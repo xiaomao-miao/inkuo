@@ -19,17 +19,13 @@ export const SettingsPanel: React.FC = () => {
   const [showApiKey, setShowApiKey] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
-  const [saving, setSaving] = useState(false);
 
   const saveSettings = async () => {
-    setSaving(true);
     try {
       const { invoke } = await import('@tauri-apps/api/core');
       await invoke('save_settings', { settings });
     } catch (err) {
       console.error('Failed to save settings:', err);
-    } finally {
-      setSaving(false);
     }
   };
 

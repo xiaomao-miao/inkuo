@@ -15,7 +15,7 @@ interface DocumentState {
 interface EditorState {
   // Multi-document state - keyed by file path
   documentContents: Record<string, DocumentState>;
-  
+
   // Actions
   setDocumentContent: (path: string, doc: Document, content: string) => void;
   setContent: (path: string, content: string) => void;
@@ -36,7 +36,7 @@ interface EditorState {
 
 export const useEditorStore = create<EditorState>((set) => ({
   documentContents: {},
-  
+
   setDocumentContent: (path, doc, content) => set((state) => ({
     documentContents: {
       ...state.documentContents,
@@ -51,7 +51,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       }
     }
   })),
-  
+
   setContent: (path, content) => set((state) => {
     const current = state.documentContents[path];
     if (!current) return state;
@@ -66,7 +66,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       }
     };
   }),
-  
+
   setSelection: (path, selection) => set((state) => {
     const current = state.documentContents[path];
     if (!current) return state;
@@ -80,7 +80,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       }
     };
   }),
-  
+
   setDiffHunks: (path, hunks) => set((state) => {
     const current = state.documentContents[path];
     if (!current) return state;
@@ -95,7 +95,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       }
     };
   }),
-  
+
   setActiveHunkIndex: (path, index) => set((state) => {
     const current = state.documentContents[path];
     if (!current) return state;
@@ -109,7 +109,7 @@ export const useEditorStore = create<EditorState>((set) => ({
       }
     };
   }),
-  
+
   setIsDiffMode: (path, isDiff) => set((state) => {
     const current = state.documentContents[path];
     if (!current) return state;
@@ -123,14 +123,14 @@ export const useEditorStore = create<EditorState>((set) => ({
       }
     };
   }),
-  
+
   applyHunk: (path, hunkId) => set((state) => {
     const current = state.documentContents[path];
     if (!current) return state;
-    
+
     const hunkIndex = current.diffHunks.findIndex(h => h.id === hunkId);
     if (hunkIndex === -1) return state;
-    
+
     const newHunks = current.diffHunks.filter(h => h.id !== hunkId);
     return {
       documentContents: {
@@ -144,11 +144,11 @@ export const useEditorStore = create<EditorState>((set) => ({
       }
     };
   }),
-  
+
   rejectHunk: (path, hunkId) => set((state) => {
     const current = state.documentContents[path];
     if (!current) return state;
-    
+
     const newHunks = current.diffHunks.filter(h => h.id !== hunkId);
     return {
       documentContents: {
@@ -161,11 +161,11 @@ export const useEditorStore = create<EditorState>((set) => ({
       }
     };
   }),
-  
+
   applyAllHunks: (path) => set((state) => {
     const current = state.documentContents[path];
     if (!current) return state;
-    
+
     return {
       documentContents: {
         ...state.documentContents,
@@ -178,11 +178,11 @@ export const useEditorStore = create<EditorState>((set) => ({
       }
     };
   }),
-  
+
   rejectAllHunks: (path) => set((state) => {
     const current = state.documentContents[path];
     if (!current) return state;
-    
+
     return {
       documentContents: {
         ...state.documentContents,
@@ -194,11 +194,11 @@ export const useEditorStore = create<EditorState>((set) => ({
       }
     };
   }),
-  
+
   clearDiff: (path) => set((state) => {
     const current = state.documentContents[path];
     if (!current) return state;
-    
+
     return {
       documentContents: {
         ...state.documentContents,
@@ -211,11 +211,11 @@ export const useEditorStore = create<EditorState>((set) => ({
       }
     };
   }),
-  
+
   markSaved: (path) => set((state) => {
     const current = state.documentContents[path];
     if (!current) return state;
-    
+
     return {
       documentContents: {
         ...state.documentContents,
@@ -226,11 +226,11 @@ export const useEditorStore = create<EditorState>((set) => ({
       }
     };
   }),
-  
+
   updateTabDirty: (path, isDirty) => set((state) => {
     const current = state.documentContents[path];
     if (!current) return state;
-    
+
     return {
       documentContents: {
         ...state.documentContents,
@@ -241,12 +241,12 @@ export const useEditorStore = create<EditorState>((set) => ({
       }
     };
   }),
-  
+
   getSelection: () => {
     // This is a temporary implementation - in real app, get from editor
     return null;
   },
-  
+
   applyDiff: (diff) => {
     // This is a temporary implementation - in real app, apply to editor
     console.log('Applying diff:', diff);
@@ -262,7 +262,7 @@ interface SidebarState {
   isLoading: boolean;
   openTabs: OpenTab[];
   activeTabId: string | null;
-  
+
   setWorkspacePath: (path: string) => void;
   setFiles: (files: FileEntry[]) => void;
   toggleDir: (path: string) => void;
@@ -290,7 +290,7 @@ export const useSidebarStore = create<SidebarState>()(
   isLoading: false,
   openTabs: [],
   activeTabId: null,
-  
+
   setWorkspacePath: (path) => set({ workspacePath: path }),
   setFiles: (files) => set({ files }),
   toggleDir: (path) => set((state) => {
@@ -323,17 +323,17 @@ export const useSidebarStore = create<SidebarState>()(
         newActiveId = null;
       }
     }
-    return { 
-      openTabs: newTabs, 
+    return {
+      openTabs: newTabs,
       activeTabId: newActiveId,
       selectedFile: newActiveId ? (newTabs.find(t => t.id === newActiveId)?.path || null) : null
     };
   }),
   setActiveTab: (tabId) => set((state) => {
     const tab = state.openTabs.find(t => t.id === tabId);
-    return { 
-      activeTabId: tabId, 
-      selectedFile: tab?.path || state.selectedFile 
+    return {
+      activeTabId: tabId,
+      selectedFile: tab?.path || state.selectedFile
     };
   }),
 }),
@@ -349,7 +349,10 @@ export const useSidebarStore = create<SidebarState>()(
   )
 );
 
-// AI Panel store
+// ============================================================================
+// AI Panel Store - Extended with Tool Calling Support
+// ============================================================================
+
 export interface CurrentDiff {
   originalText: string;
   newText: string;
@@ -357,15 +360,53 @@ export interface CurrentDiff {
   summary: string;
 }
 
+/** Chat modes */
 export type ChatMode = 'ask' | 'plan' | 'agent';
 
-export interface ChatMessage {
+/** Message role including tool role for agent mode */
+export type MessageRole = 'user' | 'assistant' | 'system' | 'tool';
+
+/** Tool call as embedded in messages */
+export interface MessageToolCall {
   id: string;
-  role: 'user' | 'assistant';
-  content: string;
-  timestamp: number;
+  name: string;
+  arguments: Record<string, unknown>;
 }
 
+/** Tool result attached to a message */
+export interface MessageToolResult {
+  toolCallId: string;
+  result: string;
+  isError: boolean;
+  duration?: number;
+}
+
+/** Chat message with full tool support */
+export interface ChatMessage {
+  id: string;
+  role: MessageRole;
+  content: string;
+  timestamp: number;
+  // For assistant messages with tool calls
+  toolCalls?: MessageToolCall[];
+  // For tool result messages
+  toolCallId?: string;
+  toolResult?: MessageToolResult;
+}
+
+/** Active tool call being executed */
+export interface ActiveToolCall {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+  status: 'pending' | 'executing' | 'success' | 'error';
+  result?: string;
+  error?: string;
+  startTime: number;
+  duration?: number;
+}
+
+/** Chat session */
 export interface ChatSession {
   id: string;
   title: string;
@@ -374,8 +415,11 @@ export interface ChatSession {
   messages: ChatMessage[];
   isStreaming: boolean;
   currentDiff: CurrentDiff | null;
+  // Active tool calls for agent mode
+  activeToolCalls: ActiveToolCall[];
 }
 
+/** AI Panel state */
 interface AIPanelState {
   isOpen: boolean;
   activeTab: 'chat' | 'edit';
@@ -394,8 +438,15 @@ interface AIPanelState {
 
   addMessage: (sessionId: string, message: ChatMessage) => void;
   updateMessage: (sessionId: string, messageId: string, content: string) => void;
+  appendMessageContent: (sessionId: string, messageId: string, content: string) => void;
   setIsStreaming: (sessionId: string, streaming: boolean) => void;
   clearMessages: (sessionId: string) => void;
+
+  // Tool call management
+  addToolCall: (sessionId: string, toolCall: ActiveToolCall) => void;
+  updateToolCall: (sessionId: string, toolCallId: string, update: Partial<ActiveToolCall>) => void;
+  removeToolCall: (sessionId: string, toolCallId: string) => void;
+  clearToolCalls: (sessionId: string) => void;
 
   setCurrentDiff: (sessionId: string, diff: CurrentDiff | null) => void;
   acceptHunk: (sessionId: string, hunkId: string) => void;
@@ -418,6 +469,7 @@ function createNewSession(index: number): ChatSession {
     messages: [],
     isStreaming: false,
     currentDiff: null,
+    activeToolCalls: [],
   };
 }
 
@@ -487,6 +539,22 @@ export const useAIPanelStore = create<AIPanelState>()(
             ),
           })),
 
+        appendMessageContent: (sessionId, messageId, content) =>
+          set((state) => ({
+            sessions: state.sessions.map((s) =>
+              s.id === sessionId
+                ? {
+                    ...s,
+                    messages: s.messages.map((m) =>
+                      m.id === messageId
+                        ? { ...m, content: m.content + content }
+                        : m
+                    ),
+                  }
+                : s
+            ),
+          })),
+
         setIsStreaming: (sessionId, streaming) =>
           set((state) => ({
             sessions: state.sessions.map((s) => (s.id === sessionId ? { ...s, isStreaming: streaming } : s)),
@@ -495,7 +563,49 @@ export const useAIPanelStore = create<AIPanelState>()(
         clearMessages: (sessionId) =>
           set((state) => ({
             sessions: state.sessions.map((s) =>
-              s.id === sessionId ? { ...s, messages: [], isStreaming: false, currentDiff: null } : s
+              s.id === sessionId ? { ...s, messages: [], isStreaming: false, currentDiff: null, activeToolCalls: [] } : s
+            ),
+          })),
+
+        // Tool call management
+        addToolCall: (sessionId, toolCall) =>
+          set((state) => ({
+            sessions: state.sessions.map((s) =>
+              s.id === sessionId
+                ? { ...s, activeToolCalls: [...s.activeToolCalls, toolCall] }
+                : s
+            ),
+          })),
+
+        updateToolCall: (sessionId, toolCallId, update) =>
+          set((state) => ({
+            sessions: state.sessions.map((s) =>
+              s.id === sessionId
+                ? {
+                    ...s,
+                    activeToolCalls: s.activeToolCalls.map((tc) =>
+                      tc.id === toolCallId ? { ...tc, ...update } : tc
+                    ),
+                  }
+                : s
+            ),
+          })),
+
+        removeToolCall: (sessionId, toolCallId) =>
+          set((state) => ({
+            sessions: state.sessions.map((s) =>
+              s.id === sessionId
+                ? { ...s, activeToolCalls: s.activeToolCalls.filter((tc) => tc.id !== toolCallId) }
+                : s
+            ),
+          })),
+
+        clearToolCalls: (sessionId) =>
+          set((state) => ({
+            sessions: state.sessions.map((s) =>
+              s.id === sessionId
+                ? { ...s, activeToolCalls: [] }
+                : s
             ),
           })),
 
@@ -549,6 +659,7 @@ export const useAIPanelStore = create<AIPanelState>()(
           ...s,
           isStreaming: false,
           currentDiff: null,
+          activeToolCalls: [], // Don't persist active tool calls
         })),
         activeSessionId: state.activeSessionId,
       }),
@@ -556,11 +667,14 @@ export const useAIPanelStore = create<AIPanelState>()(
   )
 );
 
-// Settings store
+// ============================================================================
+// Settings Store
+// ============================================================================
+
 interface SettingsState {
   settings: Settings;
   isSettingsOpen: boolean;
-  
+
   setSettings: (settings: Settings) => void;
   updateSetting: <K extends keyof Settings>(key: K, value: Settings[K]) => void;
   setIsSettingsOpen: (open: boolean) => void;
@@ -596,13 +710,16 @@ export const useSettingsStore = create<SettingsState>()(
   )
 );
 
-// Cmd+K modal store
+// ============================================================================
+// Cmd+K Modal Store
+// ============================================================================
+
 interface CmdKState {
   isOpen: boolean;
   scope: 'selection' | 'paragraph' | 'section' | 'document';
   instruction: string;
   isProcessing: boolean;
-  
+
   open: () => void;
   close: () => void;
   setScope: (scope: 'selection' | 'paragraph' | 'section' | 'document') => void;
@@ -616,7 +733,7 @@ export const useCmdKStore = create<CmdKState>((set) => ({
   scope: 'selection',
   instruction: '',
   isProcessing: false,
-  
+
   open: () => set({ isOpen: true }),
   close: () => set({ isOpen: false, instruction: '', isProcessing: false }),
   setScope: (scope) => set({ scope }),

@@ -94,7 +94,109 @@ export interface AIEditResponse {
   rules_applied: string[];
 }
 
+// ============================================================================
+// Agent & Tool Calling Types
+// ============================================================================
+
+/** Tool definition following OpenAI function calling format */
+export interface ToolDefinition {
+  type: 'function';
+  function: ToolFunction;
+}
+
+export interface ToolFunction {
+  name: string;
+  description: string;
+  parameters: ToolParameters;
+}
+
+export interface ToolParameters {
+  type: 'object';
+  properties: Record<string, ToolParameter>;
+  required: string[];
+  additionalProperties?: boolean;
+}
+
+export interface ToolParameter {
+  type: string;
+  description?: string;
+  default?: unknown;
+}
+
+/** Tool call request from AI */
+export interface ToolCall {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+}
+
+/** Tool execution status */
+export type ToolCallStatus = 'pending' | 'executing' | 'success' | 'error';
+
+/** Tool call with execution result */
+export interface ToolCallResult {
+  toolCallId: string;
+  toolName: string;
+  arguments: Record<string, unknown>;
+  status: ToolCallStatus;
+  result?: string;
+  error?: string;
+  duration?: number; // Execution time in ms
+}
+
+/** Message role including tool role */
+export type MessageRole = 'user' | 'assistant' | 'system' | 'tool';
+
+/** Agent message in conversation */
+export interface AgentMessage {
+  id: string;
+  role: MessageRole;
+  content: string;
+  timestamp: number;
+  toolCalls?: ToolCall[];
+  toolCallId?: string; // If role is 'tool', this is the associated call ID
+}
+
+/** Stream event from backend */
+export interface StreamEvent {
+  session_id: string;
+  message_id: string;
+  event_type: StreamEventType;
+  content?: string;
+  summary?: string;
+  tool_call_id?: string;
+  tool_name?: string;
+  tool_args?: string;
+  final_content?: string;
+  error?: string;
+  done: boolean;
+}
+
+/** Stream event types */
+export type StreamEventType =
+  | 'text'
+  | 'error'
+  | 'tool_call_start'
+  | 'tool_result'
+  | 'done';
+
+/** Agent session configuration */
+export interface AgentConfig {
+  maxIterations: number;
+  autoExecute: boolean; // Execute tools automatically without confirmation
+  workspacePath?: string;
+}
+
+/** Agent mode */
+export type AgentMode = 'ask' | 'plan' | 'agent';
+
+/** Agent status */
+export type AgentStatus = 'idle' | 'thinking' | 'executing' | 'error';
+
+// ============================================================================
 // File types
+// ============================================================================
+
 export interface FileEntry {
   name: string;
   path: string;
@@ -102,7 +204,10 @@ export interface FileEntry {
   is_markdown: boolean;
 }
 
+// ============================================================================
 // Settings types
+// ============================================================================
+
 export interface Settings {
   theme: ThemeType;
   accent_color: string;
@@ -117,7 +222,10 @@ export interface Settings {
 export type ThemeType = 'cursor-dark' | 'cursor-light' | 'high-contrast-dark' | 'high-contrast-light';
 export type AIProviderType = 'openai' | 'ollama' | 'official';
 
+// ============================================================================
 // Search types
+// ============================================================================
+
 export interface SearchResult {
   chunks: SearchChunk[];
   total: number;

@@ -28,6 +28,7 @@ import {
   type ChatMode,
   type ActiveToolCall,
 } from '../../store';
+import { useSettingsStore } from '../../store';
 import styles from './AIPanel.module.css';
 import { parsePlanBlocks, type PlanBlock } from './planRender';
 
@@ -176,6 +177,7 @@ export const AIPanel: React.FC = () => {
       if (mode === 'agent') {
         // Use full agent with tool calling with context memory
         const workspacePath = useSidebarStore.getState().workspacePath || undefined;
+        const aiConfig = useSettingsStore.getState().settings;
         // Get conversation history (excluding the messages we're about to add)
         const conversationHistory = messages.map(m => ({
           id: m.id,
@@ -190,6 +192,12 @@ export const AIPanel: React.FC = () => {
           instruction,
           workspacePath,
           history: conversationHistory,
+          configInput: {
+            provider: aiConfig.ai_provider,
+            api_key: aiConfig.ai_api_key,
+            base_url: aiConfig.ai_base_url,
+            model: aiConfig.ai_model,
+          },
         });
       } else {
         // Use simple chat/edit mode

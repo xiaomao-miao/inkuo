@@ -1842,6 +1842,7 @@ dependencies = [
  "chrono",
  "dirs",
  "futures-util",
+ "glob",
  "once_cell",
  "parking_lot",
  "pulldown-cmark",
