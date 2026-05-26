@@ -174,13 +174,28 @@ export const AIPanel: React.FC = () => {
         const workspacePath = useSidebarStore.getState().workspacePath || undefined;
         const aiConfig = useSettingsStore.getState().settings;
         // Get conversation history (excluding the messages we're about to add)
-        const conversationHistory = messages.map(m => ({
-          id: m.id,
-          role: m.role,
-          content: m.content,
-          tool_calls: m.toolCalls,
-          tool_call_id: m.toolCallId,
-        }));
+        const conversationHistory = messages.map(m => {
+          // For tool messages, use content; for others, extract text from outputItems
+          let textContent = '';
+          if (m.role === 'tool') {
+            textContent = m.content || '';
+          } else if (m.outputItems && m.outputItems.length > 0) {
+            // Reconstruct content from outputItems for assistant messages
+            textContent = m.outputItems
+              .filter(item => item.type === 'text')
+              .map(item => item.content)
+              .join('');
+          } else {
+            textContent = m.content || '';
+          }
+          return {
+            id: m.id,
+            role: m.role,
+            content: textContent,
+            tool_calls: m.toolCalls,
+            tool_call_id: m.toolCallId,
+          };
+        });
         // Don't await - let the invoke run in background while UI remains responsive
         invoke('ai_agent_stream', {
           sessionId,
@@ -380,7 +395,6 @@ export const AIPanel: React.FC = () => {
                           ? {
                               ...m,
                               toolResults: [...(m.toolResults || []), toolResult],
-                              // Append tool_result item to outputItems (in order of arrival)
                               outputItems: [
                                 ...m.outputItems,
                                 {
@@ -399,6 +413,18 @@ export const AIPanel: React.FC = () => {
                   : s
               ),
             }));
+
+            // Also add a standalone tool message so it appears in history for subsequent requests
+            // This is critical for multi-turn conversations — the API requires tool_call_id responses
+            const toolMessage: ChatMessage = {
+              id: `tool-${tool_call_id}-${Date.now()}`,
+              role: 'tool',
+              content: content || '',
+              toolCallId: tool_call_id,
+              timestamp: Date.now(),
+              outputItems: [],
+            };
+            addMessage(session_id, toolMessage);
             return;
           }
 
@@ -610,6 +636,9 @@ export const AIPanel: React.FC = () => {
                     </div>
                   </div>
                 );
+              } else if (message.role === 'tool') {
+                // Tool messages are rendered as part of the assistant's outputItems (tool result cards)
+                // Skip standalone rendering to avoid duplication
               } else if (message.role === 'assistant') {
                 // Determine if this is the assistant message currently receiving stream deltas.
                 const streamingMessageId = activeSession?.messages
