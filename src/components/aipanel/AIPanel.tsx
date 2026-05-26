@@ -167,7 +167,8 @@ export const AIPanel: React.FC = () => {
           tool_calls: m.toolCalls,
           tool_call_id: m.toolCallId,
         }));
-        await invoke('ai_agent_stream', {
+        // Don't await - let the invoke run in background while UI remains responsive
+        invoke('ai_agent_stream', {
           sessionId,
           messageId: assistantMessageId,
           instruction,
@@ -179,15 +180,22 @@ export const AIPanel: React.FC = () => {
             base_url: aiConfig.ai_base_url,
             model: aiConfig.ai_model,
           },
+        }).catch((err) => {
+          updateMessage(sessionId, assistantMessageId, `抱歉，发生了错误：${err}`);
+          setIsStreaming(sessionId, false);
         });
       } else {
         // Use simple chat/edit mode
-        await invoke('ai_chat_stream', {
+        // Don't await - let the invoke run in background while UI remains responsive
+        invoke('ai_chat_stream', {
           sessionId,
           messageId: assistantMessageId,
           mode,
           instruction,
           originalText: originalText.slice(0, 5000),
+        }).catch((err) => {
+          updateMessage(sessionId, assistantMessageId, `抱歉，发生了错误：${err}`);
+          setIsStreaming(sessionId, false);
         });
       }
     } catch (err) {
