@@ -1,0 +1,277 @@
+/* Markdown Container */
+.markdown {
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--fg-primary);
+}
+
+/* Headings */
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  margin: 1em 0 0.5em 0;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--fg-primary);
+}
+
+.markdown h1 {
+  font-size: 1.5em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.markdown h2 {
+  font-size: 1.3em;
+  padding-bottom: 0.25em;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.markdown h3 {
+  font-size: 1.15em;
+}
+
+.markdown h4 {
+  font-size: 1em;
+}
+
+.markdown h5,
+.markdown h6 {
+  font-size: 0.9em;
+  color: var(--fg-secondary);
+}
+
+/* Paragraph */
+.markdown p {
+  margin: 0.8em 0;
+}
+
+/* Links */
+.link {
+  color: var(--accent-primary);
+  text-decoration: none;
+  transition: color var(--transition-fast);
+}
+
+.link:hover {
+  color: var(--accent-hover);
+  text-decoration: underline;
+}
+
+/* Bold & Italic */
+.markdown strong {
+  font-weight: 600;
+  color: var(--fg-primary);
+}
+
+.markdown em {
+  font-style: italic;
+}
+
+/* Lists */
+.markdown ul,
+.markdown ol {
+  margin: 0.8em 0;
+  padding-left: 1.5em;
+}
+
+.markdown li {
+  margin: 0.3em 0;
+}
+
+.markdown li > p {
+  margin: 0.3em 0;
+}
+
+/* Nested lists */
+.markdown ul ul,
+.markdown ol ol,
+.markdown ul ol,
+.markdown ol ul {
+  margin: 0.3em 0;
+}
+
+/* Task lists (GFM) */
+.markdown ul.contains-task-list {
+  list-style: none;
+  padding-left: 0.5em;
+}
+
+.markdown input[type="checkbox"] {
+  margin-right: 0.5em;
+  accent-color: var(--accent-primary);
+}
+
+/* Blockquotes */
+.markdown blockquote {
+  margin: 0.8em 0;
+  padding: 0.5em 1em;
+  border-left: 3px solid var(--accent-primary);
+  background-color: var(--bg-tertiary);
+  color: var(--fg-secondary);
+  border-radius: 0 4px 4px 0;
+}
+
+.markdown blockquote p {
+  margin: 0.5em 0;
+}
+
+.markdown blockquote > :first-child {
+  margin-top: 0;
+}
+
+.markdown blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+/* Inline Code */
+.inlineCode {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  padding: 0.15em 0.4em;
+  background-color: var(--bg-tertiary);
+  border-radius: 4px;
+  color: var(--accent-primary);
+}
+
+/* Code Blocks */
+.codeBlock {
+  margin: 1em 0;
+  padding: 1em;
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  overflow-x: auto;
+}
+
+.codeBlock code {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--fg-primary);
+}
+
+/* Code highlighting - using highlight.js classes */
+.codeBlock .hljs {
+  background: transparent;
+  color: var(--fg-primary);
+}
+
+.codeBlock .hljs-keyword,
+.codeBlock .hljs-selector-tag,
+.codeBlock .hljs-built_in,
+.codeBlock .hljs-name,
+.codeBlock .hljs-tag {
+  color: #c678dd;
+}
+
+.codeBlock .hljs-string,
+.codeBlock .hljs-title,
+.codeBlock .hljs-section,
+.codeBlock .hljs-attribute,
+.codeBlock .hljs-literal,
+.codeBlock .hljs-template-tag,
+.codeBlock .hljs-template-variable,
+.codeBlock .hljs-type,
+.codeBlock .hljs-addition {
+  color: #98c379;
+}
+
+.codeBlock .hljs-comment,
+.codeBlock .hljs-quote,
+.codeBlock .hljs-deletion,
+.codeBlock .hljs-meta {
+  color: #5c6370;
+  font-style: italic;
+}
+
+.codeBlock .hljs-number,
+.codeBlock .hljs-regexp,
+.codeBlock .hljs-selector-id,
+.codeBlock .hljs-selector-class {
+  color: #d19a66;
+}
+
+.codeBlock .hljs-variable,
+.codeBlock .hljs-template-variable,
+.codeBlock .hljs-attr {
+  color: #e06c75;
+}
+
+/* Tables */
+.tableWrapper {
+  margin: 1em 0;
+  overflow-x: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.table th,
+.table td {
+  padding: 8px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.table th {
+  background-color: var(--bg-tertiary);
+  font-weight: 600;
+  color: var(--fg-primary);
+}
+
+.table tr:last-child td {
+  border-bottom: none;
+}
+
+.table tr:hover td {
+  background-color: var(--bg-hover);
+}
+
+/* Horizontal Rule */
+.markdown hr {
+  margin: 1.5em 0;
+  border: none;
+  border-top: 1px solid var(--border-color);
+}
+
+/* Images */
+.markdown img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+  margin: 0.5em 0;
+}
+
+/* Strikethrough (GFM) */
+.markdown del {
+  color: var(--fg-muted);
+  text-decoration: line-through;
+}
+
+/* Details/Summary (GFM) */
+.markdown details {
+  margin: 1em 0;
+  padding: 0.5em 1em;
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+
+.markdown summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--fg-primary);
+}
+
+.markdown details[open] summary {
+  margin-bottom: 0.5em;
+}

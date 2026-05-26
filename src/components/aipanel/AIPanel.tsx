@@ -31,6 +31,7 @@ import {
 import { useSettingsStore } from '../../store';
 import styles from './AIPanel.module.css';
 import { parsePlanBlocks, type PlanBlock } from './planRender';
+import { MarkdownRenderer } from './MarkdownRenderer';
 
 const MODE_LABELS: Record<ChatMode, string> = {
   ask: 'Ask',
@@ -688,9 +689,9 @@ export const AIPanel: React.FC = () => {
                           </div>
                         ))}
                       </div>
-                    ) : (
-                      message.content
-                    )}
+                    ) : message.content ? (
+                      <MarkdownRenderer content={message.content} />
+                    ) : null}
                   </div>
                 )}
               </div>
