@@ -492,7 +492,8 @@ impl AgentExecutor {
                                         entry.function.name = name;
                                     }
                                     if let Some(args) = tc.function.arguments {
-                                        entry.function.arguments = args;
+                                        // IMPORTANT: Append instead of replace to handle streaming arguments
+                                        entry.function.arguments.push_str(&args);
                                     }
                                 }
                             }
