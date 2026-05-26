@@ -1,0 +1,150 @@
+import React from 'react';
+import { Check, X, Copy, ChevronDown } from 'lucide-react';
+import type { DiffHunk } from '../../types';
+import { useEditorStore, useSidebarStore } from '../../store';
+import styles from './DiffOverlay.module.css';
+
+interface DiffOverlayProps {
+  hunks: DiffHunk[];
+}
+
+export const DiffOverlay: React.FC<DiffOverlayProps> = ({ hunks }) => {
+  const { selectedFile } = useSidebarStore();
+  const { documentContents, setActiveHunkIndex, applyHunk, rejectHunk, applyAllHunks, rejectAllHunks } = useEditorStore();
+  
+  const currentDoc = selectedFile ? documentContents[selectedFile] : null;
+  const activeHunkIndex = currentDoc?.activeHunkIndex || 0;
+
+  if (hunks.length === 0) {
+    return null;
+  }
+
+  const handleApply = (hunkId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (selectedFile) {
+      applyHunk(selectedFile, hunkId);
+    }
+  };
+
+  const handleReject = (hunkId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (selectedFile) {
+      rejectHunk(selectedFile, hunkId);
+    }
+  };
+
+  const handleCopy = (hunk: DiffHunk, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const content = hunk.changes
+      .filter(c => c.tag === 'Insert')
+      .map(c => c.content)
+      .join('');
+    navigator.clipboard.writeText(content);
+  };
+
+  const handleApplyAll = () => {
+    if (selectedFile) {
+      applyAllHunks(selectedFile);
+    }
+  };
+
+  const handleRejectAll = () => {
+    if (selectedFile) {
+      rejectAllHunks(selectedFile);
+    }
+  };
+
+  return (
+    <div className={styles.overlay}>
+      <div className={styles.controls}>
+        <span className={styles.hunkCount}>
+          {hunks.length} 个差异块
+        </span>
+        <div className={styles.controlButtons}>
+          <button 
+            className={styles.applyAllButton}
+            onClick={handleApplyAll}
+            title="应用全部 (Shift+Tab)"
+          >
+            <Check size={14} />
+            <span>全部应用</span>
+          </button>
+          <button 
+            className={styles.rejectAllButton}
+            onClick={handleRejectAll}
+            title="拒绝全部 (Cmd+Esc)"
+          >
+            <X size={14} />
+            <span>全部拒绝</span>
+          </button>
+        </div>
+      </div>
+      
+      <div className={styles.hunksList}>
+        {hunks.map((hunk, index) => (
+          <div 
+            key={hunk.id}
+            className={`${styles.hunkCard} ${index === activeHunkIndex ? styles.active : ''}`}
+            onClick={() => selectedFile && setActiveHunkIndex(selectedFile, index)}
+          >
+            <div className={styles.hunkHeader}>
+              <div className={styles.hunkSummary}>
+                <span className={styles.summaryIcon}>
+                  <ChevronDown size={14} />
+                </span>
+                <span className={styles.summaryText}>{hunk.summary}</span>
+              </div>
+              <div className={styles.hunkActions}>
+                <button 
+                  className={styles.actionIcon}
+                  onClick={(e) => handleCopy(hunk, e)}
+                  title="复制修改内容"
+                >
+                  <Copy size={12} />
+                </button>
+                <button 
+                  className={styles.rejectIcon}
+                  onClick={(e) => handleReject(hunk.id, e)}
+                  title="拒绝 (Esc)"
+                >
+                  <X size={12} />
+                </button>
+                <button 
+                  className={styles.applyIcon}
+                  onClick={(e) => handleApply(hunk.id, e)}
+                  title="应用 (Tab)"
+                >
+                  <Check size={12} />
+                </button>
+              </div>
+            </div>
+            
+            <div className={styles.hunkContent}>
+              {hunk.changes.map((change, changeIndex) => (
+                <div 
+                  key={changeIndex}
+                  className={`${styles.changeLine} ${
+                    change.tag === 'Delete' ? styles.deleted :
+                    change.tag === 'Insert' ? styles.inserted :
+                    ''
+                  }`}
+                >
+                  <span className={styles.lineNumber}>
+                    {change.tag === 'Delete' ? change.old_line :
+                     change.tag === 'Insert' ? change.new_line :
+                     change.old_line}
+                  </span>
+                  <span className={styles.lineTag}>
+                    {change.tag === 'Delete' ? '-' :
+                     change.tag === 'Insert' ? '+' : ' '}
+                  </span>
+                  <span className={styles.lineContent}>{change.content}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};

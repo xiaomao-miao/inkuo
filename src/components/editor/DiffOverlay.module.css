@@ -1,0 +1,187 @@
+.overlay {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 400px;
+  max-width: 50%;
+  height: 100%;
+  background-color: var(--bg-secondary);
+  border-left: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  box-shadow: var(--shadow-lg);
+  z-index: var(--z-overlay);
+  animation: slideInRight 0.2s ease;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-sm) var(--space-md);
+  border-bottom: 1px solid var(--border-color);
+  background-color: var(--bg-tertiary);
+}
+
+.hunkCount {
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--accent-primary);
+}
+
+.controlButtons {
+  display: flex;
+  gap: var(--space-xs);
+}
+
+.applyAllButton,
+.rejectAllButton {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: var(--space-xs) var(--space-sm);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  transition: background-color var(--transition-fast);
+}
+
+.applyAllButton {
+  color: var(--diff-added-fg);
+  background-color: var(--diff-added-bg);
+}
+
+.applyAllButton:hover {
+  background-color: rgba(72, 199, 116, 0.25);
+}
+
+.rejectAllButton {
+  color: var(--diff-removed-fg);
+  background-color: var(--diff-removed-bg);
+}
+
+.rejectAllButton:hover {
+  background-color: rgba(241, 91, 91, 0.25);
+}
+
+.hunksList {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-sm);
+}
+
+.hunkCard {
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-sm);
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.hunkCard:hover {
+  border-color: var(--accent-primary);
+}
+
+.hunkCard.active {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 1px var(--accent-primary);
+}
+
+.hunkHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-sm) var(--space-md);
+  background-color: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.hunkSummary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-size: var(--font-size-sm);
+  color: var(--fg-secondary);
+}
+
+.summaryIcon {
+  display: flex;
+  color: var(--fg-muted);
+}
+
+.hunkActions {
+  display: flex;
+  gap: var(--space-xs);
+}
+
+.actionIcon,
+.rejectIcon,
+.applyIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-sm);
+  color: var(--fg-secondary);
+  transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.actionIcon:hover {
+  background-color: var(--bg-hover);
+  color: var(--fg-primary);
+}
+
+.rejectIcon:hover {
+  background-color: var(--diff-removed-bg);
+  color: var(--diff-removed-fg);
+}
+
+.applyIcon:hover {
+  background-color: var(--diff-added-bg);
+  color: var(--diff-added-fg);
+}
+
+.hunkContent {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  line-height: 1.6;
+}
+
+.changeLine {
+  display: flex;
+  padding: 2px var(--space-sm);
+}
+
+.changeLine.deleted {
+  background-color: var(--diff-removed-bg);
+  color: var(--diff-removed-fg);
+}
+
+.changeLine.inserted {
+  background-color: var(--diff-added-bg);
+  color: var(--diff-added-fg);
+}
+
+.lineNumber {
+  width: 36px;
+  text-align: right;
+  padding-right: var(--space-sm);
+  color: var(--fg-muted);
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.lineTag {
+  width: 16px;
+  text-align: center;
+  flex-shrink: 0;
+  font-weight: 600;
+}
+
+.lineContent {
+  flex: 1;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

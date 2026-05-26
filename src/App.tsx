@@ -1,51 +1,55 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
-import "./App.css";
+import { useEffect } from 'react';
+import { Layout } from './components/layout';
+import { CmdK } from './components/cmdk';
+import { useSettingsStore } from './store';
+import { invoke } from '@tauri-apps/api/core';
+import type { Settings } from './types';
+
+import './styles/design-tokens.css';
+import './styles/global.css';
 
 function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
+  const { settings, setSettings } = useSettingsStore();
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
-  }
+  // Load settings on mount
+  useEffect(() => {
+    const loadSettings = async () => {
+      try {
+        const savedSettings = await invoke<Settings>('get_settings');
+        setSettings(savedSettings);
+      } catch (err) {
+        console.error('Failed to load settings:', err);
+      }
+    };
+    loadSettings();
+  }, [setSettings]);
+
+  // Apply theme
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', settings.theme);
+    
+    // Apply accent color as CSS variable
+    document.documentElement.style.setProperty('--accent-primary', settings.accent_color);
+    document.documentElement.style.setProperty('--accent-hover', adjustColor(settings.accent_color, 20));
+    document.documentElement.style.setProperty('--accent-active', adjustColor(settings.accent_color, -20));
+  }, [settings.theme, settings.accent_color]);
 
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
-
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
-
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
-    </main>
+    <>
+      <Layout />
+      <CmdK />
+    </>
   );
+}
+
+// Helper function to adjust color brightness
+function adjustColor(hex: string, percent: number): string {
+  const num = parseInt(hex.replace('#', ''), 16);
+  const amt = Math.round(2.55 * percent);
+  const R = Math.min(255, Math.max(0, (num >> 16) + amt));
+  const G = Math.min(255, Math.max(0, ((num >> 8) & 0x00FF) + amt));
+  const B = Math.min(255, Math.max(0, (num & 0x0000FF) + amt));
+  return `#${(0x1000000 + R * 0x10000 + G * 0x100 + B).toString(16).slice(1)}`;
 }
 
 export default App;

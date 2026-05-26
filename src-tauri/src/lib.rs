@@ -1,14 +1,65 @@
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
+//! inkuo - Local-First AI Document Editor
+//! 
+//! Rust backend core module handling:
+//! - Document parsing and serialization
+//! - Diff engine
+//! - AI provider adapters
+//! - RAG indexing
+//! - File system operations
+
+mod document;
+mod diff;
+mod ai;
+mod rag;
+mod commands;
+
+pub use document::*;
+pub use diff::*;
+pub use ai::*;
+pub use rag::*;
+
+use std::panic;
+
+fn setup_logging() {
+    // Simple logging setup - write to stdout
+    // In production, would use tracing-appender with proper guard handling
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .with_target(false)
+        .init();
+
+    // Set up panic hook to log panics
+    let default_panic = panic::take_hook();
+    panic::set_hook(Box::new(move |info| {
+        eprintln!("Application panic: {:?}", info);
+        default_panic(info);
+    }));
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    setup_logging();
+    
+    tracing::info!("Starting inkuo v{}", env!("CARGO_PKG_VERSION"));
+    
     tauri::Builder::default()
+        .manage(commands::AppState::default())
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![greet])
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_os::init())
+        .invoke_handler(tauri::generate_handler![
+            commands::read_document,
+            commands::write_document,
+            commands::list_directory,
+            commands::compute_diff,
+            commands::ai_edit,
+            commands::search_knowledge_base,
+            commands::get_settings,
+            commands::save_settings,
+            commands::index_workspace,
+        ])
         .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .expect("error while running inkuo application");
 }

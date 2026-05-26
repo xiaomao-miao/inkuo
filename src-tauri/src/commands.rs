@@ -1,0 +1,267 @@
+//! Tauri commands module
+//! 
+//! Exposes Rust backend functionality to the frontend via IPC.
+
+use crate::{diff, document, ai, rag};
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
+use tauri::State;
+
+pub struct AppState {
+    pub rag_index: Arc<rag::RAGIndex>,
+    pub ai_config: Arc<tokio::sync::RwLock<ai::AIConfig>>,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self {
+            rag_index: Arc::new(rag::RAGIndex::new()),
+            ai_config: Arc::new(tokio::sync::RwLock::new(ai::AIConfig::default())),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ReadDocumentResult {
+    pub document: document::Document,
+    pub content: String,
+}
+
+#[tauri::command]
+pub async fn read_document(path: String) -> Result<ReadDocumentResult, String> {
+    tracing::info!("Reading document: {}", path);
+    
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read file: {}", e))?;
+    
+    let doc = document::Document::from_markdown(&content, &path)
+        .map_err(|e| format!("Failed to parse document: {}", e))?;
+    
+    Ok(ReadDocumentResult { document: doc, content })
+}
+
+#[tauri::command]
+pub async fn write_document(path: String, content: String) -> Result<(), String> {
+    tracing::info!("Writing document: {}", path);
+    
+    // Create backup
+    let backup_path = format!("{}.bak", path);
+    if std::path::Path::new(&path).exists() {
+        std::fs::copy(&path, &backup_path)
+            .map_err(|e| format!("Failed to create backup: {}", e))?;
+    }
+    
+    std::fs::write(&path, &content)
+        .map_err(|e| format!("Failed to write file: {}", e))?;
+    
+    Ok(())
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FileEntry {
+    pub name: String,
+    pub path: String,
+    pub is_dir: bool,
+    pub is_markdown: bool,
+}
+
+#[tauri::command]
+pub async fn list_directory(path: String) -> Result<Vec<FileEntry>, String> {
+    tracing::info!("Listing directory: {}", path);
+    
+    let entries = std::fs::read_dir(&path)
+        .map_err(|e| format!("Failed to read directory: {}", e))?;
+    
+    let mut files: Vec<FileEntry> = entries
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            
+            // Skip hidden files
+            if name.starts_with('.') {
+                return None;
+            }
+            
+            let is_dir = path.is_dir();
+            let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            let is_markdown = matches!(extension, "md" | "markdown" | "txt");
+            
+            Some(FileEntry {
+                name,
+                path: path.to_string_lossy().to_string(),
+                is_dir,
+                is_markdown,
+            })
+        })
+        .collect();
+    
+    // Sort: directories first, then files alphabetically
+    files.sort_by(|a, b| {
+        match (a.is_dir, b.is_dir) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+        }
+    });
+    
+    Ok(files)
+}
+
+#[tauri::command]
+pub async fn compute_diff(old_text: String, new_text: String) -> Result<diff::DiffResult, String> {
+    tracing::info!("Computing diff");
+    Ok(diff::compute_diff(&old_text, &new_text))
+}
+
+#[tauri::command]
+pub async fn ai_edit(
+    instruction: String,
+    original_text: String,
+    scope: String,
+    context: Vec<ai::ContextItem>,
+    state: State<'_, AppState>,
+) -> Result<ai::AIEditResponse, String> {
+    tracing::info!("AI edit request: {}", instruction);
+    
+    let config = state.ai_config.read().await.clone();
+    let adapter = ai::AIProviderAdapter::new(config);
+    
+    let edit_scope = match scope.as_str() {
+        "selection" => ai::EditScope::Selection,
+        "paragraph" => ai::EditScope::Paragraph,
+        "section" => ai::EditScope::Section,
+        "document" => ai::EditScope::Document,
+        _ => ai::EditScope::Selection,
+    };
+    
+    let request = ai::AIEditRequest {
+        instruction,
+        original_text,
+        scope: edit_scope,
+        context,
+    };
+    
+    adapter.edit(request)
+        .await
+        .map_err(|e| format!("AI error: {}", e))
+}
+
+#[tauri::command]
+pub async fn search_knowledge_base(
+    query: String,
+    limit: usize,
+    state: State<'_, AppState>,
+) -> Result<rag::SearchResult, String> {
+    tracing::info!("Searching knowledge base: {}", query);
+    
+    let results = state.rag_index.search(&query, limit);
+    Ok(results)
+}
+
+#[tauri::command]
+pub async fn index_workspace(
+    path: String,
+    state: State<'_, AppState>,
+) -> Result<usize, String> {
+    tracing::info!("Indexing workspace: {}", path);
+    
+    let mut count = 0;
+    let index = Arc::clone(&state.rag_index);
+    
+    fn index_dir(dir: &std::path::Path, index: &Arc<rag::RAGIndex>, count: &mut usize) -> Result<(), String> {
+        if !dir.is_dir() {
+            return Ok(());
+        }
+        
+        for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path();
+            
+            if path.is_dir() {
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if !name.starts_with('.') {
+                    index_dir(&path, index, count)?;
+                }
+            } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                if matches!(ext, "md" | "markdown") {
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        let doc_id = uuid::Uuid::new_v4().to_string();
+                        let blocks = vec![];
+                        index.index_document(&doc_id, path.to_str().unwrap_or(""), &content, &blocks);
+                        *count += 1;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+    
+    index_dir(std::path::Path::new(&path), &index, &mut count)?;
+    Ok(count)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Settings {
+    pub theme: String,
+    pub accent_color: String,
+    pub editor_font_size: u32,
+    pub editor_font_family: String,
+    pub ai_provider: String,
+    pub ai_model: String,
+    pub ai_api_key: Option<String>,
+    pub ai_base_url: Option<String>,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            theme: "cursor-dark".to_string(),
+            accent_color: "#7C5CFF".to_string(),
+            editor_font_size: 14,
+            editor_font_family: "JetBrains Mono, monospace".to_string(),
+            ai_provider: "ollama".to_string(),
+            ai_model: "llama3".to_string(),
+            ai_api_key: None,
+            ai_base_url: Some("http://localhost:11434".to_string()),
+        }
+    }
+}
+
+fn get_settings_path() -> std::path::PathBuf {
+    dirs::config_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("inkuo")
+        .join("settings.json")
+}
+
+#[tauri::command]
+pub async fn get_settings() -> Result<Settings, String> {
+    let path = get_settings_path();
+    
+    if !path.exists() {
+        return Ok(Settings::default());
+    }
+    
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read settings: {}", e))?;
+    
+    serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse settings: {}", e))
+}
+
+#[tauri::command]
+pub async fn save_settings(settings: Settings) -> Result<(), String> {
+    let path = get_settings_path();
+    
+    std::fs::create_dir_all(path.parent().unwrap())
+        .map_err(|e| format!("Failed to create config directory: {}", e))?;
+    
+    let content = serde_json::to_string_pretty(&settings)
+        .map_err(|e| format!("Failed to serialize settings: {}", e))?;
+    
+    std::fs::write(&path, content)
+        .map_err(|e| format!("Failed to write settings: {}", e))?;
+    
+    Ok(())
+}
