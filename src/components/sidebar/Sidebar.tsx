@@ -18,6 +18,26 @@ import { useSidebarStore } from '../../store';
 import type { FileEntry } from '../../types';
 import styles from './Sidebar.module.css';
 
+// Helper function to get all parent folders for search results
+function getEntriesWithParents(matchingEntries: FileEntry[], allEntries: FileEntry[]): FileEntry[] {
+  const resultSet = new Set<string>();
+  
+  for (const entry of matchingEntries) {
+    // Add the matching entry itself
+    resultSet.add(entry.path);
+    
+    // Add all parent folders
+    const parts = entry.path.split('/');
+    for (let i = 1; i < parts.length; i++) {
+      const parentPath = parts.slice(0, i).join('/');
+      resultSet.add(parentPath);
+    }
+  }
+  
+  // Return all entries that are either matching or are parents of matching entries
+  return allEntries.filter(e => resultSet.has(e.path));
+}
+
 export const Sidebar: React.FC = () => {
   const {
     workspacePath,
@@ -99,11 +119,18 @@ export const Sidebar: React.FC = () => {
       return !relativePath.includes('/');
     });
     
+    // When searching, show all matching entries with their parent folders
+    // When not searching, show only root level entries
     const filteredEntries = searchQuery
       ? entries.filter(e => e.name.toLowerCase().includes(searchQuery.toLowerCase()))
       : rootEntries;
 
-    const sortedEntries = [...filteredEntries].sort((a, b) => {
+    // When searching, we need to include parent folders of matching items
+    const entriesToShow = searchQuery
+      ? getEntriesWithParents(filteredEntries, entries)
+      : filteredEntries;
+
+    const sortedEntries = [...entriesToShow].sort((a, b) => {
       if (a.is_dir && !b.is_dir) return -1;
       if (!a.is_dir && b.is_dir) return 1;
       return a.name.localeCompare(b.name);

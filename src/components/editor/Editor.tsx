@@ -7,8 +7,8 @@ import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { invoke } from '@tauri-apps/api/core';
-import { Save, Sparkles } from 'lucide-react';
-import { useEditorStore, useSidebarStore, useCmdKStore } from '../../store';
+import { Sparkles } from 'lucide-react';
+import { useEditorStore, useSidebarStore } from '../../store';
 import { DiffOverlay } from './DiffOverlay';
 import styles from './Editor.module.css';
 
@@ -23,7 +23,6 @@ export const Editor: React.FC = () => {
     updateTabDirty,
   } = useEditorStore();
   const { selectedFile } = useSidebarStore();
-  const { open: openCmdK } = useCmdKStore();
 
   // Get current document state from store
   const currentDoc = selectedFile ? documentContents[selectedFile] : null;
@@ -75,11 +74,6 @@ export const Editor: React.FC = () => {
         e.preventDefault();
         handleSave();
       }
-      // Cmd/Ctrl+K - Open Cmd+K
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-        e.preventDefault();
-        openCmdK();
-      }
       // Tab - Apply current hunk
       if (e.key === 'Tab' && isDiffMode) {
         e.preventDefault();
@@ -125,13 +119,17 @@ export const Editor: React.FC = () => {
     }
   }, [selectedFile, setSelection]);
 
+  // No file selected - show inline hint instead of big card
   if (!selectedFile || !currentDoc) {
     return (
-      <div className={styles.emptyState}>
-        <div className={styles.emptyContent}>
-          <Sparkles size={48} className={styles.emptyIcon} />
-          <h2>欢迎使用 inkuo</h2>
-          <p>选择一个文件开始编辑，或使用 Cmd+K 调用 AI 助手</p>
+      <div className={styles.editorContainer}>
+        <div className={styles.editorWrapper}>
+          <div className={styles.noFileHint}>
+            <Sparkles size={24} className={styles.hintIcon} />
+            <span className={styles.hintText}>
+              选择一个文件开始编辑，或按 <kbd>Ctrl</kbd>+<kbd>K</kbd> 调用 AI 助手
+            </span>
+          </div>
         </div>
       </div>
     );
@@ -139,30 +137,6 @@ export const Editor: React.FC = () => {
 
   return (
     <div className={styles.editorContainer}>
-      <div className={styles.editorHeader}>
-        <div className={styles.fileInfo}>
-          <span className={styles.fileName}>{currentDoc.document?.title || '未命名文件'}</span>
-          {isDirty && <span className={styles.dirtyIndicator}>●</span>}
-        </div>
-        <div className={styles.editorActions}>
-          <button 
-            className={styles.actionButton}
-            onClick={openCmdK}
-            title="AI 编辑 (Cmd+K)"
-          >
-            <Sparkles size={16} />
-          </button>
-          <button 
-            className={styles.actionButton}
-            onClick={handleSave}
-            disabled={!isDirty}
-            title="保存 (Cmd+S)"
-          >
-            <Save size={16} />
-          </button>
-        </div>
-      </div>
-      
       <div className={styles.editorWrapper}>
         <CodeMirror
           ref={editorRef}
@@ -235,7 +209,7 @@ export const Editor: React.FC = () => {
       
       <div className={styles.statusBar}>
         <span className={styles.statusItem}>
-          {currentDoc.document?.doc_type || 'PlainText'}
+          {currentDoc.document?.doc_type || 'Markdown'}
         </span>
         <span className={styles.statusItem}>
           {currentContent.split('\n').length} 行
@@ -250,6 +224,9 @@ export const Editor: React.FC = () => {
             {diffHunks.length} 个差异块
           </span>
         )}
+        <span className={styles.statusItem} style={{ marginLeft: 'auto' }}>
+          Ctrl+S 保存
+        </span>
       </div>
     </div>
   );

@@ -29,6 +29,8 @@ interface EditorState {
   clearDiff: (path: string) => void;
   markSaved: (path: string) => void;
   updateTabDirty: (path: string, isDirty: boolean) => void;
+  getSelection: () => string | null;
+  applyDiff: (diff: { originalText: string; newText: string }) => void;
 }
 
 export const useEditorStore = create<EditorState>((set) => ({
@@ -238,6 +240,16 @@ export const useEditorStore = create<EditorState>((set) => ({
       }
     };
   }),
+  
+  getSelection: () => {
+    // This is a temporary implementation - in real app, get from editor
+    return null;
+  },
+  
+  applyDiff: (diff) => {
+    // This is a temporary implementation - in real app, apply to editor
+    console.log('Applying diff:', diff);
+  },
 }));
 
 // Sidebar store
@@ -324,11 +336,19 @@ export const useSidebarStore = create<SidebarState>((set) => ({
 }));
 
 // AI Panel store
+export interface CurrentDiff {
+  originalText: string;
+  newText: string;
+  hunks: DiffHunk[];
+  summary: string;
+}
+
 interface AIPanelState {
   isOpen: boolean;
   activeTab: 'chat' | 'edit';
   messages: ChatMessage[];
   isStreaming: boolean;
+  currentDiff: CurrentDiff | null;
   
   setIsOpen: (open: boolean) => void;
   togglePanel: () => void;
@@ -337,6 +357,11 @@ interface AIPanelState {
   updateMessage: (id: string, content: string) => void;
   setIsStreaming: (streaming: boolean) => void;
   clearMessages: () => void;
+  setCurrentDiff: (diff: CurrentDiff | null) => void;
+  acceptHunk: (hunkId: string) => void;
+  rejectHunk: (hunkId: string) => void;
+  acceptAllHunks: () => void;
+  rejectAllHunks: () => void;
 }
 
 export interface ChatMessage {
@@ -351,6 +376,7 @@ export const useAIPanelStore = create<AIPanelState>((set) => ({
   activeTab: 'chat',
   messages: [],
   isStreaming: false,
+  currentDiff: null,
   
   setIsOpen: (open) => set({ isOpen: open }),
   togglePanel: () => set((state) => ({ isOpen: !state.isOpen })),
@@ -365,6 +391,27 @@ export const useAIPanelStore = create<AIPanelState>((set) => ({
   })),
   setIsStreaming: (streaming) => set({ isStreaming: streaming }),
   clearMessages: () => set({ messages: [], isStreaming: false }),
+  setCurrentDiff: (diff) => set({ currentDiff: diff }),
+  acceptHunk: (hunkId) => set((state) => {
+    if (!state.currentDiff) return state;
+    const newHunks = state.currentDiff.hunks.filter(h => h.id !== hunkId);
+    return { 
+      currentDiff: newHunks.length > 0 
+        ? { ...state.currentDiff, hunks: newHunks }
+        : null 
+    };
+  }),
+  rejectHunk: (hunkId) => set((state) => {
+    if (!state.currentDiff) return state;
+    const newHunks = state.currentDiff.hunks.filter(h => h.id !== hunkId);
+    return { 
+      currentDiff: newHunks.length > 0 
+        ? { ...state.currentDiff, hunks: newHunks }
+        : null 
+    };
+  }),
+  acceptAllHunks: () => set({ currentDiff: null }),
+  rejectAllHunks: () => set({ currentDiff: null }),
 }));
 
 // Settings store

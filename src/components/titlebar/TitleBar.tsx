@@ -1,10 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
-  ChevronDown,
-  X
+  Minus,
+  Square,
+  X,
+  Copy
 } from 'lucide-react';
 import { useSidebarStore, useEditorStore } from '../../store';
 import { invoke } from '@tauri-apps/api/core';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import styles from './TitleBar.module.css';
 
 interface MenuItem {
@@ -22,6 +25,7 @@ interface Menu {
 
 export const TitleBar: React.FC = () => {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
+  const [isMaximized, setIsMaximized] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   
   const { selectedFile, setWorkspacePath, setFiles } = useSidebarStore();
@@ -29,6 +33,25 @@ export const TitleBar: React.FC = () => {
   
   const currentDoc = selectedFile ? documentContents[selectedFile] : null;
   const isDirty = currentDoc?.isDirty || false;
+
+  // Check initial maximized state
+  useEffect(() => {
+    const checkMaximized = async () => {
+      const win = getCurrentWindow();
+      setIsMaximized(await win.isMaximized());
+    };
+    checkMaximized();
+    
+    // Listen for window state changes
+    const win = getCurrentWindow();
+    const unlisten = win.onResized(() => {
+      win.isMaximized().then(setIsMaximized);
+    });
+    
+    return () => {
+      unlisten.then(fn => fn());
+    };
+  }, []);
 
   // Close menu when clicking outside
   useEffect(() => {
@@ -86,6 +109,22 @@ export const TitleBar: React.FC = () => {
     setActiveMenu(null);
   };
 
+  const handleMinimize = async () => {
+    const win = getCurrentWindow();
+    await win.minimize();
+  };
+
+  const handleMaximize = async () => {
+    const win = getCurrentWindow();
+    await win.toggleMaximize();
+    setIsMaximized(!isMaximized);
+  };
+
+  const handleClose = async () => {
+    const win = getCurrentWindow();
+    await win.close();
+  };
+
   const menus: Menu[] = [
     {
       label: '文件',
@@ -98,7 +137,7 @@ export const TitleBar: React.FC = () => {
         { divider: true, label: '' },
         { label: '关闭编辑器', shortcut: 'Ctrl+W', action: () => setActiveMenu(null), disabled: !selectedFile },
         { divider: true, label: '' },
-        { label: '退出', shortcut: 'Alt+F4', action: () => window.close() },
+        { label: '退出', shortcut: 'Alt+F4', action: handleClose },
       ],
     },
     {
@@ -147,7 +186,7 @@ export const TitleBar: React.FC = () => {
   ];
 
   return (
-    <div className={styles.titleBar} ref={menuRef}>
+    <div className={styles.titleBar} ref={menuRef} data-tauri-drag-region>
       <div className={styles.menuArea}>
         {menus.map(menu => (
           <div key={menu.label} className={styles.menuContainer}>
@@ -183,7 +222,7 @@ export const TitleBar: React.FC = () => {
         ))}
       </div>
       
-      <div className={styles.title}>
+      <div className={styles.title} data-tauri-drag-region>
         <span className={styles.appName}>inkuo</span>
         {selectedFile && (
           <>
@@ -199,14 +238,21 @@ export const TitleBar: React.FC = () => {
       <div className={styles.actions}>
         <button 
           className={styles.actionButton}
-          onClick={() => setActiveMenu(null)}
+          onClick={handleMinimize}
           title="最小化"
         >
-          <ChevronDown size={14} style={{ transform: 'rotate(180deg)' }} />
+          <Minus size={14} />
+        </button>
+        <button 
+          className={styles.actionButton}
+          onClick={handleMaximize}
+          title={isMaximized ? '还原' : '最大化'}
+        >
+          {isMaximized ? <Copy size={12} /> : <Square size={12} />}
         </button>
         <button 
           className={`${styles.actionButton} ${styles.close}`}
-          onClick={() => window.close()}
+          onClick={handleClose}
           title="关闭"
         >
           <X size={14} />

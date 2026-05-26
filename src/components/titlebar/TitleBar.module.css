@@ -1,7 +1,7 @@
 .titleBar {
   display: flex;
   align-items: center;
-  height: 28px;
+  height: 36px;
   background-color: var(--bg-secondary);
   border-bottom: 1px solid var(--border-color);
   user-select: none;
@@ -25,7 +25,7 @@
   display: flex;
   align-items: center;
   height: 100%;
-  padding: 0 10px;
+  padding: 0 12px;
   font-size: 13px;
   color: var(--fg-secondary);
   background: transparent;
@@ -47,7 +47,7 @@
   min-width: 220px;
   background-color: var(--bg-tertiary);
   border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
+  border-radius: 8px;
   box-shadow: var(--shadow-lg);
   padding: 4px 0;
   z-index: var(--z-dropdown);
@@ -70,7 +70,7 @@
   align-items: center;
   justify-content: space-between;
   width: 100%;
-  padding: 6px 12px;
+  padding: 8px 12px;
   font-size: 13px;
   color: var(--fg-primary);
   background: transparent;
@@ -116,7 +116,6 @@
   justify-content: center;
   font-size: 13px;
   color: var(--fg-secondary);
-  -webkit-app-region: drag;
 }
 
 .appName {
