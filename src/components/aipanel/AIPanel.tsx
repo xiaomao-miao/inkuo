@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import {
@@ -81,6 +81,52 @@ export const AIPanel: React.FC = () => {
 
   // Ref to track accumulated text content for the current streaming message
   const streamingContentRef = useRef<Record<string, string>>({});
+
+  // Microtask batching for text deltas — batches rapid text events into a single state update
+  const pendingTextDeltasRef = useRef<Record<string, string>>({});
+  const flushTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingFlushRef = useRef<Set<string>>(new Set());
+
+  const flushTextDeltas = useCallback(() => {
+    const deltas = pendingTextDeltasRef.current;
+    const toFlush = [...pendingFlushRef.current];
+    if (toFlush.length === 0) return;
+
+    pendingTextDeltasRef.current = {};
+    pendingFlushRef.current = new Set();
+    flushTimeoutRef.current = null;
+
+    useAIPanelStore.setState((state) => ({
+      sessions: state.sessions.map((s) => {
+        const updatedMessages = s.messages.map((m) => {
+          const delta = deltas[m.id];
+          if (!delta) return m;
+          const items = m.outputItems;
+          const lastItem = items[items.length - 1];
+          if (lastItem && lastItem.type === 'text') {
+            const updated = { ...lastItem, content: lastItem.content + delta };
+            return { ...m, outputItems: [...items.slice(0, -1), updated] };
+          }
+          return { ...m, outputItems: [...items, { type: 'text' as const, content: delta, isPendingMarkdown: true }] };
+        });
+        return { ...s, messages: updatedMessages };
+      }),
+    }));
+  }, []);
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const scheduleTextFlush = useCallback(() => {
+    if (flushTimeoutRef.current !== null) return;
+    flushTimeoutRef.current = setTimeout(flushTextDeltas, 16);
+  }, [flushTextDeltas]);
+
+  const flushAllPending = useCallback(() => {
+    if (flushTimeoutRef.current !== null) {
+      clearTimeout(flushTimeoutRef.current);
+      flushTimeoutRef.current = null;
+    }
+    flushTextDeltas();
+  }, [flushTextDeltas]);
 
   // Ref to track the unlisten function
   const unlistenRef = useRef<(() => void) | null>(null);
@@ -298,6 +344,7 @@ export const AIPanel: React.FC = () => {
           // Handle error event
           if (event_type === 'error') {
             console.log('[Stream Error]', error);
+            flushAllPending();
             useAIPanelStore.setState((state) => ({
               sessions: state.sessions.map((s) =>
                 s.id === session_id
@@ -428,40 +475,23 @@ export const AIPanel: React.FC = () => {
             return;
           }
 
-          // Handle text delta — append to the last text item in outputItems, or create one
+          // Handle text delta — batch into a microtask to avoid per-token React state updates
           if (typeof content === 'string' && content.length > 0) {
             const currentAccumulated = streamingContentRef.current[message_id] || '';
             streamingContentRef.current[message_id] = currentAccumulated + content;
 
-            useAIPanelStore.setState((state) => ({
-              sessions: state.sessions.map((s) =>
-                s.id === session_id
-                  ? {
-                      ...s,
-                      messages: s.messages.map((m) => {
-                        if (m.id !== message_id) return m;
-                        const items = m.outputItems;
-                        const lastItem = items[items.length - 1];
-                        if (lastItem && lastItem.type === 'text') {
-                          // Append to existing last text item
-                          const updated = { ...lastItem, content: lastItem.content + content };
-                          return { ...m, outputItems: [...items.slice(0, -1), updated] };
-                        } else {
-                          // Create new text item with isPendingMarkdown flag
-                          // During streaming, raw text is shown without markdown parsing
-                          // to avoid broken table rendering from partial markdown
-                          return { ...m, outputItems: [...items, { type: 'text', content: content, isPendingMarkdown: true }] };
-                        }
-                      }),
-                    }
-                  : s
-              ),
-            }));
+            pendingTextDeltasRef.current[message_id] =
+              (pendingTextDeltasRef.current[message_id] || '') + content;
+            pendingFlushRef.current.add(message_id);
+
+            scheduleTextFlush();
           }
 
           // Handle done event
           if (done) {
             const currentMode = modeRef.current;
+            // Flush any pending text deltas before finalizing
+            flushAllPending();
             // Fallback: use accumulated streaming content if final_content is missing
             const effectiveContent = final_content || streamingContentRef.current[message_id] || '';
 
@@ -547,6 +577,10 @@ export const AIPanel: React.FC = () => {
     return () => {
       unlistenRef.current?.();
       unlistenRef.current = null;
+      if (flushTimeoutRef.current !== null) {
+        clearTimeout(flushTimeoutRef.current);
+        flushTimeoutRef.current = null;
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

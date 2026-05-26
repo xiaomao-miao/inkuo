@@ -462,7 +462,7 @@ impl AgentExecutor {
                 }
 
                 // Parse SSE data
-                for data in crate::openai_stream::iter_sse_data_lines(&line) {
+                for data in crate::openai_stream::iter_sse_event_data_lines(&line) {
                     if data.trim() == "[DONE]" {
                         continue;
                     }

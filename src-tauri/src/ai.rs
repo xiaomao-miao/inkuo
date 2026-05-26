@@ -405,15 +405,14 @@ Context (optional references):
         let mut stream = response.bytes_stream();
         while let Some(item) = stream.next().await {
             let bytes = item.map_err(|e| AIError::NetworkError(e.to_string()))?;
-            let chunk = String::from_utf8_lossy(&bytes).to_string();
-            buffer.push_str(&chunk);
+            let chunk = String::from_utf8_lossy(&bytes);
+            buffer.push_str(chunk.as_ref());
 
-            // process complete lines
-            while let Some(pos) = buffer.find('\n') {
-                let line = buffer[..pos].trim_end().to_string();
-                buffer = buffer[pos + 1..].to_string();
+            // Parse complete SSE events (delimited by a blank line).
+            while let Some((event, rest)) = crate::openai_stream::take_next_sse_event(&buffer) {
+                buffer = rest;
 
-                for data in crate::openai_stream::iter_sse_data_lines(&line) {
+                for data in crate::openai_stream::iter_sse_event_data_lines(&event) {
                     if data.trim() == "[DONE]" {
                         return Ok(full);
                     }
@@ -524,14 +523,14 @@ Context (optional references):
         let mut stream = response.bytes_stream();
         while let Some(item) = stream.next().await {
             let bytes = item.map_err(|e| AIError::NetworkError(e.to_string()))?;
-            let chunk = String::from_utf8_lossy(&bytes).to_string();
-            buffer.push_str(&chunk);
+            let chunk = String::from_utf8_lossy(&bytes);
+            buffer.push_str(chunk.as_ref());
 
-            while let Some(pos) = buffer.find('\n') {
-                let line = buffer[..pos].trim_end().to_string();
-                buffer = buffer[pos + 1..].to_string();
+            // Parse complete SSE events (delimited by a blank line).
+            while let Some((event, rest)) = crate::openai_stream::take_next_sse_event(&buffer) {
+                buffer = rest;
 
-                for data in crate::openai_stream::iter_sse_data_lines(&line) {
+                for data in crate::openai_stream::iter_sse_event_data_lines(&event) {
                     if data.trim() == "[DONE]" {
                         return self.parse_ai_response(&full);
                     }
