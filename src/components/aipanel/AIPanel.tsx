@@ -95,6 +95,27 @@ export const AIPanel: React.FC = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
+  // Ref to track accumulated content for streaming
+  const streamingContentRef = useRef<Record<string, string>>({});
+
+  // Ref to track the unlisten function
+  const unlistenRef = useRef<(() => void) | null>(null);
+
+  // Ref to track if listener is being set up (prevent race condition)
+  const isSettingUpRef = useRef(false);
+
+  // Refs to track latest values for event handlers
+  const getSelectionRef = useRef(getSelection);
+  const selectedFileRef = useRef(selectedFile);
+  const documentContentsRef = useRef(documentContents);
+
+  // Keep refs updated
+  useEffect(() => {
+    getSelectionRef.current = getSelection;
+    selectedFileRef.current = selectedFile;
+    documentContentsRef.current = documentContents;
+  });
+
   // Scroll to bottom when new messages arrive
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -191,60 +212,114 @@ export const AIPanel: React.FC = () => {
 
   // Streaming events
   useEffect(() => {
-    let unlisten: (() => void) | null = null;
+    const setupListener = async () => {
+      // Prevent multiple concurrent setups
+      if (unlistenRef.current || isSettingUpRef.current) return;
+      isSettingUpRef.current = true;
 
-    const setup = async () => {
-      unlisten = await listen<any>('ai://stream', async (event) => {
+      try {
+      unlistenRef.current = await listen<any>('ai://stream', async (event) => {
         const payload = event.payload;
-        if (!payload || !activeSession) return;
-
         const { session_id, message_id, event_type, content, done, summary, final_content, error } = payload;
-        if (session_id !== activeSession.id) return;
+
+        if (!payload || !session_id || !message_id) return;
+
+        // Debug logging
+        console.log('[Stream Event]', { session_id, message_id, event_type, content: content?.slice(0, 50), done });
 
         if (event_type === 'error') {
-          updateMessage(session_id, message_id, error ?? '发生错误');
-          setIsStreaming(session_id, false);
-          return;
-        }
+          console.log('[Stream Error]', error);
+          useAIPanelStore.setState((state) => {
+              const session = state.sessions.find((s) => s.id === session_id);
+              if (!session) return state;
+              return {
+                sessions: state.sessions.map((s) =>
+                  s.id === session_id
+                    ? {
+                        ...s,
+                        messages: s.messages.map((m) =>
+                          m.id === message_id ? { ...m, content: error ?? '发生错误' } : m
+                        ),
+                        isStreaming: false,
+                      }
+                    : s
+                ),
+              };
+            });
+            return;
+          }
 
-        if (typeof content === 'string' && content.length > 0) {
-          const current = (sessions.find((s) => s.id === session_id)?.messages.find((m) => m.id === message_id)?.content) ?? '';
-          updateMessage(session_id, message_id, current + content);
-        }
+          if (typeof content === 'string' && content.length > 0) {
+            // Use ref to accumulate content reliably
+            const currentAccumulated = streamingContentRef.current[message_id] || '';
+            streamingContentRef.current[message_id] = currentAccumulated + content;
 
-        if (done) {
-          setIsStreaming(session_id, false);
+            useAIPanelStore.setState((state) => ({
+              sessions: state.sessions.map((s) =>
+                s.id === session_id
+                  ? {
+                      ...s,
+                      messages: s.messages.map((m) =>
+                        m.id === message_id
+                          ? { ...m, content: streamingContentRef.current[message_id] || '' }
+                          : m
+                      ),
+                    }
+                  : s
+              ),
+            }));
+          }
 
-          if (final_content && mode === 'agent') {
-            try {
-              const selection = getSelection();
-              const currentDoc = selectedFile ? documentContents[selectedFile] : null;
-              const originalText = selection || currentDoc?.content || '';
+          if (done) {
+            // Clean up ref
+            delete streamingContentRef.current[message_id];
 
-              const diff = await invoke<any>('compute_diff', {
-                oldText: originalText,
-                newText: final_content,
-              });
+            useAIPanelStore.setState((state) => ({
+              sessions: state.sessions.map((s) =>
+                s.id === session_id ? { ...s, isStreaming: false } : s
+              ),
+            }));
 
-              setCurrentDiff(session_id, {
-                originalText,
-                newText: final_content,
-                hunks: diff?.hunks ?? [],
-                summary: summary ?? 'AI 已修改内容',
-              });
-            } catch {
-              // ignore diff failure
+            if (final_content) {
+              const state = useAIPanelStore.getState();
+              const currentSession = state.sessions.find((s) => s.id === session_id);
+
+              if (currentSession?.mode === 'agent') {
+                try {
+                  const selection = getSelectionRef.current();
+                  const currentDoc = selectedFileRef.current ? documentContentsRef.current[selectedFileRef.current] : null;
+                  const originalText = selection || currentDoc?.content || '';
+
+                  const diff = await invoke<any>('compute_diff', {
+                    oldText: originalText,
+                    newText: final_content,
+                  });
+
+                  useAIPanelStore.getState().setCurrentDiff(session_id, {
+                    originalText,
+                    newText: final_content,
+                    hunks: diff?.hunks ?? [],
+                    summary: summary ?? 'AI 已修改内容',
+                  });
+                } catch {
+                  // ignore diff failure
+                }
+              }
             }
           }
-        }
-      });
+        });
+      } finally {
+        isSettingUpRef.current = false;
+      }
     };
 
-    setup();
+    setupListener();
     return () => {
-      unlisten?.();
+      unlistenRef.current?.();
+      unlistenRef.current = null;
     };
-  }, [activeSession, sessions, mode, updateMessage, setIsStreaming, setCurrentDiff, getSelection, selectedFile, documentContents]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const getScopeIcon = () => {
     const opt = SCOPE_OPTIONS.find(o => o.key === scope);
