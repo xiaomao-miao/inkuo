@@ -3,8 +3,7 @@ import {
   Minus,
   Square,
   X,
-  Copy,
-  Settings
+  Copy
 } from 'lucide-react';
 import { useSidebarStore, useEditorStore } from '../../store';
 import { invoke } from '@tauri-apps/api/core';
@@ -24,11 +23,7 @@ interface Menu {
   items: MenuItem[];
 }
 
-interface TitleBarProps {
-  onOpenSettings: () => void;
-}
-
-export const TitleBar: React.FC<TitleBarProps> = ({ onOpenSettings }) => {
+export const TitleBar: React.FC = () => {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
   const [isMaximized, setIsMaximized] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -186,8 +181,6 @@ export const TitleBar: React.FC<TitleBarProps> = ({ onOpenSettings }) => {
       items: [
         { label: '关于 inkuo', action: () => setActiveMenu(null) },
         { label: '快捷键参考', shortcut: 'Ctrl+K Ctrl+R', action: () => setActiveMenu(null) },
-        { divider: true, label: '' },
-        { label: '设置...', shortcut: 'Ctrl+,', action: () => { setActiveMenu(null); onOpenSettings(); } },
       ],
     },
   ];
@@ -243,13 +236,6 @@ export const TitleBar: React.FC<TitleBarProps> = ({ onOpenSettings }) => {
       </div>
       
       <div className={styles.actions}>
-        <button 
-          className={styles.actionButton}
-          onClick={onOpenSettings}
-          title="设置"
-        >
-          <Settings size={14} />
-        </button>
         <button 
           className={styles.actionButton}
           onClick={handleMinimize}

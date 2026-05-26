@@ -1,14 +1,10 @@
 .panel {
-  width: var(--aipanel-width);
-  min-width: var(--aipanel-min-width);
-  max-width: var(--aipanel-max-width);
   height: 100%;
   background-color: var(--bg-secondary);
-  border-left: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
   position: relative;
-  animation: slideInFromRight 0.2s ease-out;
+  overflow: hidden;
 }
 
 @keyframes slideInFromRight {

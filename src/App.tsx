@@ -1,7 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { Layout } from './components/layout';
 import { CmdK } from './components/cmdk';
-import { Settings } from './components/settings';
 import { useSettingsStore } from './store';
 import { invoke } from '@tauri-apps/api/core';
 import type { Settings as SettingsType } from './types';
@@ -11,7 +10,6 @@ import './styles/global.css';
 
 function App() {
   const { settings, setSettings } = useSettingsStore();
-  const [showSettings, setShowSettings] = useState(false);
 
   // Load settings on mount
   useEffect(() => {
@@ -38,9 +36,8 @@ function App() {
 
   return (
     <>
-      <Layout onOpenSettings={() => setShowSettings(true)} />
+      <Layout />
       <CmdK />
-      {showSettings && <Settings onClose={() => setShowSettings(false)} />}
     </>
   );
 }
