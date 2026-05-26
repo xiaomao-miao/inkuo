@@ -636,6 +636,16 @@
   cursor: not-allowed;
 }
 
+/* Tool executing indicator */
+.toolExecutingIndicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--accent-primary);
+  padding: 8px 0;
+}
+
 /* Inline Tool Calls (inside message) */
 .inlineToolCalls {
   display: flex;

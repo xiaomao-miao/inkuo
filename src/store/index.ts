@@ -405,6 +405,24 @@ export interface MessageToolResult {
   result: string;
   isError: boolean;
   duration?: number;
+  diffSummary?: {
+    file_name: string;
+    added_lines: number;
+    deleted_lines: number;
+    hunks: {
+      id: string;
+      old_start: number;
+      old_lines: number;
+      new_start: number;
+      new_lines: number;
+      changes: {
+        tag: 'delete' | 'insert' | 'equal';
+        old_line: number | null;
+        new_line: number | null;
+        content: string;
+      }[];
+    }[];
+  };
 }
 
 /** Chat message with full tool support */
@@ -415,6 +433,8 @@ export interface ChatMessage {
   timestamp: number;
   // For assistant messages with tool calls
   toolCalls?: MessageToolCall[];
+  // Tool results associated with this assistant message (rendered after its content)
+  toolResults?: MessageToolResult[];
   // For tool result messages
   toolCallId?: string;
   toolResult?: MessageToolResult;

@@ -20,6 +20,8 @@ import {
   type ChatMessage,
   type ChatMode,
   type ActiveToolCall,
+  type MessageToolCall,
+  type MessageToolResult,
 } from '../../store';
 import { useSettingsStore } from '../../store';
 import styles from './AIPanel.module.css';
@@ -304,18 +306,31 @@ export const AIPanel: React.FC = () => {
               // ignore parse error
             }
 
-            const newToolCall: ActiveToolCall = {
+            const newToolCall: MessageToolCall = {
               id: tool_call_id,
               name: tool_name,
               arguments: args,
-              status: 'executing',
-              startTime: Date.now(),
             };
 
+            // Add tool call to the assistant message
             useAIPanelStore.setState((state) => ({
               sessions: state.sessions.map((s) =>
                 s.id === session_id
-                  ? { ...s, activeToolCalls: [...s.activeToolCalls, newToolCall] }
+                  ? {
+                      ...s,
+                      messages: s.messages.map((m) =>
+                        m.id === message_id
+                          ? { ...m, toolCalls: [...(m.toolCalls || []), newToolCall] }
+                          : m
+                      ),
+                      activeToolCalls: [...s.activeToolCalls, {
+                        id: tool_call_id,
+                        name: tool_name,
+                        arguments: args,
+                        status: 'executing' as const,
+                        startTime: Date.now(),
+                      }],
+                    }
                   : s
               ),
             }));
@@ -325,11 +340,21 @@ export const AIPanel: React.FC = () => {
           // Handle tool result
           if (event_type === 'tool_result' && tool_call_id) {
             const isError = !!error;
-            const duration = useAIPanelStore.getState().sessions
+            const toolCall = useAIPanelStore.getState().sessions
               .find((s) => s.id === session_id)
-              ?.activeToolCalls.find((tc) => tc.id === tool_call_id)?.startTime;
+              ?.activeToolCalls.find((tc) => tc.id === tool_call_id);
+            const duration = toolCall?.startTime ? Date.now() - toolCall.startTime : undefined;
 
-            // Update tool call with result and diff_summary
+            // Build tool result to add to message
+            const toolResult: MessageToolResult = {
+              toolCallId: tool_call_id,
+              result: content || '',
+              isError,
+              duration,
+              diffSummary: diff_summary ?? undefined,
+            };
+
+            // Update the assistant message with tool result and diff_summary
             useAIPanelStore.setState((state) => ({
               sessions: state.sessions.map((s) =>
                 s.id === session_id
@@ -337,15 +362,13 @@ export const AIPanel: React.FC = () => {
                       ...s,
                       activeToolCalls: s.activeToolCalls.map((tc) =>
                         tc.id === tool_call_id
-                          ? {
-                              ...tc,
-                              status: isError ? 'error' : 'success',
-                              result: content,
-                              error: isError ? error : undefined,
-                              duration: duration ? Date.now() - duration : undefined,
-                              diffSummary: diff_summary ?? tc.diffSummary,
-                            }
+                          ? { ...tc, status: isError ? 'error' : 'success', result: content, error: isError ? error : undefined, duration }
                           : tc
+                      ),
+                      messages: s.messages.map((m) =>
+                        m.id === message_id
+                          ? { ...m, toolResults: [...(m.toolResults || []), toolResult] }
+                          : m
                       ),
                     }
                   : s
@@ -564,6 +587,36 @@ export const AIPanel: React.FC = () => {
                   </div>
                 ) : (
                   <div className={styles.messageContent}>
+                    {/* Tool call start indicator */}
+                    {message.toolCalls && message.toolCalls.length > 0 && !message.toolResults?.length && (
+                      <div className={styles.toolExecutingIndicator}>
+                        <Loader2 size={12} className={styles.spinning} />
+                        <span>正在执行工具...</span>
+                      </div>
+                    )}
+
+                    {/* Tool results rendered inline with their associated tool call info */}
+                    {message.toolResults?.map((result) => {
+                      const toolCall = message.toolCalls?.find(tc => tc.id === result.toolCallId);
+                      return (
+                        <div key={result.toolCallId} className={styles.inlineToolCalls}>
+                          <ToolCallCard
+                            id={result.toolCallId}
+                            name={toolCall?.name || 'unknown'}
+                            arguments={toolCall?.arguments || {}}
+                            status={result.isError ? 'error' : 'success'}
+                            result={result.result}
+                            error={result.isError ? result.result : undefined}
+                            duration={result.duration}
+                            diffSummary={result.diffSummary as any}
+                            onAccept={() => activeSession && acceptAllHunks(activeSession.id)}
+                            onReject={() => activeSession && rejectAllHunks(activeSession.id)}
+                          />
+                        </div>
+                      );
+                    })}
+
+                    {/* Continue with message content after tool results */}
                     {mode === 'plan' && message.content ? (
                       <div className={styles.planBlocks}>
                         {parsePlanBlocks(message.content).map((b: PlanBlock, idx: number) => (
@@ -576,13 +629,6 @@ export const AIPanel: React.FC = () => {
                     ) : message.content ? (
                       <MarkdownRenderer content={message.content} />
                     ) : null}
-
-                    {/* Tool calls associated with this assistant message */}
-                    {activeToolCalls.length > 0 && (
-                      <div className={styles.inlineToolCalls}>
-                        {activeToolCalls.map(renderToolCall)}
-                      </div>
-                    )}
 
                     {/* Inline diff associated with this message */}
                     {message.diff && (
