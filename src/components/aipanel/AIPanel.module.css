@@ -636,6 +636,14 @@
   cursor: not-allowed;
 }
 
+/* Inline Tool Calls (inside message) */
+.inlineToolCalls {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 12px;
+}
+
 /* Tool Calls */
 .toolCallsContainer {
   padding: 0;

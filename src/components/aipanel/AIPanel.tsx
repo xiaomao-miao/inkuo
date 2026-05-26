@@ -108,9 +108,21 @@ export const AIPanel: React.FC = () => {
     modeRef.current = mode;
   }, [mode]);
 
-  // Scroll to bottom when new messages arrive
+  // Track scroll position to enable/disable auto-scroll
+  const contentRef = useRef<HTMLDivElement>(null);
+  const isAtBottomRef = useRef(true);
+
+  const checkIfAtBottom = () => {
+    if (!contentRef.current) return true;
+    const { scrollTop, scrollHeight, clientHeight } = contentRef.current;
+    isAtBottomRef.current = scrollHeight - scrollTop - clientHeight < 50;
+  };
+
+  // Scroll to bottom only when user is already at bottom or it's a new message
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (isAtBottomRef.current || messages.length <= 2) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
   }, [messages, activeToolCalls]);
 
   // Auto-resize textarea
@@ -514,20 +526,7 @@ export const AIPanel: React.FC = () => {
       </div>
 
       {/* Chat Content */}
-      <div className={styles.content}>
-        {/* Active Tool Calls */}
-        {activeToolCalls.length > 0 && (
-          <div className={styles.toolCallsContainer}>
-            <div className={styles.toolCallsHeader}>
-              <Terminal size={14} />
-              <span>工具调用 ({activeToolCalls.length})</span>
-            </div>
-            <div className={styles.toolCallsList}>
-              {activeToolCalls.map(renderToolCall)}
-            </div>
-          </div>
-        )}
-
+      <div className={styles.content} ref={contentRef} onScroll={checkIfAtBottom}>
         {/* Messages */}
         {messages.length === 0 ? (
           <div className={styles.emptyState}>
@@ -577,6 +576,13 @@ export const AIPanel: React.FC = () => {
                     ) : message.content ? (
                       <MarkdownRenderer content={message.content} />
                     ) : null}
+
+                    {/* Tool calls associated with this assistant message */}
+                    {activeToolCalls.length > 0 && (
+                      <div className={styles.inlineToolCalls}>
+                        {activeToolCalls.map(renderToolCall)}
+                      </div>
+                    )}
 
                     {/* Inline diff associated with this message */}
                     {message.diff && (
