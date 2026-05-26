@@ -1,52 +1,54 @@
 /* Markdown Container */
 .markdown {
   font-size: 14px;
-  line-height: 1.6;
+  line-height: 1.5;
   color: var(--fg-primary);
 }
 
-/* Headings */
+/* Force reset ALL margins inside markdown to eliminate any gap */
+.markdown * {
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+}
+
+/* Then selectively re-add minimal margins */
+.markdown p {
+  margin: 0.2em 0 !important;
+}
+
 .markdown h1,
 .markdown h2,
 .markdown h3,
 .markdown h4,
 .markdown h5,
 .markdown h6 {
-  margin: 1em 0 0.5em 0;
+  margin: 0.3em 0 0.15em 0 !important;
   font-weight: 600;
   line-height: 1.3;
   color: var(--fg-primary);
 }
 
 .markdown h1 {
-  font-size: 1.5em;
-  padding-bottom: 0.3em;
-  border-bottom: 1px solid var(--border-color);
-}
-
-.markdown h2 {
-  font-size: 1.3em;
+  font-size: 1.4em;
   padding-bottom: 0.25em;
   border-bottom: 1px solid var(--border-color);
 }
 
+.markdown h2 {
+  font-size: 1.2em;
+  padding-bottom: 0.2em;
+  border-bottom: 1px solid var(--border-color);
+}
+
 .markdown h3 {
-  font-size: 1.15em;
+  font-size: 1.05em;
 }
 
-.markdown h4 {
-  font-size: 1em;
-}
-
+.markdown h4,
 .markdown h5,
 .markdown h6 {
-  font-size: 0.9em;
+  font-size: 0.95em;
   color: var(--fg-secondary);
-}
-
-/* Paragraph */
-.markdown p {
-  margin: 0.8em 0;
 }
 
 /* Links */
@@ -74,16 +76,17 @@
 /* Lists */
 .markdown ul,
 .markdown ol {
-  margin: 0.8em 0;
+  margin: 0.3em 0 !important;
   padding-left: 1.5em;
 }
 
 .markdown li {
-  margin: 0.3em 0;
+  margin: 0.2em 0;
+  line-height: 1.4;
 }
 
 .markdown li > p {
-  margin: 0.3em 0;
+  margin: 0.2em 0 !important;
 }
 
 /* Nested lists */
@@ -91,7 +94,7 @@
 .markdown ol ol,
 .markdown ul ol,
 .markdown ol ul {
-  margin: 0.3em 0;
+  margin: 0.2em 0 !important;
 }
 
 /* Task lists (GFM) */
@@ -107,7 +110,7 @@
 
 /* Blockquotes */
 .markdown blockquote {
-  margin: 0.8em 0;
+  margin: 0.3em 0 !important;
   padding: 0.5em 1em;
   border-left: 3px solid var(--accent-primary);
   background-color: var(--bg-tertiary);
@@ -116,15 +119,15 @@
 }
 
 .markdown blockquote p {
-  margin: 0.5em 0;
+  margin: 0.3em 0 !important;
 }
 
 .markdown blockquote > :first-child {
-  margin-top: 0;
+  margin-top: 0 !important;
 }
 
 .markdown blockquote > :last-child {
-  margin-bottom: 0;
+  margin-bottom: 0 !important;
 }
 
 /* Inline Code */
@@ -139,8 +142,8 @@
 
 /* Code Blocks */
 .codeBlock {
-  margin: 1em 0;
-  padding: 1em;
+  margin: 0.4em 0 !important;
+  padding: 0.8em;
   background-color: var(--bg-primary);
   border: 1px solid var(--border-color);
   border-radius: 8px;
@@ -203,7 +206,7 @@
 
 /* Tables */
 .tableWrapper {
-  margin: 1em 0;
+  margin: 0.4em 0 !important;
   overflow-x: auto;
   border: 1px solid var(--border-color);
   border-radius: 8px;
@@ -213,13 +216,16 @@
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
+  min-width: 200px;
 }
 
 .table th,
 .table td {
-  padding: 8px 12px;
+  padding: 5px 10px;
   text-align: left;
   border-bottom: 1px solid var(--border-color);
+  vertical-align: top;
+  line-height: 1.4;
 }
 
 .table th {
@@ -238,7 +244,7 @@
 
 /* Horizontal Rule */
 .markdown hr {
-  margin: 1.5em 0;
+  margin: 0.8em 0 !important;
   border: none;
   border-top: 1px solid var(--border-color);
 }
@@ -248,7 +254,7 @@
   max-width: 100%;
   height: auto;
   border-radius: 4px;
-  margin: 0.5em 0;
+  margin: 0.3em 0 !important;
 }
 
 /* Strikethrough (GFM) */
@@ -259,7 +265,7 @@
 
 /* Details/Summary (GFM) */
 .markdown details {
-  margin: 1em 0;
+  margin: 0.4em 0 !important;
   padding: 0.5em 1em;
   background-color: var(--bg-tertiary);
   border: 1px solid var(--border-color);
@@ -273,5 +279,20 @@
 }
 
 .markdown details[open] summary {
-  margin-bottom: 0.5em;
+  margin-bottom: 0.5em !important;
+}
+
+/* OutputTextItem wrapper overrides - push down specificity */
+.outputTextItem {
+  line-height: 1.5;
+}
+
+.outputTextItem > .markdown > *:first-child,
+.outputTextItem > *:first-child {
+  margin-top: 0 !important;
+}
+
+.outputTextItem > .markdown > *:last-child,
+.outputTextItem > *:last-child {
+  margin-bottom: 0 !important;
 }

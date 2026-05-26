@@ -317,7 +317,7 @@
 .message.assistant .messageContent {
   padding: 0;
   font-size: 14px;
-  line-height: 1.6;
+  line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
   color: var(--fg-primary);
@@ -388,7 +388,39 @@
 
 /* Output text item */
 .outputTextItem {
-  line-height: 1.6;
+  line-height: 1.5;
+}
+
+/* Reduce paragraph margins inside outputTextItem to minimize blank space before tables */
+.outputTextItem > p,
+.outputTextItem p {
+  margin: 0.3em 0;
+}
+
+.outputTextItem > p:first-child,
+.outputTextItem p:first-child {
+  margin-top: 0;
+}
+
+.outputTextItem > p:last-child,
+.outputTextItem p:last-child {
+  margin-bottom: 0;
+}
+
+/* Headings in outputTextItem - reduce top margin */
+.outputTextItem h1,
+.outputTextItem h2,
+.outputTextItem h3,
+.outputTextItem h4 {
+  margin-top: 0.5em;
+  margin-bottom: 0.3em;
+}
+
+.outputTextItem h1:first-child,
+.outputTextItem h2:first-child,
+.outputTextItem h3:first-child,
+.outputTextItem h4:first-child {
+  margin-top: 0;
 }
 
 /* Tool error item */

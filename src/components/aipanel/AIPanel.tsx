@@ -447,8 +447,10 @@ export const AIPanel: React.FC = () => {
                           const updated = { ...lastItem, content: lastItem.content + content };
                           return { ...m, outputItems: [...items.slice(0, -1), updated] };
                         } else {
-                          // Create new text item
-                          return { ...m, outputItems: [...items, { type: 'text', content: content }] };
+                          // Create new text item with isPendingMarkdown flag
+                          // During streaming, raw text is shown without markdown parsing
+                          // to avoid broken table rendering from partial markdown
+                          return { ...m, outputItems: [...items, { type: 'text', content: content, isPendingMarkdown: true }] };
                         }
                       }),
                     }
@@ -478,6 +480,7 @@ export const AIPanel: React.FC = () => {
             }));
 
             // Update message with final content (backward compat + fallback)
+            // Also clear isPendingMarkdown from all text items so markdown gets rendered on done
             if (effectiveContent) {
               useAIPanelStore.setState((state) => ({
                 sessions: state.sessions.map((s) =>
@@ -491,7 +494,14 @@ export const AIPanel: React.FC = () => {
                                 // Set legacy content field as fallback
                                 content: m.content || effectiveContent,
                                 // If outputItems is empty, create a single text item
-                                outputItems: m.outputItems.length > 0 ? m.outputItems : [{ type: 'text', content: effectiveContent }],
+                                // Otherwise, clear isPendingMarkdown so markdown renders
+                                outputItems: m.outputItems.length > 0
+                                  ? m.outputItems.map((item) =>
+                                      item.type === 'text'
+                                        ? { ...item, isPendingMarkdown: false }
+                                        : item
+                                    )
+                                  : [{ type: 'text', content: effectiveContent, isPendingMarkdown: false }],
                               }
                             : m
                         ),
@@ -659,7 +669,15 @@ export const AIPanel: React.FC = () => {
                           if (item.type === 'text') {
                             return (
                               <div key={idx} className={styles.outputTextItem}>
-                                <MarkdownRenderer content={item.content} />
+                                {item.isPendingMarkdown ? (
+                                  // During streaming, show raw text without markdown parsing
+                                  // to avoid broken table rendering from partial markdown
+                                  <pre style={{ margin: 0, padding: 0, fontFamily: 'inherit', fontSize: 'inherit', lineHeight: 'inherit', whiteSpace: 'pre-wrap', background: 'transparent' }}>
+                                    {item.content}
+                                  </pre>
+                                ) : (
+                                  <MarkdownRenderer content={item.content} />
+                                )}
                               </div>
                             );
                           }
@@ -740,7 +758,14 @@ export const AIPanel: React.FC = () => {
                               ))}
                             </div>
                           ) : message.content ? (
-                            <MarkdownRenderer content={message.content} />
+                            // During streaming, show raw text to avoid broken markdown
+                            isThisStreaming ? (
+                              <pre style={{ margin: 0, padding: 0, fontFamily: 'inherit', fontSize: 'inherit', lineHeight: 'inherit', whiteSpace: 'pre-wrap', background: 'transparent' }}>
+                                {message.content}
+                              </pre>
+                            ) : (
+                              <MarkdownRenderer content={message.content} />
+                            )
                           ) : !message.toolResults?.length && !isThisStreaming ? (
                             <div className={styles.toolOnlyPlaceholder}>工具执行完成</div>
                           ) : null}

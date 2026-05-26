@@ -427,7 +427,7 @@ export interface MessageToolResult {
 
 /** Output item types for interleaved rendering */
 export type OutputItem =
-  | { type: 'text'; content: string }
+  | { type: 'text'; content: string; isPendingMarkdown?: boolean }
   | { type: 'tool_call_start'; toolCallId: string; toolName: string; arguments: Record<string, unknown> }
   | { type: 'tool_result'; toolCallId: string; status: 'success' | 'error'; result: string; duration?: number; diffSummary?: MessageToolResult['diffSummary'] }
   | { type: 'tool_error'; toolCallId: string; error: string };
