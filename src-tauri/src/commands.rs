@@ -251,7 +251,7 @@ pub async fn get_settings() -> Result<Settings, String> {
 }
 
 #[tauri::command]
-pub async fn save_settings(settings: Settings) -> Result<(), String> {
+pub async fn save_settings(settings: Settings, state: State<'_, AppState>) -> Result<(), String> {
     let path = get_settings_path();
     
     std::fs::create_dir_all(path.parent().unwrap())
@@ -263,5 +263,98 @@ pub async fn save_settings(settings: Settings) -> Result<(), String> {
     std::fs::write(&path, content)
         .map_err(|e| format!("Failed to write settings: {}", e))?;
     
+    // Update AI config from settings
+    let ai_provider = match settings.ai_provider.as_str() {
+        "openai" | "deepseek" => ai::AIProvider::OpenAI {
+            api_key: settings.ai_api_key.clone().unwrap_or_default(),
+            base_url: settings.ai_base_url.clone().unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
+        },
+        "ollama" => ai::AIProvider::Ollama {
+            base_url: settings.ai_base_url.clone().unwrap_or_else(|| "http://localhost:11434".to_string()),
+        },
+        _ => ai::AIProvider::OpenAI {
+            api_key: settings.ai_api_key.clone().unwrap_or_default(),
+            base_url: settings.ai_base_url.clone().unwrap_or_else(|| "https://api.deepseek.com".to_string()),
+        },
+    };
+    
+    let ai_config = ai::AIConfig {
+        provider: ai_provider,
+        model: settings.ai_model.clone(),
+        temperature: 0.7,
+        max_tokens: Some(4096),
+    };
+    
+    *state.ai_config.write().await = ai_config;
+    
     Ok(())
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TestResult {
+    pub success: bool,
+    pub message: String,
+}
+
+#[tauri::command]
+pub async fn test_ai_connection(
+    api_key: Option<String>,
+    base_url: String,
+    model: String,
+) -> Result<TestResult, String> {
+    tracing::info!("Testing AI connection to: {}", base_url);
+    
+    let client = reqwest::Client::new();
+    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+    
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [
+            {"role": "user", "content": "Say 'Hello, connection successful!' in exactly those words."}
+        ],
+        "max_tokens": 50,
+    });
+    
+    let mut request = client.post(&url);
+    
+    if let Some(key) = &api_key {
+        if !key.is_empty() {
+            request = request.header("Authorization", format!("Bearer {}", key));
+        }
+    }
+    
+    request = request.header("Content-Type", "application/json");
+    
+    let response = request
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+    
+    if response.status().is_success() {
+        let response_json: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse response: {}", e))?;
+        
+        if let Some(content) = response_json["choices"][0]["message"]["content"].as_str() {
+            Ok(TestResult {
+                success: true,
+                message: format!("连接成功！AI 回复: {}", content),
+            })
+        } else {
+            Ok(TestResult {
+                success: true,
+                message: "连接成功！".to_string(),
+            })
+        }
+    } else {
+        let status = response.status();
+        let error_text = response.text().await.unwrap_or_default();
+        
+        Ok(TestResult {
+            success: false,
+            message: format!("连接失败 (HTTP {}): {}", status.as_u16(), error_text),
+        })
+    }
 }

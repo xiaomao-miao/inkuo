@@ -59,6 +59,7 @@ pub fn run() {
             commands::get_settings,
             commands::save_settings,
             commands::index_workspace,
+            commands::test_ai_connection,
         ])
         .run(tauri::generate_context!())
         .expect("error while running inkuo application");

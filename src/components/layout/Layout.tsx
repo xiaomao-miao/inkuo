@@ -8,7 +8,11 @@ import { AIPanel } from '../aipanel/AIPanel';
 import { useAIPanelStore } from '../../store';
 import styles from './Layout.module.css';
 
-export const Layout: React.FC = () => {
+interface LayoutProps {
+  onOpenSettings: () => void;
+}
+
+export const Layout: React.FC<LayoutProps> = ({ onOpenSettings }) => {
   const { isOpen: isAIPanelOpen } = useAIPanelStore();
   const [activeView, setActiveView] = useState<ViewType>('files');
   const [isSidebarVisible, setIsSidebarVisible] = useState(true);
@@ -19,7 +23,7 @@ export const Layout: React.FC = () => {
 
   return (
     <div className={styles.layout}>
-      <TitleBar />
+      <TitleBar onOpenSettings={onOpenSettings} />
       <div className={styles.body}>
         <ActivityBar 
           activeView={activeView}

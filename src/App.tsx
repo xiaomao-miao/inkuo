@@ -1,21 +1,23 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Layout } from './components/layout';
 import { CmdK } from './components/cmdk';
+import { Settings } from './components/settings';
 import { useSettingsStore } from './store';
 import { invoke } from '@tauri-apps/api/core';
-import type { Settings } from './types';
+import type { Settings as SettingsType } from './types';
 
 import './styles/design-tokens.css';
 import './styles/global.css';
 
 function App() {
   const { settings, setSettings } = useSettingsStore();
+  const [showSettings, setShowSettings] = useState(false);
 
   // Load settings on mount
   useEffect(() => {
     const loadSettings = async () => {
       try {
-        const savedSettings = await invoke<Settings>('get_settings');
+        const savedSettings = await invoke<SettingsType>('get_settings');
         setSettings(savedSettings);
       } catch (err) {
         console.error('Failed to load settings:', err);
@@ -36,8 +38,9 @@ function App() {
 
   return (
     <>
-      <Layout />
+      <Layout onOpenSettings={() => setShowSettings(true)} />
       <CmdK />
+      {showSettings && <Settings onClose={() => setShowSettings(false)} />}
     </>
   );
 }
