@@ -17,8 +17,6 @@ import {
   Search,
   FileEdit,
   Sparkles,
-  Plus,
-  Minus,
 } from 'lucide-react';
 import {
   useAIPanelStore,
@@ -32,6 +30,7 @@ import { useSettingsStore } from '../../store';
 import styles from './AIPanel.module.css';
 import { parsePlanBlocks, type PlanBlock } from './planRender';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { InlineDiffPreview } from './InlineDiffPreview';
 
 const MODE_LABELS: Record<ChatMode, string> = {
   ask: 'Ask',
@@ -84,6 +83,7 @@ export const AIPanel: React.FC = () => {
     rejectAllHunks,
     setIsOpen,
     clearToolCalls,
+    setMessageDiff,
   } = useAIPanelStore();
 
   const activeSession = useMemo(
@@ -93,7 +93,7 @@ export const AIPanel: React.FC = () => {
 
   const messages = activeSession?.messages ?? [];
   const isStreaming = activeSession?.isStreaming ?? false;
-  const currentDiff = activeSession?.currentDiff ?? null;
+  const pendingDiff = activeSession?.pendingDiff ?? null;
   const mode: ChatMode = activeSession?.mode ?? 'ask';
   const activeToolCalls = activeSession?.activeToolCalls ?? [];
 
@@ -371,7 +371,8 @@ export const AIPanel: React.FC = () => {
                   newText: new_content,
                 });
 
-                useAIPanelStore.getState().setCurrentDiff(session_id, {
+                // Set diff on the message associated with this tool result
+                setMessageDiff(session_id, message_id, {
                   originalText: original_content,
                   newText: new_content,
                   hunks: diff?.hunks ?? [],
@@ -458,7 +459,8 @@ export const AIPanel: React.FC = () => {
                   newText: effectiveContent,
                 });
 
-                useAIPanelStore.getState().setCurrentDiff(session_id, {
+                // Set diff on the message itself
+                setMessageDiff(session_id, message_id, {
                   originalText,
                   newText: effectiveContent,
                   hunks: diff?.hunks ?? [],
@@ -607,44 +609,8 @@ export const AIPanel: React.FC = () => {
           </div>
         )}
 
-        {/* Diff view */}
-        {currentDiff && (
-          <div className={styles.diffContainer}>
-            <div className={styles.diffHeader}>
-              <h4>AI 修改建议</h4>
-              <div className={styles.diffActions}>
-                <button
-                  className={styles.diffBtnAccept}
-                  onClick={() => activeSession && acceptAllHunks(activeSession.id)}
-                >
-                  <Check size={14} />
-                  接受全部
-                </button>
-                <button
-                  className={styles.diffBtnReject}
-                  onClick={() => activeSession && rejectAllHunks(activeSession.id)}
-                >
-                  <X size={14} />
-                  拒绝全部
-                </button>
-              </div>
-            </div>
-            <div className={styles.diffSummary}>{currentDiff.summary}</div>
-            <div className={styles.diffContent}>
-              <div className={styles.diffOld}>
-                <div className={styles.diffLabel}><Minus size={12} /><span>原文</span></div>
-                <pre className={styles.diffText}>{currentDiff.originalText}</pre>
-              </div>
-              <div className={styles.diffNew}>
-                <div className={styles.diffLabel}><Plus size={12} /><span>修改后</span></div>
-                <pre className={styles.diffText}>{currentDiff.newText}</pre>
-              </div>
-            </div>
-          </div>
-        )}
-
         {/* Messages */}
-        {messages.length === 0 && !currentDiff ? (
+        {messages.length === 0 ? (
           <div className={styles.emptyState}>
             <div className={styles.emptyIcon}><Sparkles size={32} /></div>
             <h3>开始对话</h3>
@@ -692,6 +658,16 @@ export const AIPanel: React.FC = () => {
                     ) : message.content ? (
                       <MarkdownRenderer content={message.content} />
                     ) : null}
+
+                    {/* Inline diff associated with this message */}
+                    {message.diff && (
+                      <InlineDiffPreview
+                        originalText={message.diff.originalText}
+                        newText={message.diff.newText}
+                        onAccept={() => activeSession && acceptAllHunks(activeSession.id)}
+                        onReject={() => activeSession && rejectAllHunks(activeSession.id)}
+                      />
+                    )}
                   </div>
                 )}
               </div>
@@ -705,6 +681,17 @@ export const AIPanel: React.FC = () => {
                     : '正在思考...'}
                 </span>
               </div>
+            )}
+
+            {/* Streaming diff preview - shows during text editing */}
+            {pendingDiff && (
+              <InlineDiffPreview
+                originalText={pendingDiff.originalText}
+                newText={pendingDiff.newText}
+                onAccept={() => activeSession && acceptAllHunks(activeSession.id)}
+                onReject={() => activeSession && rejectAllHunks(activeSession.id)}
+                isStreaming={isStreaming}
+              />
             )}
             <div ref={messagesEndRef} />
           </div>

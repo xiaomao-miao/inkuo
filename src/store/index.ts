@@ -392,6 +392,8 @@ export interface ChatMessage {
   // For tool result messages
   toolCallId?: string;
   toolResult?: MessageToolResult;
+  // Inline diff associated with this message
+  diff?: CurrentDiff;
 }
 
 /** Active tool call being executed */
@@ -417,6 +419,8 @@ export interface ChatSession {
   currentDiff: CurrentDiff | null;
   // Active tool calls for agent mode
   activeToolCalls: ActiveToolCall[];
+  // Pending diff preview during streaming (for inline editing)
+  pendingDiff: CurrentDiff | null;
 }
 
 /** AI Panel state */
@@ -449,6 +453,8 @@ interface AIPanelState {
   clearToolCalls: (sessionId: string) => void;
 
   setCurrentDiff: (sessionId: string, diff: CurrentDiff | null) => void;
+  setMessageDiff: (sessionId: string, messageId: string, diff: CurrentDiff | null) => void;
+  setPendingDiff: (sessionId: string, diff: CurrentDiff | null) => void;
   acceptHunk: (sessionId: string, hunkId: string) => void;
   rejectHunk: (sessionId: string, hunkId: string) => void;
   acceptAllHunks: (sessionId: string) => void;
@@ -470,6 +476,7 @@ function createNewSession(index: number): ChatSession {
     isStreaming: false,
     currentDiff: null,
     activeToolCalls: [],
+    pendingDiff: null,
   };
 }
 
@@ -563,7 +570,7 @@ export const useAIPanelStore = create<AIPanelState>()(
         clearMessages: (sessionId) =>
           set((state) => ({
             sessions: state.sessions.map((s) =>
-              s.id === sessionId ? { ...s, messages: [], isStreaming: false, currentDiff: null, activeToolCalls: [] } : s
+              s.id === sessionId ? { ...s, messages: [], isStreaming: false, currentDiff: null, activeToolCalls: [], pendingDiff: null } : s
             ),
           })),
 
@@ -614,16 +621,52 @@ export const useAIPanelStore = create<AIPanelState>()(
             sessions: state.sessions.map((s) => (s.id === sessionId ? { ...s, currentDiff: diff } : s)),
           })),
 
+        setMessageDiff: (sessionId, messageId, diff) =>
+          set((state) => ({
+            sessions: state.sessions.map((s) =>
+              s.id === sessionId
+                ? {
+                    ...s,
+                    messages: s.messages.map((m) =>
+                      m.id === messageId ? { ...m, diff } : m
+                    ),
+                  }
+                : s
+            ),
+          })),
+
+        setPendingDiff: (sessionId, diff) =>
+          set((state) => ({
+            sessions: state.sessions.map((s) =>
+              s.id === sessionId ? { ...s, pendingDiff: diff } : s
+            ),
+          })),
+
         acceptHunk: (sessionId, hunkId) =>
           set((state) => ({
             sessions: state.sessions.map((s) => {
               if (s.id !== sessionId) return s;
-              if (!s.currentDiff) return s;
-              const newHunks = s.currentDiff.hunks.filter((h) => h.id !== hunkId);
-              return {
-                ...s,
-                currentDiff: newHunks.length > 0 ? { ...s.currentDiff, hunks: newHunks } : null,
-              };
+
+              // Check session-level diff
+              if (s.currentDiff) {
+                const newHunks = s.currentDiff.hunks.filter((h) => h.id !== hunkId);
+                return {
+                  ...s,
+                  currentDiff: newHunks.length > 0 ? { ...s.currentDiff, hunks: newHunks } : null,
+                };
+              }
+
+              // Check message-level diffs
+              const updatedMessages = s.messages.map((m) => {
+                if (!m.diff) return m;
+                const newHunks = m.diff.hunks.filter((h) => h.id !== hunkId);
+                return {
+                  ...m,
+                  diff: newHunks.length > 0 ? { ...m.diff, hunks: newHunks } : undefined,
+                };
+              });
+
+              return { ...s, messages: updatedMessages };
             }),
           })),
 
@@ -631,23 +674,68 @@ export const useAIPanelStore = create<AIPanelState>()(
           set((state) => ({
             sessions: state.sessions.map((s) => {
               if (s.id !== sessionId) return s;
-              if (!s.currentDiff) return s;
-              const newHunks = s.currentDiff.hunks.filter((h) => h.id !== hunkId);
-              return {
-                ...s,
-                currentDiff: newHunks.length > 0 ? { ...s.currentDiff, hunks: newHunks } : null,
-              };
+
+              // Check session-level diff
+              if (s.currentDiff) {
+                const newHunks = s.currentDiff.hunks.filter((h) => h.id !== hunkId);
+                return {
+                  ...s,
+                  currentDiff: newHunks.length > 0 ? { ...s.currentDiff, hunks: newHunks } : null,
+                };
+              }
+
+              // Check message-level diffs
+              const updatedMessages = s.messages.map((m) => {
+                if (!m.diff) return m;
+                const newHunks = m.diff.hunks.filter((h) => h.id !== hunkId);
+                return {
+                  ...m,
+                  diff: newHunks.length > 0 ? { ...m.diff, hunks: newHunks } : undefined,
+                };
+              });
+
+              return { ...s, messages: updatedMessages };
             }),
           })),
 
         acceptAllHunks: (sessionId) =>
           set((state) => ({
-            sessions: state.sessions.map((s) => (s.id === sessionId ? { ...s, currentDiff: null } : s)),
+            sessions: state.sessions.map((s) => {
+              if (s.id !== sessionId) return s;
+
+              // Clear session-level diff
+              if (s.currentDiff || s.pendingDiff) {
+                return { ...s, currentDiff: null, pendingDiff: null };
+              }
+
+              // Clear message-level diffs
+              const updatedMessages = s.messages.map((m) => ({
+                ...m,
+                diff: undefined,
+              }));
+
+              return { ...s, messages: updatedMessages };
+            }),
           })),
 
         rejectAllHunks: (sessionId) =>
           set((state) => ({
-            sessions: state.sessions.map((s) => (s.id === sessionId ? { ...s, currentDiff: null } : s)),
+            sessions: state.sessions.map((s) => {
+              if (s.id !== sessionId) return s;
+
+              // Clear session-level diff
+              if (s.currentDiff || s.pendingDiff) {
+                return { ...s, currentDiff: null, pendingDiff: null };
+              }
+
+              // Clear message-level diffs
+              const updatedMessages = s.messages.map((m) => ({
+                ...m,
+                diff: undefined,
+              }));
+
+              return { ...s, messages: updatedMessages };
+            }),
           })),
       };
     },

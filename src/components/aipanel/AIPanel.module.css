@@ -413,6 +413,27 @@
   padding: 16px;
 }
 
+/* Inline Diff (within message) */
+.inlineDiffContainer {
+  margin-top: 16px;
+  padding: 12px;
+  background-color: var(--bg-tertiary);
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+}
+
+.inlineDiffContainer .diffHeader {
+  margin-bottom: 8px;
+}
+
+.inlineDiffContainer .diffSummary {
+  margin-bottom: 8px;
+}
+
+.inlineDiffContainer .diffContent {
+  gap: 8px;
+}
+
 .diffHeader {
   display: flex;
   align-items: center;
