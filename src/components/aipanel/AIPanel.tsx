@@ -118,6 +118,8 @@ export const AIPanel: React.FC = () => {
   const selectedFileRef = useRef(selectedFile);
   const documentContentsRef = useRef(documentContents);
   const workspacePathRef = useRef<string | null>(null);
+  // Track current mode to avoid stale closure in streaming listener
+  const modeRef = useRef(mode);
 
   // Keep refs updated
   useEffect(() => {
@@ -126,6 +128,11 @@ export const AIPanel: React.FC = () => {
     documentContentsRef.current = documentContents;
     workspacePathRef.current = useSidebarStore.getState().workspacePath;
   });
+
+  // Keep modeRef in sync with mode
+  useEffect(() => {
+    modeRef.current = mode;
+  }, [mode]);
 
   // Scroll to bottom when new messages arrive
   useEffect(() => {
@@ -258,6 +265,9 @@ export const AIPanel: React.FC = () => {
             tool_call_id,
             tool_name,
             tool_args,
+            file_path,
+            original_content,
+            new_content,
           } = payload;
 
           if (!payload || !session_id || !message_id) return;
@@ -327,6 +337,10 @@ export const AIPanel: React.FC = () => {
               .find((s) => s.id === session_id)
               ?.activeToolCalls.find((tc) => tc.id === tool_call_id)?.startTime;
 
+            // Check if this is a file modification (has diff info)
+            const hasDiffInfo = file_path && original_content && new_content;
+
+            // Store diff info for tool call
             useAIPanelStore.setState((state) => ({
               sessions: state.sessions.map((s) =>
                 s.id === session_id
@@ -347,6 +361,25 @@ export const AIPanel: React.FC = () => {
                   : s
               ),
             }));
+
+            // Compute diff hunks for file modifications and show in UI
+            if (hasDiffInfo && !isError && original_content && new_content) {
+              try {
+                const diff = await invoke<any>('compute_diff', {
+                  oldText: original_content,
+                  newText: new_content,
+                });
+
+                useAIPanelStore.getState().setCurrentDiff(session_id, {
+                  originalText: original_content,
+                  newText: new_content,
+                  hunks: diff?.hunks ?? [],
+                  summary: `已修改文件: ${file_path}`,
+                });
+              } catch {
+                // ignore diff failure
+              }
+            }
             return;
           }
 
@@ -374,6 +407,10 @@ export const AIPanel: React.FC = () => {
 
           // Handle done event
           if (done) {
+            const currentMode = modeRef.current;
+            // Fallback: use accumulated streaming content if final_content is missing
+            const effectiveContent = final_content || streamingContentRef.current[message_id] || '';
+
             // Clean up ref
             delete streamingContentRef.current[message_id];
 
@@ -388,23 +425,41 @@ export const AIPanel: React.FC = () => {
               ),
             }));
 
-            // Handle final content for agent mode - compute diff if needed
-            if (final_content && mode === 'agent') {
+            // Update message with final content (only if not already set via streaming)
+            if (effectiveContent) {
+              useAIPanelStore.setState((state) => ({
+                sessions: state.sessions.map((s) =>
+                  s.id === session_id
+                    ? {
+                        ...s,
+                        messages: s.messages.map((m) =>
+                          m.id === message_id
+                            ? { ...m, content: m.content || effectiveContent }
+                            : m
+                        ),
+                      }
+                    : s
+                ),
+              }));
+            }
+
+            // Handle final content for agent mode - compute diff ONLY if:
+            // 1. User has selected text (no selection = no diff needed)
+            // 2. AI content is different from the original selection
+            // Note: Most agent interactions are conversational, not document edits
+            const selection = getSelectionRef.current();
+            if (effectiveContent && currentMode === 'agent' && selection && effectiveContent !== selection) {
               try {
-                const selection = getSelectionRef.current();
-                const currentDoc = selectedFileRef.current
-                  ? documentContentsRef.current[selectedFileRef.current]
-                  : null;
-                const originalText = selection || currentDoc?.content || '';
+                const originalText = selection;
 
                 const diff = await invoke<any>('compute_diff', {
                   oldText: originalText,
-                  newText: final_content,
+                  newText: effectiveContent,
                 });
 
                 useAIPanelStore.getState().setCurrentDiff(session_id, {
                   originalText,
-                  newText: final_content,
+                  newText: effectiveContent,
                   hunks: diff?.hunks ?? [],
                   summary: summary ?? 'AI 已修改内容',
                 });

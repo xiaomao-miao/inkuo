@@ -66,6 +66,7 @@ fn convert_message(msg: &FrontendMessage) -> Option<Message> {
             });
             Some(Message::Assistant {
                 content: Some(msg.content.clone()),
+                reasoning_content: None,
                 tool_calls,
             })
         }
@@ -153,7 +154,11 @@ pub async fn ai_agent_stream(
     let app_clone = app.clone();
     let instruction_clone = instruction.clone();
 
+    tracing::info!("[DEBUG] Setting up callback for session: {}, message: {}", session_id_clone, message_id_clone);
+
     let callback = move |payload: StreamPayload| {
+        tracing::info!("[DEBUG] Callback fired - event_type: {}, session_id: {}, message_id: {}",
+            payload.event_type, payload.session_id, payload.message_id);
         let mut p = payload;
         p.session_id = session_id_clone.clone();
         p.message_id = message_id_clone.clone();
@@ -161,7 +166,7 @@ pub async fn ai_agent_stream(
     };
 
     match executor
-        .run(&mut session, &instruction_clone, callback)
+        .run(&mut session, &instruction_clone, &session_id, &message_id, callback)
         .await
     {
         Ok(final_response) => {
@@ -185,6 +190,9 @@ pub async fn ai_agent_stream(
                     final_content: Some(final_response),
                     error: None,
                     done: true,
+                    file_path: None,
+                    original_content: None,
+                    new_content: None,
                 },
             );
         }
@@ -213,6 +221,9 @@ pub async fn ai_agent_stream(
                     final_content: None,
                     error: Some(error_msg),
                     done: true,
+                    file_path: None,
+                    original_content: None,
+                    new_content: None,
                 },
             );
         }

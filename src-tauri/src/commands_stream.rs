@@ -50,6 +50,9 @@ pub async fn ai_chat_stream(
                     final_content: None,
                     error: None,
                     done: false,
+                    file_path: None,
+                    original_content: None,
+                    new_content: None,
                 },
             );
         })
@@ -73,6 +76,9 @@ pub async fn ai_chat_stream(
                 final_content: None,
                 error: Some(e.to_string()),
                 done: true,
+                file_path: None,
+                original_content: None,
+                new_content: None,
             },
         );
         return Err(format!("AI error: {}", e));
@@ -93,6 +99,9 @@ pub async fn ai_chat_stream(
                 final_content: None,
                 error: Some("cancelled".to_string()),
                 done: true,
+                file_path: None,
+                original_content: None,
+                new_content: None,
             },
         );
         return Ok(());
@@ -112,6 +121,9 @@ pub async fn ai_chat_stream(
             final_content: Some(result.unwrap()),
             error: None,
             done: true,
+            file_path: None,
+            original_content: None,
+            new_content: None,
         },
     );
 
@@ -170,6 +182,9 @@ pub async fn ai_edit_stream(
                     final_content: None,
                     error: None,
                     done: false,
+                    file_path: None,
+                    original_content: None,
+                    new_content: None,
                 },
             );
         })
@@ -191,6 +206,9 @@ pub async fn ai_edit_stream(
                 final_content: None,
                 error: Some("cancelled".to_string()),
                 done: true,
+                file_path: None,
+                original_content: None,
+                new_content: None,
             },
         );
         return Ok(());
@@ -210,6 +228,9 @@ pub async fn ai_edit_stream(
             final_content: Some(result.content),
             error: None,
             done: true,
+            file_path: None,
+            original_content: None,
+            new_content: None,
         },
     );
 

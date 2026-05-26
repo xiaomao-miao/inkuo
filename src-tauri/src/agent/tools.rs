@@ -113,6 +113,12 @@ pub struct ToolResult {
     pub tool_call_id: String,
     pub output: String,
     pub is_error: bool,
+    /// Original file content before modification (for diff calculation)
+    pub original_content: Option<String>,
+    /// New content after modification (for diff calculation)
+    pub new_content: Option<String>,
+    /// Path of modified file (if applicable)
+    pub file_path: Option<String>,
 }
 
 impl ToolResult {
@@ -121,6 +127,9 @@ impl ToolResult {
             tool_call_id: tool_call_id.to_string(),
             output: output.into(),
             is_error: false,
+            original_content: None,
+            new_content: None,
+            file_path: None,
         }
     }
 
@@ -129,6 +138,27 @@ impl ToolResult {
             tool_call_id: tool_call_id.to_string(),
             output: error.into(),
             is_error: true,
+            original_content: None,
+            new_content: None,
+            file_path: None,
+        }
+    }
+
+    /// Create a success result for file modifications with diff info
+    pub fn file_modified(
+        tool_call_id: &str,
+        output: impl Into<String>,
+        file_path: impl Into<String>,
+        original_content: impl Into<String>,
+        new_content: impl Into<String>,
+    ) -> Self {
+        Self {
+            tool_call_id: tool_call_id.to_string(),
+            output: output.into(),
+            is_error: false,
+            original_content: Some(original_content.into()),
+            new_content: Some(new_content.into()),
+            file_path: Some(file_path.into()),
         }
     }
 }
@@ -724,8 +754,45 @@ impl ToolRegistry {
             }
         };
 
+        // Check if this is a file modification tool
+        let is_file_modification = matches!(
+            tool_call.name.as_str(),
+            "write_file" | "edit_file"
+        );
+
+        // For file modification tools, we need to capture original content
+        let original_content: Option<String> = if is_file_modification {
+            if let Some(path) = tool_call.arguments.get("path").and_then(|v| v.as_str()) {
+                tokio::fs::read_to_string(path).await.ok()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
         match executor.execute(tool_call.arguments.clone()).await {
-            Ok(output) => ToolResult::success(&tool_call.id, output),
+            Ok(output) => {
+                if is_file_modification {
+                    let file_path = tool_call.arguments.get("path").and_then(|v| v.as_str());
+                    let new_content = if let Some(path) = file_path {
+                        tokio::fs::read_to_string(path).await.ok()
+                    } else {
+                        None
+                    };
+
+                    ToolResult {
+                        tool_call_id: tool_call.id.clone(),
+                        output,
+                        is_error: false,
+                        original_content,
+                        new_content,
+                        file_path: file_path.map(String::from),
+                    }
+                } else {
+                    ToolResult::success(&tool_call.id, output)
+                }
+            }
             Err(e) => ToolResult::error(&tool_call.id, e.to_string()),
         }
     }

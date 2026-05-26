@@ -51,6 +51,8 @@ pub enum Message {
     #[serde(rename = "assistant")]
     Assistant {
         content: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reasoning_content: Option<String>,
         #[serde(default)]
         tool_calls: Option<Vec<ToolCallMessage>>,
     },
@@ -70,8 +72,8 @@ impl Message {
         Self::System { content: content.into() }
     }
 
-    pub fn assistant(content: Option<String>, tool_calls: Option<Vec<ToolCallMessage>>) -> Self {
-        Self::Assistant { content, tool_calls }
+    pub fn assistant(content: Option<String>, reasoning_content: Option<String>, tool_calls: Option<Vec<ToolCallMessage>>) -> Self {
+        Self::Assistant { content, reasoning_content, tool_calls }
     }
 
     pub fn tool_result(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
@@ -134,12 +136,15 @@ impl AgentSession {
                     "role": "user",
                     "content": content
                 }),
-                Message::Assistant { content, tool_calls } => {
+                Message::Assistant { content, reasoning_content, tool_calls } => {
                     let mut obj = serde_json::json!({
                         "role": "assistant",
                     });
                     if let Some(c) = content {
                         obj["content"] = serde_json::json!(c);
+                    }
+                    if let Some(rc) = reasoning_content {
+                        obj["reasoning_content"] = serde_json::json!(rc);
                     }
                     if let Some(tc) = tool_calls {
                         obj["tool_calls"] = serde_json::json!(tc);
@@ -183,11 +188,15 @@ impl AgentExecutor {
         &self,
         session: &mut AgentSession,
         user_request: &str,
+        session_id: &str,
+        message_id: &str,
         on_event: F,
     ) -> Result<String, AgentError>
     where
         F: Fn(StreamPayload) + Clone + Send + Sync + 'static,
     {
+        tracing::info!("[DEBUG] AgentExecutor::run started - session_id: {}, message_id: {}", session_id, message_id);
+
         // Add user message
         session.add_message(Message::user(user_request));
 
@@ -208,21 +217,21 @@ impl AgentExecutor {
 
             // Make API call with tools
             let response = self
-                .call_ai_with_tools(&messages, &tools_json, on_event.clone())
+                .call_ai_with_tools(&messages, &tools_json, session_id, message_id, on_event.clone())
                 .await?;
 
             // Parse response
-            let (content, tool_calls) = self.parse_response(&response)?;
+            let (content, reasoning_content, tool_calls) = self.parse_response(&response)?;
 
             // Check for cancellation
-            if let Some(content) = &content {
-                if content.contains("__CANCELLED__") {
+            if let Some(c) = &content {
+                if c.contains("__CANCELLED__") {
                     return Err(AgentError::Cancelled);
                 }
             }
 
-            // Add assistant message to history
-            session.add_message(Message::assistant(content.clone(), tool_calls.clone()));
+            // Add assistant message to history (with reasoning_content for DeepSeek)
+            session.add_message(Message::assistant(content.clone(), reasoning_content.clone(), tool_calls.clone()));
 
             // If no tool calls, we're done
             let tool_calls = match tool_calls {
@@ -256,8 +265,8 @@ impl AgentExecutor {
             for parsed in &parsed_calls {
                 // Emit tool call start event
                 on_event(StreamPayload {
-                    session_id: String::new(),
-                    message_id: String::new(),
+                    session_id: session_id.to_string(),
+                    message_id: message_id.to_string(),
                     event_type: "tool_call_start".to_string(),
                     content: None,
                     summary: None,
@@ -267,6 +276,9 @@ impl AgentExecutor {
                     final_content: None,
                     error: None,
                     done: false,
+                    file_path: None,
+                    original_content: None,
+                    new_content: None,
                 });
 
                 // Execute tool
@@ -278,19 +290,23 @@ impl AgentExecutor {
 
                 let result = session.tool_registry.read().await.execute(&tool_call).await;
 
-                // Emit tool result event
+                // Emit tool result event (includes diff info for file modifications)
                 on_event(StreamPayload {
-                    session_id: String::new(),
-                    message_id: String::new(),
+                    session_id: session_id.to_string(),
+                    message_id: message_id.to_string(),
                     event_type: "tool_result".to_string(),
                     content: Some(result.output.clone()),
                     summary: None,
-                    tool_call_id: Some(result.tool_call_id),
+                    tool_call_id: Some(result.tool_call_id.clone()),
                     tool_name: None,
                     tool_args: None,
                     final_content: None,
                     error: if result.is_error { Some(result.output.clone()) } else { None },
                     done: false,
+                    // Diff info for file modification tools
+                    file_path: result.file_path.clone(),
+                    original_content: result.original_content.clone(),
+                    new_content: result.new_content.clone(),
                 });
 
                 // Add tool result to message history
@@ -306,6 +322,8 @@ impl AgentExecutor {
         &self,
         messages: &[Value],
         tools: &[Value],
+        session_id: &str,
+        message_id: &str,
         on_event: F,
     ) -> Result<String, AgentError>
     where
@@ -363,6 +381,7 @@ impl AgentExecutor {
         let mut buffer = String::new();
         let mut current_tool_calls: Vec<ToolCallMessage> = Vec::new();
         let mut current_content = String::new();
+        let mut current_reasoning_content = String::new();
 
         let mut stream = response.bytes_stream();
         let mut bytes_received = 0;
@@ -402,14 +421,16 @@ impl AgentExecutor {
 
                     tracing::info!("SSE data: {}", data);
 
-                    match self.parse_sse_delta(data) {
+                    let parsed = self.parse_sse_delta(data);
+                    tracing::info!("[PARSING] parse result: {:?}", parsed);
+                    match parsed {
                         Ok(Some(delta)) => {
-                            // Update content
+                            // Update content (both content and reasoning_content for DeepSeek)
                             if let Some(content) = delta.content {
                                 current_content.push_str(&content);
                                 on_event(StreamPayload {
-                                    session_id: String::new(),
-                                    message_id: String::new(),
+                                    session_id: session_id.to_string(),
+                                    message_id: message_id.to_string(),
                                     event_type: "text".to_string(),
                                     content: Some(content),
                                     summary: None,
@@ -419,7 +440,32 @@ impl AgentExecutor {
                                     final_content: None,
                                     error: None,
                                     done: false,
+                                    file_path: None,
+                                    original_content: None,
+                                    new_content: None,
                                 });
+                            }
+                            // Also handle reasoning_content (DeepSeek's thinking)
+                            if let Some(reasoning) = delta.reasoning_content {
+                                if !reasoning.is_empty() {
+                                    current_reasoning_content.push_str(&reasoning);
+                                    on_event(StreamPayload {
+                                        session_id: session_id.to_string(),
+                                        message_id: message_id.to_string(),
+                                        event_type: "text".to_string(),
+                                        content: Some(reasoning),
+                                        summary: None,
+                                        tool_call_id: None,
+                                        tool_name: None,
+                                        tool_args: None,
+                                        final_content: None,
+                                        error: None,
+                                        done: false,
+                                        file_path: None,
+                                        original_content: None,
+                                        new_content: None,
+                                    });
+                                }
                             }
 
                             // Collect tool calls
@@ -465,9 +511,16 @@ impl AgentExecutor {
 
         tracing::info!("Stream processing complete. bytes_received: {}, current_content_len: {}", bytes_received, current_content.len());
 
+        // Debug: log the final tool calls
+        for (i, tc) in current_tool_calls.iter().enumerate() {
+            tracing::info!("[TOOL_CALL_DEBUG] #{:02}: id='{}', name='{}', args='{}'", 
+                i, tc.id, tc.function.name, tc.function.arguments);
+        }
+
         // Build final response
         let response_json = serde_json::json!({
             "content": current_content,
+            "reasoning_content": current_reasoning_content,
             "tool_calls": current_tool_calls
         });
 
@@ -478,26 +531,33 @@ impl AgentExecutor {
     fn parse_sse_delta(&self, data: &str) -> Result<Option<DeltaResponse>, String> {
         let json: Value = serde_json::from_str(data)
             .map_err(|e| format!("JSON parse error: {}", e))?;
-        let delta = match json.get("delta") {
+
+        // delta is nested inside choices[0].delta
+        let delta = match json.get("choices") {
+            Some(choices) if choices.is_array() => {
+                choices.get(0).and_then(|c| c.get("delta"))
+            }
+            _ => None,
+        };
+
+        let delta = match delta {
             Some(d) => d,
             None => return Ok(None),
         };
-        // Verify we have choices
-        if json.get("choices").is_none() {
-            return Ok(None);
-        }
 
-        // Handle both content and reasoning_content (DeepSeek)
+        // Handle content (Chinese text from DeepSeek)
         let content = delta
             .get("content")
             .and_then(|c| c.as_str())
-            .map(String::from)
-            .or_else(|| {
-                delta
-                    .get("reasoning_content")
-                    .and_then(|c| c.as_str())
-                    .map(String::from)
-            });
+            .filter(|s| !s.is_empty())
+            .map(String::from);
+
+        // Handle reasoning_content (English thinking from DeepSeek)
+        let reasoning_content = delta
+            .get("reasoning_content")
+            .and_then(|c| c.as_str())
+            .filter(|s| !s.is_empty())
+            .map(String::from);
 
         let tool_calls = delta
             .get("tool_calls")
@@ -531,18 +591,27 @@ impl AgentExecutor {
 
         Ok(Some(DeltaResponse {
             content,
+            reasoning_content,
             tool_calls,
         }))
     }
 
     /// Parse the final response
-    fn parse_response(&self, response: &str) -> Result<(Option<String>, Option<Vec<ToolCallMessage>>), AgentError> {
+    fn parse_response(&self, response: &str) -> Result<(Option<String>, Option<String>, Option<Vec<ToolCallMessage>>), AgentError> {
         let json: Value = serde_json::from_str(response)
             .map_err(|e| AgentError::InvalidResponse(format!("JSON parse error: {}", e)))?;
 
+        // DeepSeek puts Chinese text in content, English thinking in reasoning_content
         let content = json
             .get("content")
             .and_then(|c| c.as_str())
+            .filter(|s| !s.is_empty())
+            .map(String::from);
+
+        let reasoning_content = json
+            .get("reasoning_content")
+            .and_then(|c| c.as_str())
+            .filter(|s| !s.is_empty())
             .map(String::from);
 
         let tool_calls = json
@@ -563,13 +632,14 @@ impl AgentExecutor {
                     .collect()
             });
 
-        Ok((content, tool_calls))
+        Ok((content, reasoning_content, tool_calls))
     }
 }
 
 #[derive(Debug)]
 struct DeltaResponse {
     content: Option<String>,
+    reasoning_content: Option<String>,
     tool_calls: Option<Vec<DeltaToolCall>>,
 }
 

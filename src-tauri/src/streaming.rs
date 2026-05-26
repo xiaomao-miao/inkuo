@@ -61,6 +61,19 @@ pub struct StreamPayload {
 
     /// Whether this is the final event
     pub done: bool,
+
+    // === File modification diff fields ===
+    /// File path that was modified
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_path: Option<String>,
+
+    /// Original content before modification (for diff calculation)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub original_content: Option<String>,
+
+    /// New content after modification (for diff calculation)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_content: Option<String>,
 }
 
 impl Default for StreamPayload {
@@ -77,6 +90,9 @@ impl Default for StreamPayload {
             final_content: None,
             error: None,
             done: false,
+            file_path: None,
+            original_content: None,
+            new_content: None,
         }
     }
 }
@@ -95,6 +111,9 @@ impl StreamPayload {
             final_content: None,
             error: None,
             done: false,
+            file_path: None,
+            original_content: None,
+            new_content: None,
         }
     }
 
@@ -111,6 +130,9 @@ impl StreamPayload {
             final_content: None,
             error: Some(error.to_string()),
             done: true,
+            file_path: None,
+            original_content: None,
+            new_content: None,
         }
     }
 
@@ -133,6 +155,9 @@ impl StreamPayload {
             final_content: None,
             error: None,
             done: false,
+            file_path: None,
+            original_content: None,
+            new_content: None,
         }
     }
 
@@ -155,6 +180,9 @@ impl StreamPayload {
             final_content: None,
             error: if is_error { Some(result.to_string()) } else { None },
             done: false,
+            file_path: None,
+            original_content: None,
+            new_content: None,
         }
     }
 
@@ -171,6 +199,9 @@ impl StreamPayload {
             final_content: final_content.map(String::from),
             error: None,
             done: true,
+            file_path: None,
+            original_content: None,
+            new_content: None,
         }
     }
 }
