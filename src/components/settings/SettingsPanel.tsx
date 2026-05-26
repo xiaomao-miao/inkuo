@@ -15,10 +15,23 @@ import styles from './SettingsPanel.module.css';
 
 export const SettingsPanel: React.FC = () => {
   const { settings, updateSetting } = useSettingsStore();
-  
+
   const [showApiKey, setShowApiKey] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const saveSettings = async () => {
+    setSaving(true);
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('save_settings', { settings });
+    } catch (err) {
+      console.error('Failed to save settings:', err);
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const handleTestConnection = async () => {
     setTesting(true);
@@ -62,7 +75,7 @@ export const SettingsPanel: React.FC = () => {
             <select
               className={styles.select}
               value={settings.ai_provider}
-              onChange={e => updateSetting('ai_provider', e.target.value as any)}
+              onChange={e => { updateSetting('ai_provider', e.target.value as any); saveSettings(); }}
             >
               <option value="openai">OpenAI (兼容)</option>
               <option value="ollama">Ollama (本地)</option>
@@ -80,7 +93,7 @@ export const SettingsPanel: React.FC = () => {
               type="text"
               className={styles.input}
               value={settings.ai_base_url || ''}
-              onChange={e => updateSetting('ai_base_url', e.target.value)}
+              onChange={e => { updateSetting('ai_base_url', e.target.value); saveSettings(); }}
               placeholder="https://api.openai.com/v1"
             />
           </div>
@@ -95,7 +108,7 @@ export const SettingsPanel: React.FC = () => {
               type="text"
               className={styles.input}
               value={settings.ai_model}
-              onChange={e => updateSetting('ai_model', e.target.value)}
+              onChange={e => { updateSetting('ai_model', e.target.value); saveSettings(); }}
               placeholder="gpt-4o-mini"
             />
           </div>
@@ -111,7 +124,7 @@ export const SettingsPanel: React.FC = () => {
                 type={showApiKey ? 'text' : 'password'}
                 className={styles.input}
                 value={settings.ai_api_key || ''}
-                onChange={e => updateSetting('ai_api_key', e.target.value || null)}
+                onChange={e => { updateSetting('ai_api_key', e.target.value || null); saveSettings(); }}
                 placeholder="sk-..."
               />
               <button
@@ -165,7 +178,7 @@ export const SettingsPanel: React.FC = () => {
                 min="10"
                 max="24"
                 value={settings.editor_font_size}
-                onChange={e => updateSetting('editor_font_size', parseInt(e.target.value))}
+                onChange={e => { updateSetting('editor_font_size', parseInt(e.target.value)); saveSettings(); }}
                 className={styles.range}
               />
               <span className={styles.rangeValue}>{settings.editor_font_size}px</span>
@@ -177,7 +190,7 @@ export const SettingsPanel: React.FC = () => {
             <select
               className={styles.select}
               value={settings.editor_font_family}
-              onChange={e => updateSetting('editor_font_family', e.target.value)}
+              onChange={e => { updateSetting('editor_font_family', e.target.value); saveSettings(); }}
             >
               <option value="JetBrains Mono, monospace">JetBrains Mono</option>
               <option value="Fira Code, monospace">Fira Code</option>
@@ -197,7 +210,7 @@ export const SettingsPanel: React.FC = () => {
             <div className={styles.themeGrid}>
               <button
                 className={`${styles.themeOption} ${settings.theme === 'cursor-dark' ? styles.active : ''}`}
-                onClick={() => updateSetting('theme', 'cursor-dark')}
+                                onClick={() => { updateSetting('theme', 'cursor-dark'); saveSettings(); }}
               >
                 <div className={styles.themePreview} style={{ background: '#1e1e1e' }}>
                   <div style={{ color: '#7c5cff', fontSize: '10px' }}>Aa</div>
@@ -206,7 +219,7 @@ export const SettingsPanel: React.FC = () => {
               </button>
               <button
                 className={`${styles.themeOption} ${settings.theme === 'cursor-light' ? styles.active : ''}`}
-                onClick={() => updateSetting('theme', 'cursor-light')}
+                                onClick={() => { updateSetting('theme', 'cursor-light'); saveSettings(); }}
               >
                 <div className={styles.themePreview} style={{ background: '#ffffff' }}>
                   <div style={{ color: '#7c5cff', fontSize: '10px' }}>Aa</div>
@@ -222,7 +235,7 @@ export const SettingsPanel: React.FC = () => {
               <input
                 type="color"
                 value={settings.accent_color}
-                onChange={e => updateSetting('accent_color', e.target.value)}
+                onChange={e => { updateSetting('accent_color', e.target.value); saveSettings(); }}
                 className={styles.colorInput}
               />
               <span className={styles.colorValue}>{settings.accent_color}</span>

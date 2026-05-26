@@ -1,38 +1,32 @@
 import { useEffect } from 'react';
 import { Layout } from './components/layout';
 import { CmdK } from './components/cmdk';
-import { useSettingsStore } from './store';
-import { invoke } from '@tauri-apps/api/core';
-import type { Settings as SettingsType } from './types';
+import { useSettingsStore, useSidebarStore } from './store';
 
 import './styles/design-tokens.css';
 import './styles/global.css';
 
 function App() {
-  const { settings, setSettings } = useSettingsStore();
-
-  // Load settings on mount
-  useEffect(() => {
-    const loadSettings = async () => {
-      try {
-        const savedSettings = await invoke<SettingsType>('get_settings');
-        setSettings(savedSettings);
-      } catch (err) {
-        console.error('Failed to load settings:', err);
-      }
-    };
-    loadSettings();
-  }, [setSettings]);
+  const { settings } = useSettingsStore();
+  const { openTabs, activeTabId, setActiveTab } = useSidebarStore();
 
   // Apply theme
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', settings.theme);
-    
+
     // Apply accent color as CSS variable
     document.documentElement.style.setProperty('--accent-primary', settings.accent_color);
     document.documentElement.style.setProperty('--accent-hover', adjustColor(settings.accent_color, 20));
     document.documentElement.style.setProperty('--accent-active', adjustColor(settings.accent_color, -20));
   }, [settings.theme, settings.accent_color]);
+
+  // Restore open tabs on startup
+  useEffect(() => {
+    if (openTabs.length > 0 && activeTabId) {
+      setActiveTab(activeTabId);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <>

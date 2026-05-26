@@ -3,9 +3,14 @@
 //! Exposes Rust backend functionality to the frontend via IPC.
 
 use crate::{diff, document, ai, rag};
+use std::collections::HashSet;
+use parking_lot::Mutex;
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::State;
+
+pub static STREAM_CANCELLED: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
 pub struct AppState {
     pub rag_index: Arc<rag::RAGIndex>,
@@ -14,9 +19,41 @@ pub struct AppState {
 
 impl Default for AppState {
     fn default() -> Self {
+        let settings = read_settings_from_disk().unwrap_or_else(|_| Settings::default());
+
+        let ai_provider = match settings.ai_provider.as_str() {
+            "openai" | "deepseek" => ai::AIProvider::OpenAI {
+                api_key: settings.ai_api_key.clone().unwrap_or_default(),
+                base_url: settings
+                    .ai_base_url
+                    .clone()
+                    .unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
+            },
+            "ollama" => ai::AIProvider::Ollama {
+                base_url: settings
+                    .ai_base_url
+                    .clone()
+                    .unwrap_or_else(|| "http://localhost:11434".to_string()),
+            },
+            _ => ai::AIProvider::OpenAI {
+                api_key: settings.ai_api_key.clone().unwrap_or_default(),
+                base_url: settings
+                    .ai_base_url
+                    .clone()
+                    .unwrap_or_else(|| "https://api.deepseek.com".to_string()),
+            },
+        };
+
+        let ai_config = ai::AIConfig {
+            provider: ai_provider,
+            model: settings.ai_model.clone(),
+            temperature: 0.7,
+            max_tokens: Some(4096),
+        };
+
         Self {
             rag_index: Arc::new(rag::RAGIndex::new()),
-            ai_config: Arc::new(tokio::sync::RwLock::new(ai::AIConfig::default())),
+            ai_config: Arc::new(tokio::sync::RwLock::new(ai_config)),
         }
     }
 }
@@ -233,6 +270,20 @@ fn get_settings_path() -> std::path::PathBuf {
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join("inkuo")
         .join("settings.json")
+}
+
+fn read_settings_from_disk() -> Result<Settings, String> {
+    let path = get_settings_path();
+
+    if !path.exists() {
+        return Ok(Settings::default());
+    }
+
+    let content = std::fs::read_to_string(&path)
+        .map_err(|e| format!("Failed to read settings: {}", e))?;
+
+    serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse settings: {}", e))
 }
 
 #[tauri::command]

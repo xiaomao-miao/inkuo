@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 import type { Document, Settings, DiffHunk, FileEntry } from '../types';
 
 interface DocumentState {
@@ -279,7 +280,9 @@ export interface OpenTab {
   isDirty: boolean;
 }
 
-export const useSidebarStore = create<SidebarState>((set) => ({
+export const useSidebarStore = create<SidebarState>()(
+  persist(
+    (set) => ({
   workspacePath: null,
   files: [],
   expandedDirs: new Set(),
@@ -333,7 +336,18 @@ export const useSidebarStore = create<SidebarState>((set) => ({
       selectedFile: tab?.path || state.selectedFile 
     };
   }),
-}));
+}),
+    {
+      name: 'inkuo-sidebar',
+      partialize: (state) => ({
+        workspacePath: state.workspacePath,
+        openTabs: state.openTabs,
+        activeTabId: state.activeTabId,
+        selectedFile: state.selectedFile,
+      }),
+    }
+  )
+);
 
 // AI Panel store
 export interface CurrentDiff {
@@ -343,26 +357,7 @@ export interface CurrentDiff {
   summary: string;
 }
 
-interface AIPanelState {
-  isOpen: boolean;
-  activeTab: 'chat' | 'edit';
-  messages: ChatMessage[];
-  isStreaming: boolean;
-  currentDiff: CurrentDiff | null;
-  
-  setIsOpen: (open: boolean) => void;
-  togglePanel: () => void;
-  setActiveTab: (tab: 'chat' | 'edit') => void;
-  addMessage: (message: ChatMessage) => void;
-  updateMessage: (id: string, content: string) => void;
-  setIsStreaming: (streaming: boolean) => void;
-  clearMessages: () => void;
-  setCurrentDiff: (diff: CurrentDiff | null) => void;
-  acceptHunk: (hunkId: string) => void;
-  rejectHunk: (hunkId: string) => void;
-  acceptAllHunks: () => void;
-  rejectAllHunks: () => void;
-}
+export type ChatMode = 'ask' | 'plan' | 'agent';
 
 export interface ChatMessage {
   id: string;
@@ -371,48 +366,195 @@ export interface ChatMessage {
   timestamp: number;
 }
 
-export const useAIPanelStore = create<AIPanelState>((set) => ({
-  isOpen: true,
-  activeTab: 'chat',
-  messages: [],
-  isStreaming: false,
-  currentDiff: null,
-  
-  setIsOpen: (open) => set({ isOpen: open }),
-  togglePanel: () => set((state) => ({ isOpen: !state.isOpen })),
-  setActiveTab: (tab) => set({ activeTab: tab }),
-  addMessage: (message) => set((state) => ({ 
-    messages: [...state.messages, message] 
-  })),
-  updateMessage: (id, content) => set((state) => ({
-    messages: state.messages.map(m => 
-      m.id === id ? { ...m, content } : m
-    ),
-  })),
-  setIsStreaming: (streaming) => set({ isStreaming: streaming }),
-  clearMessages: () => set({ messages: [], isStreaming: false }),
-  setCurrentDiff: (diff) => set({ currentDiff: diff }),
-  acceptHunk: (hunkId) => set((state) => {
-    if (!state.currentDiff) return state;
-    const newHunks = state.currentDiff.hunks.filter(h => h.id !== hunkId);
-    return { 
-      currentDiff: newHunks.length > 0 
-        ? { ...state.currentDiff, hunks: newHunks }
-        : null 
-    };
-  }),
-  rejectHunk: (hunkId) => set((state) => {
-    if (!state.currentDiff) return state;
-    const newHunks = state.currentDiff.hunks.filter(h => h.id !== hunkId);
-    return { 
-      currentDiff: newHunks.length > 0 
-        ? { ...state.currentDiff, hunks: newHunks }
-        : null 
-    };
-  }),
-  acceptAllHunks: () => set({ currentDiff: null }),
-  rejectAllHunks: () => set({ currentDiff: null }),
-}));
+export interface ChatSession {
+  id: string;
+  title: string;
+  createdAt: number;
+  mode: ChatMode;
+  messages: ChatMessage[];
+  isStreaming: boolean;
+  currentDiff: CurrentDiff | null;
+}
+
+interface AIPanelState {
+  isOpen: boolean;
+  activeTab: 'chat' | 'edit';
+
+  sessions: ChatSession[];
+  activeSessionId: string;
+
+  setIsOpen: (open: boolean) => void;
+  togglePanel: () => void;
+  setActiveTab: (tab: 'chat' | 'edit') => void;
+
+  createSession: () => string;
+  deleteSession: (sessionId: string) => void;
+  setActiveSession: (sessionId: string) => void;
+  setSessionMode: (sessionId: string, mode: ChatMode) => void;
+
+  addMessage: (sessionId: string, message: ChatMessage) => void;
+  updateMessage: (sessionId: string, messageId: string, content: string) => void;
+  setIsStreaming: (sessionId: string, streaming: boolean) => void;
+  clearMessages: (sessionId: string) => void;
+
+  setCurrentDiff: (sessionId: string, diff: CurrentDiff | null) => void;
+  acceptHunk: (sessionId: string, hunkId: string) => void;
+  rejectHunk: (sessionId: string, hunkId: string) => void;
+  acceptAllHunks: (sessionId: string) => void;
+  rejectAllHunks: (sessionId: string) => void;
+}
+
+function createSessionTitle(index: number) {
+  return `对话 ${index}`;
+}
+
+function createNewSession(index: number): ChatSession {
+  const now = Date.now();
+  return {
+    id: now.toString(),
+    title: createSessionTitle(index),
+    createdAt: now,
+    mode: 'ask',
+    messages: [],
+    isStreaming: false,
+    currentDiff: null,
+  };
+}
+
+export const useAIPanelStore = create<AIPanelState>()(
+  persist(
+    (set, get) => {
+      const initialSession = createNewSession(1);
+
+      return {
+        isOpen: true,
+        activeTab: 'chat',
+
+        sessions: [initialSession],
+        activeSessionId: initialSession.id,
+
+        setIsOpen: (open) => set({ isOpen: open }),
+        togglePanel: () => set((state) => ({ isOpen: !state.isOpen })),
+        setActiveTab: (tab) => set({ activeTab: tab }),
+
+        createSession: () => {
+          const index = get().sessions.length + 1;
+          const session = createNewSession(index);
+          set((state) => ({
+            sessions: [session, ...state.sessions],
+            activeSessionId: session.id,
+          }));
+          return session.id;
+        },
+
+        deleteSession: (sessionId) => {
+          set((state) => {
+            const remaining = state.sessions.filter((s) => s.id !== sessionId);
+            const safeRemaining = remaining.length > 0 ? remaining : [createNewSession(1)];
+            const nextActiveId =
+              state.activeSessionId === sessionId ? safeRemaining[0].id : state.activeSessionId;
+
+            return {
+              sessions: safeRemaining,
+              activeSessionId: nextActiveId,
+            };
+          });
+        },
+
+        setActiveSession: (sessionId) => set({ activeSessionId: sessionId }),
+
+        setSessionMode: (sessionId, mode) =>
+          set((state) => ({
+            sessions: state.sessions.map((s) => (s.id === sessionId ? { ...s, mode } : s)),
+          })),
+
+        addMessage: (sessionId, message) =>
+          set((state) => ({
+            sessions: state.sessions.map((s) =>
+              s.id === sessionId ? { ...s, messages: [...s.messages, message] } : s
+            ),
+          })),
+
+        updateMessage: (sessionId, messageId, content) =>
+          set((state) => ({
+            sessions: state.sessions.map((s) =>
+              s.id === sessionId
+                ? {
+                    ...s,
+                    messages: s.messages.map((m) => (m.id === messageId ? { ...m, content } : m)),
+                  }
+                : s
+            ),
+          })),
+
+        setIsStreaming: (sessionId, streaming) =>
+          set((state) => ({
+            sessions: state.sessions.map((s) => (s.id === sessionId ? { ...s, isStreaming: streaming } : s)),
+          })),
+
+        clearMessages: (sessionId) =>
+          set((state) => ({
+            sessions: state.sessions.map((s) =>
+              s.id === sessionId ? { ...s, messages: [], isStreaming: false, currentDiff: null } : s
+            ),
+          })),
+
+        setCurrentDiff: (sessionId, diff) =>
+          set((state) => ({
+            sessions: state.sessions.map((s) => (s.id === sessionId ? { ...s, currentDiff: diff } : s)),
+          })),
+
+        acceptHunk: (sessionId, hunkId) =>
+          set((state) => ({
+            sessions: state.sessions.map((s) => {
+              if (s.id !== sessionId) return s;
+              if (!s.currentDiff) return s;
+              const newHunks = s.currentDiff.hunks.filter((h) => h.id !== hunkId);
+              return {
+                ...s,
+                currentDiff: newHunks.length > 0 ? { ...s.currentDiff, hunks: newHunks } : null,
+              };
+            }),
+          })),
+
+        rejectHunk: (sessionId, hunkId) =>
+          set((state) => ({
+            sessions: state.sessions.map((s) => {
+              if (s.id !== sessionId) return s;
+              if (!s.currentDiff) return s;
+              const newHunks = s.currentDiff.hunks.filter((h) => h.id !== hunkId);
+              return {
+                ...s,
+                currentDiff: newHunks.length > 0 ? { ...s.currentDiff, hunks: newHunks } : null,
+              };
+            }),
+          })),
+
+        acceptAllHunks: (sessionId) =>
+          set((state) => ({
+            sessions: state.sessions.map((s) => (s.id === sessionId ? { ...s, currentDiff: null } : s)),
+          })),
+
+        rejectAllHunks: (sessionId) =>
+          set((state) => ({
+            sessions: state.sessions.map((s) => (s.id === sessionId ? { ...s, currentDiff: null } : s)),
+          })),
+      };
+    },
+    {
+      name: 'inkuo-aipanel',
+      partialize: (state) => ({
+        isOpen: state.isOpen,
+        sessions: state.sessions.map((s) => ({
+          ...s,
+          isStreaming: false,
+          currentDiff: null,
+        })),
+        activeSessionId: state.activeSessionId,
+      }),
+    }
+  )
+);
 
 // Settings store
 interface SettingsState {
@@ -435,16 +577,24 @@ const defaultSettings: Settings = {
   ai_base_url: 'https://api.deepseek.com',
 };
 
-export const useSettingsStore = create<SettingsState>((set) => ({
-  settings: defaultSettings,
-  isSettingsOpen: false,
-  
-  setSettings: (settings) => set({ settings }),
-  updateSetting: (key, value) => set((state) => ({
-    settings: { ...state.settings, [key]: value },
-  })),
-  setIsSettingsOpen: (open) => set({ isSettingsOpen: open }),
-}));
+export const useSettingsStore = create<SettingsState>()(
+  persist(
+    (set) => ({
+      settings: defaultSettings,
+      isSettingsOpen: false,
+
+      setSettings: (settings) => set({ settings }),
+      updateSetting: (key, value) => set((state) => ({
+        settings: { ...state.settings, [key]: value },
+      })),
+      setIsSettingsOpen: (open) => set({ isSettingsOpen: open }),
+    }),
+    {
+      name: 'inkuo-settings',
+      partialize: (state) => ({ settings: state.settings }),
+    }
+  )
+);
 
 // Cmd+K modal store
 interface CmdKState {

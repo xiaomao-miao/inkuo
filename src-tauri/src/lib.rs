@@ -12,6 +12,9 @@ mod diff;
 mod ai;
 mod rag;
 mod commands;
+mod commands_stream;
+mod streaming;
+mod openai_stream;
 
 pub use document::*;
 pub use diff::*;
@@ -55,6 +58,9 @@ pub fn run() {
             commands::list_directory,
             commands::compute_diff,
             commands::ai_edit,
+            commands_stream::ai_chat_stream,
+            commands_stream::ai_edit_stream,
+            commands_stream::ai_stream_cancel,
             commands::search_knowledge_base,
             commands::get_settings,
             commands::save_settings,

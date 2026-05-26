@@ -1,14 +1,12 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { 
-  MessageSquare, 
-  Wand2, 
-  PanelRightClose, 
+import { listen } from '@tauri-apps/api/event';
+import {
+  MessageSquare,
+  PanelRightClose,
   Loader2,
   Copy,
   Trash2,
-  Check,
-  X,
   ChevronDown,
   FileText,
   MousePointer,
@@ -17,10 +15,15 @@ import {
   Minus,
   AlignLeft,
   FileCode,
-  Send
+  Send,
+  PlusCircle,
+  StopCircle,
+  Check,
+  X,
 } from 'lucide-react';
-import { useAIPanelStore, useEditorStore, useSidebarStore, type ChatMessage } from '../../store';
+import { useAIPanelStore, useEditorStore, useSidebarStore, type ChatMessage, type ChatMode } from '../../store';
 import styles from './AIPanel.module.css';
+import { parsePlanBlocks, type PlanBlock } from './planRender';
 
 type ScopeType = 'selection' | 'paragraph' | 'section' | 'document';
 
@@ -34,29 +37,61 @@ const TEMPLATES = [
   { icon: <FileText size={14} />, label: '翻译英文', prompt: '请翻译为英文并保留专业术语' },
 ];
 
+const SCOPE_OPTIONS: { key: ScopeType; icon: React.ReactNode; label: string }[] = [
+  { key: 'selection', icon: <MousePointer size={14} />, label: '选区' },
+  { key: 'paragraph', icon: <AlignLeft size={14} />, label: '段落' },
+  { key: 'section', icon: <FileText size={14} />, label: '章节' },
+  { key: 'document', icon: <FileCode size={14} />, label: '文档' },
+];
+
+const MODE_LABELS: Record<ChatMode, string> = {
+  ask: 'Ask',
+  plan: 'Plan',
+  agent: 'Agent',
+};
+
+const MODE_HINTS: Record<ChatMode, string> = {
+  ask: '只回答（不修改文件）',
+  plan: '只输出计划（不修改文件）',
+  agent: '允许修改（会给出可应用变更）',
+};
+
 export const AIPanel: React.FC = () => {
   const {
-    activeTab,
-    messages,
-    isStreaming,
-    currentDiff,
-    setActiveTab,
+    sessions,
+    activeSessionId,
+    createSession,
+    deleteSession,
+    setActiveSession,
+    setSessionMode,
     addMessage,
+    updateMessage,
     setIsStreaming,
     clearMessages,
     setCurrentDiff,
     acceptAllHunks,
     rejectAllHunks,
+    setIsOpen,
   } = useAIPanelStore();
-  
+
+  const activeSession = useMemo(
+    () => sessions.find((s) => s.id === activeSessionId) ?? sessions[0],
+    [sessions, activeSessionId]
+  );
+
+  const messages = activeSession?.messages ?? [];
+  const isStreaming = activeSession?.isStreaming ?? false;
+  const currentDiff = activeSession?.currentDiff ?? null;
+  const mode: ChatMode = activeSession?.mode ?? 'ask';
+
   const { selectedFile } = useSidebarStore();
   const { documentContents, getSelection } = useEditorStore();
-  
+
   const [input, setInput] = useState('');
   const [scope, setScope] = useState<ScopeType>('selection');
   const [showScopeMenu, setShowScopeMenu] = useState(false);
   const [showTemplates, setShowTemplates] = useState(false);
-  
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -74,61 +109,57 @@ export const AIPanel: React.FC = () => {
   }, [input]);
 
   const handleSend = async () => {
-    if (!input.trim() || isStreaming) return;
+    if (!activeSession || !input.trim() || isStreaming) return;
+
+    const sessionId = activeSession.id;
+    const instruction = input.trim();
 
     const userMessage: ChatMessage = {
       id: Date.now().toString(),
       role: 'user',
-      content: input.trim(),
+      content: instruction,
       timestamp: Date.now(),
     };
-    
-    addMessage(userMessage);
+
+    const assistantMessageId = (Date.now() + 1).toString();
+    const assistantPlaceholder: ChatMessage = {
+      id: assistantMessageId,
+      role: 'assistant',
+      content: '',
+      timestamp: Date.now(),
+    };
+
+    addMessage(sessionId, userMessage);
+    addMessage(sessionId, assistantPlaceholder);
     setInput('');
-    setIsStreaming(true);
+    setIsStreaming(sessionId, true);
 
     try {
-      // Get current editor content and selection
       const selection = getSelection();
       const currentDoc = selectedFile ? documentContents[selectedFile] : null;
       const originalText = selection || currentDoc?.content || '';
 
-      // Call AI edit
-      const response = await invoke<any>('ai_edit', {
-        instruction: input.trim(),
-        originalText: originalText.slice(0, 5000),
-        scope: scope,
-        context: [],
-      });
-
-      const assistantMessage: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: response.content || response,
-        timestamp: Date.now(),
-      };
-      
-      addMessage(assistantMessage);
-      
-      // If there's a diff, store it
-      if (response.diff) {
-        setCurrentDiff({
-          originalText,
-          newText: response.content,
-          hunks: response.diff.hunks || [],
-          summary: response.summary || 'AI 已修改内容',
+      if (mode === 'agent') {
+        await invoke('ai_edit_stream', {
+          sessionId,
+          messageId: assistantMessageId,
+          instruction,
+          originalText: originalText.slice(0, 5000),
+          scope,
+          context: [],
+        });
+      } else {
+        await invoke('ai_chat_stream', {
+          sessionId,
+          messageId: assistantMessageId,
+          mode,
+          instruction,
+          originalText: originalText.slice(0, 5000),
         });
       }
     } catch (err) {
-      const errorMessage: ChatMessage = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: `抱歉，发生了错误：${err}`,
-        timestamp: Date.now(),
-      };
-      addMessage(errorMessage);
-    } finally {
-      setIsStreaming(false);
+      updateMessage(sessionId, assistantMessageId, `抱歉，发生了错误：${err}`);
+      setIsStreaming(sessionId, false);
     }
   };
 
@@ -149,245 +180,305 @@ export const AIPanel: React.FC = () => {
     inputRef.current?.focus();
   };
 
-  const getScopeLabel = () => {
-    switch (scope) {
-      case 'selection': return '选区';
-      case 'paragraph': return '段落';
-      case 'section': return '章节';
-      case 'document': return '文档';
-      default: return '选区';
+  const handleStop = async () => {
+    if (!activeSession) return;
+    try {
+      await invoke('ai_stream_cancel', { sessionId: activeSession.id });
+    } catch {
+      // ignore
     }
   };
 
+  // Streaming events
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+
+    const setup = async () => {
+      unlisten = await listen<any>('ai://stream', async (event) => {
+        const payload = event.payload;
+        if (!payload || !activeSession) return;
+
+        const { session_id, message_id, event_type, content, done, summary, final_content, error } = payload;
+        if (session_id !== activeSession.id) return;
+
+        if (event_type === 'error') {
+          updateMessage(session_id, message_id, error ?? '发生错误');
+          setIsStreaming(session_id, false);
+          return;
+        }
+
+        if (typeof content === 'string' && content.length > 0) {
+          const current = (sessions.find((s) => s.id === session_id)?.messages.find((m) => m.id === message_id)?.content) ?? '';
+          updateMessage(session_id, message_id, current + content);
+        }
+
+        if (done) {
+          setIsStreaming(session_id, false);
+
+          if (final_content && mode === 'agent') {
+            try {
+              const selection = getSelection();
+              const currentDoc = selectedFile ? documentContents[selectedFile] : null;
+              const originalText = selection || currentDoc?.content || '';
+
+              const diff = await invoke<any>('compute_diff', {
+                oldText: originalText,
+                newText: final_content,
+              });
+
+              setCurrentDiff(session_id, {
+                originalText,
+                newText: final_content,
+                hunks: diff?.hunks ?? [],
+                summary: summary ?? 'AI 已修改内容',
+              });
+            } catch {
+              // ignore diff failure
+            }
+          }
+        }
+      });
+    };
+
+    setup();
+    return () => {
+      unlisten?.();
+    };
+  }, [activeSession, sessions, mode, updateMessage, setIsStreaming, setCurrentDiff, getSelection, selectedFile, documentContents]);
+
   const getScopeIcon = () => {
-    switch (scope) {
-      case 'selection': return <MousePointer size={14} />;
-      case 'paragraph': return <AlignLeft size={14} />;
-      case 'section': return <FileText size={14} />;
-      case 'document': return <FileCode size={14} />;
-      default: return <MousePointer size={14} />;
-    }
+    const opt = SCOPE_OPTIONS.find(o => o.key === scope);
+    return opt?.icon ?? <MousePointer size={14} />;
+  };
+
+  const getScopeLabel = () => {
+    const opt = SCOPE_OPTIONS.find(o => o.key === scope);
+    return opt?.label ?? '选区';
+  };
+
+  const cycleMode = () => {
+    if (!activeSession) return;
+    const order: ChatMode[] = ['ask', 'plan', 'agent'];
+    const idx = order.indexOf(mode);
+    setSessionMode(activeSession.id, order[(idx + 1) % order.length]);
   };
 
   return (
     <aside className={styles.panel}>
+      {/* Header */}
       <div className={styles.header}>
-        <div className={styles.tabs}>
+        <div className={styles.sessionBar}>
           <button
-            className={`${styles.tab} ${activeTab === 'chat' ? styles.active : ''}`}
-            onClick={() => setActiveTab('chat')}
+            className={styles.newSessionBtn}
+            onClick={() => { const id = createSession(); setActiveSession(id); }}
+            title="新建对话"
+            type="button"
           >
-            <MessageSquare size={14} />
-            <span>对话</span>
+            <PlusCircle size={16} />
           </button>
-          <button
-            className={`${styles.tab} ${activeTab === 'edit' ? styles.active : ''}`}
-            onClick={() => setActiveTab('edit')}
-          >
-            <Wand2 size={14} />
-            <span>编辑</span>
-          </button>
+          <div className={styles.sessionList}>
+            {sessions.map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                className={`${styles.sessionChip} ${s.id === activeSession?.id ? styles.sessionActive : ''}`}
+                onClick={() => setActiveSession(s.id)}
+              >
+                <MessageSquare size={12} />
+                <span className={styles.sessionTitle}>
+                  {s.messages.length > 0
+                    ? s.messages[0].content.slice(0, 20) + (s.messages[0].content.length > 20 ? '...' : '')
+                    : '新对话'}
+                </span>
+                {sessions.length > 1 && (
+                  <span
+                    className={styles.sessionClose}
+                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); deleteSession(s.id); }}
+                    title="关闭"
+                  >
+                    <X size={11} />
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
         </div>
-        <button className={styles.closeButton} title="关闭面板">
+        <button className={styles.closeButton} title="关闭面板" onClick={() => setIsOpen(false)}>
           <PanelRightClose size={16} />
         </button>
       </div>
 
+      {/* Chat Content */}
       <div className={styles.content}>
-        {activeTab === 'chat' ? (
-          <>
-            {messages.length === 0 ? (
-              <div className={styles.emptyState}>
-                <div className={styles.emptyIcon}>
-                  <Sparkles size={32} />
-                </div>
-                <h3>开始对话</h3>
-                <p>询问关于文档的问题或请求 AI 帮助你写作</p>
-                <div className={styles.quickActions}>
-                  <button 
-                    className={styles.quickAction}
-                    onClick={() => setInput('总结这篇文档的主要内容')}
-                  >
-                    总结文档
-                  </button>
-                  <button 
-                    className={styles.quickAction}
-                    onClick={() => setInput('解释这段代码/文本的工作原理')}
-                  >
-                    解释内容
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className={styles.messages}>
-                {messages.map(message => (
-                  <div 
-                    key={message.id}
-                    className={`${styles.message} ${styles[message.role]}`}
-                  >
-                    <div className={styles.messageHeader}>
-                      <span className={styles.messageRole}>
-                        {message.role === 'user' ? '你' : 'AI'}
-                      </span>
-                      <div className={styles.messageActions}>
-                        <button 
-                          className={styles.actionBtn}
-                          onClick={() => handleCopy(message.content)}
-                          title="复制"
-                        >
-                          <Copy size={12} />
-                        </button>
-                      </div>
-                    </div>
-                    <div className={styles.messageContent}>
-                      {message.content}
-                    </div>
-                  </div>
-                ))}
-                {isStreaming && (
-                  <div className={`${styles.message} ${styles.assistant}`}>
-                    <div className={styles.messageHeader}>
-                      <span className={styles.messageRole}>AI</span>
-                    </div>
-                    <div className={styles.messageContent}>
-                      <Loader2 size={14} className={styles.loadingSpinner} />
-                      <span>正在思考...</span>
-                    </div>
-                  </div>
-                )}
-                <div ref={messagesEndRef} />
-              </div>
-            )}
-          </>
-        ) : (
-          <>
-            {/* Edit Tab */}
-            <div className={styles.editHeader}>
-              <div className={styles.scopeSelector}>
-                <button 
-                  className={styles.scopeButton}
-                  onClick={() => setShowScopeMenu(!showScopeMenu)}
-                >
-                  {getScopeIcon()}
-                  <span>{getScopeLabel()}</span>
-                  <ChevronDown size={12} />
-                </button>
-                {showScopeMenu && (
-                  <div className={styles.scopeMenu}>
-                    {(['selection', 'paragraph', 'section', 'document'] as ScopeType[]).map(s => (
-                      <button
-                        key={s}
-                        className={`${styles.scopeMenuItem} ${scope === s ? styles.active : ''}`}
-                        onClick={() => { setScope(s); setShowScopeMenu(false); }}
-                      >
-                        {s === 'selection' && <MousePointer size={14} />}
-                        {s === 'paragraph' && <AlignLeft size={14} />}
-                        {s === 'section' && <FileText size={14} />}
-                        {s === 'document' && <FileCode size={14} />}
-                        <span>
-                          {s === 'selection' && '选区'}
-                          {s === 'paragraph' && '段落'}
-                          {s === 'section' && '章节'}
-                          {s === 'document' && '文档'}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-              <button 
-                className={styles.templateButton}
-                onClick={() => setShowTemplates(!showTemplates)}
+        {/* Scope bar (shown when there's a currentDiff or when user wants edit scope) */}
+        {mode === 'agent' && (
+          <div className={styles.scopeBar}>
+            <div className={styles.scopeSelector}>
+              <button
+                className={styles.scopeButton}
+                onClick={() => setShowScopeMenu(!showScopeMenu)}
               >
-                <Sparkles size={14} />
-                <span>模板</span>
+                {getScopeIcon()}
+                <span>{getScopeLabel()}</span>
+                <ChevronDown size={12} />
+              </button>
+              {showScopeMenu && (
+                <div className={styles.scopeMenu}>
+                  {SCOPE_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.key}
+                      className={`${styles.scopeMenuItem} ${scope === opt.key ? styles.active : ''}`}
+                      onClick={() => { setScope(opt.key); setShowScopeMenu(false); }}
+                    >
+                      {opt.icon}
+                      <span>{opt.label}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <button
+              className={styles.templateButton}
+              onClick={() => setShowTemplates(!showTemplates)}
+            >
+              <Sparkles size={14} />
+              <span>模板</span>
+            </button>
+          </div>
+        )}
+
+        {showTemplates && (
+          <div className={styles.templates}>
+            {TEMPLATES.map((t, i) => (
+              <button
+                key={i}
+                className={styles.templateItem}
+                onClick={() => handleTemplateClick(t.prompt)}
+              >
+                {t.icon}
+                <span>{t.label}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Diff view */}
+        {currentDiff && (
+          <div className={styles.diffContainer}>
+            <div className={styles.diffHeader}>
+              <h4>AI 修改建议</h4>
+              <div className={styles.diffActions}>
+                <button
+                  className={styles.diffBtnAccept}
+                  onClick={() => activeSession && acceptAllHunks(activeSession.id)}
+                >
+                  <Check size={14} />
+                  接受全部
+                </button>
+                <button
+                  className={styles.diffBtnReject}
+                  onClick={() => activeSession && rejectAllHunks(activeSession.id)}
+                >
+                  <X size={14} />
+                  拒绝全部
+                </button>
+              </div>
+            </div>
+            <div className={styles.diffSummary}>{currentDiff.summary}</div>
+            <div className={styles.diffContent}>
+              <div className={styles.diffOld}>
+                <div className={styles.diffLabel}><Minus size={12} /><span>原文</span></div>
+                <pre className={styles.diffText}>{currentDiff.originalText}</pre>
+              </div>
+              <div className={styles.diffNew}>
+                <div className={styles.diffLabel}><Plus size={12} /><span>修改后</span></div>
+                <pre className={styles.diffText}>{currentDiff.newText}</pre>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Messages */}
+        {messages.length === 0 && !currentDiff ? (
+          <div className={styles.emptyState}>
+            <div className={styles.emptyIcon}><Sparkles size={32} /></div>
+            <h3>开始对话</h3>
+            <p>询问关于文档的问题或请求 AI 帮助你写作</p>
+            <div className={styles.quickActions}>
+              <button className={styles.quickAction} onClick={() => setInput('总结这篇文档的主要内容')}>
+                总结文档
+              </button>
+              <button className={styles.quickAction} onClick={() => setInput('解释这段代码/文本的工作原理')}>
+                解释内容
               </button>
             </div>
-
-            {showTemplates && (
-              <div className={styles.templates}>
-                {TEMPLATES.map((t, i) => (
-                  <button
-                    key={i}
-                    className={styles.templateItem}
-                    onClick={() => handleTemplateClick(t.prompt)}
-                  >
-                    {t.icon}
-                    <span>{t.label}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-
-            {currentDiff ? (
-              <div className={styles.diffContainer}>
-                <div className={styles.diffHeader}>
-                  <h4>AI 修改建议</h4>
-                  <div className={styles.diffActions}>
-                    <button 
-                      className={styles.diffBtnAccept}
-                      onClick={acceptAllHunks}
-                    >
-                      <Check size={14} />
-                      接受全部
-                    </button>
-                    <button 
-                      className={styles.diffBtnReject}
-                      onClick={rejectAllHunks}
-                    >
-                      <X size={14} />
-                      拒绝全部
+          </div>
+        ) : (
+          <div className={styles.messages}>
+            {messages.map((message) => (
+              <div key={message.id} className={`${styles.message} ${styles[message.role]}`}>
+                <div className={styles.messageHeader}>
+                  <span className={styles.messageRole}>
+                    {message.role === 'user' ? '你' : 'AI'}
+                  </span>
+                  <div className={styles.messageActions}>
+                    <button className={styles.actionBtn} onClick={() => handleCopy(message.content)} title="复制">
+                      <Copy size={12} />
                     </button>
                   </div>
                 </div>
-                <div className={styles.diffSummary}>
-                  {currentDiff.summary}
-                </div>
-                <div className={styles.diffContent}>
-                  <div className={styles.diffOld}>
-                    <div className={styles.diffLabel}>
-                      <Minus size={12} />
-                      <span>原文</span>
+                <div className={styles.messageContent}>
+                  {mode === 'plan' && message.role === 'assistant' ? (
+                    <div className={styles.planBlocks}>
+                      {parsePlanBlocks(message.content).map((b: PlanBlock, idx: number) => (
+                        <div key={idx} className={styles.planBlock}>
+                          <div className={styles.planTitle}>{b.title}</div>
+                          <pre className={styles.planBody}>{b.lines.join('\n')}</pre>
+                        </div>
+                      ))}
                     </div>
-                    <pre className={styles.diffText}>{currentDiff.originalText}</pre>
-                  </div>
-                  <div className={styles.diffNew}>
-                    <div className={styles.diffLabel}>
-                      <Plus size={12} />
-                      <span>修改后</span>
-                    </div>
-                    <pre className={styles.diffText}>{currentDiff.newText}</pre>
-                  </div>
+                  ) : (
+                    message.content
+                  )}
                 </div>
               </div>
-            ) : (
-              <div className={styles.editEmpty}>
-                <Wand2 size={32} />
-                <h3>AI 编辑</h3>
-                <p>输入指令，AI 将帮你修改文档内容</p>
-                <div className={styles.editTips}>
-                  <div className={styles.tip}>
-                    <kbd>Tab</kbd> 接受修改
-                  </div>
-                  <div className={styles.tip}>
-                    <kbd>Esc</kbd> 拒绝修改
-                  </div>
+            ))}
+            {isStreaming && (
+              <div className={`${styles.message} ${styles.assistant}`}>
+                <div className={styles.messageHeader}>
+                  <span className={styles.messageRole}>AI</span>
+                </div>
+                <div className={styles.messageContent}>
+                  <Loader2 size={14} className={styles.loadingSpinner} />
+                  <span>正在思考...</span>
                 </div>
               </div>
             )}
-          </>
+            <div ref={messagesEndRef} />
+          </div>
         )}
       </div>
 
       {/* Input Area */}
       <div className={styles.inputArea}>
+        <div className={styles.inputLeft}>
+          <button
+            type="button"
+            className={styles.modeButton}
+            onClick={cycleMode}
+            disabled={!activeSession || isStreaming}
+            title={MODE_HINTS[mode]}
+          >
+            {MODE_LABELS[mode]}
+          </button>
+        </div>
         <textarea
           ref={inputRef}
           className={styles.input}
           placeholder={
-            activeTab === 'chat' 
-              ? '输入消息... (Enter 发送，Shift+Enter 换行)' 
-              : '输入编辑指令... (例如：让这段话更专业)'
+            mode === 'agent'
+              ? '输入编辑指令... (例如：让这段话更专业)'
+              : '输入消息... (Enter 发送，Shift+Enter 换行)'
           }
           value={input}
           onChange={e => setInput(e.target.value)}
@@ -395,16 +486,20 @@ export const AIPanel: React.FC = () => {
           rows={1}
         />
         <div className={styles.inputActions}>
-          {messages.length > 0 && (
-            <button 
+          {isStreaming ? (
+            <button className={styles.iconBtn} onClick={handleStop} title="停止生成" type="button">
+              <StopCircle size={14} />
+            </button>
+          ) : messages.length > 0 && activeSession ? (
+            <button
               className={styles.iconBtn}
-              onClick={clearMessages}
+              onClick={() => clearMessages(activeSession.id)}
               title="清空对话"
             >
               <Trash2 size={14} />
             </button>
-          )}
-          <button 
+          ) : null}
+          <button
             className={styles.sendBtn}
             onClick={handleSend}
             disabled={!input.trim() || isStreaming}

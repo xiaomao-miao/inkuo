@@ -27,6 +27,120 @@
   border-bottom: 1px solid var(--border-color);
   height: 40px;
   flex-shrink: 0;
+  gap: 10px;
+}
+
+.sessionBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.newSessionBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  color: var(--fg-secondary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.newSessionBtn:hover {
+  background-color: var(--bg-hover);
+  color: var(--fg-primary);
+}
+
+.sessionList {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 2px;
+}
+
+.sessionChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 160px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  background-color: var(--bg-secondary);
+  color: var(--fg-secondary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  white-space: nowrap;
+}
+
+.sessionChip:hover {
+  border-color: var(--accent-primary);
+  color: var(--fg-primary);
+}
+
+.sessionActive {
+  border-color: var(--accent-primary);
+  background-color: var(--accent-subtle);
+  color: var(--fg-primary);
+}
+
+.sessionTitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 120px;
+}
+
+.sessionClose {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  color: var(--fg-muted);
+}
+
+.sessionClose:hover {
+  background-color: var(--bg-hover);
+  color: var(--fg-primary);
+}
+
+.inputLeft {
+  display: flex;
+  align-items: center;
+  padding-bottom: 2px;
+}
+
+.modeButton {
+  height: 34px;
+  padding: 0 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background-color: var(--bg-primary);
+  color: var(--fg-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.modeButton:hover:not(:disabled) {
+  border-color: var(--accent-primary);
+  color: var(--fg-primary);
+}
+
+.modeButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .tabs {
@@ -270,14 +384,15 @@
   to { transform: rotate(360deg); }
 }
 
-/* Edit Tab */
-.editHeader {
+/* Scope bar */
+.scopeBar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
+  padding: 8px 16px;
   border-bottom: 1px solid var(--border-color);
   background-color: var(--bg-tertiary);
+  gap: 8px;
 }
 
 .scopeSelector {
