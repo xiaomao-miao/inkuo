@@ -3,22 +3,6 @@ import { Check, X, Loader2, FileEdit, Terminal } from 'lucide-react';
 import type { DiffSummary } from '../../store';
 import styles from './ToolCallCard.module.css';
 
-interface DiffChange {
-  tag: 'delete' | 'insert' | 'equal';
-  old_line: number | null;
-  new_line: number | null;
-  content: string;
-}
-
-interface DiffHunk {
-  id: string;
-  old_start: number;
-  old_lines: number;
-  new_start: number;
-  new_lines: number;
-  changes: DiffChange[];
-}
-
 interface ToolCallCardProps {
   id: string;
   name: string;
@@ -45,11 +29,9 @@ const getToolDisplayName = (name: string): string => {
 };
 
 export const ToolCallCard: React.FC<ToolCallCardProps> = ({
-  id,
   name,
   arguments: args,
   status,
-  result,
   error,
   duration,
   diffSummary,

@@ -19,7 +19,6 @@ import {
   useSidebarStore,
   type ChatMessage,
   type ChatMode,
-  type ActiveToolCall,
   type MessageToolCall,
   type MessageToolResult,
 } from '../../store';
@@ -80,7 +79,7 @@ export const AIPanel: React.FC = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  // Ref to track accumulated content for streaming
+  // Ref to track accumulated text content for the current streaming message
   const streamingContentRef = useRef<Record<string, string>>({});
 
   // Ref to track the unlisten function
@@ -146,14 +145,15 @@ export const AIPanel: React.FC = () => {
       role: 'user',
       content: instruction,
       timestamp: Date.now(),
+      outputItems: [],
     };
 
     const assistantMessageId = (Date.now() + 1).toString();
     const assistantPlaceholder: ChatMessage = {
       id: assistantMessageId,
       role: 'assistant',
-      content: '',
       timestamp: Date.now(),
+      outputItems: [],
     };
 
     addMessage(sessionId, userMessage);
@@ -276,6 +276,10 @@ export const AIPanel: React.FC = () => {
             tool_name,
           });
 
+          // Debug: log message list after each event
+          const debugMessages = useAIPanelStore.getState().sessions.find(s => s.id === session_id)?.messages ?? [];
+          console.log('[Messages Debug] count:', debugMessages.length, 'roles:', debugMessages.map(m => m.role));
+
           // Handle error event
           if (event_type === 'error') {
             console.log('[Stream Error]', error);
@@ -312,7 +316,6 @@ export const AIPanel: React.FC = () => {
               arguments: args,
             };
 
-            // Add tool call to the assistant message
             useAIPanelStore.setState((state) => ({
               sessions: state.sessions.map((s) =>
                 s.id === session_id
@@ -320,7 +323,15 @@ export const AIPanel: React.FC = () => {
                       ...s,
                       messages: s.messages.map((m) =>
                         m.id === message_id
-                          ? { ...m, toolCalls: [...(m.toolCalls || []), newToolCall] }
+                          ? {
+                              ...m,
+                              toolCalls: [...(m.toolCalls || []), newToolCall],
+                              // Append tool_call_start item to outputItems
+                              outputItems: [
+                                ...m.outputItems,
+                                { type: 'tool_call_start', toolCallId: tool_call_id, toolName: tool_name, arguments: args },
+                              ],
+                            }
                           : m
                       ),
                       activeToolCalls: [...s.activeToolCalls, {
@@ -354,7 +365,6 @@ export const AIPanel: React.FC = () => {
               diffSummary: diff_summary ?? undefined,
             };
 
-            // Update the assistant message with tool result and diff_summary
             useAIPanelStore.setState((state) => ({
               sessions: state.sessions.map((s) =>
                 s.id === session_id
@@ -367,7 +377,22 @@ export const AIPanel: React.FC = () => {
                       ),
                       messages: s.messages.map((m) =>
                         m.id === message_id
-                          ? { ...m, toolResults: [...(m.toolResults || []), toolResult] }
+                          ? {
+                              ...m,
+                              toolResults: [...(m.toolResults || []), toolResult],
+                              // Append tool_result item to outputItems (in order of arrival)
+                              outputItems: [
+                                ...m.outputItems,
+                                {
+                                  type: 'tool_result',
+                                  toolCallId: tool_call_id,
+                                  status: isError ? 'error' : 'success',
+                                  result: content || '',
+                                  duration,
+                                  diffSummary: diff_summary ?? undefined,
+                                },
+                              ],
+                            }
                           : m
                       ),
                     }
@@ -377,9 +402,8 @@ export const AIPanel: React.FC = () => {
             return;
           }
 
-          // Handle text delta
+          // Handle text delta — append to the last text item in outputItems, or create one
           if (typeof content === 'string' && content.length > 0) {
-            // Use ref to accumulate content reliably
             const currentAccumulated = streamingContentRef.current[message_id] || '';
             streamingContentRef.current[message_id] = currentAccumulated + content;
 
@@ -388,11 +412,19 @@ export const AIPanel: React.FC = () => {
                 s.id === session_id
                   ? {
                       ...s,
-                      messages: s.messages.map((m) =>
-                        m.id === message_id
-                          ? { ...m, content: streamingContentRef.current[message_id] || '' }
-                          : m
-                      ),
+                      messages: s.messages.map((m) => {
+                        if (m.id !== message_id) return m;
+                        const items = m.outputItems;
+                        const lastItem = items[items.length - 1];
+                        if (lastItem && lastItem.type === 'text') {
+                          // Append to existing last text item
+                          const updated = { ...lastItem, content: lastItem.content + content };
+                          return { ...m, outputItems: [...items.slice(0, -1), updated] };
+                        } else {
+                          // Create new text item
+                          return { ...m, outputItems: [...items, { type: 'text', content: content }] };
+                        }
+                      }),
                     }
                   : s
               ),
@@ -405,7 +437,7 @@ export const AIPanel: React.FC = () => {
             // Fallback: use accumulated streaming content if final_content is missing
             const effectiveContent = final_content || streamingContentRef.current[message_id] || '';
 
-            // Clean up ref
+            // Clean up refs
             delete streamingContentRef.current[message_id];
 
             // Clear tool calls after a delay
@@ -419,7 +451,7 @@ export const AIPanel: React.FC = () => {
               ),
             }));
 
-            // Update message with final content (only if not already set via streaming)
+            // Update message with final content (backward compat + fallback)
             if (effectiveContent) {
               useAIPanelStore.setState((state) => ({
                 sessions: state.sessions.map((s) =>
@@ -428,7 +460,13 @@ export const AIPanel: React.FC = () => {
                         ...s,
                         messages: s.messages.map((m) =>
                           m.id === message_id
-                            ? { ...m, content: m.content || effectiveContent }
+                            ? {
+                                ...m,
+                                // Set legacy content field as fallback
+                                content: m.content || effectiveContent,
+                                // If outputItems is empty, create a single text item
+                                outputItems: m.outputItems.length > 0 ? m.outputItems : [{ type: 'text', content: effectiveContent }],
+                              }
                             : m
                         ),
                       }
@@ -484,25 +522,6 @@ export const AIPanel: React.FC = () => {
     setSessionMode(activeSession.id, order[(idx + 1) % order.length]);
   };
 
-  // Render tool call card using ToolCallCard component
-  const renderToolCall = (toolCall: ActiveToolCall) => {
-    return (
-      <ToolCallCard
-        key={toolCall.id}
-        id={toolCall.id}
-        name={toolCall.name}
-        arguments={toolCall.arguments}
-        status={toolCall.status}
-        result={toolCall.result}
-        error={toolCall.error}
-        duration={toolCall.duration}
-        diffSummary={toolCall.diffSummary as any}
-        onAccept={() => activeSession && acceptAllHunks(activeSession.id)}
-        onReject={() => activeSession && rejectAllHunks(activeSession.id)}
-      />
-    );
-  };
-
   return (
     <aside className={styles.panel}>
       {/* Header */}
@@ -526,7 +545,7 @@ export const AIPanel: React.FC = () => {
               >
                 <MessageSquare size={12} />
                 <span className={styles.sessionTitle}>
-                  {s.messages.length > 0
+                  {s.messages.length > 0 && s.messages[0].content
                     ? s.messages[0].content.slice(0, 20) + (s.messages[0].content.length > 20 ? '...' : '')
                     : '新对话'}
                 </span>
@@ -579,80 +598,166 @@ export const AIPanel: React.FC = () => {
           </div>
         ) : (
           <div className={styles.messages}>
-            {messages.map((message) => (
-              <div key={message.id} className={`${styles.message} ${styles[message.role]}`}>
-                {message.role === 'user' ? (
-                  <div className={styles.messageBubble}>
-                    {message.content}
+            {/* Flattened message + tool result rendering — Cursor-style interleaving */}
+            {messages.flatMap((message) => {
+              const elements: React.ReactNode[] = [];
+
+              if (message.role === 'user') {
+                elements.push(
+                  <div key={message.id} className={`${styles.message} ${styles.user}`}>
+                    <div className={styles.messageBubble}>
+                      {message.content}
+                    </div>
                   </div>
-                ) : (
-                  <div className={styles.messageContent}>
-                    {/* Tool call start indicator */}
-                    {message.toolCalls && message.toolCalls.length > 0 && !message.toolResults?.length && (
-                      <div className={styles.toolExecutingIndicator}>
-                        <Loader2 size={12} className={styles.spinning} />
-                        <span>正在执行工具...</span>
-                      </div>
-                    )}
+                );
+              } else if (message.role === 'assistant') {
+                // Determine if this is the assistant message currently receiving stream deltas.
+                const streamingMessageId = activeSession?.messages
+                  .slice()
+                  .reverse()
+                  .find((m) => m.role === 'assistant')?.id;
+                const isThisStreaming = isStreaming && message.id === streamingMessageId;
 
-                    {/* Tool results rendered inline with their associated tool call info */}
-                    {message.toolResults?.map((result) => {
-                      const toolCall = message.toolCalls?.find(tc => tc.id === result.toolCallId);
-                      return (
-                        <div key={result.toolCallId} className={styles.inlineToolCalls}>
-                          <ToolCallCard
-                            id={result.toolCallId}
-                            name={toolCall?.name || 'unknown'}
-                            arguments={toolCall?.arguments || {}}
-                            status={result.isError ? 'error' : 'success'}
-                            result={result.result}
-                            error={result.isError ? result.result : undefined}
-                            duration={result.duration}
-                            diffSummary={result.diffSummary as any}
-                            onAccept={() => activeSession && acceptAllHunks(activeSession.id)}
-                            onReject={() => activeSession && rejectAllHunks(activeSession.id)}
-                          />
-                        </div>
-                      );
-                    })}
+                // Use outputItems if available for interleaved rendering, otherwise fall back to legacy content
+                const hasOutputItems = message.outputItems && message.outputItems.length > 0;
 
-                    {/* Continue with message content after tool results */}
-                    {mode === 'plan' && message.content ? (
-                      <div className={styles.planBlocks}>
-                        {parsePlanBlocks(message.content).map((b: PlanBlock, idx: number) => (
-                          <div key={idx} className={styles.planBlock}>
-                            <div className={styles.planTitle}>{b.title}</div>
-                            <pre className={styles.planBody}>{b.lines.join('\n')}</pre>
-                          </div>
-                        ))}
-                      </div>
-                    ) : message.content ? (
-                      <MarkdownRenderer content={message.content} />
-                    ) : null}
+                elements.push(
+                  <div key={message.id} className={`${styles.message} ${styles.assistant}`}>
+                    <div className={styles.messageContent}>
+                      {/* Render via outputItems (interleaved text + tool cards) */}
+                      {hasOutputItems ? (
+                        message.outputItems.map((item, idx) => {
+                          if (item.type === 'text') {
+                            return (
+                              <div key={idx} className={styles.outputTextItem}>
+                                <MarkdownRenderer content={item.content} />
+                              </div>
+                            );
+                          }
+                          if (item.type === 'tool_call_start') {
+                            return (
+                              <div key={idx} className={styles.toolExecutingIndicator}>
+                                <Loader2 size={12} className={styles.spinning} />
+                                <span className={styles.streamingToolName}>{item.toolName}</span>
+                                <span className={styles.toolExecutingText}>正在执行...</span>
+                              </div>
+                            );
+                          }
+                          if (item.type === 'tool_result') {
+                            const toolCall = message.toolCalls?.find(tc => tc.id === item.toolCallId);
+                            return (
+                              <div key={idx} className={styles.toolResultItem}>
+                                {/* Continue generating indicator before the card */}
+                                {isThisStreaming && idx === message.outputItems.length - 1 && (
+                                  <div className={styles.continueGenerating}>
+                                    <span className={styles.continueDots}>
+                                      <span className={styles.dot} />
+                                      <span className={styles.dot} />
+                                      <span className={styles.dot} />
+                                    </span>
+                                  </div>
+                                )}
+                                <ToolCallCard
+                                  id={item.toolCallId}
+                                  name={toolCall?.name || 'unknown'}
+                                  arguments={toolCall?.arguments || {}}
+                                  status={item.status}
+                                  result={item.result}
+                                  error={item.status === 'error' ? item.result : undefined}
+                                  duration={item.duration}
+                                  diffSummary={item.diffSummary as any}
+                                  onAccept={() => activeSession && acceptAllHunks(activeSession.id)}
+                                  onReject={() => activeSession && rejectAllHunks(activeSession.id)}
+                                />
+                              </div>
+                            );
+                          }
+                          if (item.type === 'tool_error') {
+                            return (
+                              <div key={idx} className={styles.toolErrorItem}>
+                                <div className={styles.toolErrorBadge}>
+                                  <X size={12} />
+                                  <span>工具执行失败</span>
+                                </div>
+                                <pre className={styles.toolErrorText}>{item.error}</pre>
+                              </div>
+                            );
+                          }
+                          return null;
+                        })
+                      ) : (
+                        /* Legacy fallback: use content + toolResults */
+                        <>
+                          {/* Inline streaming tool call badges */}
+                          {isThisStreaming && activeToolCalls.map((tc) => (
+                            <div key={tc.id} className={styles.streamingToolCall}>
+                              <Loader2 size={12} className={styles.spinning} />
+                              <span className={styles.streamingToolName}>{tc.name}</span>
+                            </div>
+                          ))}
+                          {message.toolCalls && message.toolCalls.length > 0 && !message.toolResults?.length && (
+                            <div className={styles.toolExecutingIndicator}>
+                              <Loader2 size={12} className={styles.spinning} />
+                              <span>正在执行工具...</span>
+                            </div>
+                          )}
+                          {mode === 'plan' && message.content ? (
+                            <div className={styles.planBlocks}>
+                              {parsePlanBlocks(message.content).map((b: PlanBlock, idx: number) => (
+                                <div key={idx} className={styles.planBlock}>
+                                  <div className={styles.planTitle}>{b.title}</div>
+                                  <pre className={styles.planBody}>{b.lines.join('\n')}</pre>
+                                </div>
+                              ))}
+                            </div>
+                          ) : message.content ? (
+                            <MarkdownRenderer content={message.content} />
+                          ) : !message.toolResults?.length && !isThisStreaming ? (
+                            <div className={styles.toolOnlyPlaceholder}>工具执行完成</div>
+                          ) : null}
+                          {message.toolResults?.map((result) => {
+                            const toolCall = message.toolCalls?.find(tc => tc.id === result.toolCallId);
+                            return (
+                              <div key={`tool-${result.toolCallId}`} className={styles.toolResultItem}>
+                                <ToolCallCard
+                                  id={result.toolCallId}
+                                  name={toolCall?.name || 'unknown'}
+                                  arguments={toolCall?.arguments || {}}
+                                  status={result.isError ? 'error' : 'success'}
+                                  result={result.result}
+                                  error={result.isError ? result.result : undefined}
+                                  duration={result.duration}
+                                  diffSummary={result.diffSummary as any}
+                                  onAccept={() => activeSession && acceptAllHunks(activeSession.id)}
+                                  onReject={() => activeSession && rejectAllHunks(activeSession.id)}
+                                />
+                              </div>
+                            );
+                          })}
+                        </>
+                      )}
 
-                    {/* Inline diff associated with this message */}
-                    {message.diff && (
-                      <InlineDiffPreview
-                        originalText={message.diff.originalText}
-                        newText={message.diff.newText}
-                        onAccept={() => activeSession && acceptAllHunks(activeSession.id)}
-                        onReject={() => activeSession && rejectAllHunks(activeSession.id)}
-                      />
-                    )}
+                      {/* Inline diff preview */}
+                      {message.diff && !isThisStreaming && (
+                        <InlineDiffPreview
+                          originalText={message.diff.originalText}
+                          newText={message.diff.newText}
+                          onAccept={() => activeSession && acceptAllHunks(activeSession.id)}
+                          onReject={() => activeSession && rejectAllHunks(activeSession.id)}
+                        />
+                      )}
+
+                      {/* Streaming indicator at end of content */}
+                      {isThisStreaming && !hasOutputItems && (
+                        <span className={styles.streamingCursor} />
+                      )}
+                    </div>
                   </div>
-                )}
-              </div>
-            ))}
-            {isStreaming && (
-              <div className={styles.messageContent}>
-                <Loader2 size={14} className={styles.loadingSpinner} />
-                <span>
-                  {activeToolCalls.length > 0
-                    ? `正在执行工具... (${activeToolCalls.length})`
-                    : '正在思考...'}
-                </span>
-              </div>
-            )}
+                );
+              }
+
+              return elements;
+            })}
 
             {/* Streaming diff preview - shows during text editing */}
             {pendingDiff && (

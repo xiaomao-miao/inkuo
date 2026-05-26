@@ -290,7 +290,10 @@ impl AgentExecutor {
                     arguments: parsed.arguments.clone(),
                 };
 
-                let result = session.tool_registry.read().await.execute(&tool_call).await;
+                let mut result = session.tool_registry.read().await.execute(&tool_call).await;
+
+                // Inject the correct tool_call_id from streamed data (not the placeholder)
+                result.tool_call_id = parsed.id.clone();
 
                 // Compute diff summary for file modification tools
                 let diff_summary: Option<FileDiffSummary> = if let (Some(file_path), Some(original), Some(new_content)) = (
@@ -425,6 +428,8 @@ impl AgentExecutor {
         let mut current_tool_calls: Vec<ToolCallMessage> = Vec::new();
         let mut current_content = String::new();
         let mut current_reasoning_content = String::new();
+        // Counter for generating stable fallback IDs only when model provides none
+        let mut fallback_id_counter: usize = 0;
 
         let mut stream = response.bytes_stream();
         let mut bytes_received = 0;
@@ -516,10 +521,11 @@ impl AgentExecutor {
                             // Collect tool calls
                             if let Some(tool_calls) = delta.tool_calls {
                                 for tc in tool_calls {
-                                    // Ensure we have capacity
+                                    // Grow capacity to include this index
                                     while current_tool_calls.len() <= tc.index {
+                                        fallback_id_counter += 1;
                                         current_tool_calls.push(ToolCallMessage {
-                                            id: format!("call_{}", current_tool_calls.len()),
+                                            id: format!("call_{}", fallback_id_counter),
                                             call_type: "function".to_string(),
                                             function: ToolCallFunction {
                                                 name: String::new(),
@@ -530,14 +536,18 @@ impl AgentExecutor {
 
                                     let entry = &mut current_tool_calls[tc.index];
 
+                                    // Only update the ID if the model provided a non-empty one.
+                                    // This prevents placeholder IDs (call_1, call_2...) from
+                                    // overwriting real IDs returned by the model.
                                     if let Some(id) = tc.id {
-                                        entry.id = id;
+                                        if !id.is_empty() {
+                                            entry.id = id;
+                                        }
                                     }
                                     if let Some(name) = tc.function.name {
                                         entry.function.name = name;
                                     }
                                     if let Some(args) = tc.function.arguments {
-                                        // IMPORTANT: Append instead of replace to handle streaming arguments
                                         entry.function.arguments.push_str(&args);
                                     }
                                 }

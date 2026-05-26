@@ -425,12 +425,24 @@ export interface MessageToolResult {
   };
 }
 
+/** Output item types for interleaved rendering */
+export type OutputItem =
+  | { type: 'text'; content: string }
+  | { type: 'tool_call_start'; toolCallId: string; toolName: string; arguments: Record<string, unknown> }
+  | { type: 'tool_result'; toolCallId: string; status: 'success' | 'error'; result: string; duration?: number; diffSummary?: MessageToolResult['diffSummary'] }
+  | { type: 'tool_error'; toolCallId: string; error: string };
+
 /** Chat message with full tool support */
 export interface ChatMessage {
   id: string;
   role: MessageRole;
-  content: string;
   timestamp: number;
+  // Legacy content field — maintained for backward compatibility during migration,
+  // prefer using outputItems for new content.
+  content?: string;
+  // Ordered list of output items for interleaved rendering (text + tool cards).
+  // When this is non-empty, renderers should iterate through it instead of content.
+  outputItems: OutputItem[];
   // For assistant messages with tool calls
   toolCalls?: MessageToolCall[];
   // Tool results associated with this assistant message (rendered after its content)
@@ -692,7 +704,7 @@ export const useAIPanelStore = create<AIPanelState>()(
                 ? {
                     ...s,
                     messages: s.messages.map((m) =>
-                      m.id === messageId ? { ...m, diff } : m
+                      m.id === messageId ? { ...m, diff: diff ?? undefined } as ChatMessage : m
                     ),
                   }
                 : s
@@ -724,10 +736,8 @@ export const useAIPanelStore = create<AIPanelState>()(
               const updatedMessages = s.messages.map((m) => {
                 if (!m.diff) return m;
                 const newHunks = m.diff.hunks.filter((h) => h.id !== hunkId);
-                return {
-                  ...m,
-                  diff: newHunks.length > 0 ? { ...m.diff, hunks: newHunks } : undefined,
-                };
+                const { diff: _, ...rest } = m;
+                return { ...rest, diff: newHunks.length > 0 ? { ...m.diff, hunks: newHunks } : undefined } as ChatMessage;
               });
 
               return { ...s, messages: updatedMessages };
@@ -752,10 +762,8 @@ export const useAIPanelStore = create<AIPanelState>()(
               const updatedMessages = s.messages.map((m) => {
                 if (!m.diff) return m;
                 const newHunks = m.diff.hunks.filter((h) => h.id !== hunkId);
-                return {
-                  ...m,
-                  diff: newHunks.length > 0 ? { ...m.diff, hunks: newHunks } : undefined,
-                };
+                const { diff: _, ...rest } = m;
+                return { ...rest, diff: newHunks.length > 0 ? { ...m.diff, hunks: newHunks } : undefined } as ChatMessage;
               });
 
               return { ...s, messages: updatedMessages };
@@ -773,10 +781,10 @@ export const useAIPanelStore = create<AIPanelState>()(
               }
 
               // Clear message-level diffs
-              const updatedMessages = s.messages.map((m) => ({
-                ...m,
-                diff: undefined,
-              }));
+              const updatedMessages = s.messages.map((m) => {
+                const { diff: _, ...rest } = m;
+                return { ...rest, diff: undefined } as ChatMessage;
+              });
 
               return { ...s, messages: updatedMessages };
             }),
@@ -793,10 +801,10 @@ export const useAIPanelStore = create<AIPanelState>()(
               }
 
               // Clear message-level diffs
-              const updatedMessages = s.messages.map((m) => ({
-                ...m,
-                diff: undefined,
-              }));
+              const updatedMessages = s.messages.map((m) => {
+                const { diff: _, ...rest } = m;
+                return { ...rest, diff: undefined } as ChatMessage;
+              });
 
               return { ...s, messages: updatedMessages };
             }),

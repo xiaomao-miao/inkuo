@@ -1,7 +1,6 @@
 import React from 'react';
 import { Check, X, Copy, ChevronDown } from 'lucide-react';
-import type { DiffHunk } from '../../types';
-import { useEditorStore, useSidebarStore } from '../../store';
+import { useEditorStore, useSidebarStore, type DiffHunk } from '../../store';
 import styles from './DiffOverlay.module.css';
 
 interface DiffOverlayProps {
@@ -14,6 +13,18 @@ export const DiffOverlay: React.FC<DiffOverlayProps> = ({ hunks }) => {
   
   const currentDoc = selectedFile ? documentContents[selectedFile] : null;
   const activeHunkIndex = currentDoc?.activeHunkIndex || 0;
+
+  const getHunkSummary = (hunk: DiffHunk) => {
+    let added = 0, removed = 0;
+    hunk.changes.forEach(c => {
+      if (c.tag === 'insert') added++;
+      else if (c.tag === 'delete') removed++;
+    });
+    if (added > 0 && removed > 0) return `+${added} -${removed}`;
+    if (added > 0) return `+${added}`;
+    if (removed > 0) return `-${removed}`;
+    return '无变化';
+  };
 
   if (hunks.length === 0) {
     return null;
@@ -36,7 +47,7 @@ export const DiffOverlay: React.FC<DiffOverlayProps> = ({ hunks }) => {
   const handleCopy = (hunk: DiffHunk, e: React.MouseEvent) => {
     e.stopPropagation();
     const content = hunk.changes
-      .filter(c => c.tag === 'Insert')
+      .filter(c => c.tag === 'insert')
       .map(c => c.content)
       .join('');
     navigator.clipboard.writeText(content);
@@ -92,7 +103,7 @@ export const DiffOverlay: React.FC<DiffOverlayProps> = ({ hunks }) => {
                 <span className={styles.summaryIcon}>
                   <ChevronDown size={14} />
                 </span>
-                <span className={styles.summaryText}>{hunk.summary}</span>
+                <span className={styles.summaryText}>{getHunkSummary(hunk)}</span>
               </div>
               <div className={styles.hunkActions}>
                 <button 
@@ -124,19 +135,19 @@ export const DiffOverlay: React.FC<DiffOverlayProps> = ({ hunks }) => {
                 <div 
                   key={changeIndex}
                   className={`${styles.changeLine} ${
-                    change.tag === 'Delete' ? styles.deleted :
-                    change.tag === 'Insert' ? styles.inserted :
+                    change.tag === 'delete' ? styles.deleted :
+                    change.tag === 'insert' ? styles.inserted :
                     ''
                   }`}
                 >
                   <span className={styles.lineNumber}>
-                    {change.tag === 'Delete' ? change.old_line :
-                     change.tag === 'Insert' ? change.new_line :
+                    {change.tag === 'delete' ? change.old_line :
+                     change.tag === 'insert' ? change.new_line :
                      change.old_line}
                   </span>
                   <span className={styles.lineTag}>
-                    {change.tag === 'Delete' ? '-' :
-                     change.tag === 'Insert' ? '+' : ' '}
+                    {change.tag === 'delete' ? '-' :
+                     change.tag === 'insert' ? '+' : ' '}
                   </span>
                   <span className={styles.lineContent}>{change.content}</span>
                 </div>
