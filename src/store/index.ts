@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Document, Settings, DiffHunk, FileEntry } from '../types';
+import type { Document, Settings, FileEntry } from '../types';
 
 interface DocumentState {
   document: Document | null;
@@ -20,7 +20,7 @@ interface EditorState {
   setDocumentContent: (path: string, doc: Document, content: string) => void;
   setContent: (path: string, content: string) => void;
   setSelection: (path: string, selection: { from: number; to: number } | null) => void;
-  setDiffHunks: (path: string, hunks: DiffHunk[]) => void;
+  setDiffHunks: (path: string, hunks: any[]) => void;
   setActiveHunkIndex: (path: string, index: number) => void;
   setIsDiffMode: (path: string, isDiff: boolean) => void;
   applyHunk: (path: string, hunkId: string) => void;
@@ -45,7 +45,7 @@ export const useEditorStore = create<EditorState>((set) => ({
         content: content,
         isDirty: false,
         selection: null,
-        diffHunks: [],
+        diffHunks: [] as any[],
         activeHunkIndex: 0,
         isDiffMode: false,
       }
@@ -171,7 +171,7 @@ export const useEditorStore = create<EditorState>((set) => ({
         ...state.documentContents,
         [path]: {
           ...current,
-          diffHunks: [],
+          diffHunks: [] as any[],
           isDiffMode: false,
           isDirty: true,
         }
@@ -188,7 +188,7 @@ export const useEditorStore = create<EditorState>((set) => ({
         ...state.documentContents,
         [path]: {
           ...current,
-          diffHunks: [],
+          diffHunks: [] as any[],
           isDiffMode: false,
         }
       }
@@ -204,7 +204,7 @@ export const useEditorStore = create<EditorState>((set) => ({
         ...state.documentContents,
         [path]: {
           ...current,
-          diffHunks: [],
+          diffHunks: [] as any[],
           isDiffMode: false,
           activeHunkIndex: 0,
         }
@@ -353,6 +353,32 @@ export const useSidebarStore = create<SidebarState>()(
 // AI Panel Store - Extended with Tool Calling Support
 // ============================================================================
 
+/** Diff change line */
+export interface DiffChange {
+  tag: 'delete' | 'insert' | 'equal';
+  old_line: number | null;
+  new_line: number | null;
+  content: string;
+}
+
+/** Diff hunk for UI display */
+export interface DiffHunk {
+  id: string;
+  old_start: number;
+  old_lines: number;
+  new_start: number;
+  new_lines: number;
+  changes: DiffChange[];
+}
+
+/** Diff summary for a file modification */
+export interface DiffSummary {
+  file_name: string;
+  added_lines: number;
+  deleted_lines: number;
+  hunks: DiffHunk[];
+}
+
 export interface CurrentDiff {
   originalText: string;
   newText: string;
@@ -406,6 +432,24 @@ export interface ActiveToolCall {
   error?: string;
   startTime: number;
   duration?: number;
+  diffSummary?: {
+    file_name: string;
+    added_lines: number;
+    deleted_lines: number;
+    hunks: {
+      id: string;
+      old_start: number;
+      old_lines: number;
+      new_start: number;
+      new_lines: number;
+      changes: {
+        tag: 'delete' | 'insert' | 'equal';
+        old_line: number | null;
+        new_line: number | null;
+        content: string;
+      }[];
+    }[];
+  };
 }
 
 /** Chat session */

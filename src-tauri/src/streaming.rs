@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 /// Stream event types
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub enum StreamEventType {
     /// Text content delta
     Text,
@@ -20,6 +21,12 @@ pub enum StreamEventType {
     /// Final completion
     Done,
 }
+
+/// Re-exports from diff module for external use
+pub use crate::diff::{FileDiffSummary, StreamDiffHunk, StreamDiffChange};
+
+/// Alias for streaming diff summary
+pub type StreamDiffSummary = FileDiffSummary;
 
 /// Stream payload with tool call support
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,6 +81,10 @@ pub struct StreamPayload {
     /// New content after modification (for diff calculation)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub new_content: Option<String>,
+
+    /// Diff summary (file name, line counts, hunks) for UI display
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diff_summary: Option<FileDiffSummary>,
 }
 
 impl Default for StreamPayload {
@@ -93,6 +104,7 @@ impl Default for StreamPayload {
             file_path: None,
             original_content: None,
             new_content: None,
+            diff_summary: None,
         }
     }
 }
@@ -114,6 +126,7 @@ impl StreamPayload {
             file_path: None,
             original_content: None,
             new_content: None,
+            diff_summary: None,
         }
     }
 
@@ -133,6 +146,7 @@ impl StreamPayload {
             file_path: None,
             original_content: None,
             new_content: None,
+            diff_summary: None,
         }
     }
 
@@ -158,6 +172,7 @@ impl StreamPayload {
             file_path: None,
             original_content: None,
             new_content: None,
+            diff_summary: None,
         }
     }
 
@@ -183,6 +198,7 @@ impl StreamPayload {
             file_path: None,
             original_content: None,
             new_content: None,
+            diff_summary: None,
         }
     }
 
@@ -202,6 +218,7 @@ impl StreamPayload {
             file_path: None,
             original_content: None,
             new_content: None,
+            diff_summary: None,
         }
     }
 }

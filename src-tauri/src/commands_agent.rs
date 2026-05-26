@@ -193,6 +193,7 @@ pub async fn ai_agent_stream(
                     file_path: None,
                     original_content: None,
                     new_content: None,
+                    diff_summary: None,
                 },
             );
         }
@@ -224,6 +225,7 @@ pub async fn ai_agent_stream(
                     file_path: None,
                     original_content: None,
                     new_content: None,
+                    diff_summary: None,
                 },
             );
         }

@@ -50,6 +50,35 @@ pub struct DiffSummary {
     pub description: String,
 }
 
+/// Diff summary for a specific file (used in streaming payload)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileDiffSummary {
+    pub file_name: String,
+    pub added_lines: usize,
+    pub deleted_lines: usize,
+    pub hunks: Vec<StreamDiffHunk>,
+}
+
+/// Stream-specific diff hunk (flattened ranges for JSON serialization)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamDiffHunk {
+    pub id: String,
+    pub old_start: usize,
+    pub old_lines: usize,
+    pub new_start: usize,
+    pub new_lines: usize,
+    pub changes: Vec<StreamDiffChange>,
+}
+
+/// Stream-specific diff change (string tag instead of enum)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StreamDiffChange {
+    pub tag: String, // "delete", "insert", "equal"
+    pub old_line: Option<usize>,
+    pub new_line: Option<usize>,
+    pub content: String,
+}
+
 pub fn compute_diff(old_text: &str, new_text: &str) -> DiffResult {
     let diff = TextDiff::from_lines(old_text, new_text);
     

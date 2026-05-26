@@ -9,14 +9,9 @@ import {
   Send,
   PlusCircle,
   StopCircle,
-  Check,
-  X,
   Terminal,
-  File,
-  FolderOpen,
-  Search,
-  FileEdit,
   Sparkles,
+  X,
 } from 'lucide-react';
 import {
   useAIPanelStore,
@@ -31,6 +26,7 @@ import styles from './AIPanel.module.css';
 import { parsePlanBlocks, type PlanBlock } from './planRender';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { InlineDiffPreview } from './InlineDiffPreview';
+import { ToolCallCard } from './ToolCallCard';
 
 const MODE_LABELS: Record<ChatMode, string> = {
   ask: 'Ask',
@@ -42,29 +38,6 @@ const MODE_HINTS: Record<ChatMode, string> = {
   ask: '只回答（不修改文件）',
   plan: '只输出计划（不修改文件）',
   agent: 'Full Agent（可调用工具读写文件）',
-};
-
-// Tool icons
-const TOOL_ICONS: Record<string, React.ReactNode> = {
-  read_file: <File size={14} />,
-  write_file: <FileEdit size={14} />,
-  edit_file: <FileEdit size={14} />,
-  list_dir: <FolderOpen size={14} />,
-  glob: <File size={14} />,
-  grep: <Search size={14} />,
-};
-
-// Get tool display name
-const getToolDisplayName = (name: string): string => {
-  const names: Record<string, string> = {
-    read_file: '读取文件',
-    write_file: '写入文件',
-    edit_file: '编辑文件',
-    list_dir: '列出目录',
-    glob: '查找文件',
-    grep: '搜索文本',
-  };
-  return names[name] || name;
 };
 
 export const AIPanel: React.FC = () => {
@@ -266,9 +239,7 @@ export const AIPanel: React.FC = () => {
             tool_call_id,
             tool_name,
             tool_args,
-            file_path,
-            original_content,
-            new_content,
+            diff_summary,
           } = payload;
 
           if (!payload || !session_id || !message_id) return;
@@ -338,10 +309,7 @@ export const AIPanel: React.FC = () => {
               .find((s) => s.id === session_id)
               ?.activeToolCalls.find((tc) => tc.id === tool_call_id)?.startTime;
 
-            // Check if this is a file modification (has diff info)
-            const hasDiffInfo = file_path && original_content && new_content;
-
-            // Store diff info for tool call
+            // Update tool call with result and diff_summary
             useAIPanelStore.setState((state) => ({
               sessions: state.sessions.map((s) =>
                 s.id === session_id
@@ -355,6 +323,7 @@ export const AIPanel: React.FC = () => {
                               result: content,
                               error: isError ? error : undefined,
                               duration: duration ? Date.now() - duration : undefined,
+                              diffSummary: diff_summary ?? tc.diffSummary,
                             }
                           : tc
                       ),
@@ -362,26 +331,6 @@ export const AIPanel: React.FC = () => {
                   : s
               ),
             }));
-
-            // Compute diff hunks for file modifications and show in UI
-            if (hasDiffInfo && !isError && original_content && new_content) {
-              try {
-                const diff = await invoke<any>('compute_diff', {
-                  oldText: original_content,
-                  newText: new_content,
-                });
-
-                // Set diff on the message associated with this tool result
-                setMessageDiff(session_id, message_id, {
-                  originalText: original_content,
-                  newText: new_content,
-                  hunks: diff?.hunks ?? [],
-                  summary: `已修改文件: ${file_path}`,
-                });
-              } catch {
-                // ignore diff failure
-              }
-            }
             return;
           }
 
@@ -492,60 +441,22 @@ export const AIPanel: React.FC = () => {
     setSessionMode(activeSession.id, order[(idx + 1) % order.length]);
   };
 
-  // Render tool call card
+  // Render tool call card using ToolCallCard component
   const renderToolCall = (toolCall: ActiveToolCall) => {
-    const icon = TOOL_ICONS[toolCall.name] || <Terminal size={14} />;
-    const displayName = getToolDisplayName(toolCall.name);
-
     return (
-      <div
+      <ToolCallCard
         key={toolCall.id}
-        className={`${styles.toolCall} ${styles[`toolCall_${toolCall.status}`]}`}
-      >
-        <div className={styles.toolHeader}>
-          <div className={styles.toolIcon}>{icon}</div>
-          <span className={styles.toolName}>{displayName}</span>
-          <div className={styles.toolStatus}>
-            {toolCall.status === 'executing' && (
-              <>
-                <Loader2 size={12} className={styles.spinning} />
-                <span>执行中...</span>
-              </>
-            )}
-            {toolCall.status === 'success' && (
-              <>
-                <Check size={12} />
-                <span>成功</span>
-              </>
-            )}
-            {toolCall.status === 'error' && (
-              <>
-                <X size={12} />
-                <span>失败</span>
-              </>
-            )}
-          </div>
-        </div>
-
-        <div className={styles.toolArgs}>
-          <pre>{JSON.stringify(toolCall.arguments, null, 2)}</pre>
-        </div>
-
-        {toolCall.result && (
-          <div className={`${styles.toolResult} ${toolCall.error ? styles.errorResult : ''}`}>
-            <div className={styles.toolResultLabel}>
-              {toolCall.error ? '错误信息' : '执行结果'}
-            </div>
-            <pre>{toolCall.result}</pre>
-          </div>
-        )}
-
-        {toolCall.duration && (
-          <div className={styles.toolDuration}>
-            耗时: {toolCall.duration}ms
-          </div>
-        )}
-      </div>
+        id={toolCall.id}
+        name={toolCall.name}
+        arguments={toolCall.arguments}
+        status={toolCall.status}
+        result={toolCall.result}
+        error={toolCall.error}
+        duration={toolCall.duration}
+        diffSummary={toolCall.diffSummary as any}
+        onAccept={() => activeSession && acceptAllHunks(activeSession.id)}
+        onReject={() => activeSession && rejectAllHunks(activeSession.id)}
+      />
     );
   };
 

@@ -71,6 +71,30 @@ export interface DiffSummary {
   description: string;
 }
 
+/** Stream-specific diff types for UI display */
+export interface StreamDiffChange {
+  tag: 'delete' | 'insert' | 'equal';
+  old_line: number | null;
+  new_line: number | null;
+  content: string;
+}
+
+export interface StreamDiffHunk {
+  id: string;
+  old_start: number;
+  old_lines: number;
+  new_start: number;
+  new_lines: number;
+  changes: StreamDiffChange[];
+}
+
+export interface StreamDiffSummary {
+  file_name: string;
+  added_lines: number;
+  deleted_lines: number;
+  hunks: StreamDiffHunk[];
+}
+
 // AI types
 export interface AIEditRequest {
   instruction: string;

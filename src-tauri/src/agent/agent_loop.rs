@@ -17,7 +17,8 @@ use futures_util::StreamExt;
 
 use super::tools::{ToolCall, SharedToolRegistry};
 use crate::ai::{AIConfig, AIProvider};
-use crate::streaming::StreamPayload;
+use crate::diff;
+use crate::streaming::{StreamPayload, FileDiffSummary, StreamDiffHunk, StreamDiffChange};
 
 /// Maximum number of iterations to prevent infinite loops
 const DEFAULT_MAX_ITERATIONS: usize = 50;
@@ -279,6 +280,7 @@ impl AgentExecutor {
                     file_path: None,
                     original_content: None,
                     new_content: None,
+                    diff_summary: None,
                 });
 
                 // Execute tool
@@ -289,6 +291,46 @@ impl AgentExecutor {
                 };
 
                 let result = session.tool_registry.read().await.execute(&tool_call).await;
+
+                // Compute diff summary for file modification tools
+                let diff_summary: Option<FileDiffSummary> = if let (Some(file_path), Some(original), Some(new_content)) = (
+                    &result.file_path,
+                    &result.original_content,
+                    &result.new_content,
+                ) {
+                    let diff_result = diff::compute_diff(original, new_content);
+                    let file_name = std::path::Path::new(file_path)
+                        .file_name()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_else(|| file_path.clone());
+
+                    let hunks = diff_result.hunks.into_iter().map(|h| StreamDiffHunk {
+                        id: h.id,
+                        old_start: h.old_range.start_line,
+                        old_lines: h.old_range.end_line.saturating_sub(h.old_range.start_line) + 1,
+                        new_start: h.new_range.start_line,
+                        new_lines: h.new_range.end_line.saturating_sub(h.new_range.start_line) + 1,
+                        changes: h.changes.into_iter().map(|c| StreamDiffChange {
+                            tag: match c.tag {
+                                diff::ChangeType::Delete => "delete".to_string(),
+                                diff::ChangeType::Insert => "insert".to_string(),
+                                diff::ChangeType::Equal => "equal".to_string(),
+                            },
+                            old_line: c.old_line,
+                            new_line: c.new_line,
+                            content: c.content,
+                        }).collect(),
+                    }).collect();
+
+                    Some(FileDiffSummary {
+                        file_name,
+                        added_lines: diff_result.summary.added_lines,
+                        deleted_lines: diff_result.summary.deleted_lines,
+                        hunks,
+                    })
+                } else {
+                    None
+                };
 
                 // Emit tool result event (includes diff info for file modifications)
                 on_event(StreamPayload {
@@ -307,6 +349,7 @@ impl AgentExecutor {
                     file_path: result.file_path.clone(),
                     original_content: result.original_content.clone(),
                     new_content: result.new_content.clone(),
+                    diff_summary,
                 });
 
                 // Add tool result to message history
@@ -443,6 +486,7 @@ impl AgentExecutor {
                                     file_path: None,
                                     original_content: None,
                                     new_content: None,
+                                    diff_summary: None,
                                 });
                             }
                             // Also handle reasoning_content (DeepSeek's thinking)
@@ -464,6 +508,7 @@ impl AgentExecutor {
                                         file_path: None,
                                         original_content: None,
                                         new_content: None,
+                                        diff_summary: None,
                                     });
                                 }
                             }
