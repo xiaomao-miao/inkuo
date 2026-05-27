@@ -41,6 +41,8 @@ You MUST respond with a valid JSON object only. No additional text, explanations
 3. **Preserve structure** — maintain headings, lists, paragraphs, and their relative order
 4. **Preserve meaning** — don't alter facts, claims, or the author's intent
 5. **Preserve formatting** — keep emphasis, links, and other inline formatting
+6. **Preserve line breaks and paragraphs** — blank lines between paragraphs must be kept exactly as in the original. If the original has 5 paragraphs separated by blank lines, the output must also have 5 paragraphs with the same blank lines. **This is critical for prose/literary content.**
+7. **Do not compress into a single paragraph** — multi-paragraph input must remain multi-paragraph output
 
 Only change what was explicitly requested.
 </preservation_rules>
@@ -127,6 +129,32 @@ Output:
     "rules_applied": ["Added markdown headings", "Preserved all content", "Maintained structure"]
 }
 ```
+
+**Example 3 — Shorten multi-paragraph text (preserving structure):**
+
+Input instruction: "Shorten this story to about 100 words"
+
+Original:
+```
+从前，在一片潮湿的菜园里，住着一只叫"慢慢"的小蜗牛。
+
+慢慢每天背着它那螺旋形的小房子，在菜叶上爬来爬去。它最喜欢做的事，就是仰头看天空中飞过的蝴蝶和蜻蜓。
+
+"要是我能飞就好了。"慢慢叹了口气。
+
+菜园里的邻居们都觉得它疯了。蚂蚁搬着米粒路过时说："蜗牛怎么会飞呢？别做梦了！"
+```
+
+Output:
+```json
+{
+    "summary": "Shortened story to ~100 words while preserving all three paragraphs",
+    "content": "从前，在一片潮湿的菜园里，住着一只叫"慢慢"的小蜗牛。它每天仰望天空，梦想自己能飞。\n\n"要是我能飞就好了。"慢慢叹了口气。蚂蚁和蚯蚓都笑它异想天开。",
+    "rules_applied": ["Preserved paragraph count (3 paragraphs)", "Preserved meaning", "Preserved original line breaks", "Shortened text"]
+}
+```
+
+**CRITICAL: Never compress multi-paragraph text into a single paragraph.** Each blank line in the input must remain a blank line in the output.
 </examples>
 
 ## Error Handling

@@ -34,13 +34,13 @@ fn get_read_only_tool_registry() -> SharedToolRegistry {
 }
 
 /// Update the workspace path for both tool registries
-fn update_registry_workspace(workspace_path: Option<String>) {
+async fn update_registry_workspace(workspace_path: Option<String>) {
     if let Some(registry) = FULL_TOOL_REGISTRY.get() {
-        let mut registry = registry.blocking_write();
+        let mut registry = registry.write().await;
         registry.set_workspace(workspace_path.clone());
     }
     if let Some(registry) = READ_ONLY_TOOL_REGISTRY.get() {
-        let mut registry = registry.blocking_write();
+        let mut registry = registry.write().await;
         registry.set_workspace(workspace_path);
     }
 }
@@ -123,7 +123,7 @@ pub async fn ai_agent_stream(
     tracing::info!("ai_agent_stream start - session: {}, history length: {}", session_id, history.len());
 
     // Update workspace path for tool validation
-    update_registry_workspace(workspace_path.clone());
+    update_registry_workspace(workspace_path.clone()).await;
 
     // Create AI config from input
     let ai_config = crate::ai::AIConfig {

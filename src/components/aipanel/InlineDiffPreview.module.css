@@ -64,45 +64,6 @@
   }
 }
 
-.actions {
-  display: flex;
-  gap: 8px;
-}
-
-.acceptBtn,
-.rejectBtn {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 6px 12px;
-  font-size: 12px;
-  font-weight: 500;
-  border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.acceptBtn {
-  color: white;
-  background-color: #22c55e;
-}
-
-.acceptBtn:hover {
-  background-color: #16a34a;
-  transform: translateY(-1px);
-}
-
-.rejectBtn {
-  color: white;
-  background-color: #6b7280;
-}
-
-.rejectBtn:hover {
-  background-color: #4b5563;
-  transform: translateY(-1px);
-}
-
 .diffView {
   display: flex;
   gap: 12px;

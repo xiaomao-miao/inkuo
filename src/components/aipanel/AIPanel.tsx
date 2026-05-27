@@ -56,8 +56,6 @@ export const AIPanel: React.FC = () => {
     setIsStreaming,
     clearMessages,
     truncateMessagesAfter,
-    acceptAllHunks,
-    rejectAllHunks,
     setIsOpen,
     clearToolCalls,
     setMessageDiff,
@@ -846,8 +844,6 @@ export const AIPanel: React.FC = () => {
                                   error={item.status === 'error' ? item.result : undefined}
                                   duration={item.duration}
                                   diffSummary={item.diffSummary as any}
-                                  onAccept={() => activeSession && acceptAllHunks(activeSession.id)}
-                                  onReject={() => activeSession && rejectAllHunks(activeSession.id)}
                                 />
                               </div>
                             );
@@ -915,8 +911,6 @@ export const AIPanel: React.FC = () => {
                                   error={result.isError ? result.result : undefined}
                                   duration={result.duration}
                                   diffSummary={result.diffSummary as any}
-                                  onAccept={() => activeSession && acceptAllHunks(activeSession.id)}
-                                  onReject={() => activeSession && rejectAllHunks(activeSession.id)}
                                 />
                               </div>
                             );
@@ -925,12 +919,11 @@ export const AIPanel: React.FC = () => {
                       )}
 
                       {/* Inline diff preview */}
-                      {message.diff && !isThisStreaming && (
+                      {message.diff && !isThisStreaming && activeSession && (
                         <InlineDiffPreview
                           originalText={message.diff.originalText}
                           newText={message.diff.newText}
-                          onAccept={() => activeSession && acceptAllHunks(activeSession.id)}
-                          onReject={() => activeSession && rejectAllHunks(activeSession.id)}
+                          sessionId={activeSession.id}
                         />
                       )}
 
@@ -947,12 +940,11 @@ export const AIPanel: React.FC = () => {
             })}
 
             {/* Streaming diff preview - shows during text editing */}
-            {pendingDiff && (
+            {pendingDiff && activeSession && (
               <InlineDiffPreview
                 originalText={pendingDiff.originalText}
                 newText={pendingDiff.newText}
-                onAccept={() => activeSession && acceptAllHunks(activeSession.id)}
-                onReject={() => activeSession && rejectAllHunks(activeSession.id)}
+                sessionId={activeSession.id}
                 isStreaming={isStreaming}
               />
             )}

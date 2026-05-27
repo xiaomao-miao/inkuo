@@ -1,5 +1,5 @@
 import React from 'react';
-import { Check, X, Loader2, FileEdit, Terminal } from 'lucide-react';
+import { Check, Loader2, FileEdit, Terminal, X } from 'lucide-react';
 import type { DiffSummary } from '../../store';
 import styles from './ToolCallCard.module.css';
 
@@ -12,8 +12,6 @@ interface ToolCallCardProps {
   error?: string;
   duration?: number;
   diffSummary?: DiffSummary;
-  onAccept?: () => void;
-  onReject?: () => void;
 }
 
 const getToolDisplayName = (name: string): string => {
@@ -35,8 +33,6 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = ({
   error,
   duration,
   diffSummary,
-  onAccept,
-  onReject,
 }) => {
   const isFileModification = name === 'write_file' || name === 'edit_file';
   const filePath = args.path as string | undefined;
@@ -126,20 +122,6 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = ({
               </div>
             </div>
           ))}
-        </div>
-      )}
-
-      {/* Action buttons */}
-      {(status === 'success' || status === 'pending') && diffSummary && onAccept && onReject && (
-        <div className={styles.actions}>
-          <button className={styles.acceptBtn} onClick={onAccept}>
-            <Check size={14} />
-            接受
-          </button>
-          <button className={styles.rejectBtn} onClick={onReject}>
-            <X size={14} />
-            拒绝
-          </button>
         </div>
       )}
 
