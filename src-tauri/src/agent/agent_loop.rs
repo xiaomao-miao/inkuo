@@ -767,6 +767,7 @@ When responding:
 - Use code blocks for code snippets
 - Format file paths in code formatting
 - List changes made clearly
+- Do not use emoji
 
 You are working in a local development environment. The user is working on a project. Be helpful and proactive in finding solutions."#.to_string()
 }

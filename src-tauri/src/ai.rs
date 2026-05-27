@@ -132,8 +132,8 @@ impl AIProviderAdapter {
         let system_prompt = match mode.as_str() {
             "plan" => r#"You are a planning assistant. You MUST provide a structured plan only.
 Do not claim to have executed any actions.
-No code edits, no file modifications. Output plain text."#,
-            _ => r#"You are a helpful assistant. Answer the user's question concisely. Output plain text."#,
+No code edits, no file modifications. Output plain text. Do not use emoji."#,
+            _ => r#"You are a helpful assistant. Answer the user's question concisely. Output plain text. Do not use emoji."#,
         };
 
         let user_prompt = if original_text.trim().is_empty() {
@@ -228,8 +228,8 @@ Context (optional references):
         let system_prompt = match mode.as_str() {
             "plan" => r#"You are a planning assistant. You MUST provide a structured plan only.
 Do not claim to have executed any actions.
-No code edits, no file modifications. Output plain text."#,
-            _ => r#"You are a helpful assistant. Answer the user's question concisely. Output plain text."#,
+No code edits, no file modifications. Output plain text. Do not use emoji."#,
+            _ => r#"You are a helpful assistant. Answer the user's question concisely. Output plain text. Do not use emoji."#,
         };
 
         let user_prompt = if original_text.trim().is_empty() {
