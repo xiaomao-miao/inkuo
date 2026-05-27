@@ -17,8 +17,19 @@ use futures_util::StreamExt;
 
 use super::tools::{ToolCall, SharedToolRegistry};
 use crate::ai::{AIConfig, AIProvider};
+use crate::commands::STREAM_CANCELLED;
 use crate::diff;
 use crate::streaming::{StreamPayload, FileDiffSummary, StreamDiffHunk, StreamDiffChange};
+
+/// Check if a session has been cancelled
+fn is_session_cancelled(session_id: &str) -> bool {
+    STREAM_CANCELLED.lock().contains(session_id)
+}
+
+/// Clear cancellation flag for a session
+fn clear_cancellation(session_id: &str) {
+    STREAM_CANCELLED.lock().remove(session_id);
+}
 
 /// Maximum number of iterations to prevent infinite loops
 const DEFAULT_MAX_ITERATIONS: usize = 50;
@@ -212,6 +223,13 @@ impl AgentExecutor {
                 iteration + 1,
                 session.max_iterations
             );
+
+            // Check for cancellation before each iteration
+            if is_session_cancelled(session_id) {
+                tracing::info!("Session {} cancelled, stopping", session_id);
+                clear_cancellation(session_id);
+                return Err(AgentError::Cancelled);
+            }
 
             // Build request
             let messages = session.get_messages_for_api();
@@ -459,6 +477,13 @@ impl AgentExecutor {
         tracing::info!("Starting to process stream...");
 
         while let Some(item) = stream.next().await {
+            // Check for cancellation during streaming
+            if is_session_cancelled(session_id) {
+                tracing::info!("Session {} cancelled during streaming", session_id);
+                clear_cancellation(session_id);
+                return Err(AgentError::Cancelled);
+            }
+
             let bytes = match item {
                 Ok(b) => {
                     bytes_received += b.len();

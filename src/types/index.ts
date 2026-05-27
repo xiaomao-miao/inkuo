@@ -237,6 +237,8 @@ export interface Settings {
   ai_model: string;
   ai_api_key: string | null;
   ai_base_url: string | null;
+  ai_temperature: number;
+  ai_max_tokens: number | null;
 }
 
 export type ThemeType = 'cursor-dark' | 'cursor-light' | 'high-contrast-dark' | 'high-contrast-light';

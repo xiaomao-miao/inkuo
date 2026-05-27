@@ -273,6 +273,8 @@ export const AIPanel: React.FC = () => {
             api_key: aiConfig.ai_api_key,
             base_url: aiConfig.ai_base_url,
             model: aiConfig.ai_model,
+            temperature: aiConfig.ai_temperature,
+            max_tokens: aiConfig.ai_max_tokens,
           },
         }).catch((err) => {
           updateMessage(sessionId, assistantMessageId, `抱歉，发生了错误：${err}`);
@@ -316,6 +318,8 @@ export const AIPanel: React.FC = () => {
             api_key: aiConfig.ai_api_key,
             base_url: aiConfig.ai_base_url,
             model: aiConfig.ai_model,
+            temperature: aiConfig.ai_temperature,
+            max_tokens: aiConfig.ai_max_tokens,
           },
         }).catch((err) => {
           updateMessage(sessionId, assistantMessageId, `抱歉，发生了错误：${err}`);

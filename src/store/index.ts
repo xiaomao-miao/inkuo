@@ -547,7 +547,7 @@ function createSessionTitle(index: number) {
 function createNewSession(index: number): ChatSession {
   const now = Date.now();
   return {
-    id: now.toString(),
+    id: crypto.randomUUID(),
     title: createSessionTitle(index),
     createdAt: now,
     mode: 'ask',
@@ -868,6 +868,8 @@ const defaultSettings: Settings = {
   ai_model: 'deepseek-chat',
   ai_api_key: null,
   ai_base_url: 'https://api.deepseek.com',
+  ai_temperature: 0.7,
+  ai_max_tokens: 4096,
 };
 
 export const useSettingsStore = create<SettingsState>()(

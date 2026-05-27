@@ -48,6 +48,9 @@ pub fn run() {
     
     tracing::info!("Starting inkuo v{}", env!("CARGO_PKG_VERSION"));
     
+    // Initialize background tasks
+    commands::init_backup_cleanup_task();
+    
     tauri::Builder::default()
         .manage(commands::AppState::default())
         .plugin(tauri_plugin_opener::init())

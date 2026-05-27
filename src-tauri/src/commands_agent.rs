@@ -15,13 +15,21 @@ fn emit(app: &AppHandle, payload: StreamPayload) {
     let _ = app.emit("ai://stream", payload);
 }
 
-/// Shared tool registry for agent
-pub static AGENT_TOOL_REGISTRY: std::sync::OnceLock<SharedToolRegistry> =
+/// Shared tool registries for agent - separate for full and read-only modes
+pub static FULL_TOOL_REGISTRY: std::sync::OnceLock<SharedToolRegistry> =
+    std::sync::OnceLock::new();
+pub static READ_ONLY_TOOL_REGISTRY: std::sync::OnceLock<SharedToolRegistry> =
     std::sync::OnceLock::new();
 
-fn get_tool_registry() -> SharedToolRegistry {
-    AGENT_TOOL_REGISTRY
+fn get_full_tool_registry() -> SharedToolRegistry {
+    FULL_TOOL_REGISTRY
         .get_or_init(|| create_tool_registry())
+        .clone()
+}
+
+fn get_read_only_tool_registry() -> SharedToolRegistry {
+    READ_ONLY_TOOL_REGISTRY
+        .get_or_init(|| create_read_only_tool_registry())
         .clone()
 }
 
@@ -85,6 +93,8 @@ pub struct AIConfigInput {
     pub api_key: Option<String>,
     pub base_url: Option<String>,
     pub model: String,
+    pub temperature: Option<f32>,
+    pub max_tokens: Option<u32>,
 }
 
 #[tauri::command]
@@ -116,8 +126,8 @@ pub async fn ai_agent_stream(
             },
         },
         model: config_input.model,
-        temperature: 0.7,
-        max_tokens: Some(4096),
+        temperature: config_input.temperature.unwrap_or(0.7),
+        max_tokens: config_input.max_tokens,
     };
 
     tracing::info!("Using AI provider: {:?}", ai_config.provider);
@@ -126,9 +136,9 @@ pub async fn ai_agent_stream(
 
     // Use different tool registry based on mode
     let tool_registry = if read_only {
-        create_read_only_tool_registry()
+        get_read_only_tool_registry()
     } else {
-        create_tool_registry()
+        get_full_tool_registry()
     };
     let mut session = AgentSession::new(tool_registry);
 
@@ -256,7 +266,7 @@ pub async fn ai_agent_cancel(session_id: String) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn get_available_tools() -> Result<Vec<serde_json::Value>, String> {
-    let registry = get_tool_registry();
+    let registry = get_full_tool_registry();
     let tools = registry.read().await.get_all_definitions();
     let tools_json: Vec<serde_json::Value> = tools
         .iter()

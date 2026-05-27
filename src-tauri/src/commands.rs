@@ -9,8 +9,49 @@ use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::State;
+use tokio::sync::mpsc;
 
 pub static STREAM_CANCELLED: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
+
+/// Channel for backup cleanup requests
+static BACKUP_CLEANUP_TX: Lazy<Mutex<Option<mpsc::Sender<()>>>> = Lazy::new(|| Mutex::new(None));
+
+/// Initialize background backup cleanup task
+pub fn init_backup_cleanup_task() {
+    let (tx, mut rx) = mpsc::channel::<()>(32);
+
+    tokio::spawn(async move {
+        let mut pending_cleanups: Vec<tokio::time::Instant> = Vec::new();
+        let cleanup_interval = tokio::time::Duration::from_secs(60); // Run cleanup at most once per minute
+        let debounce_duration = tokio::time::Duration::from_secs(30); // Wait 30s after last request
+
+        loop {
+            tokio::select! {
+                _ = rx.recv() => {
+                    pending_cleanups.push(tokio::time::Instant::now() + debounce_duration);
+                }
+                _ = tokio::time::sleep(cleanup_interval) => {
+                    if let Some(next_cleanup) = pending_cleanups.first() {
+                        if tokio::time::Instant::now() >= *next_cleanup {
+                            // Run cleanup
+                            cleanup_old_backups(10);
+                            pending_cleanups.clear();
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    *BACKUP_CLEANUP_TX.lock() = Some(tx);
+}
+
+/// Request a backup cleanup (will be debounced)
+pub fn request_backup_cleanup() {
+    if let Some(tx) = BACKUP_CLEANUP_TX.lock().as_ref() {
+        let _ = tx.try_send(());
+    }
+}
 
 pub struct AppState {
     pub rag_index: Arc<rag::RAGIndex>,
@@ -126,8 +167,8 @@ impl Default for AppState {
         let ai_config = ai::AIConfig {
             provider: ai_provider,
             model: settings.ai_model.clone(),
-            temperature: 0.7,
-            max_tokens: Some(4096),
+            temperature: settings.ai_temperature,
+            max_tokens: settings.ai_max_tokens,
         };
 
         Self {
@@ -171,8 +212,8 @@ pub async fn write_document(path: String, content: String) -> Result<(), String>
         std::fs::copy(&path, &backup_path)
             .map_err(|e| format!("Failed to create backup: {}", e))?;
 
-        // Clean up old backups (keep max 10 per file)
-        cleanup_old_backups(10);
+        // Request async backup cleanup (debounced, won't block the write)
+        request_backup_cleanup();
     }
 
     std::fs::write(&path, &content)
@@ -335,6 +376,8 @@ pub struct Settings {
     pub ai_model: String,
     pub ai_api_key: Option<String>,
     pub ai_base_url: Option<String>,
+    pub ai_temperature: f32,
+    pub ai_max_tokens: Option<u32>,
 }
 
 impl Default for Settings {
@@ -348,6 +391,8 @@ impl Default for Settings {
             ai_model: "llama3".to_string(),
             ai_api_key: None,
             ai_base_url: Some("http://localhost:11434".to_string()),
+            ai_temperature: 0.7,
+            ai_max_tokens: Some(4096),
         }
     }
 }
@@ -419,8 +464,8 @@ pub async fn save_settings(settings: Settings, state: State<'_, AppState>) -> Re
     let ai_config = ai::AIConfig {
         provider: ai_provider,
         model: settings.ai_model.clone(),
-        temperature: 0.7,
-        max_tokens: Some(4096),
+        temperature: settings.ai_temperature,
+        max_tokens: settings.ai_max_tokens,
     };
     
     *state.ai_config.write().await = ai_config;
