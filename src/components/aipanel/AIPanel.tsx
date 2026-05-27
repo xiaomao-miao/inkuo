@@ -196,9 +196,9 @@ export const AIPanel: React.FC = () => {
 
     const isEditing = editingMessageId !== null;
 
-    // Generate IDs
-    const userMessageId = isEditing ? editingMessageId : Date.now().toString();
-    const assistantMessageId = (Date.now() + 1).toString();
+    // Generate IDs using crypto.randomUUID for guaranteed uniqueness
+    const userMessageId = isEditing ? editingMessageId : crypto.randomUUID();
+    const assistantMessageId = crypto.randomUUID();
 
     const userMessage: ChatMessage = {
       id: userMessageId,
@@ -524,7 +524,7 @@ export const AIPanel: React.FC = () => {
             // Also add a standalone tool message so it appears in history for subsequent requests
             // This is critical for multi-turn conversations — the API requires tool_call_id responses
             const toolMessage: ChatMessage = {
-              id: `tool-${tool_call_id}-${Date.now()}`,
+              id: `tool-${tool_call_id}-${crypto.randomUUID()}`,
               role: 'tool',
               content: content || '',
               toolCallId: tool_call_id,

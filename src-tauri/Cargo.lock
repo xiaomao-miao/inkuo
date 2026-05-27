@@ -1843,6 +1843,7 @@ dependencies = [
  "dirs",
  "futures-util",
  "glob",
+ "hex",
  "once_cell",
  "parking_lot",
  "pulldown-cmark",

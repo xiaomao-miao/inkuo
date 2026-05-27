@@ -375,29 +375,48 @@ impl AgentExecutor {
     where
         F: Fn(StreamPayload) + Clone + Send + Sync + 'static,
     {
-        let (url, headers) = match &self.config.provider {
-            AIProvider::OpenAI { api_key, base_url } => (
-                format!("{}/chat/completions", base_url.trim_end_matches('/')),
-                vec![("Authorization", format!("Bearer {}", api_key))],
-            ),
-            AIProvider::Ollama { base_url } => (
-                format!("{}/api/chat", base_url.trim_end_matches('/')),
-                vec![],
-            ),
-            AIProvider::Official { api_key } => (
-                "https://api.inkuo.com/v1/chat/completions".to_string(),
-                vec![("Authorization", format!("Bearer {}", api_key))],
-            ),
+        let (url, headers, body) = match &self.config.provider {
+            AIProvider::OpenAI { api_key, base_url } => {
+                let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+                let headers = vec![("Authorization", format!("Bearer {}", api_key))];
+                // OpenAI format with tools array
+                let body = serde_json::json!({
+                    "model": self.config.model,
+                    "messages": messages,
+                    "tools": tools,
+                    "temperature": self.config.temperature,
+                    "max_tokens": self.config.max_tokens,
+                    "stream": true,
+                });
+                (url, headers, body)
+            }
+            AIProvider::Ollama { base_url } => {
+                let url = format!("{}/api/chat", base_url.trim_end_matches('/'));
+                let headers = vec![("Content-Type", "application/json".to_string())];
+                // Ollama format: tools array inside the request
+                let body = serde_json::json!({
+                    "model": self.config.model,
+                    "messages": messages,
+                    "tools": tools,
+                    "stream": true,
+                });
+                (url, headers, body)
+            }
+            AIProvider::Official { api_key } => {
+                let url = "https://api.inkuo.com/v1/chat/completions".to_string();
+                let headers = vec![("Authorization", format!("Bearer {}", api_key))];
+                // OpenAI-compatible format
+                let body = serde_json::json!({
+                    "model": self.config.model,
+                    "messages": messages,
+                    "tools": tools,
+                    "temperature": self.config.temperature,
+                    "max_tokens": self.config.max_tokens,
+                    "stream": true,
+                });
+                (url, headers, body)
+            }
         };
-
-        let body = serde_json::json!({
-            "model": self.config.model,
-            "messages": messages,
-            "tools": tools,
-            "temperature": self.config.temperature,
-            "max_tokens": self.config.max_tokens,
-            "stream": true,
-        });
 
         let mut request = self.client.post(&url).json(&body);
 
@@ -422,6 +441,9 @@ impl AgentExecutor {
         }
 
         tracing::info!("Received response, status: {}", response.status());
+
+        // Determine if this is Ollama (needs different tool call parsing)
+        let is_ollama = matches!(&self.config.provider, AIProvider::Ollama { .. });
 
         // Process streaming response
         let mut buffer = String::new();
@@ -469,7 +491,7 @@ impl AgentExecutor {
 
                     tracing::info!("SSE data: {}", data);
 
-                    let parsed = self.parse_sse_delta(data);
+                    let parsed = self.parse_sse_delta(data, is_ollama);
                     tracing::info!("[PARSING] parse result: {:?}", parsed);
                     match parsed {
                         Ok(Some(delta)) => {
@@ -565,11 +587,29 @@ impl AgentExecutor {
             }
         }
 
+        // Process any remaining data in the buffer (issue #9 - handle residual data)
+        if !buffer.trim().is_empty() {
+            tracing::info!("Processing remaining buffer data: {}", buffer);
+            for data in crate::openai_stream::iter_sse_event_data_lines(&buffer) {
+                if data.trim() == "[DONE]" || data.trim().is_empty() {
+                    continue;
+                }
+                if let Ok(Some(delta)) = self.parse_sse_delta(data, is_ollama) {
+                    if let Some(content) = delta.content {
+                        current_content.push_str(&content);
+                    }
+                    if delta.tool_calls.is_some() {
+                        // Note: This is residual data, tool calls from partial chunks are already processed above
+                    }
+                }
+            }
+        }
+
         tracing::info!("Stream processing complete. bytes_received: {}, current_content_len: {}", bytes_received, current_content.len());
 
         // Debug: log the final tool calls
         for (i, tc) in current_tool_calls.iter().enumerate() {
-            tracing::info!("[TOOL_CALL_DEBUG] #{:02}: id='{}', name='{}', args='{}'", 
+            tracing::info!("[TOOL_CALL_DEBUG] #{:02}: id='{}', name='{}', args='{}'",
                 i, tc.id, tc.function.name, tc.function.arguments);
         }
 
@@ -584,11 +624,17 @@ impl AgentExecutor {
     }
 
     /// Parse SSE delta from OpenAI format (handles DeepSeek's reasoning_content)
-    fn parse_sse_delta(&self, data: &str) -> Result<Option<DeltaResponse>, String> {
+    /// For Ollama, uses a different response format (message.tool_calls instead of delta.tool_calls)
+    fn parse_sse_delta(&self, data: &str, is_ollama: bool) -> Result<Option<DeltaResponse>, String> {
         let json: Value = serde_json::from_str(data)
             .map_err(|e| format!("JSON parse error: {}", e))?;
 
-        // delta is nested inside choices[0].delta
+        if is_ollama {
+            // Ollama format: data.message.tool_calls
+            return self.parse_ollama_delta(&json);
+        }
+
+        // OpenAI format: data.choices[0].delta
         let delta = match json.get("choices") {
             Some(choices) if choices.is_array() => {
                 choices.get(0).and_then(|c| c.get("delta"))
@@ -635,6 +681,69 @@ impl AgentExecutor {
                             .get("arguments")
                             .and_then(|v| v.as_str())
                             .map(String::from);
+
+                        Some(DeltaToolCall {
+                            index,
+                            id,
+                            function: DeltaFunction { name, arguments },
+                        })
+                    })
+                    .collect()
+            });
+
+        Ok(Some(DeltaResponse {
+            content,
+            reasoning_content,
+            tool_calls,
+        }))
+    }
+
+    /// Parse Ollama's SSE delta format
+    /// Ollama format: data.message.content and data.message.tool_calls
+    fn parse_ollama_delta(&self, json: &Value) -> Result<Option<DeltaResponse>, String> {
+        let message = match json.get("message") {
+            Some(m) => m,
+            None => return Ok(None),
+        };
+
+        // Handle content
+        let content = message
+            .get("content")
+            .and_then(|c| c.as_str())
+            .filter(|s| !s.is_empty())
+            .map(String::from);
+
+        // Ollama doesn't have reasoning_content
+        let reasoning_content = None;
+
+        // Handle tool_calls - Ollama uses message.tool_calls
+        let tool_calls = message
+            .get("tool_calls")
+            .and_then(|tc| tc.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|tc| {
+                        // Ollama has index field in tool_calls
+                        let index = tc.get("index")?.as_u64()? as usize;
+                        let id = tc
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .map(String::from);
+                        let function = tc.get("function")?;
+                        let name = function
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .map(String::from);
+                        let arguments = function
+                            .get("arguments")
+                            .and_then(|v| {
+                                // Arguments can be a string or already-parsed object in Ollama
+                                match v {
+                                    serde_json::Value::String(s) => Some(s.clone()),
+                                    serde_json::Value::Object(_) => Some(serde_json::to_string(v).ok()?),
+                                    _ => None,
+                                }
+                            });
 
                         Some(DeltaToolCall {
                             index,
