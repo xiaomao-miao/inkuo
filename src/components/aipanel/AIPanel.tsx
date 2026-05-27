@@ -957,56 +957,59 @@ export const AIPanel: React.FC = () => {
 
       {/* Input Area */}
       <div className={styles.inputArea}>
-        <div className={styles.inputLeft}>
-          <button
-            type="button"
-            className={`${styles.modeButton} ${mode === 'agent' ? styles.agentModeActive : ''}`}
-            onClick={cycleMode}
-            disabled={!activeSession || isStreaming}
-            title={MODE_HINTS[mode]}
-          >
-            {mode === 'agent' && <Terminal size={12} />}
-            {MODE_LABELS[mode]}
-          </button>
-        </div>
-        <textarea
-          ref={inputRef}
-          className={styles.input}
-          placeholder={
-            mode === 'agent'
-              ? '输入指令... (例如：帮我创建一个 README.md)'
-              : '输入消息... (Enter 发送，Shift+Enter 换行)'
-          }
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          rows={1}
-        />
-        <div className={styles.inputActions}>
-          {isStreaming ? (
-            <button className={styles.iconBtn} onClick={handleStop} title="停止生成" type="button">
-              <StopCircle size={14} />
-            </button>
-          ) : messages.length > 0 && activeSession ? (
+        <div className={styles.inputBubble}>
+          <textarea
+            ref={inputRef}
+            className={styles.input}
+            placeholder={
+              mode === 'agent'
+                ? '输入指令... (例如：帮我创建一个 README.md)'
+                : '输入消息... (Enter 发送，Shift+Enter 换行)'
+            }
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            rows={1}
+          />
+          <div className={styles.inputBottomRow}>
             <button
-              className={styles.iconBtn}
-              onClick={() => clearMessages(activeSession.id)}
-              title="清空对话"
+              type="button"
+              className={`${styles.modeButton} ${mode === 'agent' ? styles.agentModeActive : ''}`}
+              onClick={cycleMode}
+              disabled={!activeSession || isStreaming}
+              title={MODE_HINTS[mode]}
             >
-              <Trash2 size={14} />
+              {mode === 'agent' && <Terminal size={12} />}
+              {MODE_LABELS[mode]}
             </button>
-          ) : null}
-          <button
-            className={styles.sendBtn}
-            onClick={handleSend}
-            disabled={!input.trim() || isStreaming}
-          >
-            {isStreaming ? (
-              <Loader2 size={16} className={styles.loadingSpinner} />
-            ) : (
-              <Send size={16} />
-            )}
-          </button>
+
+            <div className={styles.inputActions}>
+              {isStreaming ? (
+                <button className={styles.iconBtn} onClick={handleStop} title="停止生成" type="button">
+                  <StopCircle size={14} />
+                </button>
+              ) : messages.length > 0 && activeSession ? (
+                <button
+                  className={styles.iconBtn}
+                  onClick={() => clearMessages(activeSession.id)}
+                  title="清空对话"
+                >
+                  <Trash2 size={14} />
+                </button>
+              ) : null}
+              <button
+                className={styles.sendBtn}
+                onClick={handleSend}
+                disabled={!input.trim() || isStreaming}
+              >
+                {isStreaming ? (
+                  <Loader2 size={16} className={styles.loadingSpinner} />
+                ) : (
+                  <Send size={16} />
+                )}
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </aside>

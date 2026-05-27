@@ -121,11 +121,11 @@
 }
 
 .modeButton {
-  height: 34px;
+  height: 30px;
   padding: 0 10px;
-  border-radius: 10px;
+  border-radius: 8px;
   border: 1px solid var(--border-color);
-  background-color: var(--bg-primary);
+  background-color: var(--bg-secondary);
   color: var(--fg-secondary);
   font-size: 12px;
   font-weight: 600;
@@ -795,53 +795,71 @@
 
 /* Input Area */
 .inputArea {
-  display: flex;
-  align-items: flex-end;
-  gap: 8px;
   padding: 12px 16px;
   border-top: 1px solid var(--border-color);
   background-color: var(--bg-secondary);
   flex-shrink: 0;
 }
 
+.inputBubble {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 14px;
+  background-color: var(--bg-primary);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.inputBubble:focus-within {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 3px var(--accent-subtle);
+}
+
 .input {
-  flex: 1;
+  width: 100%;
   min-height: 38px;
   max-height: 150px;
-  padding: 10px 14px;
-  background-color: var(--bg-primary);
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
+  padding: 2px 4px;
+  background-color: transparent;
+  border: none;
+  border-radius: 0;
   font-family: inherit;
   font-size: 13px;
   color: var(--fg-primary);
   resize: none;
   line-height: 1.4;
-  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 .input:focus {
   outline: none;
-  border-color: var(--accent-primary);
-  box-shadow: 0 0 0 3px var(--accent-subtle);
+  box-shadow: none;
 }
 
 .input::placeholder {
   color: var(--fg-muted);
 }
 
+.inputBottomRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .inputActions {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  align-items: center;
+  gap: 6px;
 }
 
 .iconBtn {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  width: 30px;
+  height: 30px;
   border-radius: 8px;
   color: var(--fg-muted);
   background: transparent;
