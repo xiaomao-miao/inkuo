@@ -2,16 +2,16 @@ import React, { useState, useCallback, useEffect } from 'react';
 import { TitleBar } from '../titlebar/TitleBar';
 import { ActivityBar, type ViewType } from '../activitybar/ActivityBar';
 import { Sidebar } from '../sidebar/Sidebar';
-import { SettingsPanel } from '../settings';
 import { ResizableHandle } from '../resizable';
 import { Editor } from '../editor/Editor';
 import { TabBar } from '../editor/TabBar';
 import { AIPanel } from '../aipanel/AIPanel';
-import { useAIPanelStore } from '../../store';
+import { useAIPanelStore, useSidebarStore } from '../../store';
 import styles from './Layout.module.css';
 
 export const Layout: React.FC = () => {
   const { isOpen: isAIPanelOpen, togglePanel } = useAIPanelStore();
+  const { openTab } = useSidebarStore();
   const [activeView, setActiveView] = useState<ViewType>('files');
   const [isSidebarVisible, setIsSidebarVisible] = useState(true);
   
@@ -71,7 +71,6 @@ export const Layout: React.FC = () => {
           <>
             <div className={styles.sidebar} style={{ width: sidebarWidth }}>
               {activeView === 'files' && <Sidebar />}
-              {activeView === 'settings' && <SettingsPanel />}
               {activeView === 'search' && (
                 <div className={styles.placeholder}>
                   <p>搜索</p>

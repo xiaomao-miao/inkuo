@@ -8,7 +8,9 @@ import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { invoke } from '@tauri-apps/api/core';
 import { Sparkles } from 'lucide-react';
 import { useEditorStore, useSidebarStore } from '../../store';
+import { SETTINGS_TAB_ID } from '../../store';
 import { DiffOverlay } from './DiffOverlay';
+import { SettingsPanel } from '../settings/SettingsPanel';
 import styles from './Editor.module.css';
 
 export const Editor: React.FC = () => {
@@ -21,7 +23,8 @@ export const Editor: React.FC = () => {
     markSaved,
     updateTabDirty,
   } = useEditorStore();
-  const { selectedFile } = useSidebarStore();
+  const { selectedFile, activeTabId } = useSidebarStore();
+  const isSettingsTab = activeTabId === SETTINGS_TAB_ID;
 
   // Get current document state from store
   const currentDoc = selectedFile ? documentContents[selectedFile] : null;
@@ -118,7 +121,15 @@ export const Editor: React.FC = () => {
     }
   }, [selectedFile, setSelection]);
 
-  // No file selected - show inline hint instead of big card
+  // No file selected - show inline hint or settings
+  if (isSettingsTab) {
+    return (
+      <div className={styles.editorContainer}>
+        <SettingsPanel />
+      </div>
+    );
+  }
+
   if (!selectedFile || !currentDoc) {
     return (
       <div className={styles.editorContainer}>

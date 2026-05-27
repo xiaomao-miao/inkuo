@@ -1,6 +1,7 @@
 import React from 'react';
-import { FileText, File, X, Circle } from 'lucide-react';
+import { FileText, File, X, Circle, Settings } from 'lucide-react';
 import { useSidebarStore, useEditorStore } from '../../store';
+import { SETTINGS_TAB_ID } from '../../store';
 import type { OpenTab } from '../../store';
 import styles from './TabBar.module.css';
 
@@ -21,8 +22,11 @@ export const TabBar: React.FC = () => {
     return null;
   }
 
-  const getFileIcon = (name: string) => {
-    const isMarkdown = name.endsWith('.md') || name.endsWith('.markdown');
+  const getFileIcon = (tab: OpenTab) => {
+    if (tab.isSettings) {
+      return <Settings size={14} />;
+    }
+    const isMarkdown = tab.name.endsWith('.md') || tab.name.endsWith('.markdown');
     return isMarkdown ? <FileText size={14} /> : <File size={14} />;
   };
 
@@ -41,9 +45,9 @@ export const TabBar: React.FC = () => {
               onClick={() => handleTabClick(tab)}
             >
               <span className={styles.tabIcon}>
-                {getFileIcon(tab.name)}
+                {getFileIcon(tab)}
               </span>
-              <span className={styles.tabName}>{tab.name}</span>
+              <span className={styles.tabName}>{tab.isSettings ? '设置' : tab.name}</span>
               {isDirty && (
                 <span className={styles.dirtyIndicator}>
                   <Circle size={8} fill="currentColor" />

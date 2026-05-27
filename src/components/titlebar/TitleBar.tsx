@@ -3,9 +3,10 @@ import {
   Minus,
   Square,
   X,
-  Copy
+  Copy,
+  Settings
 } from 'lucide-react';
-import { useSidebarStore, useEditorStore } from '../../store';
+import { useSidebarStore, useEditorStore, SETTINGS_TAB_ID } from '../../store';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import styles from './TitleBar.module.css';
@@ -28,11 +29,21 @@ export const TitleBar: React.FC = () => {
   const [isMaximized, setIsMaximized] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   
-  const { selectedFile, setWorkspacePath, setFiles } = useSidebarStore();
+  const { selectedFile, setWorkspacePath, setFiles, openTab } = useSidebarStore();
   const { documentContents, markSaved } = useEditorStore();
-  
+
   const currentDoc = selectedFile ? documentContents[selectedFile] : null;
   const isDirty = currentDoc?.isDirty || false;
+
+  const handleOpenSettings = () => {
+    openTab({
+      id: SETTINGS_TAB_ID,
+      path: SETTINGS_TAB_ID,
+      name: '设置',
+      isDirty: false,
+      isSettings: true,
+    });
+  };
 
   // Check initial maximized state
   useEffect(() => {
@@ -236,21 +247,28 @@ export const TitleBar: React.FC = () => {
       </div>
       
       <div className={styles.actions}>
-        <button 
+        <button
+          className={styles.actionButton}
+          onClick={handleOpenSettings}
+          title="设置"
+        >
+          <Settings size={14} />
+        </button>
+        <button
           className={styles.actionButton}
           onClick={handleMinimize}
           title="最小化"
         >
           <Minus size={14} />
         </button>
-        <button 
+        <button
           className={styles.actionButton}
           onClick={handleMaximize}
           title={isMaximized ? '还原' : '最大化'}
         >
           {isMaximized ? <Copy size={12} /> : <Square size={12} />}
         </button>
-        <button 
+        <button
           className={`${styles.actionButton} ${styles.close}`}
           onClick={handleClose}
           title="关闭"

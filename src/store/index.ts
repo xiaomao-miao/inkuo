@@ -278,7 +278,11 @@ export interface OpenTab {
   path: string;
   name: string;
   isDirty: boolean;
+  isSettings?: boolean;
 }
+
+// Special tab IDs
+export const SETTINGS_TAB_ID = '__settings__';
 
 export const useSidebarStore = create<SidebarState>()(
   persist(
@@ -312,7 +316,9 @@ export const useSidebarStore = create<SidebarState>()(
       return { activeTabId: existing.id, selectedFile: tab.path };
     }
     const newTabs = [...state.openTabs, tab];
-    return { openTabs: newTabs, activeTabId: tab.id, selectedFile: tab.path };
+    // For settings tab, selectedFile is null
+    const newSelectedFile = tab.isSettings ? null : tab.path;
+    return { openTabs: newTabs, activeTabId: tab.id, selectedFile: newSelectedFile };
   }),
   closeTab: (tabId) => set((state) => {
     const newTabs = state.openTabs.filter(t => t.id !== tabId);
@@ -333,9 +339,10 @@ export const useSidebarStore = create<SidebarState>()(
   }),
   setActiveTab: (tabId) => set((state) => {
     const tab = state.openTabs.find(t => t.id === tabId);
+    const newSelectedFile = tab?.isSettings ? null : (tab?.path || state.selectedFile);
     return {
       activeTabId: tabId,
-      selectedFile: tab?.path || state.selectedFile
+      selectedFile: newSelectedFile
     };
   }),
 }),

@@ -4,12 +4,11 @@ import {
   Search, 
   GitBranch, 
   BookOpen,
-  Settings,
   PanelLeft
 } from 'lucide-react';
 import styles from './ActivityBar.module.css';
 
-export type ViewType = 'files' | 'search' | 'git' | 'extensions' | 'settings';
+export type ViewType = 'files' | 'search' | 'git' | 'extensions';
 
 interface ActivityBarProps {
   activeView: ViewType;
@@ -27,7 +26,6 @@ export const ActivityBar: React.FC<ActivityBarProps> = ({
     { id: 'search', icon: <Search size={22} />, label: '搜索' },
     { id: 'git', icon: <GitBranch size={22} />, label: '源代码管理' },
     { id: 'extensions', icon: <BookOpen size={22} />, label: '扩展' },
-    { id: 'settings', icon: <Settings size={22} />, label: '设置' },
   ];
 
   return (
