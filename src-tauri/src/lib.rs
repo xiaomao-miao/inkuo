@@ -45,13 +45,25 @@ fn setup_logging() {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     setup_logging();
-    
+
     tracing::info!("Starting inkuo v{}", env!("CARGO_PKG_VERSION"));
-    
-    // Initialize background tasks
-    commands::init_backup_cleanup_task();
-    
+
+    // Spawn a background thread with Tokio runtime for backup cleanup
+    std::thread::spawn(|| {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to create Tokio runtime");
+
+        rt.block_on(async {
+            commands::init_backup_cleanup_task();
+        });
+    });
+
     tauri::Builder::default()
+        .setup(|_app| {
+            Ok(())
+        })
         .manage(commands::AppState::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())

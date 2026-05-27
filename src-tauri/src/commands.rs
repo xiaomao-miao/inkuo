@@ -18,6 +18,7 @@ static BACKUP_CLEANUP_TX: Lazy<Mutex<Option<mpsc::Sender<()>>>> = Lazy::new(|| M
 
 /// Initialize background backup cleanup task
 pub fn init_backup_cleanup_task() {
+    // This must be called from within a Tokio runtime
     let (tx, mut rx) = mpsc::channel::<()>(32);
 
     tokio::spawn(async move {
