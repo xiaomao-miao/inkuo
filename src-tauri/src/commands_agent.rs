@@ -205,8 +205,6 @@ pub async fn ai_agent_stream(
                     original_content: None,
                     new_content: None,
                     diff_summary: None,
-                    suggested_mode: None,
-                    mode_switch_reason: None,
                 },
             );
         }
@@ -239,8 +237,6 @@ pub async fn ai_agent_stream(
                     original_content: None,
                     new_content: None,
                     diff_summary: None,
-                    suggested_mode: None,
-                    mode_switch_reason: None,
                 },
             );
         }

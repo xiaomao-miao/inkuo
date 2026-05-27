@@ -497,11 +497,6 @@ export interface ChatSession {
   activeToolCalls: ActiveToolCall[];
   // Pending diff preview during streaming (for inline editing)
   pendingDiff: CurrentDiff | null;
-  // Pending mode switch suggestion from AI
-  pendingModeSwitch: {
-    suggestedMode: ChatMode;
-    reason: string;
-  } | null;
 }
 
 /** AI Panel state */
@@ -541,9 +536,6 @@ interface AIPanelState {
   rejectHunk: (sessionId: string, hunkId: string) => void;
   acceptAllHunks: (sessionId: string) => void;
   rejectAllHunks: (sessionId: string) => void;
-
-  // Mode switch suggestion
-  setPendingModeSwitch: (sessionId: string, suggestion: { suggestedMode: ChatMode; reason: string } | null) => void;
 }
 
 function createSessionTitle(index: number) {
@@ -562,7 +554,6 @@ function createNewSession(index: number): ChatSession {
     currentDiff: null,
     activeToolCalls: [],
     pendingDiff: null,
-    pendingModeSwitch: null,
   };
 }
 
@@ -834,13 +825,6 @@ export const useAIPanelStore = create<AIPanelState>()(
 
               return { ...s, messages: updatedMessages };
             }),
-          })),
-
-        setPendingModeSwitch: (sessionId, suggestion) =>
-          set((state) => ({
-            sessions: state.sessions.map((s) =>
-              s.id === sessionId ? { ...s, pendingModeSwitch: suggestion } : s
-            ),
           })),
       };
     },

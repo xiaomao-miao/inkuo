@@ -30,8 +30,6 @@ import { parsePlanBlocks, type PlanBlock } from './planRender';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { InlineDiffPreview } from './InlineDiffPreview';
 import { ToolCallCard } from './ToolCallCard';
-import { ModeSwitchSuggestion } from './ModeSwitchSuggestion';
-import { ToolPanel } from './ToolPanel';
 
 const MODE_LABELS: Record<ChatMode, string> = {
   ask: 'Ask',
@@ -63,7 +61,6 @@ export const AIPanel: React.FC = () => {
     setIsOpen,
     clearToolCalls,
     setMessageDiff,
-    setPendingModeSwitch,
   } = useAIPanelStore();
 
   const activeSession = useMemo(
@@ -76,7 +73,6 @@ export const AIPanel: React.FC = () => {
   const pendingDiff = activeSession?.pendingDiff ?? null;
   const mode: ChatMode = activeSession?.mode ?? 'ask';
   const activeToolCalls = activeSession?.activeToolCalls ?? [];
-  const pendingModeSwitch = activeSession?.pendingModeSwitch ?? null;
 
   const { selectedFile } = useSidebarStore();
   const { documentContents, getSelection } = useEditorStore();
@@ -364,18 +360,6 @@ export const AIPanel: React.FC = () => {
     }
   };
 
-  // Mode switch handlers
-  const handleApproveModeSwitch = () => {
-    if (!activeSession || !pendingModeSwitch) return;
-    setSessionMode(activeSession.id, pendingModeSwitch.suggestedMode);
-    setPendingModeSwitch(activeSession.id, null);
-  };
-
-  const handleRejectModeSwitch = () => {
-    if (!activeSession) return;
-    setPendingModeSwitch(activeSession.id, null);
-  };
-
   // Streaming events
   useEffect(() => {
     const setupListener = async () => {
@@ -399,8 +383,6 @@ export const AIPanel: React.FC = () => {
             tool_name,
             tool_args,
             diff_summary,
-            suggested_mode,
-            mode_switch_reason,
           } = payload;
 
           if (!payload || !session_id || !message_id) return;
@@ -436,18 +418,6 @@ export const AIPanel: React.FC = () => {
                   : s
               ),
             }));
-            return;
-          }
-
-          // Handle mode switch suggestion from AI
-          if (event_type === 'mode_switch' && suggested_mode) {
-            const validModes: ChatMode[] = ['ask', 'plan', 'agent'];
-            if (validModes.includes(suggested_mode as ChatMode)) {
-              setPendingModeSwitch(session_id, {
-                suggestedMode: suggested_mode as ChatMode,
-                reason: mode_switch_reason || 'AI 建议切换到该模式',
-              });
-            }
             return;
           }
 
@@ -584,44 +554,6 @@ export const AIPanel: React.FC = () => {
             flushAllPending();
             // Fallback: use accumulated streaming content if final_content is missing
             const effectiveContent = final_content || streamingContentRef.current[message_id] || '';
-
-            // Parse mode switch suggestions from the response text
-            const modeSwitchRegex = /\{"type":\s*"mode_switch",\s*"suggested_mode":\s*"(ask|plan|agent)",\s*"reason":\s*"([^"]+)"\}/g;
-            const modeSwitchMatch = modeSwitchRegex.exec(effectiveContent);
-            if (modeSwitchMatch) {
-              const suggestedMode = modeSwitchMatch[1] as ChatMode;
-              const reason = modeSwitchMatch[2];
-              // Clean the content by removing the mode switch JSON
-              const cleanedContent = effectiveContent.replace(modeSwitchRegex, '').trim();
-
-              setPendingModeSwitch(session_id, { suggestedMode, reason });
-
-              // Also update the message content if it changed
-              if (cleanedContent !== effectiveContent) {
-                useAIPanelStore.setState((state) => ({
-                  sessions: state.sessions.map((s) =>
-                    s.id === session_id
-                      ? {
-                          ...s,
-                          messages: s.messages.map((m) =>
-                            m.id === message_id
-                              ? {
-                                  ...m,
-                                  content: cleanedContent,
-                                  outputItems: m.outputItems.map((item) =>
-                                    item.type === 'text'
-                                      ? { ...item, content: cleanedContent, isPendingMarkdown: false }
-                                      : item
-                                  ),
-                                }
-                              : m
-                          ),
-                        }
-                      : s
-                  ),
-                }));
-              }
-            }
 
             // Clean up refs
             delete streamingContentRef.current[message_id];
@@ -831,22 +763,7 @@ export const AIPanel: React.FC = () => {
             </div>
           </div>
         ) : (
-          <>
-            {/* Mode switch suggestion from AI */}
-            {pendingModeSwitch && (
-              <ModeSwitchSuggestion
-                currentMode={mode}
-                suggestedMode={pendingModeSwitch.suggestedMode}
-                reason={pendingModeSwitch.reason}
-                onApprove={handleApproveModeSwitch}
-                onReject={handleRejectModeSwitch}
-              />
-            )}
-
-            {/* Tool panel for current mode */}
-            <ToolPanel mode={mode} />
-
-            <div className={styles.messages}>
+          <div className={styles.messages}>
             {/* Flattened message + tool result rendering — Cursor-style interleaving */}
             {messages.flatMap((message) => {
               const elements: React.ReactNode[] = [];
@@ -1084,9 +1001,8 @@ export const AIPanel: React.FC = () => {
                 isStreaming={isStreaming}
               />
             )}
-            </div>
             <div ref={messagesEndRef} />
-          </>
+          </div>
         )}
       </div>
 

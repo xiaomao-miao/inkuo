@@ -20,8 +20,6 @@ pub enum StreamEventType {
     Thinking,
     /// Final completion
     Done,
-    /// Mode switch suggestion from AI
-    ModeSwitch,
 }
 
 /// Re-exports from diff module for external use
@@ -87,14 +85,6 @@ pub struct StreamPayload {
     /// Diff summary (file name, line counts, hunks) for UI display
     #[serde(skip_serializing_if = "Option::is_none")]
     pub diff_summary: Option<FileDiffSummary>,
-
-    // === Mode switch suggestion fields ===
-    /// Suggested mode to switch to
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub suggested_mode: Option<String>,
-    /// Reason for the mode switch suggestion
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mode_switch_reason: Option<String>,
 }
 
 impl Default for StreamPayload {
@@ -115,8 +105,6 @@ impl Default for StreamPayload {
             original_content: None,
             new_content: None,
             diff_summary: None,
-            suggested_mode: None,
-            mode_switch_reason: None,
         }
     }
 }
@@ -139,8 +127,6 @@ impl StreamPayload {
             original_content: None,
             new_content: None,
             diff_summary: None,
-            suggested_mode: None,
-            mode_switch_reason: None,
         }
     }
 
@@ -161,8 +147,6 @@ impl StreamPayload {
             original_content: None,
             new_content: None,
             diff_summary: None,
-            suggested_mode: None,
-            mode_switch_reason: None,
         }
     }
 
@@ -189,8 +173,6 @@ impl StreamPayload {
             original_content: None,
             new_content: None,
             diff_summary: None,
-            suggested_mode: None,
-            mode_switch_reason: None,
         }
     }
 
@@ -217,8 +199,6 @@ impl StreamPayload {
             original_content: None,
             new_content: None,
             diff_summary: None,
-            suggested_mode: None,
-            mode_switch_reason: None,
         }
     }
 
@@ -239,35 +219,6 @@ impl StreamPayload {
             original_content: None,
             new_content: None,
             diff_summary: None,
-            suggested_mode: None,
-            mode_switch_reason: None,
-        }
-    }
-
-    pub fn mode_switch(
-        session_id: &str,
-        message_id: &str,
-        suggested_mode: &str,
-        reason: &str,
-    ) -> Self {
-        Self {
-            session_id: session_id.to_string(),
-            message_id: message_id.to_string(),
-            event_type: "mode_switch".to_string(),
-            content: None,
-            summary: None,
-            tool_call_id: None,
-            tool_name: None,
-            tool_args: None,
-            final_content: None,
-            error: None,
-            done: false,
-            file_path: None,
-            original_content: None,
-            new_content: None,
-            diff_summary: None,
-            suggested_mode: Some(suggested_mode.to_string()),
-            mode_switch_reason: Some(reason.to_string()),
         }
     }
 }

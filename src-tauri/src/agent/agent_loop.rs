@@ -281,8 +281,6 @@ impl AgentExecutor {
                     original_content: None,
                     new_content: None,
                     diff_summary: None,
-                    suggested_mode: None,
-                    mode_switch_reason: None,
                 });
 
                 // Execute tool
@@ -355,8 +353,6 @@ impl AgentExecutor {
                     original_content: result.original_content.clone(),
                     new_content: result.new_content.clone(),
                     diff_summary,
-                    suggested_mode: None,
-                    mode_switch_reason: None,
                 });
 
                 // Add tool result to message history
@@ -496,8 +492,6 @@ impl AgentExecutor {
                                     original_content: None,
                                     new_content: None,
                                     diff_summary: None,
-                                    suggested_mode: None,
-                                    mode_switch_reason: None,
                                 });
                             }
                             // Also handle reasoning_content (DeepSeek's thinking)
@@ -520,8 +514,6 @@ impl AgentExecutor {
                                         original_content: None,
                                         new_content: None,
                                         diff_summary: None,
-                                        suggested_mode: None,
-                                        mode_switch_reason: None,
                                     });
                                 }
                             }
