@@ -119,32 +119,15 @@ export const Sidebar: React.FC = () => {
       const entries = await invoke<FileEntry[]>('list_directory', { path });
 
       if (mergeWithExisting && files.length > 0) {
-        // Get paths that are already in the current file list
-        const existingPaths = new Set(files.map(f => f.path));
+        // 保留已展开目录的子项，只替换根目录
+        const rootPaths = new Set(entries.map(e => e.path));
 
-        // Keep existing children (loaded from expanded folders) that aren't in new entries
-        // Also keep children of newly listed directories (even if not expanded yet)
-        const childrenToKeep = files.filter(f => {
-          // Skip if it's a direct child of the loaded path (will be replaced)
-          if (existingPaths.has(f.path) && entries.some(e => e.path === f.path)) {
-            return false;
-          }
-          // Keep if it's a grandchild (deeper than immediate children)
-          return entries.some(entry =>
-            entry.is_dir && f.path.startsWith(entry.path + '/')
-          );
-        });
+        // 保留展开目录的子项
+        const childrenToKeep = files.filter(f =>
+          [...expandedDirs].some(expanded => f.path.startsWith(expanded + '/'))
+        );
 
-        // Deduplicate: use path as key
-        const allEntries = [...childrenToKeep, ...entries];
-        const seen = new Set<string>();
-        const deduplicated = allEntries.filter(e => {
-          if (seen.has(e.path)) return false;
-          seen.add(e.path);
-          return true;
-        });
-
-        setFiles(deduplicated);
+        setFiles([...childrenToKeep, ...entries]);
       } else {
         setFiles(entries);
       }
@@ -155,25 +138,26 @@ export const Sidebar: React.FC = () => {
     }
   };
 
+  // 展开文件夹时添加子项，折叠时移除子项
   const handleFileClick = async (entry: FileEntry) => {
     if (entry.is_dir) {
       const wasExpanded = expandedDirs.has(entry.path);
-      toggleDir(entry.path);
-      
-      if (!wasExpanded) {
-        // Loading children for the first time
+
+      if (wasExpanded) {
+        // 折叠：移除该目录的所有子项
+        const folderPath = entry.path + '/';
+        setFiles(prevFiles => prevFiles.filter(f => !f.path.startsWith(folderPath)));
+      } else {
+        // 展开：加载并添加子项
         try {
           const childEntries = await invoke<FileEntry[]>('list_directory', { path: entry.path });
-          // Add child entries to the file list, with deduplication
-          setFiles(prevFiles => {
-            const existingPaths = new Set(prevFiles.map(f => f.path));
-            const newEntries = childEntries.filter(e => !existingPaths.has(e.path));
-            return [...prevFiles, ...newEntries];
-          });
+          setFiles(prevFiles => [...prevFiles, ...childEntries]);
         } catch (err) {
           console.error('Failed to load directory:', err);
         }
       }
+
+      toggleDir(entry.path);
     } else {
       // Open file in new tab
       openTab({
