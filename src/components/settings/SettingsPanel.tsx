@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
-import { 
-  Key, 
-  Globe, 
-  Cpu, 
-  Check, 
+import {
+  Key,
+  Globe,
+  Cpu,
+  Check,
   AlertCircle,
   Loader2,
   Eye,
@@ -11,6 +11,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 import { useSettingsStore } from '../../store';
+import { Select } from './Select';
 import styles from './SettingsPanel.module.css';
 
 export const SettingsPanel: React.FC = () => {
@@ -32,7 +33,7 @@ export const SettingsPanel: React.FC = () => {
   const handleTestConnection = async () => {
     setTesting(true);
     setTestResult(null);
-    
+
     try {
       const { invoke } = await import('@tauri-apps/api/core');
       const result = await invoke<{ success: boolean; message: string }>('test_ai_connection', {
@@ -56,7 +57,7 @@ export const SettingsPanel: React.FC = () => {
       <div className={styles.header}>
         <h3>设置</h3>
       </div>
-      
+
       <div className={styles.content}>
         {/* AI Settings Section */}
         <div className={styles.section}>
@@ -64,19 +65,20 @@ export const SettingsPanel: React.FC = () => {
             <Cpu size={14} />
             AI 设置
           </h4>
-          
+
           {/* Provider Selection */}
           <div className={styles.field}>
             <label className={styles.label}>AI 提供商</label>
-            <select
-              className={styles.select}
+            <Select
               value={settings.ai_provider}
-              onChange={e => { updateSetting('ai_provider', e.target.value as any); saveSettings(); }}
-            >
-              <option value="openai">OpenAI (兼容)</option>
-              <option value="ollama">Ollama (本地)</option>
-              <option value="deepseek">DeepSeek</option>
-            </select>
+              options={[
+                { value: 'openai', label: 'OpenAI (兼容)' },
+                { value: 'ollama', label: 'Ollama (本地)' },
+                { value: 'deepseek', label: 'DeepSeek' },
+              ]}
+              onChange={value => { updateSetting('ai_provider', value as any); saveSettings(); }}
+              className={styles.select}
+            />
           </div>
 
           {/* Base URL */}
@@ -152,7 +154,7 @@ export const SettingsPanel: React.FC = () => {
                 </>
               )}
             </button>
-            
+
             {testResult && (
               <div className={`${styles.testResult} ${testResult.success ? styles.success : styles.error}`}>
                 {testResult.success ? <Check size={12} /> : <AlertCircle size={12} />}
@@ -165,7 +167,7 @@ export const SettingsPanel: React.FC = () => {
         {/* Editor Settings */}
         <div className={styles.section}>
           <h4 className={styles.sectionTitle}>编辑器</h4>
-          
+
           <div className={styles.field}>
             <label className={styles.label}>字体大小</label>
             <div className={styles.rangeWrapper}>
@@ -183,30 +185,31 @@ export const SettingsPanel: React.FC = () => {
 
           <div className={styles.field}>
             <label className={styles.label}>字体</label>
-            <select
-              className={styles.select}
+            <Select
               value={settings.editor_font_family}
-              onChange={e => { updateSetting('editor_font_family', e.target.value); saveSettings(); }}
-            >
-              <option value="JetBrains Mono, monospace">JetBrains Mono</option>
-              <option value="Fira Code, monospace">Fira Code</option>
-              <option value="Cascadia Code, Consolas, monospace">Cascadia Code</option>
-              <option value="Consolas, monospace">Consolas</option>
-              <option value="Monaco, monospace">Monaco</option>
-            </select>
+              options={[
+                { value: 'JetBrains Mono, monospace', label: 'JetBrains Mono' },
+                { value: 'Fira Code, monospace', label: 'Fira Code' },
+                { value: 'Cascadia Code, Consolas, monospace', label: 'Cascadia Code' },
+                { value: 'Consolas, monospace', label: 'Consolas' },
+                { value: 'Monaco, monospace', label: 'Monaco' },
+              ]}
+              onChange={value => { updateSetting('editor_font_family', value); saveSettings(); }}
+              className={styles.select}
+            />
           </div>
         </div>
 
         {/* Theme Settings */}
         <div className={styles.section}>
           <h4 className={styles.sectionTitle}>主题</h4>
-          
+
           <div className={styles.field}>
             <label className={styles.label}>配色方案</label>
             <div className={styles.themeGrid}>
               <button
                 className={`${styles.themeOption} ${settings.theme === 'cursor-dark' ? styles.active : ''}`}
-                                onClick={() => { updateSetting('theme', 'cursor-dark'); saveSettings(); }}
+                onClick={() => { updateSetting('theme', 'cursor-dark'); saveSettings(); }}
               >
                 <div className={styles.themePreview} style={{ background: '#1e1e1e' }}>
                   <div style={{ color: '#7c5cff', fontSize: '10px' }}>Aa</div>
@@ -215,7 +218,7 @@ export const SettingsPanel: React.FC = () => {
               </button>
               <button
                 className={`${styles.themeOption} ${settings.theme === 'cursor-light' ? styles.active : ''}`}
-                                onClick={() => { updateSetting('theme', 'cursor-light'); saveSettings(); }}
+                onClick={() => { updateSetting('theme', 'cursor-light'); saveSettings(); }}
               >
                 <div className={styles.themePreview} style={{ background: '#ffffff' }}>
                   <div style={{ color: '#7c5cff', fontSize: '10px' }}>Aa</div>
