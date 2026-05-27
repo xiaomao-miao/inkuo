@@ -95,7 +95,7 @@ export const Sidebar: React.FC = () => {
         try {
           const childEntries = await invoke<FileEntry[]>('list_directory', { path: entry.path });
           // Add child entries to the file list, keeping the parent folder
-          setFiles([...files, ...childEntries]);
+          setFiles(prevFiles => [...prevFiles, ...childEntries]);
         } catch (err) {
           console.error('Failed to load directory:', err);
         }

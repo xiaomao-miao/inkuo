@@ -187,7 +187,8 @@ impl StreamPayload {
             session_id: session_id.to_string(),
             message_id: message_id.to_string(),
             event_type: "tool_result".to_string(),
-            content: Some(result.to_string()),
+            // When error, only put in error field, not content, to avoid duplication
+            content: if is_error { None } else { Some(result.to_string()) },
             summary: None,
             tool_call_id: Some(tool_call_id.to_string()),
             tool_name: None,

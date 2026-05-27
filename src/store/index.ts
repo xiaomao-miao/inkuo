@@ -264,7 +264,7 @@ interface SidebarState {
   activeTabId: string | null;
 
   setWorkspacePath: (path: string) => void;
-  setFiles: (files: FileEntry[]) => void;
+  setFiles: (files: FileEntry[] | ((prev: FileEntry[]) => FileEntry[])) => void;
   toggleDir: (path: string) => void;
   setSelectedFile: (path: string | null) => void;
   setIsLoading: (loading: boolean) => void;
@@ -292,7 +292,9 @@ export const useSidebarStore = create<SidebarState>()(
   activeTabId: null,
 
   setWorkspacePath: (path) => set({ workspacePath: path }),
-  setFiles: (files) => set({ files }),
+  setFiles: (files) => set((state) => ({
+    files: typeof files === 'function' ? files(state.files) : files
+  })),
   toggleDir: (path) => set((state) => {
     const newExpanded = new Set(state.expandedDirs);
     if (newExpanded.has(path)) {

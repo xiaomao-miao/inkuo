@@ -369,7 +369,7 @@ impl EditFileTool {
             ));
         }
 
-        // Replace
+        // Replace all occurrences
         let new_content = content.replace(old_text, new_text);
 
         // Write back

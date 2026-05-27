@@ -46,19 +46,15 @@ export interface DiffResult {
 
 export interface DiffHunk {
   id: string;
-  old_range: HunkRange;
-  new_range: HunkRange;
+  old_start: number;
+  old_lines: number;
+  new_start: number;
+  new_lines: number;
   changes: DiffChange[];
-  summary: string;
-}
-
-export interface HunkRange {
-  start_line: number;
-  end_line: number;
 }
 
 export interface DiffChange {
-  tag: 'Delete' | 'Insert' | 'Equal';
+  tag: 'delete' | 'insert' | 'equal';
   old_line: number | null;
   new_line: number | null;
   content: string;
