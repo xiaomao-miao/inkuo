@@ -3,7 +3,8 @@
 //! Exposes the agent tool-calling functionality to the frontend
 
 use crate::agent::{
-    create_agent_executor, create_tool_registry, get_agent_system_prompt, get_read_only_system_prompt, AgentSession, Message,
+    create_agent_executor, create_tool_registry, create_read_only_tool_registry,
+    get_agent_system_prompt, get_read_only_system_prompt, AgentSession, Message,
     SharedToolRegistry, AgentError, ToolCallMessage, ToolCallFunction,
 };
 use crate::streaming::StreamPayload;
@@ -123,10 +124,15 @@ pub async fn ai_agent_stream(
 
     let executor = create_agent_executor(ai_config);
 
-    let tool_registry = get_tool_registry();
+    // Use different tool registry based on mode
+    let tool_registry = if read_only {
+        create_read_only_tool_registry()
+    } else {
+        create_tool_registry()
+    };
     let mut session = AgentSession::new(tool_registry);
 
-    // Add system prompt based on mode (read_only for ask/plan, full for agent)
+    // Use different system prompt based on mode
     let mut system_prompt = if read_only {
         get_read_only_system_prompt()
     } else {

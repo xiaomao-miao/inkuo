@@ -706,6 +706,27 @@ impl ToolRegistry {
         registry
     }
 
+    pub fn new_read_only() -> Self {
+        let mut registry = Self {
+            definitions: HashMap::new(),
+            executors: HashMap::new(),
+        };
+        let tools: Vec<ToolExecutor> = vec![
+            ToolExecutor::ReadFile(ReadFileTool::new()),
+            ToolExecutor::ListDir(ListDirTool::new()),
+            ToolExecutor::Glob(GlobTool::new()),
+            ToolExecutor::Grep(GrepTool::new()),
+        ];
+
+        for tool in tools {
+            let name = tool.name().to_string();
+            let def = tool.definition();
+            registry.definitions.insert(name.clone(), def);
+            registry.executors.insert(name, tool);
+        }
+        registry
+    }
+
     fn register_builtin_tools(&mut self) {
         let tools: Vec<ToolExecutor> = vec![
             ToolExecutor::ReadFile(ReadFileTool::new()),
@@ -809,6 +830,12 @@ impl ToolRegistry {
 // Thread-safe wrapper for sharing registry across async tasks
 pub type SharedToolRegistry = Arc<RwLock<ToolRegistry>>;
 
+/// Create a full-featured tool registry (for agent mode)
 pub fn create_tool_registry() -> SharedToolRegistry {
     Arc::new(RwLock::new(ToolRegistry::new()))
+}
+
+/// Create a read-only tool registry (for ask/plan mode)
+pub fn create_read_only_tool_registry() -> SharedToolRegistry {
+    Arc::new(RwLock::new(ToolRegistry::new_read_only()))
 }
