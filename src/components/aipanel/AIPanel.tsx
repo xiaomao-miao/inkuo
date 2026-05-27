@@ -233,10 +233,6 @@ export const AIPanel: React.FC = () => {
     clearToolCalls(sessionId);
 
     try {
-      const selection = getSelection();
-      const currentDoc = selectedFile ? documentContents[selectedFile] : null;
-      const originalText = selection || currentDoc?.content || '';
-
       if (mode === 'agent') {
         // Use full agent with tool calling with context memory
         const workspacePath = useSidebarStore.getState().workspacePath || undefined;
@@ -270,6 +266,7 @@ export const AIPanel: React.FC = () => {
           messageId: assistantMessageId,
           instruction,
           workspacePath,
+          readOnly: false, // Full agent mode - can modify files
           history: conversationHistory,
           configInput: {
             provider: aiConfig.ai_provider,
@@ -282,14 +279,44 @@ export const AIPanel: React.FC = () => {
           setIsStreaming(sessionId, false);
         });
       } else {
-        // Use simple chat/edit mode
+        // Use read-only agent mode for ask/plan - can read files but not modify
+        const workspacePath = useSidebarStore.getState().workspacePath || undefined;
+        const aiConfig = useSettingsStore.getState().settings;
+        // Get conversation history (excluding the messages we're about to add)
+        const conversationHistory = messages.map(m => {
+          let textContent = '';
+          if (m.role === 'tool') {
+            textContent = m.content || '';
+          } else if (m.outputItems && m.outputItems.length > 0) {
+            textContent = m.outputItems
+              .filter(item => item.type === 'text')
+              .map(item => item.content)
+              .join('');
+          } else {
+            textContent = m.content || '';
+          }
+          return {
+            id: m.id,
+            role: m.role,
+            content: textContent,
+            tool_calls: m.toolCalls,
+            tool_call_id: m.toolCallId,
+          };
+        });
         // Don't await - let the invoke run in background while UI remains responsive
-        invoke('ai_chat_stream', {
+        invoke('ai_agent_stream', {
           sessionId,
           messageId: assistantMessageId,
-          mode,
           instruction,
-          originalText: originalText.slice(0, 5000),
+          workspacePath,
+          readOnly: true, // Read-only mode - can only read files
+          history: conversationHistory,
+          configInput: {
+            provider: aiConfig.ai_provider,
+            api_key: aiConfig.ai_api_key,
+            base_url: aiConfig.ai_base_url,
+            model: aiConfig.ai_model,
+          },
         }).catch((err) => {
           updateMessage(sessionId, assistantMessageId, `抱歉，发生了错误：${err}`);
           setIsStreaming(sessionId, false);

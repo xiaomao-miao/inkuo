@@ -3,7 +3,7 @@
 //! Exposes the agent tool-calling functionality to the frontend
 
 use crate::agent::{
-    create_agent_executor, create_tool_registry, get_agent_system_prompt, AgentSession, Message,
+    create_agent_executor, create_tool_registry, get_agent_system_prompt, get_read_only_system_prompt, AgentSession, Message,
     SharedToolRegistry, AgentError, ToolCallMessage, ToolCallFunction,
 };
 use crate::streaming::StreamPayload;
@@ -92,6 +92,7 @@ pub async fn ai_agent_stream(
     message_id: String,
     instruction: String,
     workspace_path: Option<String>,
+    read_only: bool,
     history: Vec<FrontendMessage>,
     config_input: AIConfigInput,
     app: AppHandle,
@@ -125,8 +126,12 @@ pub async fn ai_agent_stream(
     let tool_registry = get_tool_registry();
     let mut session = AgentSession::new(tool_registry);
 
-    // Add system prompt
-    let mut system_prompt = get_agent_system_prompt();
+    // Add system prompt based on mode (read_only for ask/plan, full for agent)
+    let mut system_prompt = if read_only {
+        get_read_only_system_prompt()
+    } else {
+        get_agent_system_prompt()
+    };
 
     // Add workspace context if provided
     if let Some(ws_path) = &workspace_path {
