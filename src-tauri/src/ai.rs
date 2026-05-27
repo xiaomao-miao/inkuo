@@ -1,5 +1,5 @@
 //! AI Provider adapter module
-//! 
+//!
 //! Handles:
 //! - OpenAI-compatible API (DeepSeek, etc.)
 //! - Ollama (local models)
@@ -8,6 +8,25 @@
 use serde::{Deserialize, Serialize, de::Error as DeError};
 use thiserror::Error;
 use futures_util::StreamExt;
+
+// ============================================================================
+// Prompts - loaded from markdown files at compile time
+// ============================================================================
+
+/// System prompt for ask mode (conversational Q&A)
+fn get_ask_prompt() -> &'static str {
+    include_str!("../prompts/ask.md")
+}
+
+/// System prompt for plan mode (structured planning)
+fn get_plan_prompt() -> &'static str {
+    include_str!("../prompts/plan.md")
+}
+
+/// System prompt for edit mode (document editing)
+fn get_edit_prompt() -> &'static str {
+    include_str!("../prompts/edit.md")
+}
 
 #[derive(Error, Debug)]
 pub enum AIError {
@@ -130,10 +149,8 @@ impl AIProviderAdapter {
         F: FnMut(String) + Send,
     {
         let system_prompt = match mode.as_str() {
-            "plan" => r#"You are a planning assistant. You MUST provide a structured plan only.
-Do not claim to have executed any actions.
-No code edits, no file modifications. Output plain text. Do not use emoji."#,
-            _ => r#"You are a helpful assistant. Answer the user's question concisely. Output plain text. Do not use emoji."#,
+            "plan" => get_plan_prompt(),
+            _ => get_ask_prompt(),
         };
 
         let user_prompt = if original_text.trim().is_empty() {
@@ -171,20 +188,7 @@ Context text:
     where
         F: FnMut(String) + Send,
     {
-        let system_prompt = r#"You are a document editing assistant. Your task is to modify the provided text according to the user's instruction.
-
-You MUST respond with a valid JSON object containing:
-{
-    \"summary\": \"One sentence describing what you changed and why\",
-    \"content\": \"The modified text (complete, not truncated)\",
-    \"rules_applied\": [\"List of constraints you followed\"]
-}
-
-Important rules:
-1. Preserve all numbers, dates, code blocks, and technical terms
-2. Do not change the meaning or facts in the text
-3. Keep the same language as the original text
-4. Output valid JSON only, no additional text"#;
+        let system_prompt = get_edit_prompt();
 
         let user_prompt = format!(
             r#"Instruction: {}
@@ -226,10 +230,8 @@ Context (optional references):
 
     pub async fn chat(&self, mode: String, instruction: String, original_text: String) -> Result<String, AIError> {
         let system_prompt = match mode.as_str() {
-            "plan" => r#"You are a planning assistant. You MUST provide a structured plan only.
-Do not claim to have executed any actions.
-No code edits, no file modifications. Output plain text. Do not use emoji."#,
-            _ => r#"You are a helpful assistant. Answer the user's question concisely. Output plain text. Do not use emoji."#,
+            "plan" => get_plan_prompt(),
+            _ => get_ask_prompt(),
         };
 
         let user_prompt = if original_text.trim().is_empty() {
@@ -259,20 +261,7 @@ Context text:
     }
     
     pub async fn edit(&self, request: AIEditRequest) -> Result<AIEditResponse, AIError> {
-        let system_prompt = r#"You are a document editing assistant. Your task is to modify the provided text according to the user's instruction.
-
-You MUST respond with a valid JSON object containing:
-{
-    "summary": "One sentence describing what you changed and why",
-    "content": "The modified text (complete, not truncated)",
-    "rules_applied": ["List of constraints you followed"]
-}
-
-Important rules:
-1. Preserve all numbers, dates, code blocks, and technical terms
-2. Do not change the meaning or facts in the text
-3. Keep the same language as the original text
-4. Output valid JSON only, no additional text"#;
+        let system_prompt = get_edit_prompt();
 
         let user_prompt = format!(
             r#"Instruction: {}

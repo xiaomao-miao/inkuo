@@ -4,7 +4,7 @@
 
 use crate::agent::{
     create_agent_executor, create_tool_registry, create_read_only_tool_registry,
-    get_agent_system_prompt, get_read_only_system_prompt, AgentSession, Message,
+    get_agent_system_prompt, get_ask_system_prompt, AgentSession, Message,
     SharedToolRegistry, AgentError, ToolCallMessage, ToolCallFunction,
 };
 use crate::streaming::StreamPayload;
@@ -134,7 +134,7 @@ pub async fn ai_agent_stream(
 
     // Use different system prompt based on mode
     let mut system_prompt = if read_only {
-        get_read_only_system_prompt()
+        get_ask_system_prompt()
     } else {
         get_agent_system_prompt()
     };
