@@ -521,6 +521,7 @@ interface AIPanelState {
   appendMessageContent: (sessionId: string, messageId: string, content: string) => void;
   setIsStreaming: (sessionId: string, streaming: boolean) => void;
   clearMessages: (sessionId: string) => void;
+  truncateMessagesAfter: (sessionId: string, messageId: string) => void;
 
   // Tool call management
   addToolCall: (sessionId: string, toolCall: ActiveToolCall) => void;
@@ -647,6 +648,22 @@ export const useAIPanelStore = create<AIPanelState>()(
           set((state) => ({
             sessions: state.sessions.map((s) =>
               s.id === sessionId ? { ...s, messages: [], isStreaming: false, currentDiff: null, activeToolCalls: [], pendingDiff: null } : s
+            ),
+          })),
+
+        truncateMessagesAfter: (sessionId, messageId) =>
+          set((state) => ({
+            sessions: state.sessions.map((s) =>
+              s.id === sessionId
+                ? {
+                    ...s,
+                    messages: s.messages.slice(0, s.messages.findIndex((m) => m.id === messageId) + 1),
+                    isStreaming: false,
+                    currentDiff: null,
+                    activeToolCalls: [],
+                    pendingDiff: null,
+                  }
+                : s
             ),
           })),
 

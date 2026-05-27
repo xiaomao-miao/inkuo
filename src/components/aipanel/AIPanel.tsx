@@ -12,6 +12,8 @@ import {
   Terminal,
   Sparkles,
   X,
+  Pencil,
+  RotateCcw,
 } from 'lucide-react';
 import {
   useAIPanelStore,
@@ -53,6 +55,7 @@ export const AIPanel: React.FC = () => {
     updateMessage,
     setIsStreaming,
     clearMessages,
+    truncateMessagesAfter,
     acceptAllHunks,
     rejectAllHunks,
     setIsOpen,
@@ -75,6 +78,10 @@ export const AIPanel: React.FC = () => {
   const { documentContents, getSelection } = useEditorStore();
 
   const [input, setInput] = useState('');
+
+  // Track which user message is being edited
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editingContent, setEditingContent] = useState('');
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -184,17 +191,23 @@ export const AIPanel: React.FC = () => {
     if (!activeSession || !input.trim() || isStreaming) return;
 
     const sessionId = activeSession.id;
+    // Use the input directly (could be from editing or a new message)
     const instruction = input.trim();
 
+    const isEditing = editingMessageId !== null;
+
+    // Generate IDs
+    const userMessageId = isEditing ? editingMessageId : Date.now().toString();
+    const assistantMessageId = (Date.now() + 1).toString();
+
     const userMessage: ChatMessage = {
-      id: Date.now().toString(),
+      id: userMessageId,
       role: 'user',
       content: instruction,
       timestamp: Date.now(),
       outputItems: [],
     };
 
-    const assistantMessageId = (Date.now() + 1).toString();
     const assistantPlaceholder: ChatMessage = {
       id: assistantMessageId,
       role: 'assistant',
@@ -202,10 +215,19 @@ export const AIPanel: React.FC = () => {
       outputItems: [],
     };
 
-    addMessage(sessionId, userMessage);
+    // If editing, the message already exists; we just need to update it and add assistant response
+    // If new message, add both messages
+    if (isEditing) {
+      updateMessage(sessionId, userMessageId, instruction);
+    } else {
+      addMessage(sessionId, userMessage);
+    }
     addMessage(sessionId, assistantPlaceholder);
+
+    // Clear edit mode state
+    setEditingMessageId(null);
+    setEditingContent('');
     setInput('');
-    setIsStreaming(sessionId, true);
 
     // Clear any previous tool calls
     clearToolCalls(sessionId);
@@ -280,6 +302,17 @@ export const AIPanel: React.FC = () => {
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // When editing a message, Enter saves and resends (without Shift)
+    if (editingMessageId) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        handleSaveEdit();
+      }
+      // Shift+Enter allows newlines in edit mode
+      return;
+    }
+
+    // Normal mode
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -592,6 +625,42 @@ export const AIPanel: React.FC = () => {
     setSessionMode(activeSession.id, order[(idx + 1) % order.length]);
   };
 
+  // Start editing a user message
+  const handleStartEdit = (messageId: string, currentContent: string) => {
+    setEditingMessageId(messageId);
+    setEditingContent(currentContent);
+    setInput(currentContent);
+  };
+
+  // Cancel editing
+  const handleCancelEdit = () => {
+    setEditingMessageId(null);
+    setEditingContent('');
+    setInput('');
+  };
+
+  // Save edited message and truncate subsequent messages, then resend
+  const handleSaveEdit = async () => {
+    if (!activeSession || !editingMessageId || !editingContent.trim()) return;
+    if (isStreaming) return;
+
+    const newContent = editingContent.trim();
+    const sessionId = activeSession.id;
+
+    // Truncate all messages after the edited one (clears subsequent history)
+    truncateMessagesAfter(sessionId, editingMessageId);
+
+    // Clear edit mode state
+    setEditingMessageId(null);
+    setEditingContent('');
+
+    // Set the input for resend
+    setInput(newContent);
+
+    // Trigger resend
+    await handleSend();
+  };
+
   return (
     <aside className={styles.panel}>
       {/* Header */}
@@ -673,10 +742,58 @@ export const AIPanel: React.FC = () => {
               const elements: React.ReactNode[] = [];
 
               if (message.role === 'user') {
+                const isEditing = editingMessageId === message.id;
                 elements.push(
                   <div key={message.id} className={`${styles.message} ${styles.user}`}>
                     <div className={styles.messageBubble}>
-                      {message.content}
+                      {isEditing ? (
+                        <div className={styles.editMode}>
+                          <textarea
+                            className={styles.editTextarea}
+                            value={editingContent}
+                            onChange={(e) => {
+                              setEditingContent(e.target.value);
+                              setInput(e.target.value);
+                            }}
+                            autoFocus
+                          />
+                          <div className={styles.editActions}>
+                            <button
+                              className={styles.editCancelBtn}
+                              onClick={handleCancelEdit}
+                              title="取消"
+                              type="button"
+                            >
+                              <X size={12} />
+                              取消
+                            </button>
+                            <button
+                              className={styles.editSaveBtn}
+                              onClick={handleSaveEdit}
+                              disabled={!editingContent.trim()}
+                              title="重新发送"
+                              type="button"
+                            >
+                              <RotateCcw size={12} />
+                              重新发送
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          <div className={styles.messageText}>{message.content}</div>
+                          {!isStreaming && (
+                            <button
+                              className={styles.editBtn}
+                              onClick={() => handleStartEdit(message.id, message.content || '')}
+                              title="编辑并重新发送"
+                              type="button"
+                            >
+                              <Pencil size={12} />
+                            </button>
+                          )}
+                        </>
+                      )}
                     </div>
                   </div>
                 );

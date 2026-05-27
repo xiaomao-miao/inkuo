@@ -307,6 +307,109 @@
   white-space: pre-wrap;
   word-break: break-word;
   border: 1px solid var(--accent-primary);
+  position: relative;
+}
+
+.messageText {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.editBtn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  color: var(--fg-muted);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  opacity: 0;
+}
+
+.messageBubble:hover .editBtn {
+  opacity: 1;
+}
+
+.editBtn:hover {
+  background-color: rgba(0, 0, 0, 0.1);
+  color: var(--fg-primary);
+}
+
+.editMode {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.editTextarea {
+  width: 100%;
+  min-height: 60px;
+  padding: 8px 10px;
+  background-color: var(--bg-primary);
+  border: 1px solid var(--accent-primary);
+  border-radius: 6px;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--fg-primary);
+  resize: vertical;
+  outline: none;
+}
+
+.editTextarea:focus {
+  box-shadow: 0 0 0 2px var(--accent-subtle);
+}
+
+.editActions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.editCancelBtn,
+.editSaveBtn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.editCancelBtn {
+  color: var(--fg-secondary);
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+}
+
+.editCancelBtn:hover {
+  background-color: var(--bg-hover);
+  color: var(--fg-primary);
+}
+
+.editSaveBtn {
+  color: white;
+  background-color: var(--accent-primary);
+}
+
+.editSaveBtn:hover:not(:disabled) {
+  background-color: var(--accent-hover);
+}
+
+.editSaveBtn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* Assistant message - no bubble, direct display */
