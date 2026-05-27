@@ -33,6 +33,18 @@ fn get_read_only_tool_registry() -> SharedToolRegistry {
         .clone()
 }
 
+/// Update the workspace path for both tool registries
+fn update_registry_workspace(workspace_path: Option<String>) {
+    if let Some(registry) = FULL_TOOL_REGISTRY.get() {
+        let mut registry = registry.blocking_write();
+        registry.set_workspace(workspace_path.clone());
+    }
+    if let Some(registry) = READ_ONLY_TOOL_REGISTRY.get() {
+        let mut registry = registry.blocking_write();
+        registry.set_workspace(workspace_path);
+    }
+}
+
 /// Message from frontend history
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FrontendMessage {
@@ -109,6 +121,9 @@ pub async fn ai_agent_stream(
     app: AppHandle,
 ) -> Result<(), String> {
     tracing::info!("ai_agent_stream start - session: {}, history length: {}", session_id, history.len());
+
+    // Update workspace path for tool validation
+    update_registry_workspace(workspace_path.clone());
 
     // Create AI config from input
     let ai_config = crate::ai::AIConfig {

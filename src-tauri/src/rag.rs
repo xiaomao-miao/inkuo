@@ -5,10 +5,12 @@
 //! - Local vector storage (simplified implementation)
 //! - Search and retrieval
 //! - Context assembly with citations
+//! - Persistence to disk for index durability
 
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use parking_lot::RwLock;
 
@@ -63,11 +65,20 @@ struct ChunkData {
     end_line: usize,
 }
 
+/// Persisted RAG index data (serializable to/from disk)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersistedRAGIndex {
+    pub chunks: Vec<EmbeddingChunk>,
+    pub doc_index: Vec<WorkspaceIndex>,
+}
+
 pub struct RAGIndex {
     // In a production implementation, this would use sqlite-vec or similar
     // For now, we use a simple in-memory store with basic text matching
     chunks: Arc<RwLock<HashMap<String, EmbeddingChunk>>>,
     doc_index: Arc<RwLock<HashMap<String, WorkspaceIndex>>>,
+    // Persistence path for saving/loading index
+    persistence_path: Option<PathBuf>,
 }
 
 impl Default for RAGIndex {
@@ -81,7 +92,114 @@ impl RAGIndex {
         Self {
             chunks: Arc::new(RwLock::new(HashMap::new())),
             doc_index: Arc::new(RwLock::new(HashMap::new())),
+            persistence_path: None,
         }
+    }
+
+    /// Create a new RAGIndex with a persistence path
+    pub fn with_persistence(app_data_dir: PathBuf) -> Self {
+        let persistence_path = app_data_dir.join("rag_index.json");
+        let mut index = Self {
+            chunks: Arc::new(RwLock::new(HashMap::new())),
+            doc_index: Arc::new(RwLock::new(HashMap::new())),
+            persistence_path: Some(persistence_path),
+        };
+        // Try to load persisted data
+        index.load_from_disk();
+        index
+    }
+
+    /// Set the persistence path
+    pub fn set_persistence_path(&mut self, path: PathBuf) {
+        self.persistence_path = Some(path);
+    }
+
+    /// Persist the index to disk
+    pub fn persist_to_disk(&self) -> Result<(), String> {
+        let Some(path) = &self.persistence_path else {
+            tracing::warn!("No persistence path configured for RAGIndex");
+            return Ok(());
+        };
+
+        let chunks = self.chunks.read();
+        let doc_index = self.doc_index.read();
+
+        let persisted = PersistedRAGIndex {
+            chunks: chunks.values().cloned().collect(),
+            doc_index: doc_index.values().cloned().collect(),
+        };
+
+        let json = serde_json::to_string_pretty(&persisted)
+            .map_err(|e| format!("Failed to serialize RAG index: {}", e))?;
+
+        // Ensure parent directory exists
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create directory: {}", e))?;
+        }
+
+        std::fs::write(path, json)
+            .map_err(|e| format!("Failed to write RAG index: {}", e))?;
+
+        tracing::info!("RAG index persisted to {:?}", path);
+        Ok(())
+    }
+
+    /// Load the index from disk
+    fn load_from_disk(&mut self) {
+        let Some(path) = &self.persistence_path else {
+            return;
+        };
+
+        if !path.exists() {
+            tracing::info!("No persisted RAG index found at {:?}", path);
+            return;
+        }
+
+        match std::fs::read_to_string(path) {
+            Ok(json) => {
+                match serde_json::from_str::<PersistedRAGIndex>(&json) {
+                    Ok(persisted) => {
+                        let mut chunks = self.chunks.write();
+                        let mut doc_index = self.doc_index.write();
+
+                        for chunk in persisted.chunks {
+                            chunks.insert(chunk.chunk_id.clone(), chunk);
+                        }
+
+                        for doc in persisted.doc_index {
+                            doc_index.insert(doc.doc_id.clone(), doc);
+                        }
+
+                        tracing::info!(
+                            "Loaded RAG index with {} chunks and {} documents",
+                            chunks.len(),
+                            doc_index.len()
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to parse persisted RAG index: {}", e);
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::error!("Failed to read persisted RAG index: {}", e);
+            }
+        }
+    }
+
+    /// Clear the persisted index file
+    pub fn clear_persisted(&self) -> Result<(), String> {
+        let Some(path) = &self.persistence_path else {
+            return Ok(());
+        };
+
+        if path.exists() {
+            std::fs::remove_file(path)
+                .map_err(|e| format!("Failed to remove persisted index: {}", e))?;
+            tracing::info!("Cleared persisted RAG index");
+        }
+        Ok(())
     }
     
     pub fn index_document(&self, doc_id: &str, path: &str, content: &str, blocks: &[super::document::Block]) {
@@ -117,6 +235,11 @@ impl RAGIndex {
             file_hash: format!("{:x}", sha2::Sha256::digest(content.as_bytes())),
             updated_at: chrono::Utc::now(),
         });
+
+        // Auto-persist after indexing
+        if let Err(e) = self.persist_to_disk() {
+            tracing::error!("Failed to persist RAG index: {}", e);
+        }
     }
     
     fn chunk_content(&self, _content: &str, blocks: &[super::document::Block]) -> Vec<ChunkData> {
@@ -251,5 +374,11 @@ impl RAGIndex {
         drop(doc_lock);
         let mut doc_lock = self.doc_index.write();
         doc_lock.remove(doc_id);
+
+        // Persist after removal
+        drop(chunks);
+        if let Err(e) = self.persist_to_disk() {
+            tracing::error!("Failed to persist RAG index after document removal: {}", e);
+        }
     }
 }

@@ -23,6 +23,7 @@ pub use document::*;
 pub use diff::*;
 pub use ai::*;
 pub use rag::*;
+use tauri::Manager;
 
 use std::panic;
 
@@ -61,7 +62,25 @@ pub fn run() {
     });
 
     tauri::Builder::default()
-        .setup(|_app| {
+        .setup(|app| {
+            // Configure RAG index persistence path
+            if let Some(app_data) = app.path().app_data_dir().ok() {
+                let state = app.state::<commands::AppState>();
+                let rag_index = state.rag_index.clone();
+                let app_data_clone = app_data.clone();
+                // Spawn a blocking task to configure persistence
+                std::thread::spawn(move || {
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .expect("Failed to create Tokio runtime for RAG setup");
+                    rt.block_on(async {
+                        let mut index = rag_index.write().await;
+                        index.set_persistence_path(app_data_clone.clone());
+                        tracing::info!("RAG index configured with persistence path: {:?}", app_data_clone);
+                    });
+                });
+            }
             Ok(())
         })
         .manage(commands::AppState::default())

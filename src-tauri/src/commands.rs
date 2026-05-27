@@ -55,7 +55,7 @@ pub fn request_backup_cleanup() {
 }
 
 pub struct AppState {
-    pub rag_index: Arc<rag::RAGIndex>,
+    pub rag_index: Arc<tokio::sync::RwLock<rag::RAGIndex>>,
     pub ai_config: Arc<tokio::sync::RwLock<ai::AIConfig>>,
 }
 
@@ -173,7 +173,7 @@ impl Default for AppState {
         };
 
         Self {
-            rag_index: Arc::new(rag::RAGIndex::new()),
+            rag_index: Arc::new(tokio::sync::RwLock::new(rag::RAGIndex::new())),
             ai_config: Arc::new(tokio::sync::RwLock::new(ai_config)),
         }
     }
@@ -320,8 +320,9 @@ pub async fn search_knowledge_base(
     state: State<'_, AppState>,
 ) -> Result<rag::SearchResult, String> {
     tracing::info!("Searching knowledge base: {}", query);
-    
-    let results = state.rag_index.search(&query, limit);
+
+    let index = state.rag_index.read().await;
+    let results = index.search(&query, limit);
     Ok(results)
 }
 
@@ -331,23 +332,57 @@ pub async fn index_workspace(
     state: State<'_, AppState>,
 ) -> Result<usize, String> {
     tracing::info!("Indexing workspace: {}", path);
-    
+
     let mut count = 0;
     let index = Arc::clone(&state.rag_index);
-    
-    fn index_dir(dir: &std::path::Path, index: &Arc<rag::RAGIndex>, count: &mut usize) -> Result<(), String> {
+
+    fn index_dir(dir: &std::path::Path, count: &mut usize) -> Result<(), String> {
         if !dir.is_dir() {
             return Ok(());
         }
-        
+
         for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())? {
             let entry = entry.map_err(|e| e.to_string())?;
             let path = entry.path();
-            
+
             if path.is_dir() {
                 let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                 if !name.starts_with('.') {
-                    index_dir(&path, index, count)?;
+                    index_dir(&path, count)?;
+                }
+            } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                if matches!(ext, "md" | "markdown") {
+                    if std::fs::read_to_string(&path).is_ok() {
+                        *count += 1;
+                        // Store for batch indexing
+                        tracing::debug!("Found markdown file: {:?}", path);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    index_dir(std::path::Path::new(&path), &mut count)?;
+
+    // Now do the actual indexing with the RAG index
+    fn index_dir_recursive(
+        dir: &std::path::Path,
+        index: &rag::RAGIndex,
+        count: &mut usize,
+    ) -> Result<(), String> {
+        if !dir.is_dir() {
+            return Ok(());
+        }
+
+        for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let path = entry.path();
+
+            if path.is_dir() {
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if !name.starts_with('.') {
+                    index_dir_recursive(&path, index, count)?;
                 }
             } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
                 if matches!(ext, "md" | "markdown") {
@@ -362,8 +397,11 @@ pub async fn index_workspace(
         }
         Ok(())
     }
-    
-    index_dir(std::path::Path::new(&path), &index, &mut count)?;
+
+    // Access the RAG index and do indexing
+    let index_guard = index.read().await;
+    index_dir_recursive(std::path::Path::new(&path), &index_guard, &mut count)?;
+
     Ok(count)
 }
 

@@ -409,19 +409,11 @@ export const AIPanel: React.FC = () => {
           if (event_type === 'error') {
             console.log('[Stream Error]', error);
             flushAllPending();
-            useAIPanelStore.setState((state) => ({
-              sessions: state.sessions.map((s) =>
-                s.id === session_id
-                  ? {
-                      ...s,
-                      messages: s.messages.map((m) =>
-                        m.id === message_id ? { ...m, content: error ?? '发生错误' } : m
-                      ),
-                      isStreaming: false,
-                    }
-                  : s
-              ),
-            }));
+
+            // Clean up streamingContentRef on error
+            delete streamingContentRef.current[message_id];
+
+            useAIPanelStore.getState().setErrorMessage(session_id, message_id, error ?? '发生错误');
             return;
           }
 
@@ -442,34 +434,27 @@ export const AIPanel: React.FC = () => {
               arguments: args,
             };
 
-            useAIPanelStore.setState((state) => ({
-              sessions: state.sessions.map((s) =>
-                s.id === session_id
+            useAIPanelStore.getState().updateSession(session_id, (s) => ({
+              ...s,
+              messages: s.messages.map((m) =>
+                m.id === message_id
                   ? {
-                      ...s,
-                      messages: s.messages.map((m) =>
-                        m.id === message_id
-                          ? {
-                              ...m,
-                              toolCalls: [...(m.toolCalls || []), newToolCall],
-                              // Append tool_call_start item to outputItems
-                              outputItems: [
-                                ...m.outputItems,
-                                { type: 'tool_call_start', toolCallId: tool_call_id, toolName: tool_name, arguments: args },
-                              ],
-                            }
-                          : m
-                      ),
-                      activeToolCalls: [...s.activeToolCalls, {
-                        id: tool_call_id,
-                        name: tool_name,
-                        arguments: args,
-                        status: 'executing' as const,
-                        startTime: Date.now(),
-                      }],
+                      ...m,
+                      toolCalls: [...(m.toolCalls || []), newToolCall],
+                      outputItems: [
+                        ...m.outputItems,
+                        { type: 'tool_call_start' as const, toolCallId: tool_call_id, toolName: tool_name, arguments: args },
+                      ],
                     }
-                  : s
+                  : m
               ),
+              activeToolCalls: [...s.activeToolCalls, {
+                id: tool_call_id,
+                name: tool_name,
+                arguments: args,
+                status: 'executing' as const,
+                startTime: Date.now(),
+              }],
             }));
             return;
           }
@@ -491,42 +476,35 @@ export const AIPanel: React.FC = () => {
               diffSummary: diff_summary ?? undefined,
             };
 
-            useAIPanelStore.setState((state) => ({
-              sessions: state.sessions.map((s) =>
-                s.id === session_id
+            useAIPanelStore.getState().updateSession(session_id, (s) => ({
+              ...s,
+              activeToolCalls: s.activeToolCalls.map((tc) =>
+                tc.id === tool_call_id
+                  ? { ...tc, status: isError ? 'error' : 'success', result: content, error: isError ? error : undefined, duration }
+                  : tc
+              ),
+              messages: s.messages.map((m) =>
+                m.id === message_id
                   ? {
-                      ...s,
-                      activeToolCalls: s.activeToolCalls.map((tc) =>
-                        tc.id === tool_call_id
-                          ? { ...tc, status: isError ? 'error' : 'success', result: content, error: isError ? error : undefined, duration }
-                          : tc
-                      ),
-                      messages: s.messages.map((m) =>
-                        m.id === message_id
-                          ? {
-                              ...m,
-                              toolResults: [...(m.toolResults || []), toolResult],
-                              outputItems: [
-                                ...m.outputItems,
-                                {
-                                  type: 'tool_result',
-                                  toolCallId: tool_call_id,
-                                  status: isError ? 'error' : 'success',
-                                  result: content || '',
-                                  duration,
-                                  diffSummary: diff_summary ?? undefined,
-                                },
-                              ],
-                            }
-                          : m
-                      ),
+                      ...m,
+                      toolResults: [...(m.toolResults || []), toolResult],
+                      outputItems: [
+                        ...m.outputItems,
+                        {
+                          type: 'tool_result' as const,
+                          toolCallId: tool_call_id,
+                          status: isError ? 'error' : 'success',
+                          result: content || '',
+                          duration,
+                          diffSummary: diff_summary ?? undefined,
+                        },
+                      ],
                     }
-                  : s
+                  : m
               ),
             }));
 
             // Also add a standalone tool message so it appears in history for subsequent requests
-            // This is critical for multi-turn conversations — the API requires tool_call_id responses
             const toolMessage: ChatMessage = {
               id: `tool-${tool_call_id}-${crypto.randomUUID()}`,
               role: 'tool',
@@ -567,48 +545,16 @@ export const AIPanel: React.FC = () => {
               clearToolCalls(session_id);
             }, 2000);
 
-            useAIPanelStore.setState((state) => ({
-              sessions: state.sessions.map((s) =>
-                s.id === session_id ? { ...s, isStreaming: false } : s
-              ),
-            }));
-
-            // Update message with final content (backward compat + fallback)
-            // Also clear isPendingMarkdown from all text items so markdown gets rendered on done
+            // Use helper method to finish streaming
             if (effectiveContent) {
-              useAIPanelStore.setState((state) => ({
-                sessions: state.sessions.map((s) =>
-                  s.id === session_id
-                    ? {
-                        ...s,
-                        messages: s.messages.map((m) =>
-                          m.id === message_id
-                            ? {
-                                ...m,
-                                // Set legacy content field as fallback
-                                content: m.content || effectiveContent,
-                                // If outputItems is empty, create a single text item
-                                // Otherwise, clear isPendingMarkdown so markdown renders
-                                outputItems: m.outputItems.length > 0
-                                  ? m.outputItems.map((item) =>
-                                      item.type === 'text'
-                                        ? { ...item, isPendingMarkdown: false }
-                                        : item
-                                    )
-                                  : [{ type: 'text', content: effectiveContent, isPendingMarkdown: false }],
-                              }
-                            : m
-                        ),
-                      }
-                    : s
-                ),
-              }));
+              useAIPanelStore.getState().finishMessageStreaming(session_id, message_id, effectiveContent);
+            } else {
+              useAIPanelStore.getState().updateSession(session_id, (s) => ({ ...s, isStreaming: false }));
             }
 
             // Handle final content for agent mode - compute diff ONLY if:
             // 1. User has selected text (no selection = no diff needed)
             // 2. AI content is different from the original selection
-            // Note: Most agent interactions are conversational, not document edits
             const selection = getSelectionRef.current();
             if (effectiveContent && currentMode === 'agent' && selection && effectiveContent !== selection) {
               try {
@@ -645,6 +591,11 @@ export const AIPanel: React.FC = () => {
         clearTimeout(flushTimeoutRef.current);
         flushTimeoutRef.current = null;
       }
+      // Clean up any pending text deltas
+      pendingTextDeltasRef.current = {};
+      pendingFlushRef.current = new Set();
+      // Clean up streaming content refs
+      streamingContentRef.current = {};
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

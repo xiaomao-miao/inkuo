@@ -25,6 +25,51 @@ pub enum ToolError {
     ExecutionError(String),
     #[error("IO error: {0}")]
     IoError(String),
+    #[error("Path validation failed: {0}")]
+    PathValidationError(String),
+}
+
+/// Result type alias for tool operations
+pub type ToolOpResult<T> = Result<T, ToolError>;
+
+/// Validates that a path is within the workspace directory
+pub fn validate_workspace_path(path: &str, workspace: &Option<String>) -> Result<(), ToolError> {
+    let Some(workspace_root) = workspace else {
+        return Ok(()); // No workspace configured, allow access
+    };
+
+    let requested_path = std::path::Path::new(path);
+
+    // Canonicalize both paths for accurate comparison
+    let canonical_workspace = match std::fs::canonicalize(workspace_root) {
+        Ok(p) => p,
+        Err(_) => {
+            return Err(ToolError::PathValidationError(
+                format!("Workspace path does not exist: {}", workspace_root)
+            ));
+        }
+    };
+
+    let canonical_requested = match std::fs::canonicalize(&requested_path) {
+        Ok(p) => p,
+        Err(e) => {
+            return Err(ToolError::PathValidationError(
+                format!("Path does not exist or is inaccessible: {} ({})", path, e)
+            ));
+        }
+    };
+
+    // Check if the requested path is a subdirectory of the workspace
+    if !canonical_requested.starts_with(&canonical_workspace) {
+        return Err(ToolError::PathValidationError(
+            format!(
+                "Path '{}' is outside the workspace directory '{}'. Access is denied for security reasons.",
+                path, workspace_root
+            )
+        ));
+    }
+
+    Ok(())
 }
 
 /// Tool parameter schema
@@ -200,14 +245,14 @@ impl ToolExecutor {
         }
     }
 
-    pub async fn execute(&self, arguments: Value) -> Result<String, ToolError> {
+    pub async fn execute(&self, arguments: Value, workspace: Option<String>) -> Result<String, ToolError> {
         match self {
-            ToolExecutor::ReadFile(t) => t.execute(arguments).await,
-            ToolExecutor::WriteFile(t) => t.execute(arguments).await,
-            ToolExecutor::EditFile(t) => t.execute(arguments).await,
-            ToolExecutor::ListDir(t) => t.execute(arguments).await,
-            ToolExecutor::Glob(t) => t.execute(arguments).await,
-            ToolExecutor::Grep(t) => t.execute(arguments).await,
+            ToolExecutor::ReadFile(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::WriteFile(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::EditFile(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::ListDir(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::Glob(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::Grep(t) => t.execute(arguments, workspace).await,
         }
     }
 }
@@ -239,10 +284,13 @@ impl ReadFileTool {
         )
     }
 
-    pub async fn execute(&self, arguments: Value) -> Result<String, ToolError> {
+    pub async fn execute(&self, arguments: Value, workspace: Option<String>) -> Result<String, ToolError> {
         let path = arguments["path"]
             .as_str()
             .ok_or_else(|| ToolError::InvalidArguments("read_file".to_string(), "path must be a string".into()))?;
+
+        // Validate workspace path
+        validate_workspace_path(path, &workspace)?;
 
         let offset = arguments["offset"].as_u64().unwrap_or(0) as usize;
         let limit = arguments["limit"].as_u64();
@@ -290,10 +338,13 @@ impl WriteFileTool {
         )
     }
 
-    pub async fn execute(&self, arguments: Value) -> Result<String, ToolError> {
+    pub async fn execute(&self, arguments: Value, workspace: Option<String>) -> Result<String, ToolError> {
         let path = arguments["path"]
             .as_str()
             .ok_or_else(|| ToolError::InvalidArguments("write_file".to_string(), "path must be a string".into()))?;
+
+        // Validate workspace path
+        validate_workspace_path(path, &workspace)?;
 
         let content = arguments["content"]
             .as_str()
@@ -343,10 +394,13 @@ impl EditFileTool {
         )
     }
 
-    pub async fn execute(&self, arguments: Value) -> Result<String, ToolError> {
+    pub async fn execute(&self, arguments: Value, workspace: Option<String>) -> Result<String, ToolError> {
         let path = arguments["path"]
             .as_str()
             .ok_or_else(|| ToolError::InvalidArguments("edit_file".to_string(), "path must be a string".into()))?;
+
+        // Validate workspace path
+        validate_workspace_path(path, &workspace)?;
 
         let old_text = arguments["old_text"]
             .as_str()
@@ -408,10 +462,13 @@ impl ListDirTool {
         )
     }
 
-    pub async fn execute(&self, arguments: Value) -> Result<String, ToolError> {
+    pub async fn execute(&self, arguments: Value, workspace: Option<String>) -> Result<String, ToolError> {
         let path = arguments["path"]
             .as_str()
             .ok_or_else(|| ToolError::InvalidArguments("list_dir".to_string(), "path must be a string".into()))?;
+
+        // Validate workspace path
+        validate_workspace_path(path, &workspace)?;
 
         let mut entries = Vec::new();
 
@@ -468,7 +525,7 @@ impl GlobTool {
         )
     }
 
-    pub async fn execute(&self, arguments: Value) -> Result<String, ToolError> {
+    pub async fn execute(&self, arguments: Value, workspace: Option<String>) -> Result<String, ToolError> {
         let pattern = arguments["pattern"]
             .as_str()
             .ok_or_else(|| ToolError::InvalidArguments("glob".to_string(), "pattern must be a string".into()))?;
@@ -476,6 +533,9 @@ impl GlobTool {
         let base_dir = arguments["base_dir"]
             .as_str()
             .ok_or_else(|| ToolError::InvalidArguments("glob".to_string(), "base_dir must be a string".into()))?;
+
+        // Validate base_dir is within workspace
+        validate_workspace_path(base_dir, &workspace)?;
 
         let matches = glob::glob(
             &if pattern.starts_with('/') {
@@ -542,7 +602,7 @@ impl GrepTool {
         )
     }
 
-    pub async fn execute(&self, arguments: Value) -> Result<String, ToolError> {
+    pub async fn execute(&self, arguments: Value, workspace: Option<String>) -> Result<String, ToolError> {
         let pattern = arguments["pattern"]
             .as_str()
             .ok_or_else(|| ToolError::InvalidArguments("grep".to_string(), "pattern must be a string".into()))?;
@@ -568,6 +628,12 @@ impl GrepTool {
             let path = path_val.as_str().ok_or_else(|| {
                 ToolError::InvalidArguments("grep".to_string(), "path must be a string".into())
             })?;
+
+            // Validate workspace path for each path
+            if let Err(e) = validate_workspace_path(path, &workspace) {
+                results.push(format!("[Path validation error] {}", e));
+                continue;
+            }
 
             let path_obj = Path::new(path);
 
@@ -688,6 +754,7 @@ async fn grep_directory_traverse(
 pub struct ToolRegistry {
     definitions: HashMap<String, ToolDefinition>,
     executors: HashMap<String, ToolExecutor>,
+    workspace: Option<String>,
 }
 
 impl Default for ToolRegistry {
@@ -701,6 +768,7 @@ impl ToolRegistry {
         let mut registry = Self {
             definitions: HashMap::new(),
             executors: HashMap::new(),
+            workspace: None,
         };
         registry.register_builtin_tools();
         registry
@@ -710,6 +778,7 @@ impl ToolRegistry {
         let mut registry = Self {
             definitions: HashMap::new(),
             executors: HashMap::new(),
+            workspace: None,
         };
         let tools: Vec<ToolExecutor> = vec![
             ToolExecutor::ReadFile(ReadFileTool::new()),
@@ -725,6 +794,16 @@ impl ToolRegistry {
             registry.executors.insert(name, tool);
         }
         registry
+    }
+
+    /// Set the workspace path for path validation
+    pub fn set_workspace(&mut self, workspace: Option<String>) {
+        self.workspace = workspace;
+    }
+
+    /// Get the current workspace path
+    pub fn get_workspace(&self) -> Option<&String> {
+        self.workspace.as_ref()
     }
 
     fn register_builtin_tools(&mut self) {
@@ -775,6 +854,8 @@ impl ToolRegistry {
             }
         };
 
+        let workspace = self.workspace.clone();
+
         // Check if this is a file modification tool
         let is_file_modification = matches!(
             tool_call.name.as_str(),
@@ -784,6 +865,10 @@ impl ToolRegistry {
         // For file modification tools, we need to capture original content
         let original_content: Option<String> = if is_file_modification {
             if let Some(path) = tool_call.arguments.get("path").and_then(|v| v.as_str()) {
+                // Validate path first
+                if let Err(e) = validate_workspace_path(path, &workspace) {
+                    return ToolResult::error(&tool_call.id, e.to_string());
+                }
                 tokio::fs::read_to_string(path).await.ok()
             } else {
                 None
@@ -792,7 +877,7 @@ impl ToolRegistry {
             None
         };
 
-        match executor.execute(tool_call.arguments.clone()).await {
+        match executor.execute(tool_call.arguments.clone(), workspace).await {
             Ok(output) => {
                 if is_file_modification {
                     let file_path = tool_call.arguments.get("path").and_then(|v| v.as_str());

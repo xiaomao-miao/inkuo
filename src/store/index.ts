@@ -538,6 +538,15 @@ interface AIPanelState {
   rejectHunk: (sessionId: string, hunkId: string) => void;
   acceptAllHunks: (sessionId: string) => void;
   rejectAllHunks: (sessionId: string) => void;
+
+  // Helper methods for safe state updates
+  getSession: (sessionId: string) => ChatSession | undefined;
+  getMessage: (sessionId: string, messageId: string) => ChatMessage | undefined;
+  updateSession: (sessionId: string, updater: (session: ChatSession) => ChatSession) => void;
+  updateMessageOutput: (sessionId: string, messageId: string, outputItems: OutputItem[]) => void;
+  addOutputToMessage: (sessionId: string, messageId: string, outputItem: OutputItem) => void;
+  finishMessageStreaming: (sessionId: string, messageId: string, finalContent: string) => void;
+  setErrorMessage: (sessionId: string, messageId: string, error: string) => void;
 }
 
 function createSessionTitle(index: number) {
@@ -827,6 +836,95 @@ export const useAIPanelStore = create<AIPanelState>()(
 
               return { ...s, messages: updatedMessages };
             }),
+          })),
+
+        // Helper methods for safe state updates
+        getSession: (sessionId) => get().sessions.find((s) => s.id === sessionId),
+
+        getMessage: (sessionId, messageId) => {
+          const session = get().sessions.find((s) => s.id === sessionId);
+          return session?.messages.find((m) => m.id === messageId);
+        },
+
+        updateSession: (sessionId, updater) =>
+          set((state) => ({
+            sessions: state.sessions.map((s) =>
+              s.id === sessionId ? updater(s) : s
+            ),
+          })),
+
+        updateMessageOutput: (sessionId, messageId, outputItems) =>
+          set((state) => ({
+            sessions: state.sessions.map((s) =>
+              s.id === sessionId
+                ? {
+                    ...s,
+                    messages: s.messages.map((m) =>
+                      m.id === messageId ? { ...m, outputItems } : m
+                    ),
+                  }
+                : s
+            ),
+          })),
+
+        addOutputToMessage: (sessionId, messageId, outputItem) =>
+          set((state) => ({
+            sessions: state.sessions.map((s) =>
+              s.id === sessionId
+                ? {
+                    ...s,
+                    messages: s.messages.map((m) =>
+                      m.id === messageId
+                        ? { ...m, outputItems: [...m.outputItems, outputItem] }
+                        : m
+                    ),
+                  }
+                : s
+            ),
+          })),
+
+        finishMessageStreaming: (sessionId, messageId, finalContent) =>
+          set((state) => ({
+            sessions: state.sessions.map((s) =>
+              s.id === sessionId
+                ? {
+                    ...s,
+                    isStreaming: false,
+                    messages: s.messages.map((m) =>
+                      m.id === messageId
+                        ? {
+                            ...m,
+                            // Set legacy content field as fallback
+                            content: m.content || finalContent,
+                            // Clear isPendingMarkdown so markdown renders
+                            outputItems: m.outputItems.length > 0
+                              ? m.outputItems.map((item) =>
+                                  item.type === 'text'
+                                    ? { ...item, isPendingMarkdown: false }
+                                    : item
+                                )
+                              : [{ type: 'text' as const, content: finalContent, isPendingMarkdown: false }],
+                          }
+                        : m
+                    ),
+                  }
+                : s
+            ),
+          })),
+
+        setErrorMessage: (sessionId, messageId, error) =>
+          set((state) => ({
+            sessions: state.sessions.map((s) =>
+              s.id === sessionId
+                ? {
+                    ...s,
+                    isStreaming: false,
+                    messages: s.messages.map((m) =>
+                      m.id === messageId ? { ...m, content: error } : m
+                    ),
+                  }
+                : s
+            ),
           })),
       };
     },
