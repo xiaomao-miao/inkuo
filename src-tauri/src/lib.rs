@@ -108,6 +108,7 @@ pub fn run() {
             commands::save_settings,
             commands::index_workspace,
             commands::test_ai_connection,
+            commands::test_api_config,
             commands::watch_directory,
             commands::unwatch_directory,
         ])

@@ -119,9 +119,6 @@ export const Sidebar: React.FC = () => {
       const entries = await invoke<FileEntry[]>('list_directory', { path });
 
       if (mergeWithExisting && files.length > 0) {
-        // 保留已展开目录的子项，只替换根目录
-        const rootPaths = new Set(entries.map(e => e.path));
-
         // 保留展开目录的子项
         const childrenToKeep = files.filter(f =>
           [...expandedDirs].some(expanded => f.path.startsWith(expanded + '/'))

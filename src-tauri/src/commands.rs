@@ -425,6 +425,20 @@ pub async fn index_workspace(
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiConfig {
+    pub id: String,
+    pub name: String,
+    pub provider: String,
+    pub base_url: String,
+    pub api_key: Option<String>,
+    pub model: String,
+    pub is_default: bool,
+    pub enabled: bool,
+    pub temperature: f32,
+    pub max_tokens: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub theme: String,
     pub accent_color: String,
@@ -436,21 +450,39 @@ pub struct Settings {
     pub ai_base_url: Option<String>,
     pub ai_temperature: f32,
     pub ai_max_tokens: Option<u32>,
+    // New multi-API config fields
+    pub api_configs: Vec<ApiConfig>,
+    pub active_api_config_id: Option<String>,
 }
 
 impl Default for Settings {
     fn default() -> Self {
+        let default_api_config = ApiConfig {
+            id: uuid::Uuid::new_v4().to_string(),
+            name: "DeepSeek V3".to_string(),
+            provider: "deepseek".to_string(),
+            base_url: "https://api.deepseek.com".to_string(),
+            api_key: None,
+            model: "deepseek-chat".to_string(),
+            is_default: true,
+            enabled: true,
+            temperature: 0.7,
+            max_tokens: Some(4096),
+        };
+
         Self {
             theme: "cursor-dark".to_string(),
             accent_color: "#7C5CFF".to_string(),
             editor_font_size: 14,
             editor_font_family: "JetBrains Mono, monospace".to_string(),
-            ai_provider: "ollama".to_string(),
-            ai_model: "llama3".to_string(),
+            ai_provider: "deepseek".to_string(),
+            ai_model: "deepseek-chat".to_string(),
             ai_api_key: None,
-            ai_base_url: Some("http://localhost:11434".to_string()),
+            ai_base_url: Some("https://api.deepseek.com".to_string()),
             ai_temperature: 0.7,
             ai_max_tokens: Some(4096),
+            api_configs: vec![default_api_config.clone()],
+            active_api_config_id: Some(default_api_config.id),
         }
     }
 }
@@ -494,40 +526,84 @@ pub async fn get_settings() -> Result<Settings, String> {
 #[tauri::command]
 pub async fn save_settings(settings: Settings, state: State<'_, AppState>) -> Result<(), String> {
     let path = get_settings_path();
-    
+
     std::fs::create_dir_all(path.parent().unwrap())
         .map_err(|e| format!("Failed to create config directory: {}", e))?;
-    
+
     let content = serde_json::to_string_pretty(&settings)
         .map_err(|e| format!("Failed to serialize settings: {}", e))?;
-    
+
     std::fs::write(&path, content)
         .map_err(|e| format!("Failed to write settings: {}", e))?;
-    
-    // Update AI config from settings
-    let ai_provider = match settings.ai_provider.as_str() {
-        "openai" | "deepseek" => ai::AIProvider::OpenAI {
-            api_key: settings.ai_api_key.clone().unwrap_or_default(),
-            base_url: settings.ai_base_url.clone().unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
-        },
-        "ollama" => ai::AIProvider::Ollama {
-            base_url: settings.ai_base_url.clone().unwrap_or_else(|| "http://localhost:11434".to_string()),
-        },
-        _ => ai::AIProvider::OpenAI {
-            api_key: settings.ai_api_key.clone().unwrap_or_default(),
-            base_url: settings.ai_base_url.clone().unwrap_or_else(|| "https://api.deepseek.com".to_string()),
-        },
+
+    // Find the active API config or fall back to legacy settings
+    let (ai_provider, model, temperature, max_tokens) = if let Some(ref active_id) = settings.active_api_config_id {
+        settings.api_configs
+            .iter()
+            .find(|c| c.id == *active_id)
+            .map(|c| {
+                let provider = match c.provider.as_str() {
+                    "openai" | "deepseek" => ai::AIProvider::OpenAI {
+                        api_key: c.api_key.clone().unwrap_or_default(),
+                        base_url: c.base_url.clone(),
+                    },
+                    "ollama" => ai::AIProvider::Ollama {
+                        base_url: c.base_url.clone(),
+                    },
+                    "official" => ai::AIProvider::Official {
+                        api_key: c.api_key.clone().unwrap_or_default(),
+                    },
+                    _ => ai::AIProvider::OpenAI {
+                        api_key: c.api_key.clone().unwrap_or_default(),
+                        base_url: c.base_url.clone(),
+                    },
+                };
+                (provider, c.model.clone(), c.temperature, c.max_tokens)
+            })
+            .unwrap_or_else(|| {
+                // Fall back to legacy settings
+                let provider = match settings.ai_provider.as_str() {
+                    "openai" | "deepseek" => ai::AIProvider::OpenAI {
+                        api_key: settings.ai_api_key.clone().unwrap_or_default(),
+                        base_url: settings.ai_base_url.clone().unwrap_or_else(|| "https://api.deepseek.com".to_string()),
+                    },
+                    "ollama" => ai::AIProvider::Ollama {
+                        base_url: settings.ai_base_url.clone().unwrap_or_else(|| "http://localhost:11434".to_string()),
+                    },
+                    _ => ai::AIProvider::OpenAI {
+                        api_key: settings.ai_api_key.clone().unwrap_or_default(),
+                        base_url: settings.ai_base_url.clone().unwrap_or_else(|| "https://api.deepseek.com".to_string()),
+                    },
+                };
+                (provider, settings.ai_model.clone(), settings.ai_temperature, settings.ai_max_tokens)
+            })
+    } else {
+        // Legacy fallback
+        let provider = match settings.ai_provider.as_str() {
+            "openai" | "deepseek" => ai::AIProvider::OpenAI {
+                api_key: settings.ai_api_key.clone().unwrap_or_default(),
+                base_url: settings.ai_base_url.clone().unwrap_or_else(|| "https://api.deepseek.com".to_string()),
+            },
+            "ollama" => ai::AIProvider::Ollama {
+                base_url: settings.ai_base_url.clone().unwrap_or_else(|| "http://localhost:11434".to_string()),
+            },
+            _ => ai::AIProvider::OpenAI {
+                api_key: settings.ai_api_key.clone().unwrap_or_default(),
+                base_url: settings.ai_base_url.clone().unwrap_or_else(|| "https://api.deepseek.com".to_string()),
+            },
+        };
+        (provider, settings.ai_model.clone(), settings.ai_temperature, settings.ai_max_tokens)
     };
-    
+
     let ai_config = ai::AIConfig {
         provider: ai_provider,
-        model: settings.ai_model.clone(),
-        temperature: settings.ai_temperature,
-        max_tokens: settings.ai_max_tokens,
+        model,
+        temperature,
+        max_tokens,
     };
-    
+
     *state.ai_config.write().await = ai_config;
-    
+
     Ok(())
 }
 
@@ -537,47 +613,53 @@ pub struct TestResult {
     pub message: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TestApiConfigRequest {
+    pub api_key: Option<String>,
+    pub base_url: String,
+    pub model: String,
+    pub provider: String,
+}
+
 #[tauri::command]
-pub async fn test_ai_connection(
-    api_key: Option<String>,
-    base_url: String,
-    model: String,
+pub async fn test_api_config(
+    request: TestApiConfigRequest,
 ) -> Result<TestResult, String> {
-    tracing::info!("Testing AI connection to: {}", base_url);
-    
+    tracing::info!("Testing API config: {} ({})", request.model, request.provider);
+
     let client = reqwest::Client::new();
-    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
-    
+    let url = format!("{}/chat/completions", request.base_url.trim_end_matches('/'));
+
     let body = serde_json::json!({
-        "model": model,
+        "model": request.model,
         "messages": [
             {"role": "user", "content": "Say 'Hello, connection successful!' in exactly those words."}
         ],
         "max_tokens": 50,
     });
-    
-    let mut request = client.post(&url);
-    
-    if let Some(key) = &api_key {
+
+    let mut request_builder = client.post(&url);
+
+    if let Some(key) = &request.api_key {
         if !key.is_empty() {
-            request = request.header("Authorization", format!("Bearer {}", key));
+            request_builder = request_builder.header("Authorization", format!("Bearer {}", key));
         }
     }
-    
-    request = request.header("Content-Type", "application/json");
-    
-    let response = request
+
+    request_builder = request_builder.header("Content-Type", "application/json");
+
+    let response = request_builder
         .json(&body)
         .send()
         .await
         .map_err(|e| format!("Network error: {}", e))?;
-    
+
     if response.status().is_success() {
         let response_json: serde_json::Value = response
             .json()
             .await
             .map_err(|e| format!("Failed to parse response: {}", e))?;
-        
+
         if let Some(content) = response_json["choices"][0]["message"]["content"].as_str() {
             Ok(TestResult {
                 success: true,
@@ -592,7 +674,70 @@ pub async fn test_ai_connection(
     } else {
         let status = response.status();
         let error_text = response.text().await.unwrap_or_default();
-        
+
+        Ok(TestResult {
+            success: false,
+            message: format!("连接失败 (HTTP {}): {}", status.as_u16(), error_text),
+        })
+    }
+}
+
+#[tauri::command]
+pub async fn test_ai_connection(
+    api_key: Option<String>,
+    base_url: String,
+    model: String,
+) -> Result<TestResult, String> {
+    tracing::info!("Testing AI connection to: {}", base_url);
+
+    let client = reqwest::Client::new();
+    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+
+    let body = serde_json::json!({
+        "model": model,
+        "messages": [
+            {"role": "user", "content": "Say 'Hello, connection successful!' in exactly those words."}
+        ],
+        "max_tokens": 50,
+    });
+
+    let mut request = client.post(&url);
+
+    if let Some(key) = &api_key {
+        if !key.is_empty() {
+            request = request.header("Authorization", format!("Bearer {}", key));
+        }
+    }
+
+    request = request.header("Content-Type", "application/json");
+
+    let response = request
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("Network error: {}", e))?;
+
+    if response.status().is_success() {
+        let response_json: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| format!("Failed to parse response: {}", e))?;
+
+        if let Some(content) = response_json["choices"][0]["message"]["content"].as_str() {
+            Ok(TestResult {
+                success: true,
+                message: format!("连接成功！AI 回复: {}", content),
+            })
+        } else {
+            Ok(TestResult {
+                success: true,
+                message: "连接成功！".to_string(),
+            })
+        }
+    } else {
+        let status = response.status();
+        let error_text = response.text().await.unwrap_or_default();
+
         Ok(TestResult {
             success: false,
             message: format!("连接失败 (HTTP {}): {}", status.as_u16(), error_text),

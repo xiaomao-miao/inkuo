@@ -1,7 +1,6 @@
 import React from 'react';
 import { FileText, File, X, Circle, Settings } from 'lucide-react';
 import { useSidebarStore, useEditorStore } from '../../store';
-import { SETTINGS_TAB_ID } from '../../store';
 import type { OpenTab } from '../../store';
 import styles from './TabBar.module.css';
 

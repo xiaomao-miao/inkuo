@@ -234,7 +234,8 @@ export const AIPanel: React.FC = () => {
       if (mode === 'agent') {
         // Use full agent with tool calling with context memory
         const workspacePath = useSidebarStore.getState().workspacePath || undefined;
-        const aiConfig = useSettingsStore.getState().settings;
+        const { apiConfigs, activeApiConfigId } = useSettingsStore.getState().settings;
+        const activeConfig = apiConfigs.find(c => c.id === activeApiConfigId) ?? apiConfigs[0];
         // Get conversation history (excluding the messages we're about to add)
         const conversationHistory = messages.map(m => {
           // For tool messages, use content; for others, extract text from outputItems
@@ -267,12 +268,12 @@ export const AIPanel: React.FC = () => {
           readOnly: false, // Full agent mode - can modify files
           history: conversationHistory,
           configInput: {
-            provider: aiConfig.ai_provider,
-            api_key: aiConfig.ai_api_key,
-            base_url: aiConfig.ai_base_url,
-            model: aiConfig.ai_model,
-            temperature: aiConfig.ai_temperature,
-            max_tokens: aiConfig.ai_max_tokens,
+            provider: activeConfig.provider,
+            api_key: activeConfig.apiKey,
+            base_url: activeConfig.baseUrl,
+            model: activeConfig.model,
+            temperature: activeConfig.temperature,
+            max_tokens: activeConfig.maxTokens,
           },
         }).catch((err) => {
           updateMessage(sessionId, assistantMessageId, `抱歉，发生了错误：${err}`);
@@ -281,7 +282,8 @@ export const AIPanel: React.FC = () => {
       } else {
         // Use read-only agent mode for ask/plan - can read files but not modify
         const workspacePath = useSidebarStore.getState().workspacePath || undefined;
-        const aiConfig = useSettingsStore.getState().settings;
+        const { apiConfigs, activeApiConfigId } = useSettingsStore.getState().settings;
+        const activeConfig = apiConfigs.find(c => c.id === activeApiConfigId) ?? apiConfigs[0];
         // Get conversation history (excluding the messages we're about to add)
         const conversationHistory = messages.map(m => {
           let textContent = '';
@@ -312,12 +314,12 @@ export const AIPanel: React.FC = () => {
           readOnly: true, // Read-only mode - can only read files
           history: conversationHistory,
           configInput: {
-            provider: aiConfig.ai_provider,
-            api_key: aiConfig.ai_api_key,
-            base_url: aiConfig.ai_base_url,
-            model: aiConfig.ai_model,
-            temperature: aiConfig.ai_temperature,
-            max_tokens: aiConfig.ai_max_tokens,
+            provider: activeConfig.provider,
+            api_key: activeConfig.apiKey,
+            base_url: activeConfig.baseUrl,
+            model: activeConfig.model,
+            temperature: activeConfig.temperature,
+            max_tokens: activeConfig.maxTokens,
           },
         }).catch((err) => {
           updateMessage(sessionId, assistantMessageId, `抱歉，发生了错误：${err}`);

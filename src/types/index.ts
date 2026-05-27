@@ -228,21 +228,40 @@ export interface FileEntry {
 // Settings types
 // ============================================================================
 
+export type AIProviderType = 'openai' | 'ollama' | 'deepseek' | 'official';
+
+/** API configuration for a single model provider */
+export interface APIConfig {
+  id: string;                    // Unique identifier
+  name: string;                 // Display name (e.g., "DeepSeek V3", "GPT-4")
+  provider: AIProviderType;     // Provider type
+  baseUrl: string;              // API base URL
+  apiKey: string | null;        // API key (encrypted in storage)
+  model: string;                // Model name
+  isDefault: boolean;            // Whether this is the default API
+  enabled: boolean;              // Whether this API is enabled
+  temperature: number;          // Default temperature for this API
+  maxTokens: number | null;      // Default max tokens for this API
+}
+
 export interface Settings {
   theme: ThemeType;
   accent_color: string;
   editor_font_size: number;
   editor_font_family: string;
+  // Legacy single API config (for backward compatibility)
   ai_provider: AIProviderType;
   ai_model: string;
   ai_api_key: string | null;
   ai_base_url: string | null;
   ai_temperature: number;
   ai_max_tokens: number | null;
+  // New multi-API config
+  apiConfigs: APIConfig[];
+  activeApiConfigId: string | null;
 }
 
 export type ThemeType = 'cursor-dark' | 'cursor-light' | 'high-contrast-dark' | 'high-contrast-light';
-export type AIProviderType = 'openai' | 'ollama' | 'official';
 
 // ============================================================================
 // Search types

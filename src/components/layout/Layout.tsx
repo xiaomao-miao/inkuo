@@ -6,12 +6,11 @@ import { ResizableHandle } from '../resizable';
 import { Editor } from '../editor/Editor';
 import { TabBar } from '../editor/TabBar';
 import { AIPanel } from '../aipanel/AIPanel';
-import { useAIPanelStore, useSidebarStore } from '../../store';
+import { useAIPanelStore } from '../../store';
 import styles from './Layout.module.css';
 
 export const Layout: React.FC = () => {
   const { isOpen: isAIPanelOpen, togglePanel } = useAIPanelStore();
-  const { openTab } = useSidebarStore();
   const [activeView, setActiveView] = useState<ViewType>('files');
   const [isSidebarVisible, setIsSidebarVisible] = useState(true);
   
