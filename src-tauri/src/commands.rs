@@ -2,13 +2,13 @@
 //!
 //! Exposes Rust backend functionality to the frontend via IPC.
 
-use crate::{diff, document, ai, rag};
+use crate::{diff, document, ai, rag, file_watcher};
 use std::collections::HashSet;
 use parking_lot::Mutex;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tauri::State;
+use tauri::{State, AppHandle};
 use tokio::sync::mpsc;
 
 pub static STREAM_CANCELLED: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
@@ -272,6 +272,25 @@ pub async fn list_directory(path: String) -> Result<Vec<FileEntry>, String> {
     });
     
     Ok(files)
+}
+
+#[tauri::command]
+pub async fn watch_directory(
+    path: String,
+    state: State<'_, file_watcher::FileWatcherState>,
+    app_handle: AppHandle,
+) -> Result<(), String> {
+    tracing::info!("Starting file watcher for: {}", path);
+    state.watch(std::path::PathBuf::from(path), app_handle)
+}
+
+#[tauri::command]
+pub async fn unwatch_directory(
+    state: State<'_, file_watcher::FileWatcherState>,
+) -> Result<(), String> {
+    tracing::info!("Stopping file watcher");
+    state.stop();
+    Ok(())
 }
 
 #[tauri::command]

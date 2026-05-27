@@ -1,5 +1,5 @@
 //! inkuo - Local-First AI Document Editor
-//! 
+//!
 //! Rust backend core module handling:
 //! - Document parsing and serialization
 //! - Diff engine
@@ -17,6 +17,7 @@ mod commands_stream;
 mod commands_agent;
 mod streaming;
 mod openai_stream;
+mod file_watcher;
 pub mod agent;
 
 pub use document::*;
@@ -84,6 +85,7 @@ pub fn run() {
             Ok(())
         })
         .manage(commands::AppState::default())
+        .manage(file_watcher::FileWatcherState::new())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
@@ -106,6 +108,8 @@ pub fn run() {
             commands::save_settings,
             commands::index_workspace,
             commands::test_ai_connection,
+            commands::watch_directory,
+            commands::unwatch_directory,
         ])
         .run(tauri::generate_context!())
         .expect("error while running inkuo application");

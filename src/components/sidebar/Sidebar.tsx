@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
 import { 
   FolderOpen, 
@@ -56,6 +57,45 @@ export const Sidebar: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [isCollapsed, setIsCollapsed] = useState(false);
 
+  // Load files when workspacePath is set (including on app startup)
+  useEffect(() => {
+    if (workspacePath) {
+      loadDirectory(workspacePath);
+    }
+  }, [workspacePath]);
+
+  // Set up file watcher when workspacePath changes
+  useEffect(() => {
+    let unlisten: UnlistenFn | null = null;
+
+    const setupWatcher = async () => {
+      if (!workspacePath) return;
+
+      try {
+        // Start watching the workspace directory
+        await invoke('watch_directory', { path: workspacePath });
+
+        // Listen for file change events
+        unlisten = await listen<{ type: string; data: { path: string } }>('file-change', () => {
+          // Refresh the file tree on any file change
+          loadDirectory(workspacePath, true);
+        });
+      } catch (err) {
+        console.error('Failed to set up file watcher:', err);
+      }
+    };
+
+    setupWatcher();
+
+    return () => {
+      if (unlisten) {
+        unlisten();
+      }
+      // Stop watching when workspace changes or component unmounts
+      invoke('unwatch_directory').catch(console.error);
+    };
+  }, [workspacePath]);
+
   const openWorkspace = async () => {
     try {
       const selected = await open({
@@ -73,11 +113,41 @@ export const Sidebar: React.FC = () => {
     }
   };
 
-  const loadDirectory = async (path: string) => {
+  const loadDirectory = async (path: string, mergeWithExisting: boolean = true) => {
     setIsLoading(true);
     try {
       const entries = await invoke<FileEntry[]>('list_directory', { path });
-      setFiles(entries);
+
+      if (mergeWithExisting && files.length > 0) {
+        // Get paths that are already in the current file list
+        const existingPaths = new Set(files.map(f => f.path));
+
+        // Keep existing children (loaded from expanded folders) that aren't in new entries
+        // Also keep children of newly listed directories (even if not expanded yet)
+        const childrenToKeep = files.filter(f => {
+          // Skip if it's a direct child of the loaded path (will be replaced)
+          if (existingPaths.has(f.path) && entries.some(e => e.path === f.path)) {
+            return false;
+          }
+          // Keep if it's a grandchild (deeper than immediate children)
+          return entries.some(entry =>
+            entry.is_dir && f.path.startsWith(entry.path + '/')
+          );
+        });
+
+        // Deduplicate: use path as key
+        const allEntries = [...childrenToKeep, ...entries];
+        const seen = new Set<string>();
+        const deduplicated = allEntries.filter(e => {
+          if (seen.has(e.path)) return false;
+          seen.add(e.path);
+          return true;
+        });
+
+        setFiles(deduplicated);
+      } else {
+        setFiles(entries);
+      }
     } catch (err) {
       console.error('Failed to load directory:', err);
     } finally {
@@ -94,8 +164,12 @@ export const Sidebar: React.FC = () => {
         // Loading children for the first time
         try {
           const childEntries = await invoke<FileEntry[]>('list_directory', { path: entry.path });
-          // Add child entries to the file list, keeping the parent folder
-          setFiles(prevFiles => [...prevFiles, ...childEntries]);
+          // Add child entries to the file list, with deduplication
+          setFiles(prevFiles => {
+            const existingPaths = new Set(prevFiles.map(f => f.path));
+            const newEntries = childEntries.filter(e => !existingPaths.has(e.path));
+            return [...prevFiles, ...newEntries];
+          });
         } catch (err) {
           console.error('Failed to load directory:', err);
         }
@@ -112,12 +186,13 @@ export const Sidebar: React.FC = () => {
   };
 
   const renderFileTree = (entries: FileEntry[], depth: number = 0): React.ReactNode => {
-    // Filter root level entries (entries that are direct children of workspace root)
-    const rootEntries = entries.filter(e => {
+    // Filter root level entries only when at depth 0
+    // For nested calls (depth > 0), we already have the correct subset of entries
+    const rootEntries = depth === 0 ? entries.filter(e => {
       if (!workspacePath) return true;
       const relativePath = e.path.replace(workspacePath + '/', '');
       return !relativePath.includes('/');
-    });
+    }) : entries;
     
     // When searching, show all matching entries with their parent folders
     // When not searching, show only root level entries
@@ -141,10 +216,6 @@ export const Sidebar: React.FC = () => {
       const isSelected = selectedFile === entry.path;
       const isOpen = openTabs.some(t => t.path === entry.path);
 
-      // Get relative path depth
-      const relativePath = entry.path.replace(workspacePath || '', '');
-      const pathDepth = (relativePath.match(/\//g) || []).length;
-
       // Get children for this directory
       const children = files.filter(f => f.path.startsWith(entry.path + '/'));
       
@@ -153,7 +224,7 @@ export const Sidebar: React.FC = () => {
           <div
             className={`${styles.fileItem} ${isSelected ? styles.selected : ''}`}
             onClick={() => handleFileClick(entry)}
-            data-depth={Math.min(pathDepth, 4)}
+            data-depth={Math.min(depth, 4)}
           >
             {entry.is_dir ? (
               <>
