@@ -167,7 +167,7 @@ export const TitleBar: React.FC = () => {
       label: '视图',
       items: [
         { label: '侧边栏', shortcut: 'Ctrl+B', action: () => setActiveMenu(null) },
-        { label: 'AI 面板', shortcut: 'Ctrl+J', action: () => setActiveMenu(null) },
+        { label: 'AI 面板', shortcut: 'Ctrl+Shift+L', action: () => setActiveMenu(null) },
         { divider: true, label: '' },
         { label: '放大字体', shortcut: 'Ctrl++', action: () => setActiveMenu(null) },
         { label: '缩小字体', shortcut: 'Ctrl+-', action: () => setActiveMenu(null) },

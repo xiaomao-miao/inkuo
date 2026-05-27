@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { TitleBar } from '../titlebar/TitleBar';
 import { ActivityBar, type ViewType } from '../activitybar/ActivityBar';
 import { Sidebar } from '../sidebar/Sidebar';
@@ -11,7 +11,7 @@ import { useAIPanelStore } from '../../store';
 import styles from './Layout.module.css';
 
 export const Layout: React.FC = () => {
-  const { isOpen: isAIPanelOpen } = useAIPanelStore();
+  const { isOpen: isAIPanelOpen, togglePanel } = useAIPanelStore();
   const [activeView, setActiveView] = useState<ViewType>('files');
   const [isSidebarVisible, setIsSidebarVisible] = useState(true);
   
@@ -41,6 +41,20 @@ export const Layout: React.FC = () => {
   const handleAIPanelResize = useCallback((delta: number) => {
     setAipanelWidth(prev => Math.max(300, Math.min(600, prev - delta)));
   }, []);
+
+  // Global keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ctrl+Shift+L: Toggle AI Panel (like Cursor)
+      if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'l') {
+        e.preventDefault();
+        togglePanel();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [togglePanel]);
 
   return (
     <div className={styles.layout}>
