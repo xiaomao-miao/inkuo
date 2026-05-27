@@ -153,3 +153,43 @@ pre {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
+
+/* CodeMirror global overrides */
+.cm-editor {
+  background-color: var(--bg-primary) !important;
+  height: 100%;
+}
+
+.cm-editor .cm-scroller {
+  font-family: var(--font-mono) !important;
+  background-color: var(--bg-primary) !important;
+}
+
+.cm-editor .cm-content {
+  background-color: var(--bg-primary) !important;
+}
+
+.cm-editor .cm-gutters {
+  background-color: var(--bg-secondary) !important;
+  border-right: 1px solid var(--border-color) !important;
+  color: var(--fg-muted) !important;
+}
+
+.cm-editor .cm-lineNumbers .cm-gutterElement {
+  color: var(--fg-muted) !important;
+  padding: 0 16px 0 8px !important;
+}
+
+/* Cursor / Caret styling */
+.cm-editor .cm-cursor {
+  border-left-color: var(--accent-primary) !important;
+  border-left-width: 2px !important;
+}
+
+.cm-editor .cm-selectionBackground {
+  background-color: var(--selection-bg) !important;
+}
+
+.cm-editor:focus .cm-selectionBackground {
+  background-color: var(--selection-bg) !important;
+}

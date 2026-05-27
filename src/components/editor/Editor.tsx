@@ -2,10 +2,9 @@ import React, { useCallback, useEffect, useRef } from 'react';
 import CodeMirror, { ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
-import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightActiveLineGutter, drawSelection, rectangularSelection } from '@codemirror/view';
+import { EditorView, keymap, lineNumbers, drawSelection, rectangularSelection } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
-import { oneDark } from '@codemirror/theme-one-dark';
 import { invoke } from '@tauri-apps/api/core';
 import { Sparkles } from 'lucide-react';
 import { useEditorStore, useSidebarStore } from '../../store';
@@ -146,9 +145,6 @@ export const Editor: React.FC = () => {
           extensions={[
             markdown({ base: markdownLanguage, codeLanguages: languages }),
             lineNumbers(),
-            highlightActiveLine(),
-            highlightActiveLineGutter(),
-            history(),
             drawSelection(),
             rectangularSelection(),
             highlightSelectionMatches(),
@@ -157,17 +153,22 @@ export const Editor: React.FC = () => {
               ...historyKeymap,
               ...searchKeymap,
             ]),
-            oneDark,
             EditorView.theme({
               '&': {
                 height: '100%',
                 fontSize: '14px',
+                backgroundColor: 'var(--bg-primary)',
+              },
+              '&.cm-editor': {
+                backgroundColor: 'var(--bg-primary)',
               },
               '.cm-scroller': {
                 fontFamily: 'var(--font-mono)',
+                backgroundColor: 'var(--bg-primary)',
               },
               '.cm-content': {
                 padding: '16px 0',
+                backgroundColor: 'var(--bg-primary)',
               },
               '.cm-line': {
                 padding: '0 16px',
@@ -175,13 +176,22 @@ export const Editor: React.FC = () => {
               '.cm-gutters': {
                 backgroundColor: 'var(--bg-secondary)',
                 borderRight: '1px solid var(--border-color)',
+                color: 'var(--fg-muted)',
+              },
+              '.cm-lineNumbers .cm-gutterElement': {
+                color: 'var(--fg-muted)',
+                padding: '0 16px 0 8px',
+              },
+              '.cm-activeLineGutter': {
+                backgroundColor: 'var(--bg-tertiary)',
+                color: 'var(--fg-secondary)',
               },
             }),
           ]}
           className={styles.codeMirror}
           basicSetup={{
             lineNumbers: true,
-            highlightActiveLineGutter: true,
+            highlightActiveLineGutter: false,
             highlightSpecialChars: true,
             history: true,
             foldGutter: true,
@@ -195,7 +205,7 @@ export const Editor: React.FC = () => {
             autocompletion: true,
             rectangularSelection: true,
             crosshairCursor: false,
-            highlightActiveLine: true,
+            highlightActiveLine: false,
             highlightSelectionMatches: true,
             closeBracketsKeymap: true,
             searchKeymap: true,

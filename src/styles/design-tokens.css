@@ -18,11 +18,11 @@
   --border-active: #007acc;
   --divider: #404040;
   
-  /* Accent colors - Default purple */
-  --accent-primary: #7c5cff;
-  --accent-hover: #9d7fff;
-  --accent-active: #6b4ce6;
-  --accent-subtle: rgba(124, 92, 255, 0.15);
+  /* Accent colors - Default green */
+  --accent-primary: #4ade80;
+  --accent-hover: #22c55e;
+  --accent-active: #16a34a;
+  --accent-subtle: rgba(74, 222, 128, 0.15);
   
   /* Diff colors */
   --diff-added-bg: rgba(72, 199, 116, 0.15);
@@ -34,7 +34,7 @@
   --diff-highlight: rgba(255, 213, 0, 0.2);
   
   /* Text selection */
-  --selection-bg: rgba(124, 92, 255, 0.3);
+  --selection-bg: rgba(74, 222, 128, 0.3);
   
   /* Focus ring */
   --focus-ring: rgba(124, 92, 255, 0.5);

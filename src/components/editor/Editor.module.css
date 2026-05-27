@@ -120,6 +120,10 @@
   outline: none;
 }
 
+.codeMirror .cm-editor:focus {
+  outline: none;
+}
+
 .codeMirror .cm-editor.cm-focused {
   outline: none !important;
 }
