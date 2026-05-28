@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useRef } from 'react';
+import { Decoration } from '@codemirror/view';
 import CodeMirror, { ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
 import { EditorView, keymap, lineNumbers, drawSelection, rectangularSelection } from '@codemirror/view';
-import { Prec } from '@codemirror/state';
+import { Prec, StateField, RangeSetBuilder } from '@codemirror/state';
+import { inlineDiffTheme } from './inlineDiffDecorations';
 import { historyKeymap } from '@codemirror/commands';
 import { highlightSelectionMatches } from '@codemirror/search';
 import { invoke } from '@tauri-apps/api/core';
@@ -11,6 +13,7 @@ import { Sparkles } from 'lucide-react';
 import { useEditorStore, useSidebarStore, useInlineCompleteStore } from '../../store';
 import { SETTINGS_TAB_ID } from '../../store';
 import { DiffOverlay } from './DiffOverlay';
+import { DiffActionBar } from './DiffActionBar';
 import { SettingsPanel } from '../settings/SettingsPanel';
 import {
   InlineCompleteProvider,
@@ -198,6 +201,46 @@ const EditorContent: React.FC<{
     return () => window.removeEventListener('pointerdown', onPointerDown, true);
   }, [editorRef]);
 
+  const diffHunksRef = useRef(diffHunks);
+  diffHunksRef.current = diffHunks;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const diffDecorationsField = StateField.define<any>({
+    create() {
+      return Decoration.none;
+    },
+    update(_decorations, tr) {
+      const hunks = diffHunksRef.current || [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const builder = new RangeSetBuilder<any>();
+
+      for (const hunk of hunks) {
+        for (const change of hunk.changes) {
+          const cls =
+            change.tag === 'insert'
+              ? 'inkuoDiffInsert'
+              : change.tag === 'delete'
+                ? 'inkuoDiffDelete'
+                : '';
+          if (!cls) continue;
+
+          const lineNo = change.tag === 'delete' ? change.old_line : change.new_line;
+          if (!lineNo) continue;
+
+          try {
+            const line = tr.state.doc.line(lineNo);
+            builder.add(line.from, line.from, Decoration.line({ class: cls }));
+          } catch {
+            // line number out of range
+          }
+        }
+      }
+
+      return builder.finish();
+    },
+    provide: (f) => EditorView.decorations.from(f),
+  });
+
   // Load document when file is selected
   useEffect(() => {
     const loadDocument = async () => {
@@ -279,6 +322,8 @@ const EditorContent: React.FC<{
             drawSelection(),
             rectangularSelection(),
             highlightSelectionMatches(),
+            inlineDiffTheme,
+            diffDecorationsField,
             // Keyboard handler for inline completion (Tab/Escape)
             inlineCompletionKeyHandler,
             // Cursor-like auto trigger (only on real user input)
@@ -387,6 +432,8 @@ const EditorContent: React.FC<{
         {isDiffMode && <DiffOverlay hunks={diffHunks} />}
         {/* ghost text is rendered via CodeMirror decoration */}
       </div>
+
+      <DiffActionBar />
 
       <div className={styles.statusBar}>
         <span className={styles.statusItem}>
