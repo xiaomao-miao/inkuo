@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState, useMemo } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import CodeMirror, { ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
@@ -16,37 +16,74 @@ import { detectLanguage } from '../../types/inline-complete';
 import styles from './Editor.module.css';
 
 // ============================================================================
-// Keyboard extension for inline completion (runs inside CodeMirror)
+// Custom Tab key handler for inline completion (replaces default indent)
 // ============================================================================
-const inlineCompletionKeymap = EditorView.domEventHandlers({
-  keydown(event, view) {
-    if (!view) return false;
-
+const acceptCompletionTabBinding = {
+  key: 'Tab',
+  run(view: EditorView) {
     const storeState = useInlineCompleteStore.getState();
     const { currentCompletion, clearCompletion } = storeState;
 
-    // Escape - Dismiss completion (priority over diff mode)
-    if (event.key === 'Escape' && currentCompletion) {
-      event.preventDefault();
-      clearCompletion();
-      return true;
-    }
-
-    // Tab - Accept completion (priority over diff mode)
-    if (event.key === 'Tab' && currentCompletion) {
-      event.preventDefault();
+    // If we have a completion, accept it
+    if (currentCompletion) {
       const cursorPosition = view.state.selection.main.head;
       clearCompletion();
       view.dispatch({
         changes: { from: cursorPosition, insert: currentCompletion.text },
         selection: { anchor: cursorPosition + currentCompletion.text.length },
       });
+      return true; // Handled
+    }
+
+    // Check for diff mode
+    const editorState = useEditorStore.getState();
+    const selectedFile = useSidebarStore.getState().selectedFile;
+    if (selectedFile) {
+      const currentDoc = editorState.documentContents[selectedFile];
+      if (currentDoc?.isDiffMode && currentDoc.diffHunks?.length > 0) {
+        const activeIndex = currentDoc.activeHunkIndex || 0;
+        editorState.applyHunk(selectedFile, currentDoc.diffHunks[activeIndex].id);
+        return true;
+      }
+    }
+
+    // Let default Tab handling (indent) take over
+    return false;
+  },
+};
+
+// Escape binding for dismissing completion
+const dismissCompletionEscapeBinding = {
+  key: 'Escape',
+  run() {
+    const storeState = useInlineCompleteStore.getState();
+    const { currentCompletion, clearCompletion } = storeState;
+
+    // If we have a completion, dismiss it
+    if (currentCompletion) {
+      clearCompletion();
       return true;
+    }
+
+    // Check for diff mode
+    const editorState = useEditorStore.getState();
+    const selectedFile = useSidebarStore.getState().selectedFile;
+    if (selectedFile) {
+      const currentDoc = editorState.documentContents[selectedFile];
+      if (currentDoc?.isDiffMode) {
+        if (currentDoc.diffHunks?.length > 0) {
+          const activeIndex = currentDoc.activeHunkIndex || 0;
+          editorState.rejectHunk(selectedFile, currentDoc.diffHunks[activeIndex].id);
+        } else {
+          editorState.clearDiff(selectedFile);
+        }
+        return true;
+      }
     }
 
     return false;
   },
-});
+};
 
 // ============================================================================
 // Editor Content Component (inside Provider) - CAN use useInlineComplete
@@ -186,65 +223,6 @@ const EditorContent: React.FC<{
     return () => window.removeEventListener('keydown', handleGlobalKeyDown);
   }, [handleSave]);
 
-  // Create keymap extensions
-  const keymapExtensions = useMemo(() => {
-    const bindings = [];
-
-    // Tab handler for diff mode (lower priority - checked after inline completion)
-    bindings.push({
-      key: 'Tab',
-      run: () => {
-        const storeState = useInlineCompleteStore.getState();
-        // If we have a completion, let the domEventHandler handle it
-        if (storeState.currentCompletion) return false;
-
-        // Diff mode Tab handling
-        const state = useEditorStore.getState();
-        const selectedFile = useSidebarStore.getState().selectedFile;
-        if (!selectedFile) return false;
-
-        const currentDoc = state.documentContents[selectedFile];
-        if (currentDoc?.isDiffMode && currentDoc.diffHunks?.length > 0) {
-          const activeIndex = currentDoc.activeHunkIndex || 0;
-          state.applyHunk(selectedFile, currentDoc.diffHunks[activeIndex].id);
-          return true;
-        }
-
-        return false;
-      },
-    });
-
-    // Escape handler for diff mode
-    bindings.push({
-      key: 'Escape',
-      run: () => {
-        const storeState = useInlineCompleteStore.getState();
-        // If we have a completion, let the domEventHandler handle it
-        if (storeState.currentCompletion) return false;
-
-        // Diff mode Escape handling
-        const state = useEditorStore.getState();
-        const selectedFile = useSidebarStore.getState().selectedFile;
-        if (!selectedFile) return false;
-
-        const currentDoc = state.documentContents[selectedFile];
-        if (currentDoc?.isDiffMode) {
-          if (currentDoc.diffHunks?.length > 0) {
-            const activeIndex = currentDoc.activeHunkIndex || 0;
-            state.rejectHunk(selectedFile, currentDoc.diffHunks[activeIndex].id);
-          } else {
-            state.clearDiff(selectedFile);
-          }
-          return true;
-        }
-
-        return false;
-      },
-    });
-
-    return keymap.of(bindings);
-  }, []);
-
   return (
     <div className={styles.editorContainer}>
       <div className={styles.editorWrapper}>
@@ -259,15 +237,16 @@ const EditorContent: React.FC<{
             drawSelection(),
             rectangularSelection(),
             highlightSelectionMatches(),
+            // Custom keymap with high priority for Tab/Escape
             keymap.of([
+              // Our custom Tab/Escape handlers (higher priority in the array)
+              acceptCompletionTabBinding,
+              dismissCompletionEscapeBinding,
+              // Default keymaps (lower priority)
               ...defaultKeymap,
               ...historyKeymap,
               ...searchKeymap,
             ]),
-            // Inline completion key handler (highest priority)
-            inlineCompletionKeymap,
-            // Custom keymap for diff mode
-            keymapExtensions,
             EditorView.theme({
               '&': {
                 height: '100%',
@@ -308,25 +287,25 @@ const EditorContent: React.FC<{
             lineNumbers: true,
             highlightActiveLineGutter: false,
             highlightSpecialChars: true,
-            history: true,
+            history: false, // We add historyKeymap manually
             foldGutter: true,
-            drawSelection: true,
+            drawSelection: false, // We add drawSelection manually
             dropCursor: true,
             allowMultipleSelections: true,
-            indentOnInput: true,
+            indentOnInput: false,
             syntaxHighlighting: true,
             bracketMatching: true,
             closeBrackets: true,
-            autocompletion: true,
-            rectangularSelection: true,
+            autocompletion: false, // Disable native autocompletion
+            rectangularSelection: false, // We add rectangularSelection manually
             crosshairCursor: false,
             highlightActiveLine: false,
-            highlightSelectionMatches: true,
-            closeBracketsKeymap: false, // Disabled to prevent conflict
-            searchKeymap: true,
-            foldKeymap: true,
-            completionKeymap: true,
-            lintKeymap: true,
+            highlightSelectionMatches: false, // We add highlightSelectionMatches manually
+            closeBracketsKeymap: false,
+            searchKeymap: false, // We add searchKeymap manually
+            foldKeymap: false,
+            completionKeymap: false,
+            lintKeymap: false,
           }}
         />
         {isDiffMode && <DiffOverlay hunks={diffHunks} />}
