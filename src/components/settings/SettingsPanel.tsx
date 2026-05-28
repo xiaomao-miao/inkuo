@@ -5,23 +5,54 @@ import {
   Palette,
   Type,
   Keyboard,
-  Info
+  Sparkles,
+  Info,
+  AlertCircle
 } from 'lucide-react';
-import { useSettingsStore } from '../../store';
+import { useSettingsStore, useInlineCompleteStore } from '../../store';
 import { ModelsSettings } from './ModelsSettings';
 import { Select } from './Select';
 import styles from './SettingsPanel.module.css';
 
-type SettingsTab = 'models' | 'editor' | 'appearance' | 'about';
+type SettingsTab = 'models' | 'editor' | 'ai' | 'appearance' | 'about';
 
 export const SettingsPanel: React.FC = () => {
   const { settings, updateSetting } = useSettingsStore();
+  const { enabled, debounceMs, setEnabled } = useInlineCompleteStore();
   const [activeTab, setActiveTab] = useState<SettingsTab>('models');
 
   const saveSettings = async () => {
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-      await invoke('save_settings', { settings });
+
+      // Convert to snake_case for Rust backend
+      const backendSettings = {
+        theme: settings.theme,
+        accent_color: settings.accent_color,
+        editor_font_size: settings.editor_font_size,
+        editor_font_family: settings.editor_font_family,
+        ai_provider: settings.ai_provider,
+        ai_model: settings.ai_model,
+        ai_api_key: settings.ai_api_key,
+        ai_base_url: settings.ai_base_url,
+        ai_temperature: settings.ai_temperature,
+        ai_max_tokens: settings.ai_max_tokens,
+        api_configs: settings.apiConfigs.map(c => ({
+          id: c.id,
+          name: c.name,
+          provider: c.provider,
+          base_url: c.baseUrl,
+          api_key: c.apiKey,
+          model: c.model,
+          is_default: c.isDefault,
+          enabled: c.enabled,
+          temperature: c.temperature,
+          max_tokens: c.maxTokens,
+        })),
+        active_api_config_id: settings.activeApiConfigId,
+      };
+
+      await invoke('save_settings', { settings: backendSettings });
     } catch (err) {
       console.error('Failed to save settings:', err);
     }
@@ -30,6 +61,7 @@ export const SettingsPanel: React.FC = () => {
   const tabs: { id: SettingsTab; label: string; icon: React.ReactNode }[] = [
     { id: 'models', label: '模型', icon: <Cpu size={14} /> },
     { id: 'editor', label: '编辑器', icon: <Type size={14} /> },
+    { id: 'ai', label: 'AI', icon: <Sparkles size={14} /> },
     { id: 'appearance', label: '外观', icon: <Palette size={14} /> },
     { id: 'about', label: '关于', icon: <Info size={14} /> },
   ];
@@ -124,6 +156,124 @@ export const SettingsPanel: React.FC = () => {
                     <span className={styles.toggleSlider}></span>
                   </label>
                   <span className={styles.toggleLabel}>启用</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      case 'ai':
+        const activeConfig = settings.apiConfigs.find(
+          (c) => c.id === settings.activeApiConfigId
+        );
+
+        const modelOptions = settings.apiConfigs.map((config) => ({
+          value: config.id,
+          label: `${config.name} (${config.model})`,
+        }));
+
+        return (
+          <div className={styles.tabContent}>
+            <div className={styles.section}>
+              <h4 className={styles.sectionTitle}>
+                <Sparkles size={14} />
+                AI Tab 补全
+              </h4>
+              <p className={styles.sectionDescription}>
+                在编辑器中按 Tab 键触发 AI 代码补全建议。
+              </p>
+
+              <div className={styles.field}>
+                <label className={styles.label}>AI 模型</label>
+                {settings.apiConfigs.length === 0 ? (
+                  <div className={styles.noConfigWarning}>
+                    <AlertCircle size={14} />
+                    <span>请先在「模型」设置中添加 API 配置</span>
+                  </div>
+                ) : (
+                  <Select
+                    value={settings.activeApiConfigId || ''}
+                    options={modelOptions}
+                    onChange={(value) => {
+                      useSettingsStore.getState().setActiveApiConfig(value);
+                      saveSettings();
+                    }}
+                    className={styles.select}
+                  />
+                )}
+                {activeConfig && (
+                  <div className={styles.activeConfigInfo}>
+                    <div className={styles.configDetail}>
+                      <span className={styles.configLabel}>提供商:</span>
+                      <span>{activeConfig.provider}</span>
+                    </div>
+                    <div className={styles.configDetail}>
+                      <span className={styles.configLabel}>模型:</span>
+                      <span>{activeConfig.model}</span>
+                    </div>
+                    <div className={styles.configDetail}>
+                      <span className={styles.configLabel}>API URL:</span>
+                      <span>{activeConfig.baseUrl}</span>
+                    </div>
+                  </div>
+                )}
+                {!activeConfig && settings.apiConfigs.length > 0 && (
+                  <p className={styles.fieldHelp} style={{ color: '#f59e0b' }}>
+                    当前没有选中的 API 配置
+                  </p>
+                )}
+              </div>
+
+              <div className={styles.field}>
+                <label className={styles.label}>启用 AI Tab 补全</label>
+                <div className={styles.toggleWrapper}>
+                  <label className={styles.toggle}>
+                    <input
+                      type="checkbox"
+                      checked={enabled}
+                      onChange={(e) => {
+                        setEnabled(e.target.checked);
+                      }}
+                    />
+                    <span className={styles.toggleSlider}></span>
+                  </label>
+                  <span className={styles.toggleLabel}>{enabled ? '启用' : '禁用'}</span>
+                </div>
+              </div>
+
+              <div className={styles.field}>
+                <label className={styles.label}>触发延迟</label>
+                <div className={styles.rangeWrapper}>
+                  <input
+                    type="range"
+                    min="100"
+                    max="1000"
+                    step="50"
+                    value={debounceMs}
+                    onChange={(e) => {
+                      useInlineCompleteStore.getState().updateSettings({
+                        debounceMs: parseInt(e.target.value)
+                      });
+                    }}
+                    className={styles.range}
+                  />
+                  <span className={styles.rangeValue}>{debounceMs}ms</span>
+                </div>
+                <p className={styles.fieldHelp}>
+                  按下 Tab 键后等待多久触发补全请求
+                </p>
+              </div>
+            </div>
+
+            <div className={styles.section}>
+              <h4 className={styles.sectionTitle}>快捷键</h4>
+              <div className={styles.shortcutList}>
+                <div className={styles.shortcutItem}>
+                  <kbd>Tab</kbd>
+                  <span>触发/接受补全</span>
+                </div>
+                <div className={styles.shortcutItem}>
+                  <kbd>Esc</kbd>
+                  <span>拒绝补全</span>
                 </div>
               </div>
             </div>

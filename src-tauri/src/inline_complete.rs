@@ -1,0 +1,354 @@
+//! Inline Completion module
+//!
+//! Handles AI-powered inline code/text completion with Ghost text display.
+//! Features:
+//! - Tab-triggered completion
+//! - Ghost text rendering
+//! - Accept/reject with Tab/Escape
+
+use serde::{Deserialize, Serialize};
+use crate::ai::{AIProviderAdapter, AIConfig, AIError};
+use crate::commands::AppState;
+use tauri::State;
+
+/// Request for inline completion
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InlineCompletionRequest {
+    /// Current document content
+    pub document: String,
+    /// Cursor position (character offset from start)
+    pub cursor_position: usize,
+    /// Programming language (for syntax-aware completion)
+    pub language: String,
+    /// Optional file path for context
+    pub file_path: Option<String>,
+}
+
+/// A single completion item
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompletionItem {
+    /// Unique identifier
+    pub id: String,
+    /// The completion text to insert
+    pub text: String,
+    /// Display text (may be truncated for UI)
+    pub display_text: String,
+    /// Confidence score (0.0 - 1.0)
+    pub score: f32,
+    /// Range info (optional)
+    pub range: Option<CompletionRange>,
+}
+
+/// Range for the completion
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompletionRange {
+    pub from: usize,
+    pub to: usize,
+}
+
+/// Response from inline completion request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InlineCompletionResponse {
+    /// List of completion items (usually 1, but can have multiple)
+    pub completions: Vec<CompletionItem>,
+    /// Model used for completion
+    pub model: String,
+    /// Usage statistics
+    pub usage: Option<TokenUsage>,
+}
+
+/// Token usage info
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenUsage {
+    pub prompt_tokens: u32,
+    pub completion_tokens: u32,
+    pub total_tokens: u32,
+}
+
+/// Inline completion state
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InlineCompletionState {
+    /// Whether inline completion is enabled
+    pub enabled: bool,
+    /// Current completion being displayed
+    pub current: Option<CompletionItem>,
+    /// Loading state
+    pub is_loading: bool,
+    /// Error message if any
+    pub error: Option<String>,
+}
+
+/// Extract context around cursor position
+fn extract_context(document: &str, cursor_pos: usize, context_lines: usize) -> (String, usize) {
+    // Convert character offset to byte offset
+    let cursor_byte = document
+        .char_indices()
+        .nth(cursor_pos)
+        .map(|(byte, _)| byte)
+        .unwrap_or_else(|| document.len());
+
+    let lines: Vec<&str> = document.lines().collect();
+    let mut byte_count = 0usize;
+    let mut line_index = 0;
+
+    // Find which line the cursor is on (using byte offset)
+    for (i, line) in lines.iter().enumerate() {
+        let line_end = byte_count + line.len() + 1; // +1 for newline
+        if byte_count + line.len() >= cursor_byte {
+            line_index = i;
+            break;
+        }
+        byte_count = line_end;
+        line_index = i + 1;
+    }
+
+    // Calculate start/end line indices
+    let start_line = line_index.saturating_sub(context_lines);
+    let end_line = (line_index + context_lines + 1).min(lines.len());
+
+    // Build context string with cursor marker
+    let mut context_parts = Vec::new();
+
+    for (i, line) in lines[start_line..end_line].iter().enumerate() {
+        if start_line + i == line_index {
+            // Find column within this line (in bytes)
+            let line_start = if start_line > 0 {
+                lines[..start_line].iter().map(|l| l.len() + 1).sum::<usize>()
+            } else {
+                0
+            };
+            let col_bytes = cursor_byte.saturating_sub(line_start);
+
+            // Use char indices to split safely
+            let chars: Vec<char> = line.chars().collect();
+            let mut char_pos = 0usize;
+            let mut byte_pos = 0usize;
+
+            for (j, c) in chars.iter().enumerate() {
+                let c_len = c.len_utf8();
+                if byte_pos + c_len > col_bytes {
+                    char_pos = j;
+                    break;
+                }
+                byte_pos += c_len;
+                char_pos = j + 1;
+            }
+
+            let before: String = chars[..char_pos].iter().collect();
+            let after: String = chars[char_pos..].iter().collect();
+
+            context_parts.push(format!("{}\x00\x00\x00{}\n", before, after));
+        } else {
+            context_parts.push(format!("{}\n", line));
+        }
+    }
+
+    let context = context_parts.join("");
+
+    // Calculate cursor position in context (in characters)
+    let before_lines: String = lines[start_line..line_index.min(end_line)]
+        .iter()
+        .map(|l| format!("{}\n", l))
+        .collect();
+    let cursor_in_context = before_lines.chars().count();
+
+    (context, cursor_in_context)
+}
+
+/// Build prompt for inline completion
+fn build_completion_prompt(
+    context: &str,
+    cursor_pos: usize,
+    language: &str,
+    file_path: Option<&str>,
+) -> String {
+    let file_info = file_path
+        .map(|p| format!("Current file: {}\n", p))
+        .unwrap_or_default();
+
+    format!(
+        r#"You are an expert code completion assistant. Complete the following {language} code naturally and concisely.
+
+{file_info}
+Rules:
+1. Only output the completion text, nothing else
+2. Match the surrounding code style and indentation
+3. Complete the logical structure (function, block, statement)
+4. Keep completion concise (typically 1-5 lines)
+5. Do not include explanatory comments
+
+Code:
+```
+{context}
+```
+Cursor position: {cursor_pos}
+
+Completion:""#,
+        language = language,
+        file_info = file_info,
+        context = context,
+        cursor_pos = cursor_pos
+    )
+}
+
+/// Generate a simple completion ID
+fn generate_completion_id() -> String {
+    use uuid::Uuid;
+    Uuid::new_v4().to_string()[..8].to_string()
+}
+
+/// Call AI model for completion with retry logic
+async fn get_completion(
+    config: &AIConfig,
+    prompt: &str,
+) -> Result<String, AIError> {
+    let adapter = AIProviderAdapter::new(config.clone());
+
+    // Use lower temperature for completions (more deterministic)
+    let mut config = config.clone();
+    config.temperature = 0.3;
+
+    // Retry logic for transient errors
+    let max_retries = 2;
+    let mut last_error = String::new();
+
+    for attempt in 0..=max_retries {
+        match adapter.chat("completion".to_string(), prompt.to_string(), String::new()).await {
+            Ok(result) => return Ok(result),
+            Err(AIError::ModelError(msg)) if msg.contains("503") || msg.contains("Service Unavailable") => {
+                if attempt < max_retries {
+                    tracing::warn!("Service unavailable, retrying in {}ms (attempt {}/{})",
+                        500 * (attempt + 1), attempt + 1, max_retries);
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500 * (attempt + 1) as u64)).await;
+                    last_error = msg;
+                } else {
+                    return Err(AIError::ModelError(format!(
+                        "Service unavailable after {} retries. Last error: {}",
+                        max_retries, msg
+                    )));
+                }
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    Err(AIError::ModelError(last_error))
+}
+
+/// Main handler for inline completion request
+#[tauri::command]
+pub async fn ai_inline_complete(
+    request: InlineCompletionRequest,
+    state: State<'_, AppState>,
+) -> Result<InlineCompletionResponse, String> {
+    tracing::info!("Inline completion request - language: {}, cursor: {}", request.language, request.cursor_position);
+
+    let config = state.get_ai_config().await.map_err(|e| {
+        tracing::error!("Failed to get AI config: {}", e);
+        e
+    })?;
+
+    tracing::debug!("Using AI config - model: {}, provider: {:?}", config.model, config.provider);
+
+    // Extract context around cursor (10 lines before and after)
+    let (context, cursor_in_context) = extract_context(
+        &request.document,
+        request.cursor_position,
+        10
+    );
+
+    // Build prompt
+    let prompt = build_completion_prompt(
+        &context,
+        cursor_in_context,
+        &request.language,
+        request.file_path.as_deref()
+    );
+
+    tracing::debug!("Inline completion prompt:\n{}", prompt);
+
+    // Get completion from AI
+    let completion = get_completion(&config, &prompt)
+        .await
+        .map_err(|e| {
+            tracing::error!("AI completion error: {}", e);
+            format!("AI 请求失败: {}", e)
+        })?;
+
+    tracing::info!("Received completion ({} chars)", completion.len());
+
+    // Clean up the completion text
+    let completion = completion
+        .trim()
+        .trim_start_matches("```")
+        .trim_start_matches(&request.language)
+        .trim()
+        .trim_end_matches("```")
+        .trim()
+        .to_string();
+
+    // Create completion item
+    let item = CompletionItem {
+        id: generate_completion_id(),
+        text: completion.clone(),
+        display_text: {
+            let chars: Vec<char> = completion.chars().collect();
+            if chars.len() > 100 {
+                chars[..100].iter().collect::<String>() + "..."
+            } else {
+                completion.clone()
+            }
+        },
+        score: 0.9, // Placeholder score
+        range: None,
+    };
+
+    Ok(InlineCompletionResponse {
+        completions: vec![item],
+        model: config.model.clone(),
+        usage: None,
+    })
+}
+
+/// Cancel any pending completion request
+#[tauri::command]
+pub async fn ai_inline_complete_cancel() -> Result<(), String> {
+    // In a full implementation, this would cancel in-flight requests
+    Ok(())
+}
+
+/// Get current inline completion state
+#[tauri::command]
+pub fn get_inline_completion_state() -> InlineCompletionState {
+    InlineCompletionState {
+        enabled: true,
+        current: None,
+        is_loading: false,
+        error: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_context() {
+        let doc = "line 1\nline 2\nline 3\nline 4\nline 5";
+        let (context, cursor) = extract_context(doc, 14, 1); // Position in "line 3"
+
+        assert!(context.contains("line 2"));
+        assert!(context.contains("line 3"));
+        assert!(context.contains("line 4"));
+    }
+
+    #[test]
+    fn test_build_completion_prompt() {
+        let context = "fn main() {\n    |\n}";
+        let prompt = build_completion_prompt(context, 15, "rust", Some("main.rs"));
+
+        assert!(prompt.contains("rust"));
+        assert!(prompt.contains("main.rs"));
+        assert!(prompt.contains("fn main()"));
+    }
+}

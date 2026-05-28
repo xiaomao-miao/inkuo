@@ -325,12 +325,26 @@ Context (optional references):
 
         if !response.status().is_success() {
             let status = response.status();
+            let error_body = response.text().await.unwrap_or_default();
+
             if status.as_u16() == 401 {
                 return Err(AIError::AuthError("Invalid API key".to_string()));
             } else if status.as_u16() == 429 {
                 return Err(AIError::RateLimited);
+            } else if status.as_u16() == 503 {
+                return Err(AIError::ModelError(format!(
+                    "Service Unavailable (503) - The API service is temporarily unavailable. \
+                    Please try again later or switch to a different API provider. \
+                    Details: {}",
+                    error_body
+                )));
             }
-            return Err(AIError::ModelError(format!("HTTP {}", status)));
+            return Err(AIError::ModelError(format!(
+                "HTTP {} - {}. Details: {}",
+                status,
+                status.canonical_reason().unwrap_or("Unknown"),
+                error_body
+            )));
         }
 
         let response_json: serde_json::Value = response
@@ -380,12 +394,26 @@ Context (optional references):
 
         if !response.status().is_success() {
             let status = response.status();
+            let error_body = response.text().await.unwrap_or_default();
+
             if status.as_u16() == 401 {
                 return Err(AIError::AuthError("Invalid API key".to_string()));
             } else if status.as_u16() == 429 {
                 return Err(AIError::RateLimited);
+            } else if status.as_u16() == 503 {
+                return Err(AIError::ModelError(format!(
+                    "Service Unavailable (503) - The API service is temporarily unavailable. \
+                    Please try again later or switch to a different API provider. \
+                    Details: {}",
+                    error_body
+                )));
             }
-            return Err(AIError::ModelError(format!("HTTP {}", status)));
+            return Err(AIError::ModelError(format!(
+                "HTTP {} - {}. Details: {}",
+                status,
+                status.canonical_reason().unwrap_or("Unknown"),
+                error_body
+            )));
         }
 
         let mut full = String::new();
@@ -498,12 +526,26 @@ Context (optional references):
 
         if !response.status().is_success() {
             let status = response.status();
+            let error_body = response.text().await.unwrap_or_default();
+
             if status.as_u16() == 401 {
                 return Err(AIError::AuthError("Invalid API key".to_string()));
             } else if status.as_u16() == 429 {
                 return Err(AIError::RateLimited);
+            } else if status.as_u16() == 503 {
+                return Err(AIError::ModelError(format!(
+                    "Service Unavailable (503) - The API service is temporarily unavailable. \
+                    Please try again later or switch to a different API provider. \
+                    Details: {}",
+                    error_body
+                )));
             }
-            return Err(AIError::ModelError(format!("HTTP {}", status)));
+            return Err(AIError::ModelError(format!(
+                "HTTP {} - {}. Details: {}",
+                status,
+                status.canonical_reason().unwrap_or("Unknown"),
+                error_body
+            )));
         }
 
         let mut full = String::new();
@@ -567,12 +609,26 @@ Context (optional references):
 
         if !response.status().is_success() {
             let status = response.status();
+            let error_body = response.text().await.unwrap_or_default();
+
             if status.as_u16() == 401 {
                 return Err(AIError::AuthError("Invalid API key".to_string()));
             } else if status.as_u16() == 429 {
                 return Err(AIError::RateLimited);
+            } else if status.as_u16() == 503 {
+                return Err(AIError::ModelError(format!(
+                    "Service Unavailable (503) - The API service is temporarily unavailable. \
+                    Please try again later or switch to a different API provider. \
+                    Details: {}",
+                    error_body
+                )));
             }
-            return Err(AIError::ModelError(format!("HTTP {}", status)));
+            return Err(AIError::ModelError(format!(
+                "HTTP {} - {}. Details: {}",
+                status,
+                status.canonical_reason().unwrap_or("Unknown"),
+                error_body
+            )));
         }
 
         let response_json: serde_json::Value = response

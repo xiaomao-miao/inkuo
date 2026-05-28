@@ -1161,3 +1161,83 @@ export const useCmdKStore = create<CmdKState>((set) => ({
   setIsProcessing: (processing) => set({ isProcessing: processing }),
   reset: () => set({ scope: 'selection', instruction: '', isProcessing: false }),
 }));
+
+// ============================================================================
+// Inline Completion Store
+// ============================================================================
+
+import type { CompletionItem } from '../types/inline-complete';
+
+interface InlineCompleteState {
+  // Feature toggle
+  enabled: boolean;
+
+  // Current completion state
+  currentCompletion: CompletionItem | null;
+  isLoading: boolean;
+  error: string | null;
+
+  // Position where completion was triggered (to detect cursor movement)
+  triggerPosition: number | null;
+
+  // Settings
+  debounceMs: number;
+  maxLines: number;
+
+  // Actions
+  setEnabled: (enabled: boolean) => void;
+  setCompletion: (completion: CompletionItem | null, triggerPosition?: number) => void;
+  setLoading: (loading: boolean) => void;
+  setError: (error: string | null) => void;
+  clearCompletion: () => void;
+  updateSettings: (settings: Partial<Pick<InlineCompleteState, 'debounceMs' | 'maxLines'>>) => void;
+}
+
+export const useInlineCompleteStore = create<InlineCompleteState>()(
+  persist(
+    (set) => ({
+      // Default state
+      enabled: true,
+      currentCompletion: null,
+      isLoading: false,
+      error: null,
+      triggerPosition: null,
+      debounceMs: 300,
+      maxLines: 10,
+
+      // Actions
+      setEnabled: (enabled) => set({ enabled }),
+
+      setCompletion: (completion, triggerPosition) => set({
+        currentCompletion: completion,
+        triggerPosition: completion ? (triggerPosition ?? null) : null,
+        isLoading: false,
+        error: null
+      }),
+
+      setLoading: (loading) => set({ isLoading: loading }),
+
+      setError: (error) => set({ error, isLoading: false }),
+
+      clearCompletion: () => set({
+        currentCompletion: null,
+        triggerPosition: null,
+        isLoading: false,
+        error: null
+      }),
+
+      updateSettings: (settings) => set((state) => ({
+        ...state,
+        ...settings
+      })),
+    }),
+    {
+      name: 'inkuo-inline-complete',
+      partialize: (state) => ({
+        enabled: state.enabled,
+        debounceMs: state.debounceMs,
+        maxLines: state.maxLines,
+      }),
+    }
+  )
+);

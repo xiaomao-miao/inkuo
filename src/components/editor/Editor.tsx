@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import CodeMirror, { ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
@@ -7,14 +7,21 @@ import { defaultKeymap, historyKeymap } from '@codemirror/commands';
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { invoke } from '@tauri-apps/api/core';
 import { Sparkles } from 'lucide-react';
-import { useEditorStore, useSidebarStore } from '../../store';
+import { useEditorStore, useSidebarStore, useInlineCompleteStore } from '../../store';
 import { SETTINGS_TAB_ID } from '../../store';
 import { DiffOverlay } from './DiffOverlay';
 import { SettingsPanel } from '../settings/SettingsPanel';
+import { InlineCompleteProvider, useInlineComplete, GhostTextOverlay, InlineCompleteStatus } from '../inline-complete';
+import { detectLanguage } from '../../types/inline-complete';
 import styles from './Editor.module.css';
 
-export const Editor: React.FC = () => {
-  const editorRef = useRef<ReactCodeMirrorRef>(null);
+// ============================================================================
+// Editor Content Component (inside Provider) - CAN use useInlineComplete
+// ============================================================================
+const EditorContent: React.FC<{
+  editorRef: React.RefObject<ReactCodeMirrorRef | null>;
+  setEditorState: React.Dispatch<React.SetStateAction<{ document: string; cursorPosition: number }>>;
+}> = ({ editorRef, setEditorState }) => {
   const {
     documentContents,
     setDocumentContent,
@@ -23,8 +30,8 @@ export const Editor: React.FC = () => {
     markSaved,
     updateTabDirty,
   } = useEditorStore();
-  const { selectedFile, activeTabId } = useSidebarStore();
-  const isSettingsTab = activeTabId === SETTINGS_TAB_ID;
+  const { selectedFile } = useSidebarStore();
+  const { triggerCompletion } = useInlineComplete(); // Now inside Provider!
 
   // Get current document state from store
   const currentDoc = selectedFile ? documentContents[selectedFile] : null;
@@ -34,11 +41,39 @@ export const Editor: React.FC = () => {
   const isDiffMode = currentDoc?.isDiffMode || false;
   const selection = currentDoc?.selection || null;
 
+  // Auto-trigger completion when typing (debounced)
+  useEffect(() => {
+    if (!selectedFile || !currentContent) return;
+
+    const timer = setTimeout(() => {
+      const view = editorRef.current?.view;
+      if (!view) return;
+
+      const cursorPosition = view.state.selection.main.head;
+      const { isLoading, currentCompletion, enabled, triggerPosition } = useInlineCompleteStore.getState();
+
+      // Don't trigger if loading or already has a completion at this position
+      if (isLoading) return;
+      if (currentCompletion && triggerPosition === cursorPosition) return;
+      if (enabled) {
+        console.log('[Editor] Auto-triggering completion at position', cursorPosition);
+        triggerCompletion({
+          document: currentContent,
+          cursorPosition,
+          language: detectLanguage(selectedFile || undefined),
+          filePath: selectedFile,
+        });
+      }
+    }, 800); // Increased debounce to 800ms to reduce API calls
+
+    return () => clearTimeout(timer);
+  }, [currentContent, selectedFile, triggerCompletion, editorRef]);
+
   // Load document when file is selected
   useEffect(() => {
     const loadDocument = async () => {
       if (!selectedFile) return;
-      
+
       try {
         const result = await invoke<{ document: any; content: string }>('read_document', {
           path: selectedFile,
@@ -48,14 +83,14 @@ export const Editor: React.FC = () => {
         console.error('Failed to load document:', err);
       }
     };
-    
+
     loadDocument();
   }, [selectedFile, setDocumentContent]);
 
   // Save document
   const handleSave = useCallback(async () => {
     if (!selectedFile || !isDirty) return;
-    
+
     try {
       await invoke('write_document', {
         path: selectedFile,
@@ -68,47 +103,18 @@ export const Editor: React.FC = () => {
     }
   }, [selectedFile, currentContent, isDirty, markSaved, updateTabDirty]);
 
-  // Keyboard shortcuts
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Cmd/Ctrl+S - Save
-      if ((e.metaKey || e.ctrlKey) && e.key === 's') {
-        e.preventDefault();
-        handleSave();
-      }
-      // Tab - Apply current hunk
-      if (e.key === 'Tab' && isDiffMode) {
-        e.preventDefault();
-        const { applyHunk } = useEditorStore.getState();
-        const currentDoc = documentContents[selectedFile || ''];
-        if (currentDoc?.diffHunks?.length > 0) {
-          const activeIndex = currentDoc.activeHunkIndex || 0;
-          applyHunk(selectedFile!, currentDoc.diffHunks[activeIndex].id);
-        }
-      }
-      // Escape - Reject current hunk or close diff mode
-      if (e.key === 'Escape' && isDiffMode) {
-        e.preventDefault();
-        const { rejectHunk, clearDiff } = useEditorStore.getState();
-        const currentDoc = documentContents[selectedFile || ''];
-        if (currentDoc?.diffHunks?.length > 0) {
-          const activeIndex = currentDoc.activeHunkIndex || 0;
-          rejectHunk(selectedFile!, currentDoc.diffHunks[activeIndex].id);
-        } else {
-          clearDiff(selectedFile!);
-        }
-      }
-    };
-    
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isDiffMode, documentContents, selectedFile]);
-
   const handleChange = useCallback((value: string) => {
     if (selectedFile) {
       setContent(selectedFile, value);
+      const view = editorRef.current?.view;
+      if (view) {
+        setEditorState({
+          document: value,
+          cursorPosition: view.state.selection.main.head,
+        });
+      }
     }
-  }, [selectedFile, setContent]);
+  }, [selectedFile, setContent, editorRef, setEditorState]);
 
   const handleUpdate = useCallback((viewUpdate: any) => {
     if (viewUpdate.selection && selectedFile) {
@@ -119,31 +125,82 @@ export const Editor: React.FC = () => {
         setSelection(selectedFile, null);
       }
     }
-  }, [selectedFile, setSelection]);
 
-  // No file selected - show inline hint or settings
-  if (isSettingsTab) {
-    return (
-      <div className={styles.editorContainer}>
-        <SettingsPanel />
-      </div>
-    );
-  }
+    const view = viewUpdate.view;
+    if (view) {
+      setEditorState({
+        document: view.state.doc.toString(),
+        cursorPosition: view.state.selection.main.head,
+      });
+    }
+  }, [selectedFile, setSelection, setEditorState]);
 
-  if (!selectedFile || !currentDoc) {
-    return (
-      <div className={styles.editorContainer}>
-        <div className={styles.editorWrapper}>
-          <div className={styles.noFileHint}>
-            <Sparkles size={24} className={styles.hintIcon} />
-            <span className={styles.hintText}>
-              选择一个文件开始编辑，或按 <kbd>Ctrl</kbd>+<kbd>K</kbd> 调用 AI 助手
-            </span>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  // Keyboard shortcuts handler
+  const handleKeyDown = useCallback((e: KeyboardEvent) => {
+    const view = editorRef.current?.view;
+    if (!view) return;
+
+    const { currentCompletion, clearCompletion } = useInlineCompleteStore.getState();
+
+    // Cmd/Ctrl+S - Save
+    if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+      e.preventDefault();
+      handleSave();
+      return;
+    }
+
+    // Tab - Accept existing completion
+    if (e.key === 'Tab' && currentCompletion) {
+      e.preventDefault();
+      const completion = currentCompletion;
+      const cursorPosition = view.state.selection.main.head;
+      clearCompletion();
+      view.dispatch({
+        changes: { from: cursorPosition, insert: completion.text },
+        selection: { anchor: cursorPosition + completion.text.length },
+      });
+      return;
+    }
+
+    // Escape - Dismiss completion
+    if (e.key === 'Escape' && currentCompletion) {
+      e.preventDefault();
+      clearCompletion();
+      return;
+    }
+
+    // Diff mode: Tab to apply hunk
+    if (e.key === 'Tab' && isDiffMode) {
+      e.preventDefault();
+      const { applyHunk } = useEditorStore.getState();
+      const currentDoc = documentContents[selectedFile || ''];
+      if (currentDoc?.diffHunks?.length > 0) {
+        const activeIndex = currentDoc.activeHunkIndex || 0;
+        applyHunk(selectedFile!, currentDoc.diffHunks[activeIndex].id);
+      }
+      return;
+    }
+
+    // Diff mode: Escape to reject
+    if (e.key === 'Escape' && isDiffMode) {
+      e.preventDefault();
+      const { rejectHunk, clearDiff } = useEditorStore.getState();
+      const currentDoc = documentContents[selectedFile || ''];
+      if (currentDoc?.diffHunks?.length > 0) {
+        const activeIndex = currentDoc.activeHunkIndex || 0;
+        rejectHunk(selectedFile!, currentDoc.diffHunks[activeIndex].id);
+      } else {
+        clearDiff(selectedFile!);
+      }
+      return;
+    }
+  }, [isDiffMode, documentContents, selectedFile, handleSave, editorRef]);
+
+  // Register keyboard handler
+  useEffect(() => {
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleKeyDown]);
 
   return (
     <div className={styles.editorContainer}>
@@ -226,11 +283,12 @@ export const Editor: React.FC = () => {
           }}
         />
         {isDiffMode && <DiffOverlay hunks={diffHunks} />}
+        <GhostTextOverlay editorRef={editorRef} />
       </div>
-      
+
       <div className={styles.statusBar}>
         <span className={styles.statusItem}>
-          {currentDoc.document?.doc_type || 'Markdown'}
+          {currentDoc?.document?.doc_type || 'Markdown'}
         </span>
         <span className={styles.statusItem}>
           {currentContent.split('\n').length} 行
@@ -245,10 +303,65 @@ export const Editor: React.FC = () => {
             {diffHunks.length} 个差异块
           </span>
         )}
+        <InlineCompleteStatus />
         <span className={styles.statusItem} style={{ marginLeft: 'auto' }}>
           Ctrl+S 保存
         </span>
       </div>
     </div>
+  );
+};
+
+// ============================================================================
+// Empty/No-file state component
+// ============================================================================
+const EmptyState: React.FC = () => (
+  <div className={styles.editorContainer}>
+    <div className={styles.editorWrapper}>
+      <div className={styles.noFileHint}>
+        <Sparkles size={24} className={styles.hintIcon} />
+        <span className={styles.hintText}>
+          选择一个文件开始编辑，或按 <kbd>Ctrl</kbd>+<kbd>K</kbd> 调用 AI 助手
+        </span>
+      </div>
+    </div>
+  </div>
+);
+
+// ============================================================================
+// Settings Panel wrapper
+// ============================================================================
+const SettingsState: React.FC = () => (
+  <div className={styles.editorContainer}>
+    <SettingsPanel />
+  </div>
+);
+
+// ============================================================================
+// Main Editor Component
+// ============================================================================
+export const Editor: React.FC = () => {
+  const editorRef = useRef<ReactCodeMirrorRef>(null);
+  const [, setEditorState] = useState({ document: '', cursorPosition: 0 });
+  const { selectedFile, activeTabId } = useSidebarStore();
+  const isSettingsTab = activeTabId === SETTINGS_TAB_ID;
+
+  // Show empty state if no file selected
+  if (isSettingsTab) {
+    return <SettingsState />;
+  }
+
+  if (!selectedFile) {
+    return <EmptyState />;
+  }
+
+  // Wrap editor content with InlineCompleteProvider
+  return (
+    <InlineCompleteProvider>
+      <EditorContent
+        editorRef={editorRef}
+        setEditorState={setEditorState}
+      />
+    </InlineCompleteProvider>
   );
 };

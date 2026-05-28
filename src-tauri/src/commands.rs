@@ -138,6 +138,71 @@ fn cleanup_old_backups(max_backups_per_file: usize) {
     }
 }
 
+impl AppState {
+    pub async fn get_ai_config(&self) -> Result<ai::AIConfig, String> {
+        // Try to read settings with flexible parsing
+        let settings_result = read_settings_from_disk();
+
+        let (ai_provider, model, temperature, max_tokens) = if let Ok(settings) = settings_result {
+            // Try to use the new multi-API config first
+            if let Some(ref active_id) = settings.active_api_config_id {
+                if let Some(config) = settings.api_configs.iter().find(|c| c.id == *active_id) {
+                    let provider = match config.provider.as_str() {
+                        "ollama" => ai::AIProvider::Ollama {
+                            base_url: config.base_url.clone(),
+                        },
+                        "official" => ai::AIProvider::Official {
+                            api_key: config.api_key.clone().unwrap_or_default(),
+                        },
+                        _ => ai::AIProvider::OpenAI {
+                            api_key: config.api_key.clone().unwrap_or_default(),
+                            base_url: config.base_url.clone(),
+                        },
+                    };
+                    return Ok(ai::AIConfig {
+                        provider,
+                        model: config.model.clone(),
+                        temperature: config.temperature,
+                        max_tokens: config.max_tokens,
+                    });
+                }
+            }
+
+            // Fallback to legacy settings
+            let provider = match settings.ai_provider.as_str() {
+                "ollama" => ai::AIProvider::Ollama {
+                    base_url: settings.ai_base_url.clone()
+                        .unwrap_or_else(|| "http://localhost:11434".to_string()),
+                },
+                _ => ai::AIProvider::OpenAI {
+                    api_key: settings.ai_api_key.clone().unwrap_or_default(),
+                    base_url: settings.ai_base_url.clone()
+                        .unwrap_or_else(|| "https://api.deepseek.com".to_string()),
+                },
+            };
+            (provider, settings.ai_model, settings.ai_temperature, settings.ai_max_tokens)
+        } else {
+            // No settings or parse error - use defaults
+            tracing::warn!("Failed to read settings, using defaults");
+            (
+                ai::AIProvider::Ollama {
+                    base_url: "http://localhost:11434".to_string(),
+                },
+                "llama3".to_string(),
+                0.7,
+                Some(4096),
+            )
+        };
+
+        Ok(ai::AIConfig {
+            provider: ai_provider,
+            model,
+            temperature,
+            max_tokens,
+        })
+    }
+}
+
 impl Default for AppState {
     fn default() -> Self {
         let settings = read_settings_from_disk().unwrap_or_else(|_| Settings::default());
@@ -504,8 +569,59 @@ fn read_settings_from_disk() -> Result<Settings, String> {
     let content = std::fs::read_to_string(&path)
         .map_err(|e| format!("Failed to read settings: {}", e))?;
 
-    serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse settings: {}", e))
+    // Try to parse as Settings, if it fails try to parse as legacy format
+    match serde_json::from_str::<Settings>(&content) {
+        Ok(settings) => Ok(settings),
+        Err(e) => {
+            tracing::warn!("Failed to parse settings as new format ({}), trying legacy format", e);
+            // Legacy format doesn't have api_configs, so we need to create a default one
+            #[derive(Debug, Deserialize)]
+            struct LegacySettings {
+                theme: Option<String>,
+                accent_color: Option<String>,
+                editor_font_size: Option<u32>,
+                editor_font_family: Option<String>,
+                ai_provider: Option<String>,
+                ai_model: Option<String>,
+                ai_api_key: Option<String>,
+                ai_base_url: Option<String>,
+                ai_temperature: Option<f32>,
+                ai_max_tokens: Option<u32>,
+            }
+
+            let legacy: LegacySettings = serde_json::from_str(&content)
+                .map_err(|e| format!("Failed to parse legacy settings: {}", e))?;
+
+            let default_api_config_id = uuid::Uuid::new_v4().to_string();
+            let default_api_config = ApiConfig {
+                id: default_api_config_id.clone(),
+                name: legacy.ai_model.clone().unwrap_or_else(|| "Default".to_string()),
+                provider: legacy.ai_provider.clone().unwrap_or_else(|| "openai".to_string()),
+                base_url: legacy.ai_base_url.clone().unwrap_or_else(|| "https://api.deepseek.com".to_string()),
+                api_key: legacy.ai_api_key.clone(),
+                model: legacy.ai_model.clone().unwrap_or_else(|| "deepseek-chat".to_string()),
+                is_default: true,
+                enabled: true,
+                temperature: legacy.ai_temperature.unwrap_or(0.7),
+                max_tokens: legacy.ai_max_tokens,
+            };
+
+            Ok(Settings {
+                theme: legacy.theme.unwrap_or_else(|| "cursor-dark".to_string()),
+                accent_color: legacy.accent_color.unwrap_or_else(|| "#7C5CFF".to_string()),
+                editor_font_size: legacy.editor_font_size.unwrap_or(14),
+                editor_font_family: legacy.editor_font_family.unwrap_or_else(|| "JetBrains Mono, monospace".to_string()),
+                ai_provider: legacy.ai_provider.unwrap_or_else(|| "deepseek".to_string()),
+                ai_model: legacy.ai_model.unwrap_or_else(|| "deepseek-chat".to_string()),
+                ai_api_key: legacy.ai_api_key,
+                ai_base_url: legacy.ai_base_url,
+                ai_temperature: legacy.ai_temperature.unwrap_or(0.7),
+                ai_max_tokens: legacy.ai_max_tokens,
+                api_configs: vec![default_api_config],
+                active_api_config_id: Some(default_api_config_id),
+            })
+        }
+    }
 }
 
 #[tauri::command]

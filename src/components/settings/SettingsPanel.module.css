@@ -490,3 +490,91 @@
 .select {
   width: 100%;
 }
+
+/* Section description */
+.sectionDescription {
+  font-size: 12px;
+  color: var(--fg-muted);
+  margin: -8px 0 12px 0;
+  line-height: 1.5;
+}
+
+/* Field help text */
+.fieldHelp {
+  font-size: 11px;
+  color: var(--fg-muted);
+  margin: 4px 0 0 0;
+}
+
+/* Shortcut list */
+.shortcutList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.shortcutItem {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.shortcutItem kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 8px;
+  font-size: 11px;
+  font-family: inherit;
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  color: var(--fg-secondary);
+}
+
+.shortcutItem span {
+  font-size: 12px;
+  color: var(--fg-secondary);
+}
+
+/* AI Model Selection */
+.noConfigWarning {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: #f59e0b;
+  background-color: rgba(245, 158, 11, 0.1);
+  border-radius: 6px;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.activeConfigInfo {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+}
+
+.configDetail {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--fg-secondary);
+  line-height: 1.6;
+}
+
+.configDetail:not(:last-child) {
+  margin-bottom: 4px;
+}
+
+.configLabel {
+  color: var(--fg-muted);
+  font-weight: 500;
+  min-width: 60px;
+}

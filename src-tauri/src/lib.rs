@@ -18,6 +18,7 @@ mod commands_agent;
 mod streaming;
 mod openai_stream;
 mod file_watcher;
+mod inline_complete;
 pub mod agent;
 
 pub use document::*;
@@ -111,6 +112,9 @@ pub fn run() {
             commands::test_api_config,
             commands::watch_directory,
             commands::unwatch_directory,
+            inline_complete::ai_inline_complete,
+            inline_complete::ai_inline_complete_cancel,
+            inline_complete::get_inline_completion_state,
         ])
         .run(tauri::generate_context!())
         .expect("error while running inkuo application");
