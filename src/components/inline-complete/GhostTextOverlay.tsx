@@ -1,7 +1,7 @@
 // Ghost text overlay for inline completion
 // Renders the completion suggestion as faded text after the cursor
 
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState } from 'react';
 import type { ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import { useInlineCompleteStore } from '../../store';
 import styles from './InlineComplete.module.css';
@@ -11,37 +11,41 @@ interface GhostTextOverlayProps {
 }
 
 export function GhostTextOverlay({ editorRef }: GhostTextOverlayProps) {
+  // Only subscribe to state changes, don't trigger re-mounts
   const currentCompletion = useInlineCompleteStore((s) => s.currentCompletion);
   const isLoading = useInlineCompleteStore((s) => s.isLoading);
 
   const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
-  const lastCursorPosRef = useRef<number>(0);
-  const rafIdRef = useRef<number>(0);
 
   const hasCompletion = !!currentCompletion?.text;
 
+  // Set up event listeners once when editor mounts
   useEffect(() => {
     const view = editorRef.current?.view;
     if (!view) return;
 
+    // Use a flag to track if we should update position
+    let rafId = 0;
+    let isMounted = true;
+
     const updatePosition = () => {
-      const cursor = view.state.selection.main.head;
+      if (!isMounted || !view) return;
+
       const storeState = useInlineCompleteStore.getState();
 
-      // If there's a completion, check if cursor moved from trigger position
+      // Check if cursor moved from trigger position
       if (storeState.currentCompletion && storeState.triggerPosition !== null) {
+        const cursor = view.state.selection.main.head;
         if (cursor !== storeState.triggerPosition) {
-          // Cursor moved - clear the completion
           storeState.clearCompletion();
           setPosition(null);
           return;
         }
       }
 
-      // Track cursor for next comparison
-      lastCursorPosRef.current = cursor;
-
+      const cursor = view.state.selection.main.head;
       const coords = view.coordsAtPos(cursor);
+
       if (coords) {
         const scroller = view.dom.querySelector('.cm-scroller');
         if (scroller) {
@@ -60,23 +64,27 @@ export function GhostTextOverlay({ editorRef }: GhostTextOverlayProps) {
       }
     };
 
-    // Throttled update using requestAnimationFrame
+    // Throttled update
     const scheduleUpdate = () => {
-      cancelAnimationFrame(rafIdRef.current);
-      rafIdRef.current = requestAnimationFrame(updatePosition);
+      cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(updatePosition);
     };
 
-    // Listen to keydown for cursor movement detection
+    // Listen to both keydown and keyup
     view.dom.addEventListener('keydown', scheduleUpdate);
+    view.dom.addEventListener('keyup', scheduleUpdate);
 
-    // Initial position
+    // Initial update
     updatePosition();
 
     return () => {
+      isMounted = false;
       view.dom.removeEventListener('keydown', scheduleUpdate);
-      cancelAnimationFrame(rafIdRef.current);
+      view.dom.removeEventListener('keyup', scheduleUpdate);
+      cancelAnimationFrame(rafId);
     };
-  }, [editorRef, hasCompletion]);
+    // Only depend on editorRef - we don't want to re-set up listeners when completion changes
+  }, [editorRef]);
 
   if (!hasCompletion) {
     return null;

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import CodeMirror, { ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
@@ -90,8 +90,7 @@ const dismissCompletionEscapeBinding = {
 // ============================================================================
 const EditorContent: React.FC<{
   editorRef: React.RefObject<ReactCodeMirrorRef | null>;
-  setEditorState: React.Dispatch<React.SetStateAction<{ document: string; cursorPosition: number }>>;
-}> = ({ editorRef, setEditorState }) => {
+}> = ({ editorRef }) => {
   const {
     documentContents,
     setDocumentContent,
@@ -181,34 +180,22 @@ const EditorContent: React.FC<{
   const handleChange = useCallback((value: string) => {
     if (selectedFile) {
       setContent(selectedFile, value);
-      const view = editorRef.current?.view;
-      if (view) {
-        setEditorState({
-          document: value,
-          cursorPosition: view.state.selection.main.head,
-        });
-      }
     }
-  }, [selectedFile, setContent, editorRef, setEditorState]);
+  }, [selectedFile, setContent]);
 
   const handleUpdate = useCallback((viewUpdate: any) => {
     if (viewUpdate.selection && selectedFile) {
       const { from, to } = viewUpdate.state.selection.main;
+      const currentDoc = documentContents[selectedFile];
       if (from !== to) {
-        setSelection(selectedFile, { from, to });
-      } else {
+        if (!currentDoc?.selection || currentDoc.selection.from !== from || currentDoc.selection.to !== to) {
+          setSelection(selectedFile, { from, to });
+        }
+      } else if (currentDoc?.selection) {
         setSelection(selectedFile, null);
       }
     }
-
-    const view = viewUpdate.view;
-    if (view) {
-      setEditorState({
-        document: view.state.doc.toString(),
-        cursorPosition: view.state.selection.main.head,
-      });
-    }
-  }, [selectedFile, setSelection, setEditorState]);
+  }, [selectedFile, setSelection, documentContents]);
 
   // Keyboard shortcuts for Save (Cmd/Ctrl+S)
   useEffect(() => {
@@ -368,7 +355,6 @@ const SettingsState: React.FC = () => (
 // ============================================================================
 export const Editor: React.FC = () => {
   const editorRef = useRef<ReactCodeMirrorRef>(null);
-  const [, setEditorState] = useState({ document: '', cursorPosition: 0 });
   const { selectedFile, activeTabId } = useSidebarStore();
   const isSettingsTab = activeTabId === SETTINGS_TAB_ID;
 
@@ -384,10 +370,7 @@ export const Editor: React.FC = () => {
   // Wrap editor content with InlineCompleteProvider
   return (
     <InlineCompleteProvider>
-      <EditorContent
-        editorRef={editorRef}
-        setEditorState={setEditorState}
-      />
+      <EditorContent editorRef={editorRef} />
     </InlineCompleteProvider>
   );
 };
