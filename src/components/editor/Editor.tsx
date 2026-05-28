@@ -3,8 +3,8 @@ import CodeMirror, { ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
 import { EditorView, keymap, lineNumbers, drawSelection, rectangularSelection } from '@codemirror/view';
-import { defaultKeymap, historyKeymap } from '@codemirror/commands';
-import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
+import { historyKeymap } from '@codemirror/commands';
+import { highlightSelectionMatches } from '@codemirror/search';
 import { invoke } from '@tauri-apps/api/core';
 import { Sparkles } from 'lucide-react';
 import { useEditorStore, useSidebarStore, useInlineCompleteStore } from '../../store';
@@ -16,74 +16,39 @@ import { detectLanguage } from '../../types/inline-complete';
 import styles from './Editor.module.css';
 
 // ============================================================================
-// Custom Tab key handler for inline completion (replaces default indent)
+// Keyboard event handler for inline completion (higher priority than keymap)
 // ============================================================================
-const acceptCompletionTabBinding = {
-  key: 'Tab',
-  run(view: EditorView) {
+const inlineCompletionKeyHandler = EditorView.domEventHandlers({
+  keydown(event, view) {
+    if (!view) return false;
+
     const storeState = useInlineCompleteStore.getState();
     const { currentCompletion, clearCompletion } = storeState;
 
-    // If we have a completion, accept it
-    if (currentCompletion) {
+    // Tab - Accept completion
+    if (event.key === 'Tab' && currentCompletion) {
+      event.preventDefault();
+      event.stopPropagation();
       const cursorPosition = view.state.selection.main.head;
+      const text = currentCompletion.text;
       clearCompletion();
       view.dispatch({
-        changes: { from: cursorPosition, insert: currentCompletion.text },
-        selection: { anchor: cursorPosition + currentCompletion.text.length },
+        changes: { from: cursorPosition, insert: text },
+        selection: { anchor: cursorPosition + text.length },
       });
-      return true; // Handled
+      return true;
     }
 
-    // Check for diff mode
-    const editorState = useEditorStore.getState();
-    const selectedFile = useSidebarStore.getState().selectedFile;
-    if (selectedFile) {
-      const currentDoc = editorState.documentContents[selectedFile];
-      if (currentDoc?.isDiffMode && currentDoc.diffHunks?.length > 0) {
-        const activeIndex = currentDoc.activeHunkIndex || 0;
-        editorState.applyHunk(selectedFile, currentDoc.diffHunks[activeIndex].id);
-        return true;
-      }
-    }
-
-    // Let default Tab handling (indent) take over
-    return false;
-  },
-};
-
-// Escape binding for dismissing completion
-const dismissCompletionEscapeBinding = {
-  key: 'Escape',
-  run() {
-    const storeState = useInlineCompleteStore.getState();
-    const { currentCompletion, clearCompletion } = storeState;
-
-    // If we have a completion, dismiss it
-    if (currentCompletion) {
+    // Escape - Dismiss completion
+    if (event.key === 'Escape' && currentCompletion) {
+      event.preventDefault();
       clearCompletion();
       return true;
     }
 
-    // Check for diff mode
-    const editorState = useEditorStore.getState();
-    const selectedFile = useSidebarStore.getState().selectedFile;
-    if (selectedFile) {
-      const currentDoc = editorState.documentContents[selectedFile];
-      if (currentDoc?.isDiffMode) {
-        if (currentDoc.diffHunks?.length > 0) {
-          const activeIndex = currentDoc.activeHunkIndex || 0;
-          editorState.rejectHunk(selectedFile, currentDoc.diffHunks[activeIndex].id);
-        } else {
-          editorState.clearDiff(selectedFile);
-        }
-        return true;
-      }
-    }
-
     return false;
   },
-};
+});
 
 // ============================================================================
 // Editor Content Component (inside Provider) - CAN use useInlineComplete
@@ -106,6 +71,9 @@ const EditorContent: React.FC<{
   const triggerCompletionRef = useRef(triggerCompletion);
   triggerCompletionRef.current = triggerCompletion;
 
+  // Track last selected file to detect file switches
+  const lastSelectedFileRef = useRef<string | null>(null);
+
   // Get current document state from store
   const currentDoc = selectedFile ? documentContents[selectedFile] : null;
   const currentContent = currentDoc?.content || '';
@@ -114,14 +82,32 @@ const EditorContent: React.FC<{
   const isDiffMode = currentDoc?.isDiffMode || false;
   const selection = currentDoc?.selection || null;
 
-  // Auto-trigger completion when typing (debounced)
-  // Only depends on selectedFile and currentContent to minimize re-runs
+  // Clear completion when switching files
+  useEffect(() => {
+    if (selectedFile !== lastSelectedFileRef.current) {
+      lastSelectedFileRef.current = selectedFile;
+      // Clear any existing completion when switching files
+      useInlineCompleteStore.getState().clearCompletion();
+    }
+  }, [selectedFile]);
+
+  // Auto-trigger completion only on actual typing (not file switch)
   useEffect(() => {
     if (!selectedFile || !currentContent) return;
+
+    // Ref to track if this is triggered by actual typing
+    let lastContentLength = currentContent.length;
 
     const timer = setTimeout(() => {
       const view = editorRef.current?.view;
       if (!view) return;
+
+      // Only trigger if content actually changed (user typed)
+      const currentContentLength = view.state.doc.length;
+      if (currentContentLength <= lastContentLength + 5) {
+        // Content didn't change much, likely a file switch
+        return;
+      }
 
       const cursorPosition = view.state.selection.main.head;
       const { isLoading, currentCompletion, enabled, triggerPosition } = useInlineCompleteStore.getState();
@@ -138,7 +124,7 @@ const EditorContent: React.FC<{
           filePath: selectedFile,
         });
       }
-    }, 1500); // 1.5s debounce to reduce API calls and improve performance
+    }, 1500); // 1.5s debounce
 
     return () => clearTimeout(timer);
   }, [currentContent, selectedFile, editorRef]);
@@ -224,15 +210,10 @@ const EditorContent: React.FC<{
             drawSelection(),
             rectangularSelection(),
             highlightSelectionMatches(),
-            // Custom keymap with high priority for Tab/Escape
+            // Keyboard handler for inline completion (Tab/Escape)
+            inlineCompletionKeyHandler,
             keymap.of([
-              // Our custom Tab/Escape handlers (higher priority in the array)
-              acceptCompletionTabBinding,
-              dismissCompletionEscapeBinding,
-              // Default keymaps (lower priority)
-              ...defaultKeymap,
               ...historyKeymap,
-              ...searchKeymap,
             ]),
             EditorView.theme({
               '&': {
