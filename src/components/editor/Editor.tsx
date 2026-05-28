@@ -130,9 +130,11 @@ const EditorContent: React.FC<{
     );
     if (!isUserInput) return;
 
-    // If a completion is currently shown, do NOT keep retriggering.
+    // If a completion is currently shown, clear it on new input and allow re-trigger.
     const storeState = useInlineCompleteStore.getState();
-    if (storeState.currentCompletion) return;
+    if (storeState.currentCompletion) {
+      useInlineCompleteStore.getState().clearCompletion();
+    }
 
     // If selection isn't empty, don't inline-complete.
     const sel = view.state.selection.main;
