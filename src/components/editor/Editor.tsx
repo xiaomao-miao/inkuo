@@ -3,6 +3,7 @@ import CodeMirror, { ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
 import { EditorView, keymap, lineNumbers, drawSelection, rectangularSelection } from '@codemirror/view';
+import { Prec } from '@codemirror/state';
 import { historyKeymap } from '@codemirror/commands';
 import { highlightSelectionMatches } from '@codemirror/search';
 import { invoke } from '@tauri-apps/api/core';
@@ -11,9 +12,15 @@ import { useEditorStore, useSidebarStore, useInlineCompleteStore } from '../../s
 import { SETTINGS_TAB_ID } from '../../store';
 import { DiffOverlay } from './DiffOverlay';
 import { SettingsPanel } from '../settings/SettingsPanel';
-import { InlineCompleteProvider, useInlineComplete, GhostTextOverlay, InlineCompleteStatus } from '../inline-complete';
+import {
+  InlineCompleteProvider,
+  useInlineComplete,
+  InlineCompleteStatus,
+  inlineCompletionDecoration,
+} from '../inline-complete';
 import { detectLanguage } from '../../types/inline-complete';
 import styles from './Editor.module.css';
+import inlineCompleteStyles from '../inline-complete/InlineComplete.module.css';
 
 // ============================================================================
 // Keyboard event handler for inline completion (higher priority than keymap)
@@ -27,14 +34,18 @@ const inlineCompletionKeyHandler = EditorView.domEventHandlers({
 
     // Tab - Accept completion
     if (event.key === 'Tab' && currentCompletion) {
+      // Prevent CodeMirror's default Tab indentation
       event.preventDefault();
       event.stopPropagation();
+
       const cursorPosition = view.state.selection.main.head;
       const text = currentCompletion.text;
+
       clearCompletion();
       view.dispatch({
         changes: { from: cursorPosition, insert: text },
         selection: { anchor: cursorPosition + text.length },
+        userEvent: 'input.complete',
       });
       return true;
     }
@@ -71,9 +82,8 @@ const EditorContent: React.FC<{
   const triggerCompletionRef = useRef(triggerCompletion);
   triggerCompletionRef.current = triggerCompletion;
 
-  // Track last selected file and switch time
+  // Track last selected file
   const lastSelectedFileRef = useRef<string | null>(null);
-  const lastFileSwitchTimeRef = useRef<number>(0);
 
   // Get current document state from store
   const currentDoc = selectedFile ? documentContents[selectedFile] : null;
@@ -83,50 +93,108 @@ const EditorContent: React.FC<{
   const isDiffMode = currentDoc?.isDiffMode || false;
   const selection = currentDoc?.selection || null;
 
-  // Clear completion and track file switch time
+  // Clear completion on file switch
   useEffect(() => {
     if (selectedFile !== lastSelectedFileRef.current) {
       lastSelectedFileRef.current = selectedFile;
-      lastFileSwitchTimeRef.current = Date.now();
-      // Clear any existing completion when switching files
       useInlineCompleteStore.getState().clearCompletion();
     }
   }, [selectedFile]);
 
-  // Auto-trigger completion on typing (skip shortly after file switch)
+  // Cursor-like auto trigger state (stable across renders)
+  const autoTriggerStateRef = useRef<{
+    timer: ReturnType<typeof setTimeout> | null;
+    lastAcceptAt: number;
+  }>({
+    timer: null,
+    lastAcceptAt: 0,
+  });
+
+  const autoTriggerStateRefForKeymap = autoTriggerStateRef;
+
+  const inlineAutoTrigger = EditorView.updateListener.of((update) => {
+    const view = update.view;
+
+    if (!view.hasFocus) return;
+
+    // After accepting a completion, don't immediately trigger again.
+    const now = Date.now();
+    if (now - autoTriggerStateRef.current.lastAcceptAt < 300) return;
+
+    // Only consider real user input/delete events.
+    const isUserInput = update.transactions.some(
+      (tr) =>
+        tr.isUserEvent('input') ||
+        tr.isUserEvent('input.type') ||
+        tr.isUserEvent('delete')
+    );
+    if (!isUserInput) return;
+
+    // If a completion is currently shown, do NOT keep retriggering.
+    const storeState = useInlineCompleteStore.getState();
+    if (storeState.currentCompletion) return;
+
+    // If selection isn't empty, don't inline-complete.
+    const sel = view.state.selection.main;
+    if (!sel.empty) return;
+
+    if (!storeState.enabled) return;
+    if (storeState.isLoading) return;
+
+    // Debounce (use configured debounceMs)
+    if (autoTriggerStateRef.current.timer) {
+      clearTimeout(autoTriggerStateRef.current.timer);
+    }
+
+    const filePath = useSidebarStore.getState().selectedFile;
+    autoTriggerStateRef.current.timer = setTimeout(() => {
+      if (!view.hasFocus) return;
+      const latestSel = view.state.selection.main;
+      if (!latestSel.empty) return;
+
+      const latestStore = useInlineCompleteStore.getState();
+      if (!latestStore.enabled || latestStore.isLoading || latestStore.currentCompletion) return;
+
+      const docLen = view.state.doc.length;
+      const cursor = latestSel.head;
+
+      // Smart snippet: capture a window around cursor, bounded by max chars.
+      // This avoids `doc.toString()` on large documents, which can freeze input.
+      const maxBefore = 8000;
+      const maxAfter = 2000;
+      const from = Math.max(0, cursor - maxBefore);
+      const to = Math.min(docLen, cursor + maxAfter);
+
+      const snippetText = view.state.doc.sliceString(from, to);
+      const cursorInSnippet = cursor - from;
+
+      triggerCompletionRef.current({
+        document: snippetText,
+        cursorPosition: cursorInSnippet,
+        language: detectLanguage(filePath || undefined),
+        filePath: filePath || undefined,
+        snippet: { text: snippetText, start_offset: from },
+      });
+    }, storeState.debounceMs);
+  });
+
+  // Clear completion & cancel pending timer when clicking outside the editor.
   useEffect(() => {
-    if (!selectedFile || !currentContent) return;
-
-    const timer = setTimeout(() => {
-      // Skip if file was just switched (within 2 seconds)
-      const timeSinceSwitch = Date.now() - lastFileSwitchTimeRef.current;
-      if (timeSinceSwitch < 2000) {
-        console.log('[Editor] Skipping auto-trigger due to recent file switch');
-        return;
-      }
-
+    const onPointerDown = (e: PointerEvent) => {
       const view = editorRef.current?.view;
       if (!view) return;
-
-      const cursorPosition = view.state.selection.main.head;
-      const { isLoading, currentCompletion, enabled, triggerPosition } = useInlineCompleteStore.getState();
-
-      // Don't trigger if loading or already has a completion at this position
-      if (isLoading) return;
-      if (currentCompletion && triggerPosition === cursorPosition) return;
-      if (enabled) {
-        console.log('[Editor] Auto-triggering completion at position', cursorPosition);
-        triggerCompletionRef.current({
-          document: currentContent,
-          cursorPosition,
-          language: detectLanguage(selectedFile || undefined),
-          filePath: selectedFile,
-        });
+      if (!view.dom.contains(e.target as Node)) {
+        useInlineCompleteStore.getState().clearCompletion();
+        if (autoTriggerStateRef.current.timer) {
+          clearTimeout(autoTriggerStateRef.current.timer);
+          autoTriggerStateRef.current.timer = null;
+        }
       }
-    }, 1500); // 1.5s debounce
+    };
 
-    return () => clearTimeout(timer);
-  }, [currentContent, selectedFile, editorRef]);
+    window.addEventListener('pointerdown', onPointerDown, true);
+    return () => window.removeEventListener('pointerdown', onPointerDown, true);
+  }, [editorRef]);
 
   // Load document when file is selected
   useEffect(() => {
@@ -196,7 +264,7 @@ const EditorContent: React.FC<{
   }, [handleSave]);
 
   return (
-    <div className={styles.editorContainer}>
+    <div className={styles.editorContainer} data-inline-complete-styles={inlineCompleteStyles}>
       <div className={styles.editorWrapper}>
         <CodeMirror
           ref={editorRef}
@@ -211,6 +279,45 @@ const EditorContent: React.FC<{
             highlightSelectionMatches(),
             // Keyboard handler for inline completion (Tab/Escape)
             inlineCompletionKeyHandler,
+            // Cursor-like auto trigger (only on real user input)
+            inlineAutoTrigger,
+            // Ensure Tab accept has highest precedence over indentation
+            Prec.highest(
+              keymap.of([
+                {
+                  key: 'Tab',
+                  run: (view) => {
+                    const { currentCompletion, clearCompletion } = useInlineCompleteStore.getState();
+                    if (!currentCompletion) return false;
+                    const cursorPosition = view.state.selection.main.head;
+                    const text = currentCompletion.text;
+
+                    // Mark accept time to avoid immediate re-trigger
+                    autoTriggerStateRefForKeymap.current.lastAcceptAt = Date.now();
+
+                    clearCompletion();
+                    view.dispatch({
+                      changes: { from: cursorPosition, insert: text },
+                      selection: { anchor: cursorPosition + text.length },
+                      userEvent: 'input.complete',
+                    });
+                    return true;
+                  },
+                  preventDefault: true,
+                },
+                {
+                  key: 'Escape',
+                  run: () => {
+                    const { currentCompletion, clearCompletion } = useInlineCompleteStore.getState();
+                    if (!currentCompletion) return false;
+                    clearCompletion();
+                    return true;
+                  },
+                },
+              ])
+            ),
+            // Render ghost text inside CodeMirror (cursor-anchored)
+            inlineCompletionDecoration(),
             keymap.of([
               ...historyKeymap,
             ]),
@@ -276,7 +383,7 @@ const EditorContent: React.FC<{
           }}
         />
         {isDiffMode && <DiffOverlay hunks={diffHunks} />}
-        <GhostTextOverlay editorRef={editorRef} />
+        {/* ghost text is rendered via CodeMirror decoration */}
       </div>
 
       <div className={styles.statusBar}>

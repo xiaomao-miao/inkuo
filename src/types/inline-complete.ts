@@ -2,14 +2,25 @@
 
 /** Request for inline completion */
 export interface InlineCompletionRequest {
-  /** Current document content */
+  /** Current document content (either full document, or a snippet around cursor) */
   document: string;
-  /** Cursor position (character offset from start) */
+  /** Cursor position.
+   * - If `snippet` is not provided: character offset from start of full document.
+   * - If `snippet` is provided: character offset within `snippet`.
+   */
   cursor_position: number;
   /** Programming language (e.g., 'rust', 'typescript') */
   language: string;
   /** Optional file path for context */
   file_path?: string;
+
+  /** Optional snippet payload to avoid sending full document. */
+  snippet?: {
+    /** Snippet text around cursor */
+    text: string;
+    /** Character offset of snippet start in the full document */
+    start_offset: number;
+  };
 }
 
 /** A single completion item */

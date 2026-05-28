@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { useAIPanelStore } from '../../store';
 import { useSidebarStore } from '../../store';
-import { useEditorStore } from '../../store';
+import { useEditorStore, useInlineCompleteStore } from '../../store';
 import styles from './InlineDiffPreview.module.css';
 
 interface InlineDiffPreviewProps {
@@ -55,6 +55,8 @@ export const InlineDiffPreview: React.FC<InlineDiffPreviewProps> = ({
 
     // Apply replaced content to editor
     useEditorStore.getState().setContent(filePath, replacedContent);
+    // AI 直接改内容后，不应该立刻触发 inline complete
+    useInlineCompleteStore.getState().clearCompletion();
 
     // Clear the diff from the session
     useAIPanelStore.getState().acceptAllHunks(sessionId);

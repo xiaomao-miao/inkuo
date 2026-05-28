@@ -13,15 +13,28 @@ use tauri::State;
 
 /// Request for inline completion
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InlineCompletionSnippet {
+    /// Snippet text around cursor
+    pub text: String,
+    /// Character offset of snippet start in the full document
+    pub start_offset: usize,
+}
+
+/// Request for inline completion
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InlineCompletionRequest {
-    /// Current document content
+    /// Current document content (either full document, or snippet text)
     pub document: String,
-    /// Cursor position (character offset from start)
+    /// Cursor position.
+    /// - If `snippet` is None: character offset from start of full document.
+    /// - If `snippet` is Some: character offset within `snippet.text`.
     pub cursor_position: usize,
     /// Programming language (for syntax-aware completion)
     pub language: String,
     /// Optional file path for context
     pub file_path: Option<String>,
+    /// Optional snippet payload to avoid sending full document.
+    pub snippet: Option<InlineCompletionSnippet>,
 }
 
 /// A single completion item
@@ -250,10 +263,17 @@ pub async fn ai_inline_complete(
 
     tracing::debug!("Using AI config - model: {}, provider: {:?}", config.model, config.provider);
 
+    // Use snippet if provided to reduce payload and improve responsiveness.
+    let (source_text, cursor_pos) = if let Some(snippet) = &request.snippet {
+        (snippet.text.as_str(), request.cursor_position)
+    } else {
+        (request.document.as_str(), request.cursor_position)
+    };
+
     // Extract context around cursor (10 lines before and after)
     let (context, cursor_in_context) = extract_context(
-        &request.document,
-        request.cursor_position,
+        source_text,
+        cursor_pos,
         10
     );
 

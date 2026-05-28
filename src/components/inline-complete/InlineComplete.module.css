@@ -104,7 +104,7 @@
 }
 
 /* CodeMirror integration - ghost text decoration */
-.cm-inline-completion-ghost {
+:global(.cm-inline-completion-ghost) {
   color: var(--inline-completion-color, #6b7280);
   opacity: 0.7;
   font-style: italic;
@@ -112,6 +112,6 @@
   border-radius: 2px;
 }
 
-.cm-inline-completion-active {
+:global(.cm-inline-completion-active) {
   border-bottom: 2px solid var(--inline-completion-active-color, #3b82f6);
 }

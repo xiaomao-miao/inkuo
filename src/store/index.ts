@@ -1202,7 +1202,7 @@ export const useInlineCompleteStore = create<InlineCompleteState>()(
       isLoading: false,
       error: null,
       triggerPosition: null,
-      debounceMs: 300,
+      debounceMs: 700,
       maxLines: 10,
 
       // Actions

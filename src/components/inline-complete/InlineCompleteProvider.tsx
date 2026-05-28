@@ -23,6 +23,7 @@ interface InlineCompleteContextValue {
     cursorPosition: number;
     language: string;
     filePath?: string;
+    snippet?: { text: string; start_offset: number };
   }) => Promise<void>;
   acceptCompletion: () => CompletionItem | null;
   dismissCompletion: () => void;
@@ -46,6 +47,8 @@ interface InlineCompleteProviderProps {
 export function InlineCompleteProvider({ children }: InlineCompleteProviderProps) {
   const abortControllerRef = useRef<AbortController | null>(null);
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const requestSeqRef = useRef(0);
+  const latestRequestRef = useRef<{ seq: number; filePath?: string; cursorPosition: number } | null>(null);
 
   const {
     enabled,
@@ -72,6 +75,19 @@ export function InlineCompleteProvider({ children }: InlineCompleteProviderProps
     }
   }, []);
 
+  const invalidateRequests = useCallback(() => {
+    requestSeqRef.current += 1;
+    latestRequestRef.current = null;
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
+  }, []);
+
   // Trigger completion request
   const triggerCompletion = useCallback(async (params: {
     document: string;
@@ -79,6 +95,10 @@ export function InlineCompleteProvider({ children }: InlineCompleteProviderProps
     language: string;
     filePath?: string;
   }) => {
+    const seq = requestSeqRef.current + 1;
+    requestSeqRef.current = seq;
+    latestRequestRef.current = { seq, filePath: params.filePath, cursorPosition: params.cursorPosition };
+
     console.log('[InlineComplete] triggerCompletion called, enabled:', enabled, 'isLoading:', isLoading, 'currentCompletion:', !!currentCompletion);
 
     if (!enabled) {
@@ -92,7 +112,7 @@ export function InlineCompleteProvider({ children }: InlineCompleteProviderProps
       clearCompletion();
     }
 
-    // Cancel any pending request
+    // Cancel previous timer/in-flight request (but do NOT invalidate this request)
     cancelPendingRequest();
 
     // Set loading state
@@ -110,6 +130,8 @@ export function InlineCompleteProvider({ children }: InlineCompleteProviderProps
           cursor_position: params.cursorPosition,
           language: params.language,
           file_path: params.filePath,
+          // pass snippet when available (Cursor-like)
+          snippet: (params as any).snippet,
         };
 
         console.log('[InlineComplete] Sending request to backend');
@@ -120,10 +142,20 @@ export function InlineCompleteProvider({ children }: InlineCompleteProviderProps
 
         console.log('[InlineComplete] Received response:', response);
 
-        // Check if cursor position changed during the request
+        // Drop stale/outdated responses (Cursor-like)
+        const latest = latestRequestRef.current;
+        if (!latest || latest.seq !== seq) {
+          console.log('[InlineComplete] Stale response (seq mismatch), ignoring');
+          return;
+        }
+        if (latest.filePath !== params.filePath || latest.cursorPosition !== params.cursorPosition) {
+          console.log('[InlineComplete] Stale response (context changed), ignoring');
+          return;
+        }
+
+        // If some other completion was already set while waiting, ignore
         const currentState = useInlineCompleteStore.getState();
         if (currentState.currentCompletion) {
-          // Another completion was set while waiting
           console.log('[InlineComplete] Another completion was set, ignoring response');
           return;
         }
@@ -160,16 +192,16 @@ export function InlineCompleteProvider({ children }: InlineCompleteProviderProps
 
   // Dismiss the current completion
   const dismissCompletion = useCallback(() => {
-    cancelPendingRequest();
+    invalidateRequests();
     clearCompletion();
-  }, [cancelPendingRequest, clearCompletion]);
+  }, [invalidateRequests, clearCompletion]);
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      cancelPendingRequest();
+      invalidateRequests();
     };
-  }, [cancelPendingRequest]);
+  }, [invalidateRequests]);
 
   const value: InlineCompleteContextValue = {
     isEnabled: enabled,
