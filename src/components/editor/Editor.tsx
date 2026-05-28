@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import CodeMirror, { ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
@@ -16,6 +16,39 @@ import { detectLanguage } from '../../types/inline-complete';
 import styles from './Editor.module.css';
 
 // ============================================================================
+// Keyboard extension for inline completion (runs inside CodeMirror)
+// ============================================================================
+const inlineCompletionKeymap = EditorView.domEventHandlers({
+  keydown(event, view) {
+    if (!view) return false;
+
+    const storeState = useInlineCompleteStore.getState();
+    const { currentCompletion, clearCompletion } = storeState;
+
+    // Escape - Dismiss completion (priority over diff mode)
+    if (event.key === 'Escape' && currentCompletion) {
+      event.preventDefault();
+      clearCompletion();
+      return true;
+    }
+
+    // Tab - Accept completion (priority over diff mode)
+    if (event.key === 'Tab' && currentCompletion) {
+      event.preventDefault();
+      const cursorPosition = view.state.selection.main.head;
+      clearCompletion();
+      view.dispatch({
+        changes: { from: cursorPosition, insert: currentCompletion.text },
+        selection: { anchor: cursorPosition + currentCompletion.text.length },
+      });
+      return true;
+    }
+
+    return false;
+  },
+});
+
+// ============================================================================
 // Editor Content Component (inside Provider) - CAN use useInlineComplete
 // ============================================================================
 const EditorContent: React.FC<{
@@ -31,7 +64,7 @@ const EditorContent: React.FC<{
     updateTabDirty,
   } = useEditorStore();
   const { selectedFile } = useSidebarStore();
-  const { triggerCompletion } = useInlineComplete(); // Now inside Provider!
+  const { triggerCompletion } = useInlineComplete();
 
   // Get current document state from store
   const currentDoc = selectedFile ? documentContents[selectedFile] : null;
@@ -135,72 +168,77 @@ const EditorContent: React.FC<{
     }
   }, [selectedFile, setSelection, setEditorState]);
 
-  // Keyboard shortcuts handler
-  const handleKeyDown = useCallback((e: KeyboardEvent) => {
-    const view = editorRef.current?.view;
-    if (!view) return;
-
-    const { currentCompletion, clearCompletion } = useInlineCompleteStore.getState();
-
-    // Cmd/Ctrl+S - Save
-    if ((e.metaKey || e.ctrlKey) && e.key === 's') {
-      e.preventDefault();
-      handleSave();
-      return;
-    }
-
-    // Tab - Accept existing completion
-    if (e.key === 'Tab' && currentCompletion) {
-      e.preventDefault();
-      const completion = currentCompletion;
-      const cursorPosition = view.state.selection.main.head;
-      clearCompletion();
-      view.dispatch({
-        changes: { from: cursorPosition, insert: completion.text },
-        selection: { anchor: cursorPosition + completion.text.length },
-      });
-      return;
-    }
-
-    // Escape - Dismiss completion
-    if (e.key === 'Escape' && currentCompletion) {
-      e.preventDefault();
-      clearCompletion();
-      return;
-    }
-
-    // Diff mode: Tab to apply hunk
-    if (e.key === 'Tab' && isDiffMode) {
-      e.preventDefault();
-      const { applyHunk } = useEditorStore.getState();
-      const currentDoc = documentContents[selectedFile || ''];
-      if (currentDoc?.diffHunks?.length > 0) {
-        const activeIndex = currentDoc.activeHunkIndex || 0;
-        applyHunk(selectedFile!, currentDoc.diffHunks[activeIndex].id);
-      }
-      return;
-    }
-
-    // Diff mode: Escape to reject
-    if (e.key === 'Escape' && isDiffMode) {
-      e.preventDefault();
-      const { rejectHunk, clearDiff } = useEditorStore.getState();
-      const currentDoc = documentContents[selectedFile || ''];
-      if (currentDoc?.diffHunks?.length > 0) {
-        const activeIndex = currentDoc.activeHunkIndex || 0;
-        rejectHunk(selectedFile!, currentDoc.diffHunks[activeIndex].id);
-      } else {
-        clearDiff(selectedFile!);
-      }
-      return;
-    }
-  }, [isDiffMode, documentContents, selectedFile, handleSave, editorRef]);
-
-  // Register keyboard handler
+  // Keyboard shortcuts for Save (Cmd/Ctrl+S)
   useEffect(() => {
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleKeyDown]);
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+        e.preventDefault();
+        handleSave();
+      }
+    };
+
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [handleSave]);
+
+  // Create keymap extensions
+  const keymapExtensions = useMemo(() => {
+    const bindings = [];
+
+    // Tab handler for diff mode (lower priority - checked after inline completion)
+    bindings.push({
+      key: 'Tab',
+      run: () => {
+        const storeState = useInlineCompleteStore.getState();
+        // If we have a completion, let the domEventHandler handle it
+        if (storeState.currentCompletion) return false;
+
+        // Diff mode Tab handling
+        const state = useEditorStore.getState();
+        const selectedFile = useSidebarStore.getState().selectedFile;
+        if (!selectedFile) return false;
+
+        const currentDoc = state.documentContents[selectedFile];
+        if (currentDoc?.isDiffMode && currentDoc.diffHunks?.length > 0) {
+          const activeIndex = currentDoc.activeHunkIndex || 0;
+          state.applyHunk(selectedFile, currentDoc.diffHunks[activeIndex].id);
+          return true;
+        }
+
+        return false;
+      },
+    });
+
+    // Escape handler for diff mode
+    bindings.push({
+      key: 'Escape',
+      run: () => {
+        const storeState = useInlineCompleteStore.getState();
+        // If we have a completion, let the domEventHandler handle it
+        if (storeState.currentCompletion) return false;
+
+        // Diff mode Escape handling
+        const state = useEditorStore.getState();
+        const selectedFile = useSidebarStore.getState().selectedFile;
+        if (!selectedFile) return false;
+
+        const currentDoc = state.documentContents[selectedFile];
+        if (currentDoc?.isDiffMode) {
+          if (currentDoc.diffHunks?.length > 0) {
+            const activeIndex = currentDoc.activeHunkIndex || 0;
+            state.rejectHunk(selectedFile, currentDoc.diffHunks[activeIndex].id);
+          } else {
+            state.clearDiff(selectedFile);
+          }
+          return true;
+        }
+
+        return false;
+      },
+    });
+
+    return keymap.of(bindings);
+  }, []);
 
   return (
     <div className={styles.editorContainer}>
@@ -221,6 +259,10 @@ const EditorContent: React.FC<{
               ...historyKeymap,
               ...searchKeymap,
             ]),
+            // Inline completion key handler (highest priority)
+            inlineCompletionKeymap,
+            // Custom keymap for diff mode
+            keymapExtensions,
             EditorView.theme({
               '&': {
                 height: '100%',
@@ -275,7 +317,7 @@ const EditorContent: React.FC<{
             crosshairCursor: false,
             highlightActiveLine: false,
             highlightSelectionMatches: true,
-            closeBracketsKeymap: true,
+            closeBracketsKeymap: false, // Disabled to prevent conflict
             searchKeymap: true,
             foldKeymap: true,
             completionKeymap: true,

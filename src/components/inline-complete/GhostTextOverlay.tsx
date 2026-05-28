@@ -66,17 +66,14 @@ export function GhostTextOverlay({ editorRef }: GhostTextOverlayProps) {
       rafIdRef.current = requestAnimationFrame(updatePosition);
     };
 
-    // Listen to keyup for cursor movement detection (keyup fires after selection is updated)
-    view.dom.addEventListener('keyup', scheduleUpdate);
-    // Also listen to mouse clicks for cursor movement
-    view.dom.addEventListener('mouseup', scheduleUpdate);
+    // Listen to keydown for cursor movement detection
+    view.dom.addEventListener('keydown', scheduleUpdate);
 
     // Initial position
     updatePosition();
 
     return () => {
-      view.dom.removeEventListener('keyup', scheduleUpdate);
-      view.dom.removeEventListener('mouseup', scheduleUpdate);
+      view.dom.removeEventListener('keydown', scheduleUpdate);
       cancelAnimationFrame(rafIdRef.current);
     };
   }, [editorRef, hasCompletion]);
