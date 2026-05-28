@@ -66,6 +66,10 @@ const EditorContent: React.FC<{
   const { selectedFile } = useSidebarStore();
   const { triggerCompletion } = useInlineComplete();
 
+  // Ref for triggerCompletion to avoid effect re-runs
+  const triggerCompletionRef = useRef(triggerCompletion);
+  triggerCompletionRef.current = triggerCompletion;
+
   // Get current document state from store
   const currentDoc = selectedFile ? documentContents[selectedFile] : null;
   const currentContent = currentDoc?.content || '';
@@ -75,6 +79,7 @@ const EditorContent: React.FC<{
   const selection = currentDoc?.selection || null;
 
   // Auto-trigger completion when typing (debounced)
+  // Only depends on selectedFile and currentContent to minimize re-runs
   useEffect(() => {
     if (!selectedFile || !currentContent) return;
 
@@ -90,17 +95,17 @@ const EditorContent: React.FC<{
       if (currentCompletion && triggerPosition === cursorPosition) return;
       if (enabled) {
         console.log('[Editor] Auto-triggering completion at position', cursorPosition);
-        triggerCompletion({
+        triggerCompletionRef.current({
           document: currentContent,
           cursorPosition,
           language: detectLanguage(selectedFile || undefined),
           filePath: selectedFile,
         });
       }
-    }, 800); // Increased debounce to 800ms to reduce API calls
+    }, 1500); // 1.5s debounce to reduce API calls and improve performance
 
     return () => clearTimeout(timer);
-  }, [currentContent, selectedFile, triggerCompletion, editorRef]);
+  }, [currentContent, selectedFile, editorRef]);
 
   // Load document when file is selected
   useEffect(() => {
