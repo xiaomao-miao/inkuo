@@ -71,8 +71,9 @@ const EditorContent: React.FC<{
   const triggerCompletionRef = useRef(triggerCompletion);
   triggerCompletionRef.current = triggerCompletion;
 
-  // Track last selected file to detect file switches
+  // Track last selected file and switch time
   const lastSelectedFileRef = useRef<string | null>(null);
+  const lastFileSwitchTimeRef = useRef<number>(0);
 
   // Get current document state from store
   const currentDoc = selectedFile ? documentContents[selectedFile] : null;
@@ -82,32 +83,30 @@ const EditorContent: React.FC<{
   const isDiffMode = currentDoc?.isDiffMode || false;
   const selection = currentDoc?.selection || null;
 
-  // Clear completion when switching files
+  // Clear completion and track file switch time
   useEffect(() => {
     if (selectedFile !== lastSelectedFileRef.current) {
       lastSelectedFileRef.current = selectedFile;
+      lastFileSwitchTimeRef.current = Date.now();
       // Clear any existing completion when switching files
       useInlineCompleteStore.getState().clearCompletion();
     }
   }, [selectedFile]);
 
-  // Auto-trigger completion only on actual typing (not file switch)
+  // Auto-trigger completion on typing (skip shortly after file switch)
   useEffect(() => {
     if (!selectedFile || !currentContent) return;
 
-    // Ref to track if this is triggered by actual typing
-    let lastContentLength = currentContent.length;
-
     const timer = setTimeout(() => {
-      const view = editorRef.current?.view;
-      if (!view) return;
-
-      // Only trigger if content actually changed (user typed)
-      const currentContentLength = view.state.doc.length;
-      if (currentContentLength <= lastContentLength + 5) {
-        // Content didn't change much, likely a file switch
+      // Skip if file was just switched (within 2 seconds)
+      const timeSinceSwitch = Date.now() - lastFileSwitchTimeRef.current;
+      if (timeSinceSwitch < 2000) {
+        console.log('[Editor] Skipping auto-trigger due to recent file switch');
         return;
       }
+
+      const view = editorRef.current?.view;
+      if (!view) return;
 
       const cursorPosition = view.state.selection.main.head;
       const { isLoading, currentCompletion, enabled, triggerPosition } = useInlineCompleteStore.getState();
