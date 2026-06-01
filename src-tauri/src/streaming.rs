@@ -85,6 +85,17 @@ pub struct StreamPayload {
     /// Diff summary (file name, line counts, hunks) for UI display
     #[serde(skip_serializing_if = "Option::is_none")]
     pub diff_summary: Option<FileDiffSummary>,
+
+    /// Office file that was modified (path -> format: "xlsx" or "docx")
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub office_file_modified: Option<OfficeFileModified>,
+}
+
+/// Metadata about an Office file that was modified
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OfficeFileModified {
+    pub path: String,
+    pub format: String,
 }
 
 impl Default for StreamPayload {
@@ -105,6 +116,7 @@ impl Default for StreamPayload {
             original_content: None,
             new_content: None,
             diff_summary: None,
+            office_file_modified: None,
         }
     }
 }
@@ -127,6 +139,7 @@ impl StreamPayload {
             original_content: None,
             new_content: None,
             diff_summary: None,
+            office_file_modified: None,
         }
     }
 
@@ -147,6 +160,7 @@ impl StreamPayload {
             original_content: None,
             new_content: None,
             diff_summary: None,
+            office_file_modified: None,
         }
     }
 
@@ -173,6 +187,7 @@ impl StreamPayload {
             original_content: None,
             new_content: None,
             diff_summary: None,
+            office_file_modified: None,
         }
     }
 
@@ -200,6 +215,7 @@ impl StreamPayload {
             original_content: None,
             new_content: None,
             diff_summary: None,
+            office_file_modified: None,
         }
     }
 
@@ -220,6 +236,7 @@ impl StreamPayload {
             original_content: None,
             new_content: None,
             diff_summary: None,
+            office_file_modified: None,
         }
     }
 }

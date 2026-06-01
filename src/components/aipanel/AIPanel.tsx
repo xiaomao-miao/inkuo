@@ -387,6 +387,7 @@ export const AIPanel: React.FC = () => {
             tool_name,
             tool_args,
             diff_summary,
+            office_file_modified,
           } = payload;
 
           if (!payload || !session_id || !message_id) return;
@@ -514,6 +515,18 @@ export const AIPanel: React.FC = () => {
               outputItems: [],
             };
             addMessage(session_id, toolMessage);
+
+            // Refresh the editor buffer if the agent wrote an Office file
+            if (office_file_modified) {
+              const { path, format } = office_file_modified;
+              const { invalidateOfficeBuffer } = useEditorStore.getState();
+              const { setOpenTabDirty } = useSidebarStore.getState();
+              // Increment version counter so OfficeViewer re-reads the file from disk
+              invalidateOfficeBuffer(path);
+              // Clear dirty flag since the file on disk matches what was written
+              setOpenTabDirty(path, false);
+              console.log('[Office] Buffer invalidated for re-read:', path, 'format:', format);
+            }
             return;
           }
 

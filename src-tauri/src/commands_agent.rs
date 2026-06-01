@@ -230,6 +230,7 @@ pub async fn ai_agent_stream(
                     original_content: None,
                     new_content: None,
                     diff_summary: None,
+                    office_file_modified: None,
                 },
             );
         }
@@ -262,6 +263,7 @@ pub async fn ai_agent_stream(
                     original_content: None,
                     new_content: None,
                     diff_summary: None,
+                    office_file_modified: None,
                 },
             );
         }

@@ -19,6 +19,7 @@ mod streaming;
 mod openai_stream;
 mod file_watcher;
 mod inline_complete;
+mod office;
 pub mod agent;
 
 pub use document::*;
@@ -117,6 +118,8 @@ pub fn run() {
             inline_complete::get_inline_completion_state,
             commands::read_office_file,
             commands::write_office_file,
+            commands::read_office_text,
+            commands::write_office_text,
         ])
         .run(tauri::generate_context!())
         .expect("error while running inkuo application");

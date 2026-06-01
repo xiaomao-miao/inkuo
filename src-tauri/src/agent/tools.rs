@@ -15,6 +15,8 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use thiserror::Error;
 
+use crate::commands;
+
 #[derive(Error, Debug)]
 pub enum ToolError {
     #[error("Tool not found: {0}")]
@@ -220,6 +222,8 @@ pub enum ToolExecutor {
     ListDir(ListDirTool),
     Glob(GlobTool),
     Grep(GrepTool),
+    ReadOfficeFile(ReadOfficeFileTool),
+    WriteOfficeFile(WriteOfficeFileTool),
 }
 
 impl ToolExecutor {
@@ -231,6 +235,8 @@ impl ToolExecutor {
             ToolExecutor::ListDir(_) => "list_dir",
             ToolExecutor::Glob(_) => "glob",
             ToolExecutor::Grep(_) => "grep",
+            ToolExecutor::ReadOfficeFile(_) => "read_office_file",
+            ToolExecutor::WriteOfficeFile(_) => "write_office_file",
         }
     }
 
@@ -242,6 +248,8 @@ impl ToolExecutor {
             ToolExecutor::ListDir(t) => t.definition(),
             ToolExecutor::Glob(t) => t.definition(),
             ToolExecutor::Grep(t) => t.definition(),
+            ToolExecutor::ReadOfficeFile(t) => t.definition(),
+            ToolExecutor::WriteOfficeFile(t) => t.definition(),
         }
     }
 
@@ -253,6 +261,8 @@ impl ToolExecutor {
             ToolExecutor::ListDir(t) => t.execute(arguments, workspace).await,
             ToolExecutor::Glob(t) => t.execute(arguments, workspace).await,
             ToolExecutor::Grep(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::ReadOfficeFile(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::WriteOfficeFile(t) => t.execute(arguments, workspace).await,
         }
     }
 }
@@ -747,6 +757,180 @@ async fn grep_directory_traverse(
 }
 
 // ============================================================================
+// Office File Tools
+// ============================================================================
+
+/// Read Office file tool - reads Word (.docx) and Excel (.xlsx) files as text
+pub struct ReadOfficeFileTool;
+
+impl ReadOfficeFileTool {
+    pub fn new() -> Self {
+        Self
+    }
+
+    pub fn definition(&self) -> ToolDefinition {
+        ToolDefinition::new(
+            "read_office_file",
+            "Read a Word (.docx) or Excel (.xlsx) file and extract its content as readable text. Use this when you need to understand the contents of a Word document or Excel spreadsheet. The output includes the full text content, structured data, and a JSON representation for programmatic editing.",
+            ToolParameters::new(
+                vec!["path"],
+                vec![
+                    ("path", "string", Some("Absolute path to the .docx or .xlsx file to read")),
+                ],
+            ),
+        )
+    }
+
+    pub async fn execute(&self, arguments: Value, workspace: Option<String>) -> Result<String, ToolError> {
+        let path = arguments["path"]
+            .as_str()
+            .ok_or_else(|| ToolError::InvalidArguments("read_office_file".to_string(), "path must be a string".into()))?;
+
+        validate_workspace_path(path, &workspace)?;
+
+        let path_obj = std::path::Path::new(path);
+        let extension = path_obj
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+
+        if !matches!(extension.as_str(), "docx" | "xlsx") {
+            return Err(ToolError::InvalidArguments(
+                "read_office_file".to_string(),
+                format!(
+                    "Unsupported file type: '{}'. Only .docx and .xlsx files are supported.",
+                    extension
+                ),
+            ));
+        }
+
+        let bytes = tokio::fs::read(path)
+            .await
+            .map_err(|e| ToolError::IoError(format!("Failed to read file {}: {}", path, e)))?;
+
+        let result = crate::office::read_office_file(path_obj)
+            .map_err(|e| ToolError::ExecutionError(format!("Failed to parse office file: {}", e)))?;
+
+        let (file_type, text_content) = result;
+
+        let response = match file_type {
+            crate::office::OfficeFileType::Word(doc) => {
+                let json = serde_json::to_string(&doc)
+                    .map_err(|e| ToolError::ExecutionError(format!("JSON serialization failed: {}", e)))?;
+                serde_json::json!({
+                    "file_type": "docx",
+                    "file_name": path_obj.file_name().and_then(|n| n.to_str()).unwrap_or("unknown"),
+                    "text_content": text_content,
+                    "json_content": json,
+                    "note": "To modify this document, produce a modified JSON representation and use the frontend to save. You can describe the changes you want to make."
+                }).to_string()
+            }
+            crate::office::OfficeFileType::Excel(workbook) => {
+                let json = serde_json::to_string(&workbook)
+                    .map_err(|e| ToolError::ExecutionError(format!("JSON serialization failed: {}", e)))?;
+                serde_json::json!({
+                    "file_type": "xlsx",
+                    "file_name": path_obj.file_name().and_then(|n| n.to_str()).unwrap_or("unknown"),
+                    "sheets": workbook.sheets.iter().map(|s| s.name.clone()).collect::<Vec<_>>(),
+                    "text_content": text_content,
+                    "json_content": json,
+                    "note": "To modify this spreadsheet, produce a modified JSON representation. The frontend will handle saving."
+                }).to_string()
+            }
+        };
+
+        Ok(response)
+    }
+}
+
+impl Default for ReadOfficeFileTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ============================================================================
+// WriteOfficeFile Tool
+// ============================================================================
+
+pub struct WriteOfficeFileTool;
+
+impl WriteOfficeFileTool {
+    pub fn new() -> Self {
+        Self
+    }
+
+    pub fn definition(&self) -> ToolDefinition {
+        ToolDefinition::new(
+            "write_office_file",
+            "Write a modified Word (.docx) or Excel (.xlsx) file from a JSON representation. Use this after read_office_file to apply modifications.",
+            ToolParameters::new(
+                vec!["path", "json_content"],
+                vec![
+                    ("path", "string", Some("Absolute path to the office file to write")),
+                    ("json_content", "string", Some("JSON representation of the modified document (from read_office_file response)")),
+                ],
+            ),
+        )
+    }
+
+    pub async fn execute(&self, arguments: Value, workspace: Option<String>) -> Result<String, ToolError> {
+        let path = arguments["path"]
+            .as_str()
+            .ok_or_else(|| ToolError::InvalidArguments("write_office_file".to_string(), "path must be a string".into()))?;
+
+        let json_content = arguments["json_content"]
+            .as_str()
+            .ok_or_else(|| ToolError::InvalidArguments("write_office_file".to_string(), "json_content must be a string".into()))?;
+
+        validate_workspace_path(path, &workspace)?;
+
+        let path_obj = std::path::Path::new(path);
+        let extension = path_obj
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+
+        if !matches!(extension.as_str(), "docx" | "xlsx") {
+            return Err(ToolError::InvalidArguments(
+                "write_office_file".to_string(),
+                format!(
+                    "Unsupported file type: '{}'. Only .docx and .xlsx files are supported.",
+                    extension
+                ),
+            ));
+        }
+
+        // First validate the JSON can be parsed
+        match extension.as_str() {
+            "xlsx" => {
+                let _: crate::office::ExcelWorkbook = serde_json::from_str(json_content)
+                    .map_err(|e| ToolError::InvalidArguments("write_office_file".to_string(), format!("Invalid Excel JSON: {}", e)))?;
+            }
+            "docx" => {
+                let _: crate::office::WordDocument = serde_json::from_str(json_content)
+                    .map_err(|e| ToolError::InvalidArguments("write_office_file".to_string(), format!("Invalid Word JSON: {}", e)))?;
+            }
+            _ => unreachable!(),
+        }
+
+        // Write the file using the office module
+        crate::office::write_office_file(path_obj, json_content)
+            .map_err(|e| ToolError::ExecutionError(format!("Failed to write office file: {}", e)))?;
+
+        Ok(format!("Successfully wrote office file: {}", path))
+    }
+}
+
+impl Default for WriteOfficeFileTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ============================================================================
 // Tool Registry
 // ============================================================================
 
@@ -785,6 +969,7 @@ impl ToolRegistry {
             ToolExecutor::ListDir(ListDirTool::new()),
             ToolExecutor::Glob(GlobTool::new()),
             ToolExecutor::Grep(GrepTool::new()),
+            ToolExecutor::ReadOfficeFile(ReadOfficeFileTool::new()),
         ];
 
         for tool in tools {
@@ -814,6 +999,8 @@ impl ToolRegistry {
             ToolExecutor::ListDir(ListDirTool::new()),
             ToolExecutor::Glob(GlobTool::new()),
             ToolExecutor::Grep(GrepTool::new()),
+            ToolExecutor::ReadOfficeFile(ReadOfficeFileTool::new()),
+            ToolExecutor::WriteOfficeFile(WriteOfficeFileTool::new()),
         ];
 
         for tool in tools {
@@ -859,7 +1046,7 @@ impl ToolRegistry {
         // Check if this is a file modification tool
         let is_file_modification = matches!(
             tool_call.name.as_str(),
-            "write_file" | "edit_file"
+            "write_file" | "edit_file" | "write_office_file"
         );
 
         // For file modification tools, we need to capture original content

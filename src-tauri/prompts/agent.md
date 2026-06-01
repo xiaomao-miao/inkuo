@@ -36,6 +36,20 @@ Find all files matching a glob pattern (e.g., `**/*.md`, `docs/**/*.{txt,md}`).
 Search for lines containing a pattern in files. Supports regex.
 - **Parameters**: `pattern` (string, required), `paths` (array of strings, required), `case_sensitive` (boolean, optional)
 
+### read_office_file
+Read a Word (.docx) or Excel (.xlsx) file and extract its content as readable text with JSON representation.
+- **Parameters**: `path` (string, required)
+- **Output**: Returns `text_content` (human-readable text), `json_content` (structured data), and `sheet_names` (for Excel).
+- **Supported formats**: `.docx` (Word documents) and `.xlsx` (Excel spreadsheets)
+- **Note**: For Excel files, you can see all sheet names. Output is limited to 100 rows per sheet to avoid token limits.
+
+### write_office_file
+Write a modified Word (.docx) or Excel (.xlsx) file from a JSON representation.
+- **Parameters**: `path` (string, required), `json_content` (string, required)
+- **Input**: Pass the modified `json_content` you received from `read_office_file` (or a modified version of it).
+- **Supported formats**: `.docx` and `.xlsx`
+- **Note**: Use this after `read_office_file` to apply modifications. The file will be written directly to disk.
+
 ## Core Behavioral Rules
 
 <tool_calling_rules>
@@ -258,9 +272,14 @@ Keep summaries short and non-repetitive. If the user wants details, they can see
 <read_only_vs_full>
 This prompt is for **Agent Mode** (full read/write access).
 
-For **Ask Mode** (read-only), the AI has tools limited to `read_file`, `list_dir`, `glob`, and `grep`.
+For **Ask Mode** (read-only), the AI has tools limited to `read_file`, `read_office_file`, `list_dir`, `glob`, and `grep`.
 
 For **Plan Mode** (read-only planning), the AI outputs structured plans without implementing.
+
+**Office Document Workflow**: To modify a Word or Excel file:
+1. Call `read_office_file` to get `text_content` and `json_content`
+2. Analyze and understand the content
+3. Call `write_office_file` with the modified `json_content` to save changes back to disk
 </read_only_vs_full>
 
 ## Example Workflow

@@ -19,7 +19,7 @@ use super::tools::{ToolCall, SharedToolRegistry};
 use crate::ai::{AIConfig, AIProvider};
 use crate::commands::STREAM_CANCELLED;
 use crate::diff;
-use crate::streaming::{StreamPayload, FileDiffSummary, StreamDiffHunk, StreamDiffChange};
+use crate::streaming::{StreamPayload, FileDiffSummary, StreamDiffHunk, StreamDiffChange, OfficeFileModified};
 
 /// Check if a session has been cancelled
 fn is_session_cancelled(session_id: &str) -> bool {
@@ -299,6 +299,7 @@ impl AgentExecutor {
                     original_content: None,
                     new_content: None,
                     diff_summary: None,
+                    office_file_modified: None,
                 });
 
                 // Execute tool
@@ -353,6 +354,27 @@ impl AgentExecutor {
                     None
                 };
 
+                // Detect if write_office_file succeeded (non-error, has path)
+                let office_file_modified: Option<OfficeFileModified> = if !result.is_error
+                    && parsed.name == "write_office_file"
+                {
+                    if let Some(path) = result.file_path.as_ref() {
+                        let format = std::path::Path::new(path)
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .unwrap_or("")
+                            .to_lowercase();
+                        Some(OfficeFileModified {
+                            path: path.clone(),
+                            format,
+                        })
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
                 // Emit tool result event (includes diff info for file modifications)
                 on_event(StreamPayload {
                     session_id: session_id.to_string(),
@@ -371,6 +393,7 @@ impl AgentExecutor {
                     original_content: result.original_content.clone(),
                     new_content: result.new_content.clone(),
                     diff_summary,
+                    office_file_modified,
                 });
 
                 // Add tool result to message history
@@ -539,6 +562,7 @@ impl AgentExecutor {
                                     original_content: None,
                                     new_content: None,
                                     diff_summary: None,
+                                    office_file_modified: None,
                                 });
                             }
                             // Also handle reasoning_content (DeepSeek's thinking)
@@ -561,6 +585,7 @@ impl AgentExecutor {
                                         original_content: None,
                                         new_content: None,
                                         diff_summary: None,
+                                        office_file_modified: None,
                                     });
                                 }
                             }

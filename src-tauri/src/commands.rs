@@ -872,3 +872,52 @@ pub async fn write_office_file(path: String, data: Vec<u8>) -> Result<(), String
     tracing::info!("Writing office file: {}", path);
     std::fs::write(&path, &data).map_err(|e| format!("Failed to write file: {}", e))
 }
+
+use crate::office;
+
+#[tauri::command]
+pub async fn read_office_text(path: String) -> Result<OfficeFileResult, String> {
+    tracing::info!("Reading office file as text: {}", path);
+
+    let result = office::read_office_file(std::path::Path::new(&path))
+        .map_err(|e| format!("Failed to read office file: {}", e))?;
+
+    let (file_type, text_content) = result;
+
+    match file_type {
+        office::OfficeFileType::Word(doc) => Ok(OfficeFileResult {
+            file_type: "docx".to_string(),
+            text_content,
+            json_content: serde_json::to_string(&doc).unwrap_or_default(),
+            sheet_names: None,
+        }),
+        office::OfficeFileType::Excel(workbook) => Ok(OfficeFileResult {
+            file_type: "xlsx".to_string(),
+            text_content,
+            json_content: serde_json::to_string(&workbook).unwrap_or_default(),
+            sheet_names: Some(workbook.sheets.iter().map(|s| s.name.clone()).collect()),
+        }),
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct OfficeFileResult {
+    pub file_type: String,
+    pub text_content: String,
+    pub json_content: String,
+    pub sheet_names: Option<Vec<String>>,
+}
+
+#[tauri::command]
+pub async fn write_office_text(
+    path: String,
+    json_content: String,
+    format: String,
+) -> Result<(), String> {
+    tracing::info!("Writing office file: {} ({})", path, format);
+
+    let path_obj = std::path::Path::new(&path);
+
+    office::write_office_file(path_obj, &json_content)
+        .map_err(|e| format!("Failed to write office file: {}", e))
+}

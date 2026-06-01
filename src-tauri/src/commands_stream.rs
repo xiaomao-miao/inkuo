@@ -54,6 +54,7 @@ pub async fn ai_chat_stream(
                     original_content: None,
                     new_content: None,
                     diff_summary: None,
+                    office_file_modified: None,
                 },
             );
         })
@@ -81,6 +82,7 @@ pub async fn ai_chat_stream(
                 original_content: None,
                 new_content: None,
                 diff_summary: None,
+                office_file_modified: None,
             },
         );
         return Err(format!("AI error: {}", e));
@@ -105,6 +107,7 @@ pub async fn ai_chat_stream(
                 original_content: None,
                 new_content: None,
                 diff_summary: None,
+                office_file_modified: None,
             },
         );
         return Ok(());
@@ -128,6 +131,7 @@ pub async fn ai_chat_stream(
             original_content: None,
             new_content: None,
             diff_summary: None,
+            office_file_modified: None,
         },
     );
 
@@ -190,6 +194,7 @@ pub async fn ai_edit_stream(
                     original_content: None,
                     new_content: None,
                     diff_summary: None,
+                    office_file_modified: None,
                 },
             );
         })
@@ -215,6 +220,7 @@ pub async fn ai_edit_stream(
                 original_content: None,
                 new_content: None,
                 diff_summary: None,
+                office_file_modified: None,
             },
         );
         return Ok(());
@@ -238,6 +244,7 @@ pub async fn ai_edit_stream(
             original_content: None,
             new_content: None,
             diff_summary: None,
+            office_file_modified: None,
         },
     );
 
