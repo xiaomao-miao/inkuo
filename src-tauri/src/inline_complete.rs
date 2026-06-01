@@ -10,6 +10,9 @@ use serde::{Deserialize, Serialize};
 use crate::ai::{AIProviderAdapter, AIConfig, AIError};
 use crate::commands::AppState;
 use tauri::State;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 /// Request for inline completion
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -118,6 +121,9 @@ pub struct InlineCompletionState {
     /// Error message if any
     pub error: Option<String>,
 }
+
+static INLINE_CANCEL_SEQ: AtomicU64 = AtomicU64::new(0);
+static INLINE_CANCEL_GUARD: once_cell::sync::Lazy<Arc<Mutex<()>>> = once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(())));
 
 /// Extract context around cursor position
 fn extract_context(document: &str, cursor_pos: usize, context_lines: usize) -> (String, usize) {
@@ -348,11 +354,17 @@ pub async fn ai_inline_complete(
     request: InlineCompletionRequest,
     state: State<'_, AppState>,
 ) -> Result<InlineCompletionResponse, String> {
-    tracing::info!("[WORD-INLINE] Inline completion request - language: {}, cursor: {}, doc_len: {}, snippet: {:?}",
+    let cancel_seq_at_start = INLINE_CANCEL_SEQ.load(Ordering::SeqCst);
+    let my_guard = INLINE_CANCEL_GUARD.clone();
+    let _guard = my_guard.lock().await;
+
+    tracing::info!(
+        "[WORD-INLINE] Inline completion request - language: {}, cursor: {}, doc_len: {}, snippet: {:?}",
         request.language,
         request.cursor_position,
         request.document.len(),
-        request.snippet.as_ref().map(|s| format!("len={}", s.text.len())));
+        request.snippet.as_ref().map(|s| format!("len={}", s.text.len()))
+    );
 
     let config = state.get_ai_config().await.map_err(|e| {
         tracing::error!("Failed to get AI config: {}", e);
@@ -369,11 +381,7 @@ pub async fn ai_inline_complete(
     };
 
     // Extract context around cursor (10 lines before and after)
-    let (context, cursor_in_context) = extract_context(
-        source_text,
-        cursor_pos,
-        10
-    );
+    let (context, cursor_in_context) = extract_context(source_text, cursor_pos, 10);
 
     // Build prompt based on language
     let prompt = if request.language == "docx" {
@@ -389,6 +397,11 @@ pub async fn ai_inline_complete(
 
     tracing::debug!("Inline completion prompt:\n{}", prompt);
 
+    // If cancellation was requested while we were building prompt, stop early.
+    if INLINE_CANCEL_SEQ.load(Ordering::SeqCst) != cancel_seq_at_start {
+        return Err("cancelled".to_string());
+    }
+
     // Get completion from AI
     let raw_completion = get_completion(&config, &prompt)
         .await
@@ -396,6 +409,11 @@ pub async fn ai_inline_complete(
             tracing::error!("AI completion error: {}", e);
             format!("AI 请求失败: {}", e)
         })?;
+
+    // If cancellation was requested while waiting for the model, ignore the result.
+    if INLINE_CANCEL_SEQ.load(Ordering::SeqCst) != cancel_seq_at_start {
+        return Err("cancelled".to_string());
+    }
 
     tracing::info!("[WORD-INLINE] Received completion ({} chars)", raw_completion.len());
 
@@ -437,17 +455,19 @@ pub async fn ai_inline_complete(
         model: config.model.clone(),
         usage: None,
     };
-    tracing::info!("Returning completion: text={} ({} chars), styles={}",
+    tracing::info!(
+        "Returning completion: text={} ({} chars), styles={}",
         resp.completions[0].text,
         resp.completions[0].text.chars().count(),
-        resp.completions[0].styles.len());
+        resp.completions[0].styles.len()
+    );
     Ok(resp)
 }
 
 /// Cancel any pending completion request
 #[tauri::command]
 pub async fn ai_inline_complete_cancel() -> Result<(), String> {
-    // In a full implementation, this would cancel in-flight requests
+    INLINE_CANCEL_SEQ.fetch_add(1, Ordering::SeqCst);
     Ok(())
 }
 

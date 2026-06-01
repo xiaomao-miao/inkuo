@@ -5,6 +5,18 @@ import type { InlineCompletionRequest, InlineCompletionResponse, InlineStyle } f
 import { useInlineCompleteStore } from '../../store';
 import { showWordInlineCompletion } from './wordInlineCompletePlugin';
 
+function cancelWordInlineCompletion() {
+  const now = Date.now();
+  if (now - lastCancelInvokeTime < 120) return;
+  lastCancelInvokeTime = now;
+
+  try {
+    void invoke('ai_inline_complete_cancel');
+  } catch {
+    // ignore
+  }
+}
+
 function clampStyles(styles: InlineStyle[] | undefined, textLen: number): InlineStyle[] {
   if (!styles || styles.length === 0) return [];
 
@@ -45,6 +57,9 @@ export const wordInlineRefs = {
 };
 
 let completionTimer: ReturnType<typeof setTimeout> | null = null;
+let requestSeq = 0;
+let cancelSeq = 0;
+let lastCancelInvokeTime = 0;
 let lastAcceptTime = 0;
 
 export function markAccepted() {
@@ -64,6 +79,9 @@ function getSnippet(view: EditorView) {
 }
 
 export function scheduleWordInlineCompletion(view: EditorView, filePath: string) {
+  // Any new user input should cancel the previous completion request ASAP.
+  cancelWordInlineCompletion();
+
   const store = useInlineCompleteStore.getState();
   if (!store.enabled || store.isLoading || store.currentCompletion) return;
   if (!view.hasFocus()) return;
@@ -78,6 +96,8 @@ export function scheduleWordInlineCompletion(view: EditorView, filePath: string)
     completionTimer = null;
   }
 
+  // Only keep the latest schedule; do not touch store state here.
+  // This avoids causing heavy React re-renders during key-repeat (e.g. long-press Backspace).
   const { snippetText, cursorInSnippet, from } = getSnippet(view);
   const triggerHeadAtSchedule = view.state.selection.head;
 
@@ -89,6 +109,9 @@ export function scheduleWordInlineCompletion(view: EditorView, filePath: string)
     if (!view.hasFocus()) return;
     if (!view.state.selection.empty) return;
     if (view.state.selection.head !== triggerHeadAtSchedule) return;
+
+    const mySeq = ++requestSeq;
+    const myCancelSeq = cancelSeq;
 
     latest.setLoading(true);
     latest.setError(null);
@@ -104,6 +127,10 @@ export function scheduleWordInlineCompletion(view: EditorView, filePath: string)
         } as InlineCompletionRequest,
       });
 
+      // If a newer request started or we cancelled while waiting, ignore this response.
+      if (mySeq !== requestSeq) return;
+      if (myCancelSeq !== cancelSeq) return;
+
       const current = useInlineCompleteStore.getState();
       const headNow = view.state.selection.head;
 
@@ -114,23 +141,34 @@ export function scheduleWordInlineCompletion(view: EditorView, filePath: string)
         const item = response.completions[0];
         const text = item.text;
         const safeStyles = clampStyles(item.styles, text.length);
-        const normalizedItem = safeStyles.length > 0 ? { ...item, styles: safeStyles } : { ...item, styles: undefined };
+        const normalizedItem =
+          safeStyles.length > 0 ? { ...item, styles: safeStyles } : { ...item, styles: undefined };
 
         current.setCompletion(normalizedItem, headNow);
         showWordInlineCompletion(view, text);
-      } else {
-        current.setLoading(false);
       }
     } catch (err) {
       const current = useInlineCompleteStore.getState();
       current.setError(err instanceof Error ? err.message : String(err));
     } finally {
-      useInlineCompleteStore.getState().setLoading(false);
+      if (mySeq === requestSeq) {
+        useInlineCompleteStore.getState().setLoading(false);
+      }
     }
   }, store.debounceMs);
 }
 
 export function clearWordTimers() {
+  cancelSeq++;
+  requestSeq++;
+  cancelWordInlineCompletion();
+
+  // Best-effort cancel: if a request is in-flight, we at least ensure
+  // its response cannot update UI state.
+  if (useInlineCompleteStore.getState().isLoading) {
+    useInlineCompleteStore.getState().setLoading(false);
+  }
+
   if (completionTimer) {
     clearTimeout(completionTimer);
     completionTimer = null;

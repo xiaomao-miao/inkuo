@@ -8,6 +8,7 @@
 use serde::{Deserialize, Serialize, de::Error as DeError};
 use thiserror::Error;
 use futures_util::StreamExt;
+use once_cell::sync::Lazy;
 
 // ============================================================================
 // Prompts - loaded from markdown files at compile time
@@ -125,17 +126,20 @@ pub enum StreamEventType {
     Error,
 }
 
+static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
+    reqwest::Client::builder()
+        .pool_idle_timeout(std::time::Duration::from_secs(90))
+        .build()
+        .expect("failed to build reqwest client")
+});
+
 pub struct AIProviderAdapter {
     config: AIConfig,
-    client: reqwest::Client,
 }
 
 impl AIProviderAdapter {
     pub fn new(config: AIConfig) -> Self {
-        Self {
-            config,
-            client: reqwest::Client::new(),
-        }
+        Self { config }
     }
 
     pub async fn chat_stream<F>(
@@ -314,7 +318,7 @@ Context (optional references):
             "max_tokens": self.config.max_tokens,
         });
 
-        let response = self.client
+        let response = HTTP_CLIENT
             .post(&url)
             .header("Authorization", format!("Bearer {}", api_key))
             .header("Content-Type", "application/json")
@@ -383,7 +387,7 @@ Context (optional references):
             "stream": true,
         });
 
-        let response = self.client
+        let response = HTTP_CLIENT
             .post(&url)
             .header("Authorization", format!("Bearer {}", api_key))
             .header("Content-Type", "application/json")
@@ -467,7 +471,7 @@ Context (optional references):
             }
         });
 
-        let response = self.client
+        let response = HTTP_CLIENT
             .post(&url)
             .header("Content-Type", "application/json")
             .json(&body)
@@ -515,7 +519,7 @@ Context (optional references):
             "stream": true,
         });
 
-        let response = self.client
+        let response = HTTP_CLIENT
             .post(&url)
             .header("Authorization", format!("Bearer {}", api_key))
             .header("Content-Type", "application/json")
@@ -598,7 +602,7 @@ Context (optional references):
             "max_tokens": self.config.max_tokens,
         });
 
-        let response = self.client
+        let response = HTTP_CLIENT
             .post(&url)
             .header("Authorization", format!("Bearer {}", api_key))
             .header("Content-Type", "application/json")
@@ -663,7 +667,7 @@ Context (optional references):
             }
         });
 
-        let response = self.client
+        let response = HTTP_CLIENT
             .post(&url)
             .header("Content-Type", "application/json")
             .json(&body)
