@@ -10,10 +10,11 @@
 }
 
 .ghostText {
-  color: var(--inline-completion-color, #6b7280);
-  opacity: 0.7;
+  /* Colors use inline style from the component; these are fallback defaults */
+  color: var(--inline-completion-color, #9333ea);
+  opacity: 0.85;
   font-style: italic;
-  background-color: var(--inline-completion-bg, rgba(0, 0, 0, 0.05));
+  background-color: var(--inline-completion-bg, rgba(147, 51, 234, 0.08));
   border-radius: 2px;
   padding: 0 2px;
   font-family: var(--font-mono, monospace);
@@ -110,6 +111,18 @@
   font-style: italic;
   background-color: var(--inline-completion-bg, rgba(0, 0, 0, 0.05));
   border-radius: 2px;
+}
+
+/* Word (ProseMirror) inline completion ghost */
+:global(.inkuo-word-inline-completion-ghost) {
+  color: var(--inline-completion-color, #6b7280);
+  opacity: 0.7;
+  font-style: italic;
+  background-color: var(--inline-completion-bg, rgba(0, 0, 0, 0.05));
+  border-radius: 2px;
+  pointer-events: none;
+  user-select: none;
+  white-space: pre-wrap;
 }
 
 :global(.cm-inline-completion-active) {

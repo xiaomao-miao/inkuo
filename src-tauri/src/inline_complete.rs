@@ -37,6 +37,31 @@ pub struct InlineCompletionRequest {
     pub snippet: Option<InlineCompletionSnippet>,
 }
 
+/// Per-segment inline formatting for docx completions
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct InlineStyle {
+    #[serde(default)]
+    pub start_offset: usize,
+    #[serde(default)]
+    pub end_offset: usize,
+    #[serde(default)]
+    pub bold: Option<bool>,
+    #[serde(default)]
+    pub italic: Option<bool>,
+    #[serde(default)]
+    pub underline: Option<bool>,
+    #[serde(default)]
+    pub strikethrough: Option<bool>,
+    #[serde(default)]
+    pub color: Option<String>,
+    #[serde(default)]
+    pub highlight: Option<String>,
+    #[serde(default)]
+    pub font_size: Option<f32>,
+    #[serde(default)]
+    pub font_family: Option<String>,
+}
+
 /// A single completion item
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompletionItem {
@@ -50,6 +75,9 @@ pub struct CompletionItem {
     pub score: f32,
     /// Range info (optional)
     pub range: Option<CompletionRange>,
+    /// Per-segment styles for docx completions (optional)
+    #[serde(default)]
+    pub styles: Vec<InlineStyle>,
 }
 
 /// Range for the completion
@@ -248,13 +276,83 @@ async fn get_completion(
     Err(AIError::ModelError(last_error))
 }
 
+/// Load a prompt file from the prompts directory
+fn load_prompt(name: &str) -> String {
+    std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("prompts")
+            .join(name),
+    )
+    .unwrap_or_else(|_| {
+        tracing::warn!("Prompt file {} not found, using fallback", name);
+        String::new()
+    })
+}
+
+/// Build prompt for docx (Word) inline completion
+fn build_docx_completion_prompt(context: &str, cursor_pos: usize) -> String {
+    let prompt_template = load_prompt("docx_complete.md");
+    if prompt_template.is_empty() {
+        // Fallback minimal prompt
+        return format!(
+            r#"Complete the following document text at the cursor position.
+Only output the completion text in plain JSON format:
+{{"completion": "...", "styles": []}}
+
+Document:
+{context}
+Cursor position: {cursor_pos}
+
+Completion:"#
+        );
+    }
+
+    format!(
+        "{}\n\nDocument:\n```\n{}\n```\nCursor position: {}",
+        prompt_template, context, cursor_pos
+    )
+}
+
+/// Parse a styled docx completion from JSON response
+#[derive(Deserialize)]
+struct DocxCompletionResponse {
+    completion: String,
+    #[serde(default)]
+    styles: Vec<InlineStyle>,
+}
+
+fn parse_docx_completion(raw: &str) -> (String, Vec<InlineStyle>) {
+    // Try to extract JSON from the response
+    let trimmed = raw.trim();
+
+    // Remove markdown code blocks if present
+    let json_str = trimmed
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+
+    match serde_json::from_str::<DocxCompletionResponse>(json_str) {
+        Ok(resp) => (resp.completion, resp.styles),
+        Err(_) => {
+            // Fallback: treat the whole response as plain text
+            tracing::warn!("Failed to parse docx completion JSON, treating as plain text");
+            (trimmed.to_string(), vec![])
+        }
+    }
+}
+
 /// Main handler for inline completion request
 #[tauri::command]
 pub async fn ai_inline_complete(
     request: InlineCompletionRequest,
     state: State<'_, AppState>,
 ) -> Result<InlineCompletionResponse, String> {
-    tracing::info!("Inline completion request - language: {}, cursor: {}", request.language, request.cursor_position);
+    tracing::info!("[WORD-INLINE] Inline completion request - language: {}, cursor: {}, doc_len: {}, snippet: {:?}",
+        request.language,
+        request.cursor_position,
+        request.document.len(),
+        request.snippet.as_ref().map(|s| format!("len={}", s.text.len())));
 
     let config = state.get_ai_config().await.map_err(|e| {
         tracing::error!("Failed to get AI config: {}", e);
@@ -277,57 +375,73 @@ pub async fn ai_inline_complete(
         10
     );
 
-    // Build prompt
-    let prompt = build_completion_prompt(
-        &context,
-        cursor_in_context,
-        &request.language,
-        request.file_path.as_deref()
-    );
+    // Build prompt based on language
+    let prompt = if request.language == "docx" {
+        build_docx_completion_prompt(&context, cursor_in_context)
+    } else {
+        build_completion_prompt(
+            &context,
+            cursor_in_context,
+            &request.language,
+            request.file_path.as_deref(),
+        )
+    };
 
     tracing::debug!("Inline completion prompt:\n{}", prompt);
 
     // Get completion from AI
-    let completion = get_completion(&config, &prompt)
+    let raw_completion = get_completion(&config, &prompt)
         .await
         .map_err(|e| {
             tracing::error!("AI completion error: {}", e);
             format!("AI 请求失败: {}", e)
         })?;
 
-    tracing::info!("Received completion ({} chars)", completion.len());
+    tracing::info!("[WORD-INLINE] Received completion ({} chars)", raw_completion.len());
 
-    // Clean up the completion text
-    let completion = completion
-        .trim()
-        .trim_start_matches("```")
-        .trim_start_matches(&request.language)
-        .trim()
-        .trim_end_matches("```")
-        .trim()
-        .to_string();
+    // Parse completion based on language
+    let (completion_text, styles) = if request.language == "docx" {
+        parse_docx_completion(&raw_completion)
+    } else {
+        // Clean up code completion
+        let cleaned = raw_completion
+            .trim()
+            .trim_start_matches("```")
+            .trim_start_matches(&request.language)
+            .trim()
+            .trim_end_matches("```")
+            .trim()
+            .to_string();
+        (cleaned, vec![])
+    };
 
     // Create completion item
     let item = CompletionItem {
         id: generate_completion_id(),
-        text: completion.clone(),
+        text: completion_text.clone(),
         display_text: {
-            let chars: Vec<char> = completion.chars().collect();
+            let chars: Vec<char> = completion_text.chars().collect();
             if chars.len() > 100 {
                 chars[..100].iter().collect::<String>() + "..."
             } else {
-                completion.clone()
+                completion_text.clone()
             }
         },
-        score: 0.9, // Placeholder score
+        score: 0.9,
         range: None,
+        styles,
     };
 
-    Ok(InlineCompletionResponse {
+    let resp = InlineCompletionResponse {
         completions: vec![item],
         model: config.model.clone(),
         usage: None,
-    })
+    };
+    tracing::info!("Returning completion: text={} ({} chars), styles={}",
+        resp.completions[0].text,
+        resp.completions[0].text.chars().count(),
+        resp.completions[0].styles.len());
+    Ok(resp)
 }
 
 /// Cancel any pending completion request

@@ -1,10 +1,13 @@
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { DocxEditor, type DocxEditorRef } from '@eigenpal/docx-editor-react';
 import { ExcelGrid } from 'react-excel-lite';
 import { Save, Table2, FileText } from 'lucide-react';
 import { useKeyboardSave } from './useKeyboardSave';
-import { useSidebarStore, useEditorStore } from '../../store';
+import { useSidebarStore, useEditorStore, useInlineCompleteStore } from '../../store';
+import { scheduleWordInlineCompletion } from '../inline-complete/useWordInlineCompleteTrigger';
+import { createWordInlineCompletePlugin } from '../inline-complete/wordInlineCompletePlugin';
+import type { EditorView } from 'prosemirror-view';
 import styles from './OfficeViewer.module.css';
 import '@eigenpal/docx-editor-react/styles.css';
 
@@ -119,6 +122,36 @@ export const WordEditor: React.FC<WordEditorProps> = ({
   const editorRef = useRef<DocxEditorRef>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const hasLoadedRef = useRef(false);
+  const pmViewRef = useRef<EditorView | null>(null);
+
+  // Store the file path for the inline completion hook to access
+  (editorRef as any)._filePath = filePath;
+
+  const wordInlineCompletePlugin = useMemo(
+    () =>
+      createWordInlineCompletePlugin({
+        onUserInput: (view) => {
+          scheduleWordInlineCompletion(view, filePath);
+        },
+      }),
+    [filePath]
+  );
+
+  const enabled = true; // Word inline completion is always available
+  const currentCompletion = useInlineCompleteStore((s) => s.currentCompletion);
+  const isLoading = useInlineCompleteStore((s) => s.isLoading);
+  const inlineError = useInlineCompleteStore((s) => s.error);
+
+  // Debug: log component mount
+  useEffect(() => {
+    console.log('[WordEditor] mounted, filePath:', filePath, 'isActive:', isActive, 'pmView:', pmViewRef.current ? 'ready' : 'not ready');
+  }, []);
+
+  // Capture the ProseMirror view when it's ready
+  const handleEditorViewReady = useCallback((view: any) => {
+    pmViewRef.current = view;
+    console.log('[WordEditor] onEditorViewReady, view:', !!view, 'hasFocus:', view?.hasFocus);
+  }, []);
 
   // ── Persistent state: initialized once from the store cache ──────────────
   // Using lazy initialization: only loads from disk on first render,
@@ -279,15 +312,42 @@ export const WordEditor: React.FC<WordEditorProps> = ({
         formatIcon={<FileText size={16} />}
         editLabel="可编辑"
       />
-      <div ref={containerRef} className={styles.docxContainer}>
+      <div ref={containerRef} className={styles.docxContainer} data-ghost-container="true">
         <DocxEditor
           ref={editorRef}
           documentBuffer={documentBuffer}
           mode="editing"
           onChange={handleChange}
+          onEditorViewReady={handleEditorViewReady}
+          externalPlugins={[wordInlineCompletePlugin]}
           renderLogo={() => null}
         />
+        {/* Word inline completion ghost is rendered by ProseMirror decorations (externalPlugins) */}
       </div>
+      {enabled && (
+        <div className={styles.officeStatusBar}>
+          {isLoading && (
+            <span className={styles.inlineLoading}>
+              <span className={styles.loadingDot} />
+              <span className={styles.loadingDot} />
+              <span className={styles.loadingDot} />
+            </span>
+          )}
+          {!isLoading && currentCompletion && (
+            <span className={styles.inlineReady}>
+              <kbd>Tab</kbd> 接受 · <kbd>Esc</kbd> 拒绝
+            </span>
+          )}
+          {!isLoading && inlineError && (
+            <span className={styles.inlineError} title={inlineError}>补全失败</span>
+          )}
+          {!isLoading && !currentCompletion && !inlineError && (
+            <span className={styles.inlineHint}>
+              <kbd>Tab</kbd> AI 补全
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 };

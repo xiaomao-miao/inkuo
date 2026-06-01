@@ -23,6 +23,23 @@ export interface InlineCompletionRequest {
   };
 }
 
+/** Inline text formatting that can be applied to a completion.
+ * Offsets are character positions within the completion text. */
+export interface InlineStyle {
+  /** Start character offset (inclusive) within the completion text */
+  start_offset?: number;
+  /** End character offset (exclusive) within the completion text */
+  end_offset?: number;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  strikethrough?: boolean;
+  color?: string;
+  highlight?: string;
+  fontSize?: number;
+  fontFamily?: string;
+}
+
 /** A single completion item */
 export interface CompletionItem {
   /** Unique identifier */
@@ -35,6 +52,10 @@ export interface CompletionItem {
   score: number;
   /** Range info (optional) */
   range?: CompletionRange;
+  /** Per-segment styles for docx completions.
+   * Each element maps to a substring of `text` at the same relative offset.
+   * If omitted, the entire completion is inserted as plain text. */
+  styles?: InlineStyle[];
 }
 
 /** Range for the completion */
