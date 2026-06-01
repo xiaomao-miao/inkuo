@@ -123,6 +123,10 @@ export const WordEditor: React.FC<WordEditorProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const hasLoadedRef = useRef(false);
   const pmViewRef = useRef<EditorView | null>(null);
+  // Initialize to -1 so the first mount always passes the >= check.
+  // Incremented to >= 0 after loading completes.
+  const wordLastVersionRef = useRef(-1);
+  const hasInitializedFromCacheRef = useRef(false);
 
   // Store the file path for the inline completion hook to access
   (editorRef as any)._filePath = filePath;
@@ -168,48 +172,68 @@ export const WordEditor: React.FC<WordEditorProps> = ({
   const [isDirty, setIsDirty] = useState(false);
 
   const { setOpenTabDirty } = useSidebarStore();
+  const officeBufferVersion = useEditorStore(s => s.documentContents[filePath]?.officeBufferVersion ?? 0);
   const { setDocxBuffer } = useEditorStore();
 
-  // ── Load from disk only when initialBuffer was null (first open) ──────────
-  useEffect(() => {
-    if (hasLoadedRef.current) return;
-    hasLoadedRef.current = true;
+  // ── Re-read from disk when AI agent modified the file ─────────────────────
 
+  const loadFromDisk = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await invoke<number[]>('read_office_file', { path: filePath });
+      const buffer = new Uint8Array(data);
+      setDocumentBuffer(buffer);
+      setDocxBuffer(filePath, data);
+      setIsDirty(false);
+      setOpenTabDirty(filePath, false);
+    } catch (err) {
+      console.error('Failed to load Word document:', err);
+      setError(String(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [filePath, setOpenTabDirty, setDocxBuffer]);
+
+  // ── Load on mount and re-load when AI agent modifies the file.
+  // wordLastVersionRef tracks the version we last loaded, so both
+  // the initial mount and version-triggered invalidations are handled
+  // without double-loading.
+  useEffect(() => {
+    // Already loaded this version — skip
+    if (wordLastVersionRef.current >= officeBufferVersion) return;
+    wordLastVersionRef.current = officeBufferVersion;
+
+    // When officeBufferVersion > 0, the AI agent has written a new file.
+    // Always read from disk to get the latest content, ignoring the stale cache.
+    if (officeBufferVersion > 0) {
+      loadFromDisk();
+      return;
+    }
+
+    // Initial mount (version === 0): use cached buffer if available
     if (initialBuffer) {
+      hasInitializedFromCacheRef.current = true;
       setDocumentBuffer(initialBuffer);
       setLoading(false);
       return;
     }
 
-    // No cached buffer — load from disk
-    setLoading(true);
-    const loadDocument = async () => {
-      try {
-        const data = await invoke<number[]>('read_office_file', { path: filePath });
-        const buffer = new Uint8Array(data);
-        setDocumentBuffer(buffer);
-        setDocxBuffer(filePath, data);
-        setIsDirty(false);
-        setOpenTabDirty(filePath, false);
-      } catch (err) {
-        console.error('Failed to load Word document:', err);
-        setError(String(err));
-      } finally {
-        setLoading(false);
-      }
-    };
-    loadDocument();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    // No cached buffer — must read from disk
+    loadFromDisk();
+  }, [officeBufferVersion, initialBuffer]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── When the store cache becomes available (e.g., restored after reload) ─
-  // This fires when the prop changes from null → non-null (after localStorage restore)
+  // This fires when the prop changes from null → non-null (after localStorage restore).
+  // The version-keyed effect above may have already skipped (initialBuffer was null at that time).
   useEffect(() => {
-    if (hasLoadedRef.current && loading) {
-      hasLoadedRef.current = true;
+    if (!loading || hasInitializedFromCacheRef.current) return;
+    if (initialBuffer) {
+      hasInitializedFromCacheRef.current = true;
       setDocumentBuffer(initialBuffer);
       setLoading(false);
     }
-  }, [initialBuffer]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [initialBuffer, loading]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Sync dirty state to sidebar on mount (handles restored dirty state) ───
   useEffect(() => {
@@ -390,13 +414,55 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
   const [originalData, setOriginalData] = useState<string[][] | null>(() => initialData);
 
   const { setOpenTabDirty } = useSidebarStore();
+  const officeBufferVersion = useEditorStore(s => s.documentContents[filePath]?.officeBufferVersion ?? 0);
   const { setExcelData } = useEditorStore();
+  const excelLastVersionRef = useRef(-1);
 
-  // ── Load from disk only when no cached data ──────────────────────────────
+  // ── Re-read from disk when AI agent modified the file ─────────────────────
+  const loadFromDisk = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const fileData = await invoke<number[]>('read_office_file', { path: filePath });
+      const buffer = new Uint8Array(fileData);
+      const XLSX = await import('xlsx');
+      const workbook = XLSX.read(buffer, { type: 'array' });
+      const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+      const jsonData = XLSX.utils.sheet_to_json(firstSheet, { header: 1 }) as (string | number | null)[][];
+      const stringData = jsonData.map(row =>
+        row.map(cell => {
+          if (cell === null || cell === undefined) return '';
+          if (typeof cell === 'number') return cell.toString();
+          return String(cell);
+        })
+      );
+      setData(stringData);
+      setOriginalData(stringData);
+      setExcelData(filePath, stringData);
+      setIsDirty(false);
+      setOpenTabDirty(filePath, false);
+    } catch (err) {
+      console.error('Failed to load Excel document:', err);
+      setError(String(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [filePath, setOpenTabDirty, setExcelData]);
+
+  // ── Load on mount and re-load when AI agent modifies the file.
   useEffect(() => {
-    if (hasLoadedRef.current) return;
-    hasLoadedRef.current = true;
+    // Already loaded this version — skip
+    if (excelLastVersionRef.current >= officeBufferVersion) return;
+    excelLastVersionRef.current = officeBufferVersion;
 
+    // When officeBufferVersion > 0, the AI agent has written a new file.
+    // Always read from disk to get the latest content, ignoring the stale cache.
+    if (officeBufferVersion > 0) {
+      loadFromDisk();
+      return;
+    }
+
+    // Initial mount: use cached data if available, otherwise read from disk.
     if (initialData !== null) {
       setData(initialData);
       setOriginalData(initialData);
@@ -404,49 +470,8 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
       return;
     }
 
-    setLoading(true);
-    const loadDocument = async () => {
-      try {
-        const fileData = await invoke<number[]>('read_office_file', { path: filePath });
-        const buffer = new Uint8Array(fileData);
-
-        const XLSX = await import('xlsx');
-        const workbook = XLSX.read(buffer, { type: 'array' });
-        const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-        const jsonData = XLSX.utils.sheet_to_json(firstSheet, { header: 1 }) as (string | number | null)[][];
-
-        const stringData = jsonData.map(row =>
-          row.map(cell => {
-            if (cell === null || cell === undefined) return '';
-            if (typeof cell === 'number') return cell.toString();
-            return String(cell);
-          })
-        );
-
-        setData(stringData);
-        setOriginalData(stringData);
-        setExcelData(filePath, stringData);
-        setIsDirty(false);
-        setOpenTabDirty(filePath, false);
-      } catch (err) {
-        console.error('Failed to load Excel document:', err);
-        setError(String(err));
-      } finally {
-        setLoading(false);
-      }
-    };
-    loadDocument();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ── When store cache is restored (page reload) ───────────────────────────
-  useEffect(() => {
-    if (hasLoadedRef.current && loading && initialData !== null) {
-      hasLoadedRef.current = true;
-      setData(initialData);
-      setOriginalData(initialData);
-      setLoading(false);
-    }
-  }, [initialData]); // eslint-disable-line react-hooks/exhaustive-deps
+    loadFromDisk();
+  }, [officeBufferVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Sync dirty state to sidebar ─────────────────────────────────────────
   useEffect(() => {

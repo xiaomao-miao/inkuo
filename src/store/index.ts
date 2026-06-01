@@ -29,6 +29,8 @@ interface DocumentState {
   docxBuffer: number[] | null;
   // Excel data (cached to avoid re-reading from disk on tab switch)
   excelData: string[][] | null;
+  // Version counter: incrementing this causes OfficeViewer to re-read the file from disk
+  officeBufferVersion: number;
 }
 
 interface EditorState {
@@ -55,6 +57,10 @@ interface EditorState {
   // Word/Excel cache actions
   setDocxBuffer: (path: string, buffer: number[]) => void;
   setExcelData: (path: string, data: string[][]) => void;
+  clearDocxBuffer: (path: string) => void;
+  clearExcelData: (path: string) => void;
+  /** Incremented by AI agent when an Office file is modified, triggering a re-read. */
+  invalidateOfficeBuffer: (path: string) => void;
 }
 
 export const useEditorStore = create<EditorState>()(
@@ -75,6 +81,7 @@ export const useEditorStore = create<EditorState>()(
         isDiffMode: false,
         docxBuffer: state.documentContents[path]?.docxBuffer ?? null,
         excelData: state.documentContents[path]?.excelData ?? null,
+        officeBufferVersion: state.documentContents[path]?.officeBufferVersion ?? 0,
       }
     }
   })),
@@ -286,7 +293,26 @@ export const useEditorStore = create<EditorState>()(
 
   setDocxBuffer: (path, buffer) => set((state) => {
     const current = state.documentContents[path];
-    if (!current) return state;
+    if (!current) {
+      // Create the entry if it doesn't exist yet (first open of an Office file)
+      return {
+        documentContents: {
+          ...state.documentContents,
+          [path]: {
+            document: null,
+            content: '',
+            isDirty: false,
+            selection: null,
+            diffHunks: [],
+            activeHunkIndex: 0,
+            isDiffMode: false,
+            docxBuffer: buffer,
+            excelData: null,
+            officeBufferVersion: 0,
+          },
+        }
+      };
+    }
     return {
       documentContents: {
         ...state.documentContents,
@@ -297,11 +323,66 @@ export const useEditorStore = create<EditorState>()(
 
   setExcelData: (path, data) => set((state) => {
     const current = state.documentContents[path];
-    if (!current) return state;
+    if (!current) {
+      // Create the entry if it doesn't exist yet (first open of an Office file)
+      return {
+        documentContents: {
+          ...state.documentContents,
+          [path]: {
+            document: null,
+            content: '',
+            isDirty: false,
+            selection: null,
+            diffHunks: [],
+            activeHunkIndex: 0,
+            isDiffMode: false,
+            docxBuffer: null,
+            excelData: data,
+            officeBufferVersion: 0,
+          },
+        }
+      };
+    }
     return {
       documentContents: {
         ...state.documentContents,
         [path]: { ...current, excelData: data, isDirty: true },
+      }
+    };
+  }),
+
+  clearDocxBuffer: (path) => set((state) => {
+    const current = state.documentContents[path];
+    if (!current) return state;
+    return {
+      documentContents: {
+        ...state.documentContents,
+        [path]: { ...current, docxBuffer: null, isDirty: false },
+      }
+    };
+  }),
+
+  clearExcelData: (path) => set((state) => {
+    const current = state.documentContents[path];
+    if (!current) return state;
+    return {
+      documentContents: {
+        ...state.documentContents,
+        [path]: { ...current, excelData: null, isDirty: false },
+      }
+    };
+  }),
+
+  invalidateOfficeBuffer: (path) => set((state) => {
+    const current = state.documentContents[path];
+    if (!current) return state;
+    return {
+      documentContents: {
+        ...state.documentContents,
+        [path]: {
+          ...current,
+          officeBufferVersion: (current.officeBufferVersion ?? 0) + 1,
+        },
       }
     };
   }),
@@ -322,6 +403,7 @@ export const useEditorStore = create<EditorState>()(
               isDiffMode: doc.isDiffMode,
               docxBuffer: doc.docxBuffer,
               excelData: doc.excelData,
+              officeBufferVersion: doc.officeBufferVersion ?? 0,
             }
           ])
         ),
