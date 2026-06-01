@@ -517,8 +517,12 @@ function detectFileType(path: string): 'markdown' | 'word' | 'excel' {
 
 export const Editor: React.FC = () => {
   const editorRef = useRef<ReactCodeMirrorRef>(null);
-  const { selectedFile, activeTabId } = useSidebarStore();
+  const { selectedFile, activeTabId, openTabs } = useSidebarStore();
+  const { documentContents } = useEditorStore();
   const isSettingsTab = activeTabId === SETTINGS_TAB_ID;
+
+  // Determine active file type
+  const activeFileType = selectedFile ? detectFileType(selectedFile) : null;
 
   // Show empty state if no file selected
   if (isSettingsTab) {
@@ -529,30 +533,47 @@ export const Editor: React.FC = () => {
     return <EmptyState />;
   }
 
-  const fileType = detectFileType(selectedFile);
-
-  if (fileType === 'word') {
-    return (
-      <WordEditor
-        filePath={selectedFile}
-        fileName={selectedFile.split('/').pop() || selectedFile}
-      />
-    );
-  }
-
-  if (fileType === 'excel') {
-    return (
-      <ExcelEditor
-        filePath={selectedFile}
-        fileName={selectedFile.split('/').pop() || selectedFile}
-      />
-    );
-  }
-
-  // Default: CodeMirror for markdown/text
   return (
-    <InlineCompleteProvider>
-      <EditorContent editorRef={editorRef} />
-    </InlineCompleteProvider>
+    <>
+      {/* Always render WordEditor — keep mounted for tab-switch persistence.
+          Each editor instance is keyed by tab path. */}
+      {openTabs.map(tab => {
+        const tabFileType = detectFileType(tab.path);
+        if (tabFileType !== 'word') return null;
+        const tabCached = documentContents[tab.path]?.docxBuffer ?? null;
+        return (
+          <WordEditor
+            key={tab.id}
+            filePath={tab.path}
+            fileName={tab.name}
+            initialBuffer={tabCached ? new Uint8Array(tabCached) : null}
+            isActive={tab.path === selectedFile && activeFileType === 'word'}
+          />
+        );
+      })}
+
+      {/* Always render ExcelEditor */}
+      {openTabs.map(tab => {
+        const tabFileType = detectFileType(tab.path);
+        if (tabFileType !== 'excel') return null;
+        const tabCached = documentContents[tab.path]?.excelData ?? null;
+        return (
+          <ExcelEditor
+            key={tab.id}
+            filePath={tab.path}
+            fileName={tab.name}
+            initialData={tabCached}
+            isActive={tab.path === selectedFile && activeFileType === 'excel'}
+          />
+        );
+      })}
+
+      {/* Markdown editor - only render when active (CodeMirror is lightweight) */}
+      {activeFileType === 'markdown' && (
+        <InlineCompleteProvider>
+          <EditorContent editorRef={editorRef} />
+        </InlineCompleteProvider>
+      )}
+    </>
   );
 };

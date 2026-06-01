@@ -4,7 +4,7 @@ import { DocxEditor, type DocxEditorRef } from '@eigenpal/docx-editor-react';
 import { ExcelGrid } from 'react-excel-lite';
 import { Save, Table2, FileText } from 'lucide-react';
 import { useKeyboardSave } from './useKeyboardSave';
-import { useSidebarStore } from '../../store';
+import { useSidebarStore, useEditorStore } from '../../store';
 import styles from './OfficeViewer.module.css';
 import '@eigenpal/docx-editor-react/styles.css';
 
@@ -94,45 +94,98 @@ const OfficeToolbar: React.FC<OfficeToolbarProps> = ({
 
 // ============================================================================
 // Word Editor Component
+//
+// Key design: the component is NEVER unmounted while a tab is open. The
+// `documentBuffer` state is initialized ONCE from the `initialBuffer` prop
+// (store cache) using lazy initialization — if the prop is null it will load
+// from disk. `isActive` only controls CSS visibility, not rendering.
 // ============================================================================
 
 interface WordEditorProps {
   filePath: string;
   fileName: string;
+  /** Buffer cached in the store (survives tab switches). Lazy-initialized. */
+  initialBuffer: Uint8Array | null;
+  /** Whether this tab is currently active. Controls CSS visibility only. */
+  isActive: boolean;
 }
 
-export const WordEditor: React.FC<WordEditorProps> = ({ filePath, fileName }) => {
+export const WordEditor: React.FC<WordEditorProps> = ({
+  filePath,
+  fileName,
+  initialBuffer,
+  isActive,
+}) => {
   const editorRef = useRef<DocxEditorRef>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const [documentBuffer, setDocumentBuffer] = useState<Uint8Array | null>(null);
-  const [loading, setLoading] = useState(true);
+  const hasLoadedRef = useRef(false);
+
+  // ── Persistent state: initialized once from the store cache ──────────────
+  // Using lazy initialization: only loads from disk on first render,
+  // subsequent renders reuse the in-memory state.
+  const [documentBuffer, setDocumentBuffer] = useState<Uint8Array | null>(() => {
+    if (initialBuffer) {
+      hasLoadedRef.current = true;
+      return initialBuffer;
+    }
+    return null;
+  });
+  const [loading, setLoading] = useState<boolean>(() => initialBuffer === null);
   const [error, setError] = useState<string | null>(null);
   const [isDirty, setIsDirty] = useState(false);
+
   const { setOpenTabDirty } = useSidebarStore();
+  const { setDocxBuffer } = useEditorStore();
 
-  const handleSave = useCallback(async () => {
-    if (!isDirty) return;
-    try {
-      const savedBuffer = await editorRef.current?.save({ selective: false });
-      if (!savedBuffer) return;
-      await invoke('write_office_file', {
-        path: filePath,
-        data: Array.from(new Uint8Array(savedBuffer)),
-      });
-      setIsDirty(false);
-      setOpenTabDirty(filePath, false);
-    } catch (err) {
-      console.error('Failed to save Word document:', err);
+  // ── Load from disk only when initialBuffer was null (first open) ──────────
+  useEffect(() => {
+    if (hasLoadedRef.current) return;
+    hasLoadedRef.current = true;
+
+    if (initialBuffer) {
+      setDocumentBuffer(initialBuffer);
+      setLoading(false);
+      return;
     }
-  }, [filePath, isDirty, setOpenTabDirty]);
 
-  useKeyboardSave({ onSave: handleSave, enabled: isDirty });
+    // No cached buffer — load from disk
+    setLoading(true);
+    const loadDocument = async () => {
+      try {
+        const data = await invoke<number[]>('read_office_file', { path: filePath });
+        const buffer = new Uint8Array(data);
+        setDocumentBuffer(buffer);
+        setDocxBuffer(filePath, data);
+        setIsDirty(false);
+        setOpenTabDirty(filePath, false);
+      } catch (err) {
+        console.error('Failed to load Word document:', err);
+        setError(String(err));
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadDocument();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleChange = useCallback(() => {
-    setIsDirty(true);
-    setOpenTabDirty(filePath, true);
-  }, [filePath, setOpenTabDirty]);
+  // ── When the store cache becomes available (e.g., restored after reload) ─
+  // This fires when the prop changes from null → non-null (after localStorage restore)
+  useEffect(() => {
+    if (hasLoadedRef.current && loading) {
+      hasLoadedRef.current = true;
+      setDocumentBuffer(initialBuffer);
+      setLoading(false);
+    }
+  }, [initialBuffer]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Sync dirty state to sidebar on mount (handles restored dirty state) ───
+  useEffect(() => {
+    if (isActive && isDirty) {
+      setOpenTabDirty(filePath, true);
+    }
+  }, [isActive, isDirty]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Hide DocxEditor's top menu buttons ─────────────────────────────────
   useEffect(() => {
     if (!documentBuffer) return;
 
@@ -158,38 +211,34 @@ export const WordEditor: React.FC<WordEditorProps> = ({ filePath, fileName }) =>
     };
   }, [documentBuffer]);
 
-  useEffect(() => {
-    const loadDocument = async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        const data = await invoke<number[]>('read_office_file', { path: filePath });
-        const buffer = new Uint8Array(data);
-        setDocumentBuffer(buffer);
-        setIsDirty(false);
-        setOpenTabDirty(filePath, false);
-      } catch (err) {
-        console.error('Failed to load Word document:', err);
-        setError(String(err));
-      } finally {
-        setLoading(false);
-      }
-    };
+  // ── Save ────────────────────────────────────────────────────────────────
+  const handleSave = useCallback(async () => {
+    if (!isDirty) return;
+    try {
+      const savedBuffer = await editorRef.current?.save({ selective: false });
+      if (!savedBuffer) return;
+      const bufferArray = Array.from(new Uint8Array(savedBuffer));
+      await invoke('write_office_file', { path: filePath, data: bufferArray });
+      setDocxBuffer(filePath, bufferArray);
+      setIsDirty(false);
+      setOpenTabDirty(filePath, false);
+    } catch (err) {
+      console.error('Failed to save Word document:', err);
+    }
+  }, [filePath, isDirty, setOpenTabDirty, setDocxBuffer]);
 
-    loadDocument();
+  useKeyboardSave({ onSave: handleSave, enabled: isDirty && isActive });
+
+  const handleChange = useCallback(() => {
+    setIsDirty(true);
+    setOpenTabDirty(filePath, true);
   }, [filePath, setOpenTabDirty]);
 
+  // ── Render: CSS visibility, NOT conditional unmount ───────────────────────
   if (loading) {
     return (
-      <div className={styles.officeEditor}>
-        <OfficeToolbar
-          fileName={fileName}
-          isDirty={false}
-          onSave={handleSave}
-          canSave={false}
-          formatIcon={<FileText size={16} />}
-          editLabel="加载中..."
-        />
+      <div className={styles.officeEditor} style={{ display: isActive ? undefined : 'none' }}>
+        <OfficeToolbar fileName={fileName} isDirty={false} onSave={handleSave} canSave={false} formatIcon={<FileText size={16} />} editLabel="加载中..." />
         <div className={styles.editorLoading}>
           <div className={styles.loadingSpinner} />
           <span>正在加载 Word 文档...</span>
@@ -200,15 +249,8 @@ export const WordEditor: React.FC<WordEditorProps> = ({ filePath, fileName }) =>
 
   if (error) {
     return (
-      <div className={styles.officeEditor}>
-        <OfficeToolbar
-          fileName={fileName}
-          isDirty={false}
-          onSave={handleSave}
-          canSave={false}
-          formatIcon={<FileText size={16} />}
-          editLabel="加载失败"
-        />
+      <div className={styles.officeEditor} style={{ display: isActive ? undefined : 'none' }}>
+        <OfficeToolbar fileName={fileName} isDirty={false} onSave={handleSave} canSave={false} formatIcon={<FileText size={16} />} editLabel="加载失败" />
         <div className={styles.editorError}>
           <span>加载失败: {error}</span>
         </div>
@@ -218,15 +260,8 @@ export const WordEditor: React.FC<WordEditorProps> = ({ filePath, fileName }) =>
 
   if (!documentBuffer) {
     return (
-      <div className={styles.officeEditor}>
-        <OfficeToolbar
-          fileName={fileName}
-          isDirty={false}
-          onSave={handleSave}
-          canSave={false}
-          formatIcon={<FileText size={16} />}
-          editLabel="无文档"
-        />
+      <div className={styles.officeEditor} style={{ display: isActive ? undefined : 'none' }}>
+        <OfficeToolbar fileName={fileName} isDirty={false} onSave={handleSave} canSave={false} formatIcon={<FileText size={16} />} editLabel="无文档" />
         <div className={styles.editorError}>
           <span>无法加载文档</span>
         </div>
@@ -235,7 +270,7 @@ export const WordEditor: React.FC<WordEditorProps> = ({ filePath, fileName }) =>
   }
 
   return (
-    <div className={styles.officeEditor}>
+    <div className={styles.officeEditor} style={{ display: isActive ? undefined : 'none' }}>
       <OfficeToolbar
         fileName={fileName}
         isDirty={isDirty}
@@ -259,44 +294,58 @@ export const WordEditor: React.FC<WordEditorProps> = ({ filePath, fileName }) =>
 
 // ============================================================================
 // Excel Editor Component
+//
+// Same principle: lazy initialization from store cache, CSS visibility only,
+// never unmounts while tab is open.
 // ============================================================================
 
 interface ExcelEditorProps {
   filePath: string;
   fileName: string;
+  /** Data cached in the store (survives tab switches). Lazy-initialized. */
+  initialData: string[][] | null;
+  /** Whether this tab is currently active. Controls CSS visibility only. */
+  isActive: boolean;
 }
 
-export const ExcelEditor: React.FC<ExcelEditorProps> = ({ filePath, fileName }) => {
-  const [data, setData] = useState<string[][]>([]);
-  const [loading, setLoading] = useState(true);
+export const ExcelEditor: React.FC<ExcelEditorProps> = ({
+  filePath,
+  fileName,
+  initialData,
+  isActive,
+}) => {
+  const hasLoadedRef = useRef(false);
+
+  // Lazy initialization from store cache
+  const [data, setData] = useState<string[][] | null>(() => {
+    if (initialData !== null) {
+      hasLoadedRef.current = true;
+      return initialData;
+    }
+    return null;
+  });
+  const [loading, setLoading] = useState<boolean>(() => initialData === null);
   const [error, setError] = useState<string | null>(null);
   const [isDirty, setIsDirty] = useState(false);
-  const [originalData, setOriginalData] = useState<string[][]>([]);
+  const [originalData, setOriginalData] = useState<string[][] | null>(() => initialData);
+
   const { setOpenTabDirty } = useSidebarStore();
+  const { setExcelData } = useEditorStore();
 
-  const handleSave = useCallback(async () => {
-    if (!isDirty) return;
-    try {
-      const XLSX = await import('xlsx');
-      const worksheet = XLSX.utils.aoa_to_sheet(data);
-      const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, 'Sheet1');
-      const xlsxData = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
-      await invoke('write_office_file', { path: filePath, data: Array.from(xlsxData) });
-      setOriginalData(data);
-      setIsDirty(false);
-      setOpenTabDirty(filePath, false);
-    } catch (err) {
-      console.error('Failed to save Excel document:', err);
-    }
-  }, [filePath, data, isDirty, setOpenTabDirty]);
-
-  useKeyboardSave({ onSave: handleSave, enabled: isDirty });
-
+  // ── Load from disk only when no cached data ──────────────────────────────
   useEffect(() => {
+    if (hasLoadedRef.current) return;
+    hasLoadedRef.current = true;
+
+    if (initialData !== null) {
+      setData(initialData);
+      setOriginalData(initialData);
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
     const loadDocument = async () => {
-      setLoading(true);
-      setError(null);
       try {
         const fileData = await invoke<number[]>('read_office_file', { path: filePath });
         const buffer = new Uint8Array(fileData);
@@ -316,6 +365,7 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({ filePath, fileName }) 
 
         setData(stringData);
         setOriginalData(stringData);
+        setExcelData(filePath, stringData);
         setIsDirty(false);
         setOpenTabDirty(filePath, false);
       } catch (err) {
@@ -325,28 +375,58 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({ filePath, fileName }) 
         setLoading(false);
       }
     };
-
     loadDocument();
-  }, [filePath, setOpenTabDirty]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── When store cache is restored (page reload) ───────────────────────────
+  useEffect(() => {
+    if (hasLoadedRef.current && loading && initialData !== null) {
+      hasLoadedRef.current = true;
+      setData(initialData);
+      setOriginalData(initialData);
+      setLoading(false);
+    }
+  }, [initialData]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Sync dirty state to sidebar ─────────────────────────────────────────
+  useEffect(() => {
+    if (isActive && isDirty) {
+      setOpenTabDirty(filePath, true);
+    }
+  }, [isActive, isDirty]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleSave = useCallback(async () => {
+    if (!isDirty || !data) return;
+    try {
+      const XLSX = await import('xlsx');
+      const worksheet = XLSX.utils.aoa_to_sheet(data);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'Sheet1');
+      const xlsxData = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+      await invoke('write_office_file', { path: filePath, data: Array.from(xlsxData) });
+      setOriginalData(data);
+      setExcelData(filePath, data);
+      setIsDirty(false);
+      setOpenTabDirty(filePath, false);
+    } catch (err) {
+      console.error('Failed to save Excel document:', err);
+    }
+  }, [filePath, data, isDirty, setOpenTabDirty, setExcelData]);
+
+  useKeyboardSave({ onSave: handleSave, enabled: isDirty && isActive });
 
   const handleChange = useCallback((newData: string[][]) => {
     setData(newData);
-    const changed = JSON.stringify(newData) !== JSON.stringify(originalData);
+    const changed = JSON.stringify(newData) !== JSON.stringify(originalData ?? []);
     setIsDirty(changed);
     setOpenTabDirty(filePath, changed);
   }, [originalData, filePath, setOpenTabDirty]);
 
+  // ── Render: CSS visibility only ──────────────────────────────────────────
   if (loading) {
     return (
-      <div className={styles.officeEditor}>
-        <OfficeToolbar
-          fileName={fileName}
-          isDirty={false}
-          onSave={handleSave}
-          canSave={false}
-          formatIcon={<Table2 size={16} />}
-          editLabel="加载中..."
-        />
+      <div className={styles.officeEditor} style={{ display: isActive ? undefined : 'none' }}>
+        <OfficeToolbar fileName={fileName} isDirty={false} onSave={handleSave} canSave={false} formatIcon={<Table2 size={16} />} editLabel="加载中..." />
         <div className={styles.editorLoading}>
           <div className={styles.loadingSpinner} />
           <span>正在加载 Excel 文档...</span>
@@ -357,15 +437,8 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({ filePath, fileName }) 
 
   if (error) {
     return (
-      <div className={styles.officeEditor}>
-        <OfficeToolbar
-          fileName={fileName}
-          isDirty={false}
-          onSave={handleSave}
-          canSave={false}
-          formatIcon={<Table2 size={16} />}
-          editLabel="加载失败"
-        />
+      <div className={styles.officeEditor} style={{ display: isActive ? undefined : 'none' }}>
+        <OfficeToolbar fileName={fileName} isDirty={false} onSave={handleSave} canSave={false} formatIcon={<Table2 size={16} />} editLabel="加载失败" />
         <div className={styles.editorError}>
           <span>加载失败: {error}</span>
         </div>
@@ -373,8 +446,19 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({ filePath, fileName }) 
     );
   }
 
+  if (data === null) {
+    return (
+      <div className={styles.officeEditor} style={{ display: isActive ? undefined : 'none' }}>
+        <OfficeToolbar fileName={fileName} isDirty={false} onSave={handleSave} canSave={false} formatIcon={<Table2 size={16} />} editLabel="无数据" />
+        <div className={styles.editorError}>
+          <span>无法加载文档</span>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className={styles.officeEditor}>
+    <div className={styles.officeEditor} style={{ display: isActive ? undefined : 'none' }}>
       <OfficeToolbar
         fileName={fileName}
         isDirty={isDirty}
@@ -394,7 +478,7 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({ filePath, fileName }) 
 };
 
 // ============================================================================
-// Legacy Viewers (kept for compatibility if needed)
+// Legacy Viewers
 // ============================================================================
 
 interface WordViewerProps {

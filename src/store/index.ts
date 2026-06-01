@@ -25,6 +25,10 @@ interface DocumentState {
   diffHunks: DiffHunk[];
   activeHunkIndex: number;
   isDiffMode: boolean;
+  // Word binary buffer (cached to avoid re-reading from disk on tab switch)
+  docxBuffer: number[] | null;
+  // Excel data (cached to avoid re-reading from disk on tab switch)
+  excelData: string[][] | null;
 }
 
 interface EditorState {
@@ -48,6 +52,9 @@ interface EditorState {
   getSelection: () => string | null;
   applyDiff: (diff: { originalText: string; newText: string }) => void;
   removeDocumentContent: (path: string) => void;
+  // Word/Excel cache actions
+  setDocxBuffer: (path: string, buffer: number[]) => void;
+  setExcelData: (path: string, data: string[][]) => void;
 }
 
 export const useEditorStore = create<EditorState>()(
@@ -66,6 +73,8 @@ export const useEditorStore = create<EditorState>()(
         diffHunks: [] as any[],
         activeHunkIndex: 0,
         isDiffMode: false,
+        docxBuffer: state.documentContents[path]?.docxBuffer ?? null,
+        excelData: state.documentContents[path]?.excelData ?? null,
       }
     }
   })),
@@ -274,6 +283,28 @@ export const useEditorStore = create<EditorState>()(
     const { [path]: _, ...rest } = state.documentContents;
     return { documentContents: rest };
   }),
+
+  setDocxBuffer: (path, buffer) => set((state) => {
+    const current = state.documentContents[path];
+    if (!current) return state;
+    return {
+      documentContents: {
+        ...state.documentContents,
+        [path]: { ...current, docxBuffer: buffer, isDirty: true },
+      }
+    };
+  }),
+
+  setExcelData: (path, data) => set((state) => {
+    const current = state.documentContents[path];
+    if (!current) return state;
+    return {
+      documentContents: {
+        ...state.documentContents,
+        [path]: { ...current, excelData: data, isDirty: true },
+      }
+    };
+  }),
 }),
     {
       name: 'inkuo-editor',
@@ -289,6 +320,8 @@ export const useEditorStore = create<EditorState>()(
               diffHunks: doc.diffHunks,
               activeHunkIndex: doc.activeHunkIndex,
               isDiffMode: doc.isDiffMode,
+              docxBuffer: doc.docxBuffer,
+              excelData: doc.excelData,
             }
           ])
         ),
