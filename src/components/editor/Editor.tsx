@@ -79,7 +79,7 @@ const EditorContent: React.FC<{
     markSaved,
     updateTabDirty,
   } = useEditorStore();
-  const { selectedFile } = useSidebarStore();
+  const { selectedFile, setOpenTabDirty } = useSidebarStore();
   const { triggerCompletion } = useInlineComplete();
 
   // Ref for triggerCompletion to avoid effect re-runs
@@ -242,23 +242,33 @@ const EditorContent: React.FC<{
     provide: (f) => EditorView.decorations.from(f),
   });
 
-  // Load document when file is selected
+  // Load document when file is selected.
+  // Only load from disk if the file has no cached content in the store.
+  // This preserves unsaved changes when switching between tabs.
   useEffect(() => {
     const loadDocument = async () => {
       if (!selectedFile) return;
+
+      // If already in store (e.g., previously opened tab switching back), skip reload
+      // to preserve any unsaved edits. localStorage persistence handles page refresh.
+      const cached = documentContents[selectedFile];
+      if (cached && cached.content !== '') {
+        return;
+      }
 
       try {
         const result = await invoke<{ document: any; content: string }>('read_document', {
           path: selectedFile,
         });
         setDocumentContent(selectedFile, result.document, result.content);
+        setOpenTabDirty(selectedFile, false);
       } catch (err) {
         console.error('Failed to load document:', err);
       }
     };
 
     loadDocument();
-  }, [selectedFile, setDocumentContent]);
+  }, [selectedFile, documentContents, setDocumentContent, setOpenTabDirty]);
 
   // Save document
   const handleSave = useCallback(async () => {
@@ -271,10 +281,18 @@ const EditorContent: React.FC<{
       });
       markSaved(selectedFile);
       updateTabDirty(selectedFile, false);
+      setOpenTabDirty(selectedFile, false);
     } catch (err) {
       console.error('Failed to save document:', err);
     }
-  }, [selectedFile, currentContent, isDirty, markSaved, updateTabDirty]);
+  }, [selectedFile, currentContent, isDirty, markSaved, updateTabDirty, setOpenTabDirty]);
+
+  // Sync isDirty state to sidebar store whenever it changes
+  useEffect(() => {
+    if (selectedFile && isDirty !== undefined) {
+      setOpenTabDirty(selectedFile, isDirty);
+    }
+  }, [selectedFile, isDirty, setOpenTabDirty]);
 
   const handleChange = useCallback((value: string) => {
     if (selectedFile) {

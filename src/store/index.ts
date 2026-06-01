@@ -47,9 +47,12 @@ interface EditorState {
   updateTabDirty: (path: string, isDirty: boolean) => void;
   getSelection: () => string | null;
   applyDiff: (diff: { originalText: string; newText: string }) => void;
+  removeDocumentContent: (path: string) => void;
 }
 
-export const useEditorStore = create<EditorState>((set) => ({
+export const useEditorStore = create<EditorState>()(
+  persist(
+    (set) => ({
   documentContents: {},
 
   setDocumentContent: (path, doc, content) => set((state) => ({
@@ -266,7 +269,33 @@ export const useEditorStore = create<EditorState>((set) => ({
     // This is a temporary implementation - in real app, apply to editor
     console.log('Applying diff:', diff);
   },
-}));
+
+  removeDocumentContent: (path) => set((state) => {
+    const { [path]: _, ...rest } = state.documentContents;
+    return { documentContents: rest };
+  }),
+}),
+    {
+      name: 'inkuo-editor',
+      partialize: (state) => ({
+        documentContents: Object.fromEntries(
+          Object.entries(state.documentContents).map(([path, doc]) => [
+            path,
+            {
+              document: doc.document,
+              content: doc.content,
+              isDirty: doc.isDirty,
+              selection: doc.selection,
+              diffHunks: doc.diffHunks,
+              activeHunkIndex: doc.activeHunkIndex,
+              isDiffMode: doc.isDiffMode,
+            }
+          ])
+        ),
+      }),
+    }
+  )
+);
 
 // Sidebar store
 interface SidebarState {
@@ -277,6 +306,9 @@ interface SidebarState {
   isLoading: boolean;
   openTabs: OpenTab[];
   activeTabId: string | null;
+  // Map from tab path -> isDirty flag
+  // Needed because useEditorStore is not persisted, so we track dirty state here
+  openTabDirtyMap: Record<string, boolean>;
 
   setWorkspacePath: (path: string) => void;
   setFiles: (files: FileEntry[] | ((prev: FileEntry[]) => FileEntry[])) => void;
@@ -286,6 +318,7 @@ interface SidebarState {
   openTab: (tab: OpenTab) => void;
   closeTab: (tabId: string) => void;
   setActiveTab: (tabId: string) => void;
+  setOpenTabDirty: (path: string, isDirty: boolean) => void;
 }
 
 export interface OpenTab {
@@ -309,6 +342,7 @@ export const useSidebarStore = create<SidebarState>()(
   isLoading: false,
   openTabs: [],
   activeTabId: null,
+  openTabDirtyMap: {},
 
   setWorkspacePath: (path) => set({ workspacePath: path }),
   setFiles: (files) => set((state) => ({
@@ -333,23 +367,33 @@ export const useSidebarStore = create<SidebarState>()(
     const newTabs = [...state.openTabs, tab];
     // For settings tab, selectedFile is null
     const newSelectedFile = tab.isSettings ? null : tab.path;
-    return { openTabs: newTabs, activeTabId: tab.id, selectedFile: newSelectedFile };
+    return {
+      openTabs: newTabs,
+      activeTabId: tab.id,
+      selectedFile: newSelectedFile,
+      openTabDirtyMap: {
+        ...state.openTabDirtyMap,
+        [tab.path]: false,
+      }
+    };
   }),
   closeTab: (tabId) => set((state) => {
+    const tab = state.openTabs.find(t => t.id === tabId);
+    const closedPath = tab?.path;
     const newTabs = state.openTabs.filter(t => t.id !== tabId);
     let newActiveId = state.activeTabId;
     if (state.activeTabId === tabId) {
       const closedIndex = state.openTabs.findIndex(t => t.id === tabId);
-      if (newTabs.length > 0) {
-        newActiveId = newTabs[Math.min(closedIndex, newTabs.length - 1)].id;
-      } else {
-        newActiveId = null;
-      }
+      newActiveId = newTabs.length > 0
+        ? newTabs[Math.min(closedIndex, newTabs.length - 1)].id
+        : null;
     }
+    const { [closedPath as string]: _, ...restDirtyMap } = state.openTabDirtyMap;
     return {
       openTabs: newTabs,
       activeTabId: newActiveId,
-      selectedFile: newActiveId ? (newTabs.find(t => t.id === newActiveId)?.path || null) : null
+      selectedFile: newActiveId ? (newTabs.find(t => t.id === newActiveId)?.path || null) : null,
+      openTabDirtyMap: restDirtyMap,
     };
   }),
   setActiveTab: (tabId) => set((state) => {
@@ -360,6 +404,12 @@ export const useSidebarStore = create<SidebarState>()(
       selectedFile: newSelectedFile
     };
   }),
+  setOpenTabDirty: (path, isDirty) => set((state) => ({
+    openTabDirtyMap: {
+      ...state.openTabDirtyMap,
+      [path]: isDirty,
+    }
+  })),
 }),
     {
       name: 'inkuo-sidebar',
@@ -368,6 +418,7 @@ export const useSidebarStore = create<SidebarState>()(
         openTabs: state.openTabs,
         activeTabId: state.activeTabId,
         selectedFile: state.selectedFile,
+        openTabDirtyMap: state.openTabDirtyMap,
       }),
     }
   )

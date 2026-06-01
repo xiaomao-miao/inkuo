@@ -233,6 +233,15 @@
   font-size: 13px;
   font-weight: 500;
   color: var(--fg-primary);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.dirtyDot {
+  color: var(--accent-primary);
+  font-size: 16px;
+  line-height: 1;
 }
 
 .toolbarRight {
@@ -247,6 +256,10 @@
   padding: 2px 8px;
   background-color: rgba(124, 92, 255, 0.1);
   border-radius: var(--radius-sm);
+}
+
+.dirtyBadge {
+  background-color: rgba(124, 92, 255, 0.2);
 }
 
 .saveButton {

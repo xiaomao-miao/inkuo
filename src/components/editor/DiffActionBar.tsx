@@ -10,10 +10,9 @@ export const DiffActionBar: React.FC = () => {
   if (!selectedFile) return null;
 
   const doc = documentContents[selectedFile];
-  const pending = doc?.pendingChange;
   const hunks = doc?.diffHunks ?? [];
 
-  if (!pending || hunks.length === 0) return null;
+  if (!doc?.isDiffMode || hunks.length === 0) return null;
 
   const handleAcceptAll = async () => {
     try {
