@@ -15,6 +15,7 @@ import { SETTINGS_TAB_ID } from '../../store';
 import { DiffOverlay } from './DiffOverlay';
 import { DiffActionBar } from './DiffActionBar';
 import { SettingsPanel } from '../settings/SettingsPanel';
+import { WordEditor, ExcelEditor } from './OfficeViewer';
 import {
   InlineCompleteProvider,
   useInlineComplete,
@@ -489,6 +490,13 @@ const SettingsState: React.FC = () => (
 // ============================================================================
 // Main Editor Component
 // ============================================================================
+function detectFileType(path: string): 'markdown' | 'word' | 'excel' {
+  const ext = path.split('.').pop()?.toLowerCase() || '';
+  if (ext === 'docx') return 'word';
+  if (ext === 'xlsx' || ext === 'xls') return 'excel';
+  return 'markdown';
+}
+
 export const Editor: React.FC = () => {
   const editorRef = useRef<ReactCodeMirrorRef>(null);
   const { selectedFile, activeTabId } = useSidebarStore();
@@ -503,7 +511,27 @@ export const Editor: React.FC = () => {
     return <EmptyState />;
   }
 
-  // Wrap editor content with InlineCompleteProvider
+  const fileType = detectFileType(selectedFile);
+
+  if (fileType === 'word') {
+    return (
+      <WordEditor
+        filePath={selectedFile}
+        fileName={selectedFile.split('/').pop() || selectedFile}
+      />
+    );
+  }
+
+  if (fileType === 'excel') {
+    return (
+      <ExcelEditor
+        filePath={selectedFile}
+        fileName={selectedFile.split('/').pop() || selectedFile}
+      />
+    );
+  }
+
+  // Default: CodeMirror for markdown/text
   return (
     <InlineCompleteProvider>
       <EditorContent editorRef={editorRef} />

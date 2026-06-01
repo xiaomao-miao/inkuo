@@ -860,3 +860,15 @@ pub async fn test_ai_connection(
         })
     }
 }
+
+#[tauri::command]
+pub async fn read_office_file(path: String) -> Result<Vec<u8>, String> {
+    tracing::info!("Reading office file: {}", path);
+    std::fs::read(&path).map_err(|e| format!("Failed to read file: {}", e))
+}
+
+#[tauri::command]
+pub async fn write_office_file(path: String, data: Vec<u8>) -> Result<(), String> {
+    tracing::info!("Writing office file: {}", path);
+    std::fs::write(&path, &data).map_err(|e| format!("Failed to write file: {}", e))
+}

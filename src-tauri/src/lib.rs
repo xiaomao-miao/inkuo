@@ -115,6 +115,8 @@ pub fn run() {
             inline_complete::ai_inline_complete,
             inline_complete::ai_inline_complete_cancel,
             inline_complete::get_inline_completion_state,
+            commands::read_office_file,
+            commands::write_office_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running inkuo application");
