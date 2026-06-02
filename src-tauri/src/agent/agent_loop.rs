@@ -207,18 +207,21 @@ impl AgentExecutor {
     where
         F: Fn(StreamPayload) + Clone + Send + Sync + 'static,
     {
-        tracing::info!("[DEBUG] AgentExecutor::run started - session_id: {}, message_id: {}", session_id, message_id);
+        tracing::debug!("AgentExecutor::run started - session_id: {}, message_id: {}", session_id, message_id);
 
         // Add user message
         session.add_message(Message::user(user_request));
 
         // Get tool definitions for API call
         let tools = session.tool_registry.read().await.get_all_definitions();
-        let tools_json: Vec<Value> = tools.iter().map(|t| serde_json::to_value(t).unwrap()).collect();
+        let tools_json: Vec<Value> = tools
+            .iter()
+            .map(|t| serde_json::to_value(t).map_err(|e| AgentError::AIError(format!("Tool serialization failed: {}", e))))
+            .collect::<Result<Vec<_>, _>>()?;
 
         // Run the agent loop
         for iteration in 0..session.max_iterations {
-            tracing::info!(
+            tracing::debug!(
                 "Agent iteration {}/{}",
                 iteration + 1,
                 session.max_iterations
@@ -497,7 +500,7 @@ impl AgentExecutor {
         let mut stream = response.bytes_stream();
         let mut bytes_received = 0;
 
-        tracing::info!("Starting to process stream...");
+        tracing::debug!("Starting to process stream...");
 
         while let Some(item) = stream.next().await {
             // Check for cancellation during streaming
@@ -537,10 +540,10 @@ impl AgentExecutor {
                         continue;
                     }
 
-                    tracing::info!("SSE data: {}", data);
+                    tracing::trace!("SSE data: {}", data);
 
                     let parsed = self.parse_sse_delta(data, is_ollama);
-                    tracing::info!("[PARSING] parse result: {:?}", parsed);
+                    tracing::trace!("[PARSING] parse result: {:?}", parsed);
                     match parsed {
                         Ok(Some(delta)) => {
                             // Update content (both content and reasoning_content for DeepSeek)
@@ -627,7 +630,7 @@ impl AgentExecutor {
                         }
                         Ok(None) => {
                             // No content or tool_calls in this delta, skip
-                            tracing::info!("Delta has no content or tool_calls");
+                            tracing::trace!("Delta has no content or tool_calls");
                         }
                         Err(e) => {
                             tracing::warn!("Failed to parse SSE delta: {}", e);
@@ -639,7 +642,7 @@ impl AgentExecutor {
 
         // Process any remaining data in the buffer (issue #9 - handle residual data)
         if !buffer.trim().is_empty() {
-            tracing::info!("Processing remaining buffer data: {}", buffer);
+            tracing::debug!("Processing remaining buffer data: {}", buffer);
             for data in crate::openai_stream::iter_sse_event_data_lines(&buffer) {
                 if data.trim() == "[DONE]" || data.trim().is_empty() {
                     continue;
@@ -655,11 +658,11 @@ impl AgentExecutor {
             }
         }
 
-        tracing::info!("Stream processing complete. bytes_received: {}, current_content_len: {}", bytes_received, current_content.len());
+        tracing::debug!("Stream processing complete. bytes_received: {}, current_content_len: {}", bytes_received, current_content.len());
 
         // Debug: log the final tool calls
         for (i, tc) in current_tool_calls.iter().enumerate() {
-            tracing::info!("[TOOL_CALL_DEBUG] #{:02}: id='{}', name='{}', args='{}'",
+            tracing::debug!("[TOOL_CALL_DEBUG] #{:02}: id='{}', name='{}', args='{}'",
                 i, tc.id, tc.function.name, tc.function.arguments);
         }
 

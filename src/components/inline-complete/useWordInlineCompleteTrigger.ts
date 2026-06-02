@@ -89,6 +89,7 @@ export function scheduleWordInlineCompletion(view: EditorView, filePath: string)
   if (Date.now() - lastAcceptTime < 300) return;
 
   // During IME composition, avoid scheduling requests.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   if ((view as any).composing) return;
 
   if (completionTimer) {

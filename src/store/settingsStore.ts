@@ -141,6 +141,7 @@ export const useSettingsStore = create<SettingsState>()(
       name: 'inkuo-settings',
       partialize: (state) => ({ settings: state.settings }),
       merge: (persistedState, currentState) => {
+        // Cast persisted state to our expected structure with proper validation
         const persisted = persistedState as Partial<SettingsState> | undefined;
         const persistedSettings = persisted?.settings as Partial<Settings> | undefined;
 
@@ -149,13 +150,14 @@ export const useSettingsStore = create<SettingsState>()(
           ...persistedSettings,
         };
 
-        const apiConfigs = Array.isArray((persistedSettings as any)?.apiConfigs)
-          ? (persistedSettings as any).apiConfigs
+        // Safely extract apiConfigs with type checking
+        const rawConfigs = persistedSettings?.apiConfigs;
+        const apiConfigs: Settings['apiConfigs'] = Array.isArray(rawConfigs)
+          ? rawConfigs as Settings['apiConfigs']
           : currentState.settings.apiConfigs;
 
         mergedSettings.apiConfigs = apiConfigs.length > 0 ? apiConfigs : currentState.settings.apiConfigs;
-        mergedSettings.activeApiConfigId =
-          (persistedSettings as any)?.activeApiConfigId ?? mergedSettings.apiConfigs[0]?.id ?? null;
+        mergedSettings.activeApiConfigId = persistedSettings?.activeApiConfigId ?? mergedSettings.apiConfigs[0]?.id ?? null;
 
         if (!mergedSettings.apiConfigs.some((c) => c.isDefault)) {
           mergedSettings.apiConfigs = mergedSettings.apiConfigs.map((c, i) => ({

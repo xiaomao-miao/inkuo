@@ -8,11 +8,57 @@ import {
   useSettingsStore,
   type ChatMode,
   type ChatMessage,
+  type DiffHunk,
 } from '../../store';
 import { ChatHeader } from './ChatHeader';
 import { ChatView } from './ChatView';
 import { ChatInput } from './ChatInput';
 import styles from './AIPanel.module.css';
+
+// Type for stream payload from Rust backend (matches src-tauri/src/streaming.rs)
+// Time to wait before clearing tool calls after stream completes (allows user to see results)
+const TOOL_CALL_CLEAR_DELAY_MS = 2000;
+interface StreamPayload {
+  session_id: string;
+  message_id: string;
+  event_type: string;
+  content?: string;
+  summary?: string;
+  tool_call_id?: string;
+  tool_name?: string;
+  tool_args?: string;
+  final_content?: string;
+  error?: string;
+  done: boolean;
+  file_path?: string;
+  original_content?: string;
+  new_content?: string;
+  diff_summary?: {
+    file_name: string;
+    added_lines: number;
+    deleted_lines: number;
+    hunks: DiffHunk[];
+  };
+  office_file_modified?: {
+    path: string;
+    format: string;
+  };
+}
+
+// Helper: build conversation history from messages for AI API
+function buildConversationHistory(messages: ChatMessage[]) {
+  return messages.map(m => {
+    let textContent = '';
+    if (m.role === 'tool') {
+      textContent = m.content || '';
+    } else if (m.outputItems && m.outputItems.length > 0) {
+      textContent = m.outputItems.filter(item => item.type === 'text').map(item => item.content).join('');
+    } else {
+      textContent = m.content || '';
+    }
+    return { id: m.id, role: m.role, content: textContent, tool_calls: m.toolCalls, tool_call_id: m.toolCallId };
+  });
+}
 
 export const AIPanel: React.FC = () => {
   const {
@@ -43,9 +89,6 @@ export const AIPanel: React.FC = () => {
   const mode: ChatMode = activeSession?.mode ?? 'ask';
   const activeToolCalls = activeSession?.activeToolCalls ?? [];
 
-  const {} = useSidebarStore();
-  const {} = useEditorStore();
-
   const [input, setInput] = useState('');
 
   // Track which user message is being edited
@@ -57,7 +100,7 @@ export const AIPanel: React.FC = () => {
   // Ref to track accumulated text content for the current streaming message
   const streamingContentRef = useRef<Record<string, string>>({});
 
-  // Microtask batching for text deltas
+  // Microtask batching for text deltas (optimized: only update target session/message)
   const pendingTextDeltasRef = useRef<Record<string, string>>({});
   const flushTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingFlushRef = useRef<Set<string>>(new Set());
@@ -71,22 +114,33 @@ export const AIPanel: React.FC = () => {
     pendingFlushRef.current = new Set();
     flushTimeoutRef.current = null;
 
-    useAIPanelStore.setState((state) => ({
-      sessions: state.sessions.map((s) => {
-        const updatedMessages = s.messages.map((m) => {
-          const delta = deltas[m.id];
-          if (!delta) return m;
-          const items = m.outputItems;
-          const lastItem = items[items.length - 1];
-          if (lastItem && lastItem.type === 'text') {
-            const updated = { ...lastItem, content: lastItem.content + delta };
-            return { ...m, outputItems: [...items.slice(0, -1), updated] };
-          }
-          return { ...m, outputItems: [...items, { type: 'text' as const, content: delta, isPendingMarkdown: true }] };
-        });
-        return { ...s, messages: updatedMessages };
-      }),
-    }));
+    useAIPanelStore.setState((state) => {
+      // Build a map of messageId -> delta for fast lookup
+      const deltaMap = new Map(toFlush.map(id => [id, deltas[id]]));
+
+      return {
+        sessions: state.sessions.map((s) => {
+          // Check if this session has any messages that need updating
+          const sessionMessageIds = toFlush.filter(id =>
+            s.messages.some(m => m.id === id)
+          );
+          if (sessionMessageIds.length === 0) return s;
+
+          const updatedMessages = s.messages.map((m) => {
+            const delta = deltaMap.get(m.id);
+            if (!delta) return m;
+            const items = m.outputItems;
+            const lastItem = items[items.length - 1];
+            if (lastItem && lastItem.type === 'text') {
+              const updated = { ...lastItem, content: lastItem.content + delta };
+              return { ...m, outputItems: [...items.slice(0, -1), updated] };
+            }
+            return { ...m, outputItems: [...items, { type: 'text' as const, content: delta, isPendingMarkdown: true }] };
+          });
+          return { ...s, messages: updatedMessages };
+        }),
+      };
+    });
   }, []);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -158,69 +212,30 @@ export const AIPanel: React.FC = () => {
     clearToolCalls(sessionId);
 
     try {
-      if (mode === 'agent') {
-        const workspacePath = useSidebarStore.getState().workspacePath || undefined;
-        const { apiConfigs, activeApiConfigId } = useSettingsStore.getState().settings;
-        const activeConfig = apiConfigs.find(c => c.id === activeApiConfigId) ?? apiConfigs[0];
-        const conversationHistory = messages.map(m => {
-          let textContent = '';
-          if (m.role === 'tool') {
-            textContent = m.content || '';
-          } else if (m.outputItems && m.outputItems.length > 0) {
-            textContent = m.outputItems.filter(item => item.type === 'text').map(item => item.content).join('');
-          } else {
-            textContent = m.content || '';
-          }
-          return { id: m.id, role: m.role, content: textContent, tool_calls: m.toolCalls, tool_call_id: m.toolCallId };
-        });
+      const workspacePath = useSidebarStore.getState().workspacePath || undefined;
+      const { apiConfigs, activeApiConfigId } = useSettingsStore.getState().settings;
+      const activeConfig = apiConfigs.find(c => c.id === activeApiConfigId) ?? apiConfigs[0];
+      const conversationHistory = buildConversationHistory(messages);
 
-        invoke('ai_agent_stream', {
-          sessionId, messageId: assistantMessageId, instruction,
-          workspacePath, readOnly: false, history: conversationHistory,
-          configInput: {
-            provider: activeConfig.provider,
-            api_key: activeConfig.apiKey,
-            base_url: activeConfig.baseUrl,
-            model: activeConfig.model,
-            temperature: activeConfig.temperature,
-            max_tokens: activeConfig.maxTokens,
-          },
-        }).catch((err) => {
-          updateMessage(sessionId, assistantMessageId, `抱歉，发生了错误：${err}`);
-          setIsStreaming(sessionId, false);
-        });
-      } else {
-        const workspacePath = useSidebarStore.getState().workspacePath || undefined;
-        const { apiConfigs, activeApiConfigId } = useSettingsStore.getState().settings;
-        const activeConfig = apiConfigs.find(c => c.id === activeApiConfigId) ?? apiConfigs[0];
-        const conversationHistory = messages.map(m => {
-          let textContent = '';
-          if (m.role === 'tool') {
-            textContent = m.content || '';
-          } else if (m.outputItems && m.outputItems.length > 0) {
-            textContent = m.outputItems.filter(item => item.type === 'text').map(item => item.content).join('');
-          } else {
-            textContent = m.content || '';
-          }
-          return { id: m.id, role: m.role, content: textContent, tool_calls: m.toolCalls, tool_call_id: m.toolCallId };
-        });
-
-        invoke('ai_agent_stream', {
-          sessionId, messageId: assistantMessageId, instruction,
-          workspacePath, readOnly: true, history: conversationHistory,
-          configInput: {
-            provider: activeConfig.provider,
-            api_key: activeConfig.apiKey,
-            base_url: activeConfig.baseUrl,
-            model: activeConfig.model,
-            temperature: activeConfig.temperature,
-            max_tokens: activeConfig.maxTokens,
-          },
-        }).catch((err) => {
-          updateMessage(sessionId, assistantMessageId, `抱歉，发生了错误：${err}`);
-          setIsStreaming(sessionId, false);
-        });
-      }
+      invoke('ai_agent_stream', {
+        sessionId,
+        messageId: assistantMessageId,
+        instruction,
+        workspacePath,
+        readOnly: mode !== 'agent',
+        history: conversationHistory,
+        configInput: {
+          provider: activeConfig.provider,
+          api_key: activeConfig.apiKey,
+          base_url: activeConfig.baseUrl,
+          model: activeConfig.model,
+          temperature: activeConfig.temperature,
+          max_tokens: activeConfig.maxTokens,
+        },
+      }).catch((err) => {
+        updateMessage(sessionId, assistantMessageId, `抱歉，发生了错误：${err}`);
+        setIsStreaming(sessionId, false);
+      });
     } catch (err) {
       updateMessage(sessionId, assistantMessageId, `抱歉，发生了错误：${err}`);
       setIsStreaming(sessionId, false);
@@ -282,7 +297,7 @@ export const AIPanel: React.FC = () => {
       isSettingUpRef.current = true;
 
       try {
-        unlistenRef.current = await listen<any>('ai://stream', async (event) => {
+        unlistenRef.current = await listen<StreamPayload>('ai://stream', async (event) => {
           const payload = event.payload;
           const {
             session_id, message_id, event_type, content, done, summary,
@@ -395,7 +410,7 @@ export const AIPanel: React.FC = () => {
 
             delete streamingContentRef.current[message_id];
 
-            setTimeout(() => clearToolCalls(session_id), 2000);
+            setTimeout(() => clearToolCalls(session_id), TOOL_CALL_CLEAR_DELAY_MS);
 
             if (effectiveContent) {
               useAIPanelStore.getState().finishMessageStreaming(session_id, message_id, effectiveContent);

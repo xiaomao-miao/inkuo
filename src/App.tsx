@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { Layout } from './components/layout';
 import { CmdK } from './components/cmdk';
 import { useSettingsStore, useSidebarStore } from './store';
@@ -20,13 +20,14 @@ function App() {
     document.documentElement.style.setProperty('--accent-active', adjustColor(settings.accent_color, -20));
   }, [settings.theme, settings.accent_color]);
 
-  // Restore open tabs on startup
+  // Restore open tabs on startup - run once when store data becomes available
+  const initTabRestored = useRef(false);
   useEffect(() => {
-    if (openTabs.length > 0 && activeTabId) {
+    if (!initTabRestored.current && openTabs.length > 0 && activeTabId) {
+      initTabRestored.current = true;
       setActiveTab(activeTabId);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [openTabs, activeTabId, setActiveTab]);
 
   return (
     <>
@@ -38,7 +39,13 @@ function App() {
 
 // Helper function to adjust color brightness
 function adjustColor(hex: string, percent: number): string {
-  const num = parseInt(hex.replace('#', ''), 16);
+  const cleanHex = hex.replace('#', '');
+  // Handle both 3-char (#FFF) and 6-char (#FFFFFF) formats
+  const normalizedHex = cleanHex.length === 3
+    ? cleanHex.split('').map(c => c + c).join('')
+    : cleanHex;
+  const num = parseInt(normalizedHex, 16);
+  if (isNaN(num)) return hex; // Return original if invalid
   const amt = Math.round(2.55 * percent);
   const R = Math.min(255, Math.max(0, (num >> 16) + amt));
   const G = Math.min(255, Math.max(0, ((num >> 8) & 0x00FF) + amt));

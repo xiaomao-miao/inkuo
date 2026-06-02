@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import type { Document } from '../types';
 
 interface DocumentState {
   document: Document | null;
@@ -36,7 +37,7 @@ interface EditorState {
   setDocumentContent: (path: string, doc: Document, content: string) => void;
   setContent: (path: string, content: string) => void;
   setSelection: (path: string, selection: { from: number; to: number } | null) => void;
-  setDiffHunks: (path: string, hunks: any[]) => void;
+  setDiffHunks: (path: string, hunks: DiffHunk[]) => void;
   setActiveHunkIndex: (path: string, index: number) => void;
   setIsDiffMode: (path: string, isDiff: boolean) => void;
   applyHunk: (path: string, hunkId: string) => void;
@@ -69,7 +70,7 @@ export const useEditorStore = create<EditorState>()(
             content: content,
             isDirty: false,
             selection: null,
-            diffHunks: [] as any[],
+            diffHunks: [] as DiffHunk[],
             activeHunkIndex: 0,
             isDiffMode: false,
             docxBuffer: state.documentContents[path]?.docxBuffer ?? null,
@@ -192,7 +193,7 @@ export const useEditorStore = create<EditorState>()(
             ...state.documentContents,
             [path]: {
               ...current,
-              diffHunks: [] as any[],
+              diffHunks: [] as DiffHunk[],
               isDiffMode: false,
               isDirty: true,
             }
@@ -208,7 +209,7 @@ export const useEditorStore = create<EditorState>()(
             ...state.documentContents,
             [path]: {
               ...current,
-              diffHunks: [] as any[],
+              diffHunks: [] as DiffHunk[],
               isDiffMode: false,
             }
           }
@@ -223,7 +224,7 @@ export const useEditorStore = create<EditorState>()(
             ...state.documentContents,
             [path]: {
               ...current,
-              diffHunks: [] as any[],
+              diffHunks: [] as DiffHunk[],
               isDiffMode: false,
               activeHunkIndex: 0,
             }

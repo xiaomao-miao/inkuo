@@ -128,9 +128,6 @@ export const WordEditor: React.FC<WordEditorProps> = ({
   const wordLastVersionRef = useRef(-1);
   const hasInitializedFromCacheRef = useRef(false);
 
-  // Store the file path for the inline completion hook to access
-  (editorRef as any)._filePath = filePath;
-
   const wordInlineCompletePlugin = useMemo(
     () =>
       createWordInlineCompletePlugin({
@@ -146,15 +143,16 @@ export const WordEditor: React.FC<WordEditorProps> = ({
   const isLoading = useInlineCompleteStore((s) => s.isLoading);
   const inlineError = useInlineCompleteStore((s) => s.error);
 
-  // Debug: log component mount
+  // Debug: log component mount (disabled in production)
   useEffect(() => {
-    console.log('[WordEditor] mounted, filePath:', filePath, 'isActive:', isActive, 'pmView:', pmViewRef.current ? 'ready' : 'not ready');
+    if (import.meta.env.DEV) {
+      console.log('[WordEditor] mounted, filePath:', filePath, 'isActive:', isActive);
+    }
   }, []);
 
   // Capture the ProseMirror view when it's ready
-  const handleEditorViewReady = useCallback((view: any) => {
+  const handleEditorViewReady = useCallback((view: EditorView) => {
     pmViewRef.current = view;
-    console.log('[WordEditor] onEditorViewReady, view:', !!view, 'hasFocus:', view?.hasFocus);
   }, []);
 
   // ── Persistent state: initialized once from the store cache ──────────────
