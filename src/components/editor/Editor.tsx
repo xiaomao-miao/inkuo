@@ -249,9 +249,9 @@ const EditorContent: React.FC<{
     const loadDocument = async () => {
       if (!selectedFile) return;
 
-      // If already in store (e.g., previously opened tab switching back), skip reload
-      // to preserve any unsaved edits. localStorage persistence handles page refresh.
-      const cached = documentContents[selectedFile];
+      // Use getState() to always read the latest from store,
+      // avoiding stale closures and preventing re-render triggers.
+      const cached = useEditorStore.getState().documentContents[selectedFile];
       if (cached && cached.content !== '') {
         return;
       }
@@ -268,7 +268,7 @@ const EditorContent: React.FC<{
     };
 
     loadDocument();
-  }, [selectedFile, documentContents, setDocumentContent, setOpenTabDirty]);
+  }, [selectedFile, setDocumentContent, setOpenTabDirty]);
 
   // Save document
   const handleSave = useCallback(async () => {
@@ -303,7 +303,7 @@ const EditorContent: React.FC<{
   const handleUpdate = useCallback((viewUpdate: any) => {
     if (viewUpdate.selection && selectedFile) {
       const { from, to } = viewUpdate.state.selection.main;
-      const currentDoc = documentContents[selectedFile];
+      const currentDoc = useEditorStore.getState().documentContents[selectedFile];
       if (from !== to) {
         if (!currentDoc?.selection || currentDoc.selection.from !== from || currentDoc.selection.to !== to) {
           setSelection(selectedFile, { from, to });
@@ -312,7 +312,7 @@ const EditorContent: React.FC<{
         setSelection(selectedFile, null);
       }
     }
-  }, [selectedFile, setSelection, documentContents]);
+  }, [selectedFile, setSelection]);
 
   // Keyboard shortcuts for Save (Cmd/Ctrl+S)
   useEffect(() => {
