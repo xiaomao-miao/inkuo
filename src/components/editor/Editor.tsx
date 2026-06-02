@@ -9,6 +9,7 @@ import { inlineDiffTheme } from './inlineDiffDecorations';
 import { historyKeymap } from '@codemirror/commands';
 import { highlightSelectionMatches } from '@codemirror/search';
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { Sparkles } from 'lucide-react';
 import { useEditorStore, useSidebarStore, useInlineCompleteStore } from '../../store';
 import { SETTINGS_TAB_ID } from '../../store';
@@ -244,8 +245,11 @@ const EditorContent: React.FC<{
     provide: (f) => EditorView.decorations.from(f),
   });
 
-  // Load document when file is selected.
-  // Smart caching: only reload if file was modified (mtime changed) or no valid cache.
+  // Reload currently open file when it is modified externally (e.g., by AI panel).
+  // We track file-change events in a ref counter so the effect re-runs on external changes.
+  const forceRefreshRef = useRef<Record<string, number>>({});
+  const forceRefreshCount = forceRefreshRef.current[selectedFile || ''] ?? 0;
+
   useEffect(() => {
     let cancelled = false;
 
@@ -264,6 +268,7 @@ const EditorContent: React.FC<{
         // - Cache content is empty
         // - Cache mtime is 0 (legacy/invalid cache)
         // - File mtime differs from cache
+        // - A file-change event triggered this reload (forceRefreshCount changed)
         const needsReload = !cached ||
           cached.content === '' ||
           cached.mtime === 0 ||
@@ -285,7 +290,27 @@ const EditorContent: React.FC<{
     return () => {
       cancelled = true;
     };
-  }, [selectedFile, setDocumentContent, setOpenTabDirty]);
+  }, [selectedFile, setDocumentContent, setOpenTabDirty, forceRefreshCount]);
+
+  // Listen for external file changes and force a reload by updating mtime in the store.
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+
+    const setup = async () => {
+        unlisten = await listen<{ path: string }>('file-written', (event) => {
+        if (!selectedFile) return;
+        const changedPath = event.payload.path || '';
+        if (changedPath === selectedFile) {
+          forceRefreshRef.current[selectedFile] = (forceRefreshRef.current[selectedFile] || 0) + 1;
+        }
+      });
+    };
+
+    setup();
+    return () => {
+      if (unlisten) unlisten();
+    };
+  }, [selectedFile]);
 
   // Save document
   const handleSave = useCallback(async () => {

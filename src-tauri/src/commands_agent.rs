@@ -195,10 +195,23 @@ pub async fn ai_agent_stream(
     let callback = move |payload: StreamPayload| {
         tracing::info!("[DEBUG] Callback fired - event_type: {}, session_id: {}, message_id: {}",
             payload.event_type, payload.session_id, payload.message_id);
-        let mut p = payload;
+        let mut p = payload.clone();
         p.session_id = session_id_clone.clone();
         p.message_id = message_id_clone.clone();
         emit(&app_clone, p);
+
+        // Emit a dedicated file-written event when a file modification tool succeeds.
+        // This bypasses the file watcher path-matching issue and directly tells the
+        // frontend which file changed, so it can refresh the editor immediately.
+        if payload.event_type == "tool_result"
+            && !payload.error.as_ref().map(|e| !e.is_empty()).unwrap_or(false)
+            && payload.file_path.is_some()
+        {
+            let changed_path = payload.file_path.clone().unwrap();
+            let _ = app_clone.emit("file-written", serde_json::json!({
+                "path": changed_path,
+            }));
+        }
     };
 
     match executor
