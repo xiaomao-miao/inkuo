@@ -58,12 +58,15 @@ interface EditorState {
   clearDocxBuffer: (path: string) => void;
   clearExcelData: (path: string) => void;
   invalidateOfficeBuffer: (path: string) => void;
+  isPreviewMode: Record<string, boolean>;
+  togglePreviewMode: (path: string) => void;
 }
 
 export const useEditorStore = create<EditorState>()(
   persist(
     (set) => ({
       documentContents: {},
+      isPreviewMode: {},
 
       setDocumentContent: (path, doc, content, mtime = 0) => set((state) => ({
         documentContents: {
@@ -370,6 +373,13 @@ export const useEditorStore = create<EditorState>()(
           }
         };
       }),
+
+      togglePreviewMode: (path) => set((state) => ({
+        isPreviewMode: {
+          ...state.isPreviewMode,
+          [path]: !state.isPreviewMode[path],
+        },
+      })),
     }),
     {
       name: 'inkuo-editor',
@@ -386,6 +396,7 @@ export const useEditorStore = create<EditorState>()(
       },
       partialize: (state) => ({
         documentContents: state.documentContents,
+        isPreviewMode: state.isPreviewMode,
       }),
     }
   )

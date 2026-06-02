@@ -15,6 +15,7 @@ import { SETTINGS_TAB_ID } from '../../store';
 import type { Document } from '../../types';
 import { DiffOverlay } from './DiffOverlay';
 import { DiffActionBar } from './DiffActionBar';
+import { MarkdownPreview } from './MarkdownPreview';
 import { SettingsPanel } from '../settings/SettingsPanel';
 import { WordEditor, ExcelEditor } from './OfficeViewer';
 import {
@@ -79,6 +80,8 @@ const EditorContent: React.FC<{
     setSelection,
     markSaved,
     updateTabDirty,
+    isPreviewMode,
+    togglePreviewMode,
   } = useEditorStore();
   const { selectedFile, setOpenTabDirty } = useSidebarStore();
   const { triggerCompletion } = useInlineComplete();
@@ -328,28 +331,40 @@ const EditorContent: React.FC<{
     }
   }, [selectedFile, setSelection]);
 
-  // Keyboard shortcuts for Save (Cmd/Ctrl+S)
+  // Keyboard shortcuts for Save (Cmd/Ctrl+S) and Preview toggle (Cmd/Ctrl+Shift+P)
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 's') {
         e.preventDefault();
         handleSave();
       }
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'p') {
+        e.preventDefault();
+        if (selectedFile) {
+          togglePreviewMode(selectedFile);
+        }
+      }
     };
 
     window.addEventListener('keydown', handleGlobalKeyDown);
     return () => window.removeEventListener('keydown', handleGlobalKeyDown);
-  }, [handleSave]);
+  }, [handleSave, selectedFile, togglePreviewMode]);
+
+  const inPreviewMode = selectedFile ? !!isPreviewMode[selectedFile] : false;
 
   return (
     <div className={styles.editorContainer} data-inline-complete-styles={inlineCompleteStyles}>
       <div className={styles.editorWrapper}>
-        <CodeMirror
-          ref={editorRef}
-          value={currentContent}
-          onChange={handleChange}
-          onUpdate={handleUpdate}
-          extensions={[
+        {inPreviewMode ? (
+          <MarkdownPreview content={currentContent} fileName={selectedFile?.split('/').pop() || ''} />
+        ) : (
+          <>
+            <CodeMirror
+              ref={editorRef}
+              value={currentContent}
+              onChange={handleChange}
+              onUpdate={handleUpdate}
+              extensions={[
             markdown({ base: markdownLanguage, codeLanguages: languages }),
             lineNumbers(),
             drawSelection(),
@@ -461,12 +476,14 @@ const EditorContent: React.FC<{
             completionKeymap: false,
             lintKeymap: false,
           }}
-        />
-        {isDiffMode && <DiffOverlay hunks={diffHunks} />}
-        {/* ghost text is rendered via CodeMirror decoration */}
+            />
+            {isDiffMode && <DiffOverlay hunks={diffHunks} />}
+            {/* ghost text is rendered via CodeMirror decoration */}
+          </>
+        )}
       </div>
 
-      <DiffActionBar />
+      {!inPreviewMode && <DiffActionBar />}
 
       <div className={styles.statusBar}>
         <span className={styles.statusItem}>
@@ -475,19 +492,33 @@ const EditorContent: React.FC<{
         <span className={styles.statusItem}>
           {currentContent.split('\n').length} 行
         </span>
-        {selection && (
+        {selection && !inPreviewMode && (
           <span className={styles.statusItem}>
             已选择 {selection.to - selection.from} 字符
           </span>
         )}
-        {isDiffMode && (
+        {isDiffMode && !inPreviewMode && (
           <span className={styles.statusItem} data-type="diff">
             {diffHunks.length} 个差异块
           </span>
         )}
-        <InlineCompleteStatus />
+        {!inPreviewMode && <InlineCompleteStatus />}
         <span className={styles.statusItem} style={{ marginLeft: 'auto' }}>
-          Ctrl+S 保存
+          {inPreviewMode ? (
+            <button
+              className={styles.previewToggle}
+              onClick={() => selectedFile && togglePreviewMode(selectedFile)}
+            >
+              退出阅读
+            </button>
+          ) : (
+            <button
+              className={styles.previewToggle}
+              onClick={() => selectedFile && togglePreviewMode(selectedFile)}
+            >
+              阅读模式
+            </button>
+          )}
         </span>
       </div>
     </div>

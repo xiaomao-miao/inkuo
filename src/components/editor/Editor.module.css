@@ -206,3 +206,25 @@
   height: 12px;
   background-color: var(--border-color);
 }
+
+/* Preview toggle button in status bar */
+.previewToggle {
+  background: none;
+  border: 1px solid var(--border-color);
+  color: var(--fg-secondary);
+  font-size: var(--font-size-xs);
+  font-family: var(--font-sans);
+  padding: 1px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background-color var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.previewToggle:hover {
+  background-color: var(--bg-hover);
+  color: var(--fg-primary);
+}
+
+.previewToggle:active {
+  transform: scale(0.97);
+}
