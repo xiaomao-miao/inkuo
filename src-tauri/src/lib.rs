@@ -8,6 +8,7 @@
 //! - File system operations
 //! - Agent tool calling
 
+mod backup;
 mod document;
 mod diff;
 mod ai;
@@ -60,7 +61,7 @@ pub fn run() {
             .expect("Failed to create Tokio runtime");
 
         rt.block_on(async {
-            commands::init_backup_cleanup_task();
+            crate::backup::init_backup_cleanup_task();
         });
     });
 

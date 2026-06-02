@@ -3,148 +3,26 @@
 //! Exposes Rust backend functionality to the frontend via IPC.
 
 use crate::{diff, document, ai, rag, file_watcher};
+use crate::backup::{create_backup_path, get_backup_dir, request_backup_cleanup};
 use std::collections::HashSet;
 use parking_lot::Mutex;
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::{State, AppHandle};
-use tokio::sync::mpsc;
 
 pub static STREAM_CANCELLED: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
-
-/// Channel for backup cleanup requests
-static BACKUP_CLEANUP_TX: Lazy<Mutex<Option<mpsc::Sender<()>>>> = Lazy::new(|| Mutex::new(None));
-
-/// Initialize background backup cleanup task
-pub fn init_backup_cleanup_task() {
-    // This must be called from within a Tokio runtime
-    let (tx, mut rx) = mpsc::channel::<()>(32);
-
-    tokio::spawn(async move {
-        let mut pending_cleanups: Vec<tokio::time::Instant> = Vec::new();
-        let cleanup_interval = tokio::time::Duration::from_secs(60); // Run cleanup at most once per minute
-        let debounce_duration = tokio::time::Duration::from_secs(30); // Wait 30s after last request
-
-        loop {
-            tokio::select! {
-                _ = rx.recv() => {
-                    pending_cleanups.push(tokio::time::Instant::now() + debounce_duration);
-                }
-                _ = tokio::time::sleep(cleanup_interval) => {
-                    if let Some(next_cleanup) = pending_cleanups.first() {
-                        if tokio::time::Instant::now() >= *next_cleanup {
-                            // Run cleanup
-                            cleanup_old_backups(10);
-                            pending_cleanups.clear();
-                        }
-                    }
-                }
-            }
-        }
-    });
-
-    *BACKUP_CLEANUP_TX.lock() = Some(tx);
-}
-
-/// Request a backup cleanup (will be debounced)
-pub fn request_backup_cleanup() {
-    if let Some(tx) = BACKUP_CLEANUP_TX.lock().as_ref() {
-        let _ = tx.try_send(());
-    }
-}
 
 pub struct AppState {
     pub rag_index: Arc<tokio::sync::RwLock<rag::RAGIndex>>,
     pub ai_config: Arc<tokio::sync::RwLock<ai::AIConfig>>,
 }
 
-/// Get the backup directory path (e.g. ~/.inkuo/backups/)
-fn get_backup_dir() -> std::path::PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("inkuo")
-        .join("backups")
-}
-
-/// Create a backup file path based on the original file path.
-/// Uses a hash of the original path to avoid collisions and stores in ~/.inkuo/backups/
-fn create_backup_path(original_path: &str) -> std::path::PathBuf {
-    use sha2::{Sha256, Digest};
-
-    // Create a hash of the original path for the backup filename
-    let mut hasher = Sha256::new();
-    hasher.update(original_path.as_bytes());
-    let hash = hex::encode(&hasher.finalize()[..8]); // Use first 8 bytes
-
-    // Extract just the filename from the original path
-    let filename = std::path::Path::new(original_path)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("unknown");
-
-    let backup_dir = get_backup_dir();
-    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-
-    // Format: original_filename_HASH_TIMESTAMP.bak
-    backup_dir.join(format!("{}_{}_{}.bak", filename, hash, timestamp))
-}
-
-/// Clean up old backup files, keeping only the most recent N backups per original file.
-fn cleanup_old_backups(max_backups_per_file: usize) {
-    let backup_dir = get_backup_dir();
-
-    if !backup_dir.exists() {
-        return;
-    }
-
-    // Group backups by their original file hash (extracted from filename pattern)
-    // Backup format: original_filename_HASH_TIMESTAMP.bak
-    let mut backups_by_hash: std::collections::HashMap<String, Vec<std::path::PathBuf>> = std::collections::HashMap::new();
-
-    if let Ok(entries) = std::fs::read_dir(&backup_dir) {
-        for entry in entries.filter_map(|e| e.ok()) {
-            let path = entry.path();
-            if path.extension().map(|e| e == "bak").unwrap_or(false) {
-                if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
-                    // Extract the hash from the filename (format: name_HASH_timestamp.bak)
-                    // Find the last underscore before the timestamp pattern
-                    if let Some(last_underscore) = filename.rfind('_') {
-                        if let Some(second_last) = filename[..last_underscore].rfind('_') {
-                            let hash = &filename[second_last + 1..last_underscore];
-                            backups_by_hash
-                                .entry(hash.to_string())
-                                .or_default()
-                                .push(path);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // For each group, sort by modification time and delete old ones
-    for (_, mut backups) in backups_by_hash {
-        backups.sort_by(|a, b| {
-            std::fs::metadata(b).and_then(|m| m.modified())
-                .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
-                .cmp(&std::fs::metadata(a).and_then(|m| m.modified())
-                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH))
-        });
-
-        for backup in backups.into_iter().skip(max_backups_per_file) {
-            let _ = std::fs::remove_file(backup);
-        }
-    }
-}
-
 impl AppState {
     pub async fn get_ai_config(&self) -> Result<ai::AIConfig, String> {
-        // Try to read settings with flexible parsing
         let settings_result = read_settings_from_disk();
 
         let (ai_provider, model, temperature, max_tokens) = if let Ok(settings) = settings_result {
-            // Try to use the new multi-API config first
             if let Some(ref active_id) = settings.active_api_config_id {
                 if let Some(config) = settings.api_configs.iter().find(|c| c.id == *active_id) {
                     let provider = match config.provider.as_str() {
@@ -168,7 +46,6 @@ impl AppState {
                 }
             }
 
-            // Fallback to legacy settings
             let provider = match settings.ai_provider.as_str() {
                 "ollama" => ai::AIProvider::Ollama {
                     base_url: settings.ai_base_url.clone()
@@ -182,7 +59,6 @@ impl AppState {
             };
             (provider, settings.ai_model, settings.ai_temperature, settings.ai_max_tokens)
         } else {
-            // No settings or parse error - use defaults
             tracing::warn!("Failed to read settings, using defaults");
             (
                 ai::AIProvider::Ollama {
@@ -267,9 +143,7 @@ pub async fn read_document(path: String) -> Result<ReadDocumentResult, String> {
 pub async fn write_document(path: String, content: String) -> Result<(), String> {
     tracing::info!("Writing document: {}", path);
 
-    // Create backup in dedicated backup directory
     if std::path::Path::new(&path).exists() {
-        // Ensure backup directory exists
         let backup_dir = get_backup_dir();
         std::fs::create_dir_all(&backup_dir)
             .map_err(|e| format!("Failed to create backup directory: {}", e))?;
@@ -278,7 +152,6 @@ pub async fn write_document(path: String, content: String) -> Result<(), String>
         std::fs::copy(&path, &backup_path)
             .map_err(|e| format!("Failed to create backup: {}", e))?;
 
-        // Request async backup cleanup (debounced, won't block the write)
         request_backup_cleanup();
     }
 
@@ -309,7 +182,6 @@ pub async fn list_directory(path: String) -> Result<Vec<FileEntry>, String> {
             let path = entry.path();
             let name = entry.file_name().to_string_lossy().to_string();
             
-            // Skip hidden files
             if name.starts_with('.') {
                 return None;
             }
@@ -327,7 +199,6 @@ pub async fn list_directory(path: String) -> Result<Vec<FileEntry>, String> {
         })
         .collect();
     
-    // Sort: directories first, then files alphabetically
     files.sort_by(|a, b| {
         match (a.is_dir, b.is_dir) {
             (true, false) => std::cmp::Ordering::Less,
@@ -438,7 +309,6 @@ pub async fn index_workspace(
                 if matches!(ext, "md" | "markdown") {
                     if std::fs::read_to_string(&path).is_ok() {
                         *count += 1;
-                        // Store for batch indexing
                         tracing::debug!("Found markdown file: {:?}", path);
                     }
                 }
@@ -449,7 +319,6 @@ pub async fn index_workspace(
 
     index_dir(std::path::Path::new(&path), &mut count)?;
 
-    // Now do the actual indexing with the RAG index
     fn index_dir_recursive(
         dir: &std::path::Path,
         index: &rag::RAGIndex,
@@ -482,7 +351,6 @@ pub async fn index_workspace(
         Ok(())
     }
 
-    // Access the RAG index and do indexing
     let index_guard = index.read().await;
     index_dir_recursive(std::path::Path::new(&path), &index_guard, &mut count)?;
 
@@ -515,7 +383,6 @@ pub struct Settings {
     pub ai_base_url: Option<String>,
     pub ai_temperature: f32,
     pub ai_max_tokens: Option<u32>,
-    // New multi-API config fields
     pub api_configs: Vec<ApiConfig>,
     pub active_api_config_id: Option<String>,
 }
@@ -569,12 +436,10 @@ fn read_settings_from_disk() -> Result<Settings, String> {
     let content = std::fs::read_to_string(&path)
         .map_err(|e| format!("Failed to read settings: {}", e))?;
 
-    // Try to parse as Settings, if it fails try to parse as legacy format
     match serde_json::from_str::<Settings>(&content) {
         Ok(settings) => Ok(settings),
         Err(e) => {
             tracing::warn!("Failed to parse settings as new format ({}), trying legacy format", e);
-            // Legacy format doesn't have api_configs, so we need to create a default one
             #[derive(Debug, Deserialize)]
             struct LegacySettings {
                 theme: Option<String>,
@@ -652,7 +517,6 @@ pub async fn save_settings(settings: Settings, state: State<'_, AppState>) -> Re
     std::fs::write(&path, content)
         .map_err(|e| format!("Failed to write settings: {}", e))?;
 
-    // Find the active API config or fall back to legacy settings
     let (ai_provider, model, temperature, max_tokens) = if let Some(ref active_id) = settings.active_api_config_id {
         settings.api_configs
             .iter()
@@ -677,7 +541,6 @@ pub async fn save_settings(settings: Settings, state: State<'_, AppState>) -> Re
                 (provider, c.model.clone(), c.temperature, c.max_tokens)
             })
             .unwrap_or_else(|| {
-                // Fall back to legacy settings
                 let provider = match settings.ai_provider.as_str() {
                     "openai" | "deepseek" => ai::AIProvider::OpenAI {
                         api_key: settings.ai_api_key.clone().unwrap_or_default(),
@@ -694,7 +557,6 @@ pub async fn save_settings(settings: Settings, state: State<'_, AppState>) -> Re
                 (provider, settings.ai_model.clone(), settings.ai_temperature, settings.ai_max_tokens)
             })
     } else {
-        // Legacy fallback
         let provider = match settings.ai_provider.as_str() {
             "openai" | "deepseek" => ai::AIProvider::OpenAI {
                 api_key: settings.ai_api_key.clone().unwrap_or_default(),

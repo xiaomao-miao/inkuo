@@ -1,0 +1,283 @@
+//! Search tools: list_dir, glob, grep
+
+use serde_json::Value;
+use std::path::Path;
+
+use super::{ToolDefinition, ToolError, ToolParameters, validate_workspace_path};
+
+pub struct ListDirTool;
+
+impl ListDirTool {
+    pub fn new() -> Self { Self }
+    pub fn definition(&self) -> ToolDefinition {
+        ToolDefinition::new(
+            "list_dir",
+            "List the contents of a directory.",
+            ToolParameters::new(
+                vec!["path"],
+                vec![
+                    ("path", "string", Some("Absolute path to the directory to list")),
+                ],
+            ),
+        )
+    }
+    pub async fn execute(&self, arguments: Value, workspace: Option<String>) -> Result<String, ToolError> {
+        let path = arguments["path"]
+            .as_str()
+            .ok_or_else(|| ToolError::InvalidArguments("list_dir".to_string(), "path must be a string".into()))?;
+
+        validate_workspace_path(path, &workspace)?;
+
+        let mut entries = Vec::new();
+
+        let mut dir = tokio::fs::read_dir(path)
+            .await
+            .map_err(|e| ToolError::IoError(format!("Failed to read directory {}: {}", path, e)))?;
+
+        while let Some(entry) = dir.next_entry().await.map_err(|e| ToolError::IoError(e.to_string()))? {
+            let file_type = entry.file_type().await.map_err(|e| ToolError::IoError(e.to_string()))?;
+            let name = entry.file_name().to_string_lossy().to_string();
+
+            let entry_type = if file_type.is_dir() {
+                "[DIR]"
+            } else if file_type.is_symlink() {
+                "[SYMLINK]"
+            } else {
+                "[FILE]"
+            };
+
+            entries.push(format!("{} {}", entry_type, name));
+        }
+
+        entries.sort();
+        entries.insert(0, format!("Contents of '{}':", path));
+        Ok(entries.join("\n"))
+    }
+}
+
+impl Default for ListDirTool {
+    fn default() -> Self { Self::new() }
+}
+
+pub struct GlobTool;
+
+impl GlobTool {
+    pub fn new() -> Self { Self }
+    pub fn definition(&self) -> ToolDefinition {
+        ToolDefinition::new(
+            "glob",
+            "Find all files matching a glob pattern.",
+            ToolParameters::new(
+                vec!["pattern", "base_dir"],
+                vec![
+                    (" pattern", "string", Some("Glob pattern to match (e.g., '**/*.rs', 'src/**/*.{ts,tsx}')")),
+                    ("base_dir", "string", Some("Base directory to search from")),
+                ],
+            ),
+        )
+    }
+    pub async fn execute(&self, arguments: Value, workspace: Option<String>) -> Result<String, ToolError> {
+        let pattern = arguments["pattern"]
+            .as_str()
+            .ok_or_else(|| ToolError::InvalidArguments("glob".to_string(), "pattern must be a string".into()))?;
+
+        let base_dir = arguments["base_dir"]
+            .as_str()
+            .ok_or_else(|| ToolError::InvalidArguments("glob".to_string(), "base_dir must be a string".into()))?;
+
+        validate_workspace_path(base_dir, &workspace)?;
+
+        let matches = glob::glob(
+            &if pattern.starts_with('/') {
+                pattern.to_string()
+            } else {
+                format!("{}/{}", base_dir.trim_end_matches('/'), pattern)
+            },
+        )
+        .map_err(|e| ToolError::ExecutionError(format!("Glob error: {}", e)))?;
+
+        let mut files: Vec<String> = Vec::new();
+
+        for entry in matches {
+            match entry {
+                Ok(path) => {
+                    if let Ok(rel) = path.strip_prefix(base_dir) {
+                        files.push(rel.to_string_lossy().trim_start_matches('/').to_string());
+                    } else {
+                        files.push(path.to_string_lossy().to_string());
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Glob match error: {}", e);
+                }
+            }
+        }
+
+        files.sort();
+        if files.is_empty() {
+            Ok(format!("No files matching pattern '{}' found in '{}'", pattern, base_dir))
+        } else {
+            Ok(format!("Found {} file(s):\n{}", files.len(), files.join("\n")))
+        }
+    }
+}
+
+impl Default for GlobTool {
+    fn default() -> Self { Self::new() }
+}
+
+pub struct GrepTool;
+
+impl GrepTool {
+    pub fn new() -> Self { Self }
+    pub fn definition(&self) -> ToolDefinition {
+        ToolDefinition::new(
+            "grep",
+            "Search for lines containing a pattern in files. Supports basic regex patterns.",
+            ToolParameters::new(
+                vec!["pattern", "paths"],
+                vec![
+                    ("pattern", "string", Some("Text pattern or regex to search for")),
+                    ("paths", "array", Some("Array of file/directory paths to search in")),
+                    ("case_sensitive", "boolean", Some("Whether search should be case sensitive. Default: false")),
+                ],
+            ),
+        )
+    }
+    pub async fn execute(&self, arguments: Value, workspace: Option<String>) -> Result<String, ToolError> {
+        let pattern = arguments["pattern"]
+            .as_str()
+            .ok_or_else(|| ToolError::InvalidArguments("grep".to_string(), "pattern must be a string".into()))?;
+
+        let paths = arguments["paths"]
+            .as_array()
+            .ok_or_else(|| ToolError::InvalidArguments("grep".to_string(), "paths must be an array".into()))?;
+
+        let case_sensitive = arguments["case_sensitive"].as_bool().unwrap_or(false);
+
+        if paths.is_empty() {
+            return Err(ToolError::InvalidArguments("grep".to_string(), "paths array cannot be empty".into()));
+        }
+
+        let mut results: Vec<String> = Vec::new();
+        let pattern_lower = if case_sensitive {
+            pattern.to_string()
+        } else {
+            pattern.to_lowercase()
+        };
+
+        for path_val in paths {
+            let path = path_val.as_str().ok_or_else(|| {
+                ToolError::InvalidArguments("grep".to_string(), "path must be a string".into())
+            })?;
+
+            if let Err(e) = validate_workspace_path(path, &workspace) {
+                results.push(format!("[Path validation error] {}", e));
+                continue;
+            }
+
+            let path_obj = Path::new(path);
+
+            if path_obj.is_file() {
+                let content = tokio::fs::read_to_string(path)
+                    .await
+                    .map_err(|e| ToolError::IoError(format!("Failed to read {}: {}", path, e)))?;
+
+                let search_content = if case_sensitive {
+                    content.clone()
+                } else {
+                    content.to_lowercase()
+                };
+
+                for (line_num, line) in search_content.lines().enumerate() {
+                    if line.contains(&pattern_lower) {
+                        let original_line = content.lines().nth(line_num).unwrap_or("");
+                        results.push(format!("{}:{}: {}", path, line_num + 1, original_line));
+                    }
+                }
+            } else if path_obj.is_dir() {
+                grep_directory_traverse(path, &pattern_lower, case_sensitive, &mut results)
+                    .await?;
+            }
+        }
+
+        if results.is_empty() {
+            Ok(format!("No matches found for '{}'", pattern))
+        } else {
+            Ok(format!("Found {} match(es):\n{}", results.len(), results.join("\n")))
+        }
+    }
+}
+
+impl Default for GrepTool {
+    fn default() -> Self { Self::new() }
+}
+
+async fn grep_directory_traverse(
+    dir: &str,
+    pattern: &str,
+    case_sensitive: bool,
+    results: &mut Vec<String>,
+) -> Result<(), ToolError> {
+    let mut dir_entries = tokio::fs::read_dir(dir)
+        .await
+        .map_err(|e| ToolError::IoError(format!("Failed to read directory {}: {}", dir, e)))?;
+
+    while let Some(entry) = dir_entries.next_entry().await.map_err(|e| ToolError::IoError(e.to_string()))? {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+
+        if name.starts_with('.') || name == "node_modules" || name == "target" || name == ".git" {
+            continue;
+        }
+
+        let file_type = entry.file_type().await.map_err(|e| ToolError::IoError(e.to_string()))?;
+
+        if file_type.is_dir() {
+            Box::pin(grep_directory_traverse(
+                &path.to_string_lossy(),
+                pattern,
+                case_sensitive,
+                results,
+            ))
+            .await?;
+        } else if file_type.is_file() {
+            let is_text = name.ends_with(".rs")
+                || name.ends_with(".ts")
+                || name.ends_with(".tsx")
+                || name.ends_with(".js")
+                || name.ends_with(".jsx")
+                || name.ends_with(".py")
+                || name.ends_with(".md")
+                || name.ends_with(".json")
+                || name.ends_with(".txt")
+                || name.ends_with(".css")
+                || name.ends_with(".html")
+                || name.ends_with(".yaml")
+                || name.ends_with(".yml")
+                || name.ends_with(".toml");
+
+            if is_text {
+                let content = tokio::fs::read_to_string(&path)
+                    .await
+                    .map_err(|e| ToolError::IoError(format!("Failed to read {}: {}", path.display(), e)))?;
+
+                let search_content = if case_sensitive {
+                    content.clone()
+                } else {
+                    content.to_lowercase()
+                };
+
+                let path_str = path.to_string_lossy().to_string();
+                for (line_num, line) in search_content.lines().enumerate() {
+                    if line.contains(pattern) {
+                        let original_line = content.lines().nth(line_num).unwrap_or("");
+                        results.push(format!("{}:{}: {}", path_str, line_num + 1, original_line));
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}

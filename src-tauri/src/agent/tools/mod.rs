@@ -1,0 +1,423 @@
+//! Tool definitions and registry
+//!
+//! Provides:
+//! - ToolDefinition: JSON Schema for tool parameters
+//! - ToolResult: Execution result wrapper
+//! - ToolRegistry: Central tool registration and execution
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum ToolError {
+    #[error("Tool not found: {0}")]
+    ToolNotFound(String),
+    #[error("Invalid arguments for tool {0}: {1}")]
+    InvalidArguments(String, String),
+    #[error("Execution error: {0}")]
+    ExecutionError(String),
+    #[error("IO error: {0}")]
+    IoError(String),
+    #[error("Path validation failed: {0}")]
+    PathValidationError(String),
+}
+
+pub type ToolOpResult<T> = Result<T, ToolError>;
+
+pub fn validate_workspace_path(path: &str, workspace: &Option<String>) -> Result<(), ToolError> {
+    let Some(workspace_root) = workspace else {
+        return Ok(());
+    };
+
+    let canonical_workspace = match std::fs::canonicalize(workspace_root) {
+        Ok(p) => p,
+        Err(_) => {
+            return Err(ToolError::PathValidationError(
+                format!("Workspace path does not exist: {}", workspace_root)
+            ));
+        }
+    };
+
+    let canonical_requested = match std::fs::canonicalize(Path::new(path)) {
+        Ok(p) => p,
+        Err(e) => {
+            return Err(ToolError::PathValidationError(
+                format!("Path does not exist or is inaccessible: {} ({})", path, e)
+            ));
+        }
+    };
+
+    if !canonical_requested.starts_with(&canonical_workspace) {
+        return Err(ToolError::PathValidationError(
+            format!(
+                "Path '{}' is outside the workspace directory '{}'. Access is denied for security reasons.",
+                path, workspace_root
+            )
+        ));
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolParameter {
+    #[serde(rename = "type")]
+    pub param_type: String,
+    pub description: Option<String>,
+    #[serde(default)]
+    pub default: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolParameters {
+    #[serde(rename = "type")]
+    pub params_type: String,
+    pub properties: HashMap<String, ToolParameter>,
+    #[serde(default)]
+    pub required: Vec<String>,
+    #[serde(default)]
+    pub additionalProperties: bool,
+}
+
+impl ToolParameters {
+    pub fn new(required: Vec<&str>, properties: Vec<(&str, &str, Option<&str>)>) -> Self {
+        let mut props = HashMap::new();
+        for (name, param_type, description) in properties {
+            props.insert(
+                name.to_string(),
+                ToolParameter {
+                    param_type: param_type.to_string(),
+                    description: description.map(String::from),
+                    default: None,
+                },
+            );
+        }
+        Self {
+            params_type: "object".to_string(),
+            properties: props,
+            required: required.iter().map(|s| s.to_string()).collect(),
+            additionalProperties: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolDefinition {
+    #[serde(rename = "type")]
+    pub tool_type: String,
+    pub function: ToolFunction,
+}
+
+impl ToolDefinition {
+    pub fn new(name: &str, description: &str, parameters: ToolParameters) -> Self {
+        Self {
+            tool_type: "function".to_string(),
+            function: ToolFunction {
+                name: name.to_string(),
+                description: description.to_string(),
+                parameters,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolFunction {
+    pub name: String,
+    pub description: String,
+    pub parameters: ToolParameters,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolResult {
+    pub tool_call_id: String,
+    pub output: String,
+    pub is_error: bool,
+    pub original_content: Option<String>,
+    pub new_content: Option<String>,
+    pub file_path: Option<String>,
+}
+
+impl ToolResult {
+    pub fn success(tool_call_id: &str, output: impl Into<String>) -> Self {
+        Self {
+            tool_call_id: tool_call_id.to_string(),
+            output: output.into(),
+            is_error: false,
+            original_content: None,
+            new_content: None,
+            file_path: None,
+        }
+    }
+
+    pub fn error(tool_call_id: &str, error: impl Into<String>) -> Self {
+        Self {
+            tool_call_id: tool_call_id.to_string(),
+            output: error.into(),
+            is_error: true,
+            original_content: None,
+            new_content: None,
+            file_path: None,
+        }
+    }
+
+    pub fn file_modified(
+        tool_call_id: &str,
+        output: impl Into<String>,
+        file_path: impl Into<String>,
+        original_content: impl Into<String>,
+        new_content: impl Into<String>,
+    ) -> Self {
+        Self {
+            tool_call_id: tool_call_id.to_string(),
+            output: output.into(),
+            is_error: false,
+            original_content: Some(original_content.into()),
+            new_content: Some(new_content.into()),
+            file_path: Some(file_path.into()),
+        }
+    }
+}
+
+// Re-export tool structs and their enum variants for the unified ToolExecutor
+mod file_tools;
+mod search_tools;
+mod office_tools;
+
+pub use file_tools::{ReadFileTool, WriteFileTool, EditFileTool};
+pub use search_tools::{ListDirTool, GlobTool, GrepTool};
+pub use office_tools::{ReadOfficeFileTool, WriteOfficeFileTool};
+
+/// Unified executor enum combining all tool implementations
+pub enum ToolExecutor {
+    ReadFile(file_tools::ReadFileTool),
+    WriteFile(file_tools::WriteFileTool),
+    EditFile(file_tools::EditFileTool),
+    ListDir(search_tools::ListDirTool),
+    Glob(search_tools::GlobTool),
+    Grep(search_tools::GrepTool),
+    ReadOfficeFile(office_tools::ReadOfficeFileTool),
+    WriteOfficeFile(office_tools::WriteOfficeFileTool),
+}
+
+impl ToolExecutor {
+    pub fn name(&self) -> &'static str {
+        match self {
+            ToolExecutor::ReadFile(_) => "read_file",
+            ToolExecutor::WriteFile(_) => "write_file",
+            ToolExecutor::EditFile(_) => "edit_file",
+            ToolExecutor::ListDir(_) => "list_dir",
+            ToolExecutor::Glob(_) => "glob",
+            ToolExecutor::Grep(_) => "grep",
+            ToolExecutor::ReadOfficeFile(_) => "read_office_file",
+            ToolExecutor::WriteOfficeFile(_) => "write_office_file",
+        }
+    }
+
+    pub fn definition(&self) -> ToolDefinition {
+        match self {
+            ToolExecutor::ReadFile(t) => t.definition(),
+            ToolExecutor::WriteFile(t) => t.definition(),
+            ToolExecutor::EditFile(t) => t.definition(),
+            ToolExecutor::ListDir(t) => t.definition(),
+            ToolExecutor::Glob(t) => t.definition(),
+            ToolExecutor::Grep(t) => t.definition(),
+            ToolExecutor::ReadOfficeFile(t) => t.definition(),
+            ToolExecutor::WriteOfficeFile(t) => t.definition(),
+        }
+    }
+
+    pub async fn execute(&self, arguments: Value, workspace: Option<String>) -> Result<String, ToolError> {
+        match self {
+            ToolExecutor::ReadFile(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::WriteFile(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::EditFile(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::ListDir(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::Glob(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::Grep(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::ReadOfficeFile(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::WriteOfficeFile(t) => t.execute(arguments, workspace).await,
+        }
+    }
+}
+
+pub struct ToolRegistry {
+    definitions: HashMap<String, ToolDefinition>,
+    executors: HashMap<String, ToolExecutor>,
+    workspace: Option<String>,
+}
+
+impl Default for ToolRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ToolRegistry {
+    pub fn new() -> Self {
+        let mut registry = Self {
+            definitions: HashMap::new(),
+            executors: HashMap::new(),
+            workspace: None,
+        };
+        registry.register_builtin_tools();
+        registry
+    }
+
+    pub fn new_read_only() -> Self {
+        let mut registry = Self {
+            definitions: HashMap::new(),
+            executors: HashMap::new(),
+            workspace: None,
+        };
+        let tools: Vec<ToolExecutor> = vec![
+            ToolExecutor::ReadFile(ReadFileTool),
+            ToolExecutor::ListDir(ListDirTool),
+            ToolExecutor::Glob(GlobTool),
+            ToolExecutor::Grep(GrepTool),
+            ToolExecutor::ReadOfficeFile(ReadOfficeFileTool),
+        ];
+
+        for tool in tools {
+            let name = tool.name().to_string();
+            let def = tool.definition();
+            registry.definitions.insert(name.clone(), def);
+            registry.executors.insert(name, tool);
+        }
+        registry
+    }
+
+    pub fn set_workspace(&mut self, workspace: Option<String>) {
+        self.workspace = workspace;
+    }
+
+    pub fn get_workspace(&self) -> Option<&String> {
+        self.workspace.as_ref()
+    }
+
+    fn register_builtin_tools(&mut self) {
+        let tools: Vec<ToolExecutor> = vec![
+            ToolExecutor::ReadFile(ReadFileTool),
+            ToolExecutor::WriteFile(WriteFileTool),
+            ToolExecutor::EditFile(EditFileTool),
+            ToolExecutor::ListDir(ListDirTool),
+            ToolExecutor::Glob(GlobTool),
+            ToolExecutor::Grep(GrepTool),
+            ToolExecutor::ReadOfficeFile(ReadOfficeFileTool),
+            ToolExecutor::WriteOfficeFile(WriteOfficeFileTool),
+        ];
+
+        for tool in tools {
+            let name = tool.name().to_string();
+            let def = tool.definition();
+            self.definitions.insert(name.clone(), def);
+            self.executors.insert(name, tool);
+        }
+    }
+
+    pub fn register(&mut self, executor: ToolExecutor) {
+        let name = executor.name().to_string();
+        let def = executor.definition();
+        self.definitions.insert(name.clone(), def);
+        self.executors.insert(name, executor);
+    }
+
+    pub fn get_definition(&self, name: &str) -> Option<&ToolDefinition> {
+        self.definitions.get(name)
+    }
+
+    pub fn get_all_definitions(&self) -> Vec<ToolDefinition> {
+        self.definitions.values().cloned().collect()
+    }
+
+    pub fn has_tool(&self, name: &str) -> bool {
+        self.executors.contains_key(name)
+    }
+
+    pub async fn execute(&self, tool_call: &ToolCall) -> ToolResult {
+        let executor = match self.executors.get(&tool_call.name) {
+            Some(ex) => ex,
+            None => {
+                return ToolResult::error(
+                    &tool_call.id,
+                    format!("Tool '{}' not found. Available tools: {:?}", tool_call.name, self.definitions.keys().collect::<Vec<_>>()),
+                );
+            }
+        };
+
+        let workspace = self.workspace.clone();
+
+        let is_file_modification = matches!(
+            tool_call.name.as_str(),
+            "write_file" | "edit_file" | "write_office_file"
+        );
+
+        let original_content: Option<String> = if is_file_modification {
+            if let Some(path) = tool_call.arguments.get("path").and_then(|v| v.as_str()) {
+                if let Err(e) = validate_workspace_path(path, &workspace) {
+                    return ToolResult::error(&tool_call.id, e.to_string());
+                }
+                tokio::fs::read_to_string(path).await.ok()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        match executor.execute(tool_call.arguments.clone(), workspace).await {
+            Ok(output) => {
+                if is_file_modification {
+                    let file_path = tool_call.arguments.get("path").and_then(|v| v.as_str());
+                    let new_content = if let Some(path) = file_path {
+                        tokio::fs::read_to_string(path).await.ok()
+                    } else {
+                        None
+                    };
+
+                    ToolResult {
+                        tool_call_id: tool_call.id.clone(),
+                        output,
+                        is_error: false,
+                        original_content,
+                        new_content,
+                        file_path: file_path.map(String::from),
+                    }
+                } else {
+                    ToolResult::success(&tool_call.id, output)
+                }
+            }
+            Err(e) => ToolResult::error(&tool_call.id, e.to_string()),
+        }
+    }
+
+    pub async fn execute_many(&self, tool_calls: &[ToolCall]) -> Vec<ToolResult> {
+        let mut results = Vec::new();
+        for tool_call in tool_calls {
+            results.push(self.execute(tool_call).await);
+        }
+        results
+    }
+}
+
+pub type SharedToolRegistry = Arc<RwLock<ToolRegistry>>;
+
+pub fn create_tool_registry() -> SharedToolRegistry {
+    Arc::new(RwLock::new(ToolRegistry::new()))
+}
+
+pub fn create_read_only_tool_registry() -> SharedToolRegistry {
+    Arc::new(RwLock::new(ToolRegistry::new_read_only()))
+}

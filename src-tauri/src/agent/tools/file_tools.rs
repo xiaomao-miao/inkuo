@@ -1,0 +1,166 @@
+//! File manipulation tools: read_file, write_file, edit_file
+
+use serde_json::Value;
+use std::path::Path;
+
+use super::{ToolDefinition, ToolError, ToolParameters, validate_workspace_path};
+
+pub fn definition() -> ToolDefinition {
+    ToolDefinition::new(
+        "read_file",
+        "Read the complete contents of a file from the filesystem.",
+        ToolParameters::new(
+            vec!["path"],
+            vec![
+                ("path", "string", Some("Absolute path to the file to read")),
+                ("offset", "integer", Some("Line number to start reading from (0-indexed). Default: 0")),
+                ("limit", "integer", Some("Maximum number of lines to read. Default: all lines")),
+            ],
+        ),
+    )
+}
+
+pub async fn execute(arguments: Value, workspace: Option<String>) -> Result<String, ToolError> {
+    let path = arguments["path"]
+        .as_str()
+        .ok_or_else(|| ToolError::InvalidArguments("read_file".to_string(), "path must be a string".into()))?;
+
+    validate_workspace_path(path, &workspace)?;
+
+    let offset = arguments["offset"].as_u64().unwrap_or(0) as usize;
+    let limit = arguments["limit"].as_u64();
+
+    tokio::fs::read_to_string(path)
+        .await
+        .map_err(|e| ToolError::IoError(format!("Failed to read file {}: {}", path, e)))
+        .map(|content| {
+            let lines: Vec<&str> = content.lines().collect();
+            if offset >= lines.len() {
+                return String::new();
+            }
+            let end = limit.map(|l| (offset + l as usize).min(lines.len())).unwrap_or(lines.len());
+            lines[offset..end].join("\n")
+        })
+}
+
+pub struct ReadFileTool;
+
+impl ReadFileTool {
+    pub fn new() -> Self { Self }
+    pub fn definition(&self) -> ToolDefinition { definition() }
+    pub async fn execute(&self, arguments: Value, workspace: Option<String>) -> Result<String, ToolError> {
+        execute(arguments, workspace).await
+    }
+}
+
+impl Default for ReadFileTool {
+    fn default() -> Self { Self::new() }
+}
+
+// ─── WriteFile ────────────────────────────────────────────────────────────────
+
+pub struct WriteFileTool;
+
+impl WriteFileTool {
+    pub fn new() -> Self { Self }
+    pub fn definition(&self) -> ToolDefinition {
+        ToolDefinition::new(
+            "write_file",
+            "Create a new file or overwrite an existing file with the given content.",
+            ToolParameters::new(
+                vec!["path", "content"],
+                vec![
+                    ("path", "string", Some("Absolute path where the file should be created")),
+                    ("content", "string", Some("The complete content to write to the file")),
+                ],
+            ),
+        )
+    }
+    pub async fn execute(&self, arguments: Value, workspace: Option<String>) -> Result<String, ToolError> {
+        let path = arguments["path"]
+            .as_str()
+            .ok_or_else(|| ToolError::InvalidArguments("write_file".to_string(), "path must be a string".into()))?;
+
+        validate_workspace_path(path, &workspace)?;
+
+        let content = arguments["content"]
+            .as_str()
+            .ok_or_else(|| ToolError::InvalidArguments("write_file".to_string(), "content must be a string".into()))?;
+
+        if let Some(parent) = Path::new(path).parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|e| ToolError::IoError(format!("Failed to create directory: {}", e)))?;
+        }
+
+        tokio::fs::write(path, content)
+            .await
+            .map_err(|e| ToolError::IoError(format!("Failed to write file {}: {}", path, e)))?;
+
+        Ok(format!("File '{}' written successfully", path))
+    }
+}
+
+impl Default for WriteFileTool {
+    fn default() -> Self { Self::new() }
+}
+
+// ─── EditFile ──────────────────────────────────────────────────────────────
+
+pub struct EditFileTool;
+
+impl EditFileTool {
+    pub fn new() -> Self { Self }
+    pub fn definition(&self) -> ToolDefinition {
+        ToolDefinition::new(
+            "edit_file",
+            "Edit a specific portion of an existing file by replacing old_text with new_text.",
+            ToolParameters::new(
+                vec!["path", "old_text", "new_text"],
+                vec![
+                    ("path", "string", Some("Absolute path to the file to edit")),
+                    ("old_text", "string", Some("The exact text to find and replace. Must match exactly including whitespace and newlines.")),
+                    ("new_text", "string", Some("The replacement text")),
+                ],
+            ),
+        )
+    }
+    pub async fn execute(&self, arguments: Value, workspace: Option<String>) -> Result<String, ToolError> {
+        let path = arguments["path"]
+            .as_str()
+            .ok_or_else(|| ToolError::InvalidArguments("edit_file".to_string(), "path must be a string".into()))?;
+
+        validate_workspace_path(path, &workspace)?;
+
+        let old_text = arguments["old_text"]
+            .as_str()
+            .ok_or_else(|| ToolError::InvalidArguments("edit_file".to_string(), "old_text must be a string".into()))?;
+
+        let new_text = arguments["new_text"]
+            .as_str()
+            .ok_or_else(|| ToolError::InvalidArguments("edit_file".to_string(), "new_text must be a string".into()))?;
+
+        let content = tokio::fs::read_to_string(path)
+            .await
+            .map_err(|e| ToolError::IoError(format!("Failed to read file {}: {}", path, e)))?;
+
+        if !content.contains(old_text) {
+            return Err(ToolError::InvalidArguments(
+                "edit_file".to_string(),
+                format!("old_text not found in file. Make sure to provide the exact text including whitespace and newlines.\n\nSearched for:\n{}", old_text),
+            ));
+        }
+
+        let new_content = content.replace(old_text, new_text);
+
+        tokio::fs::write(path, &new_content)
+            .await
+            .map_err(|e| ToolError::IoError(format!("Failed to write file {}: {}", path, e)))?;
+
+        Ok(format!("File '{}' edited successfully", path))
+    }
+}
+
+impl Default for EditFileTool {
+    fn default() -> Self { Self::new() }
+}
