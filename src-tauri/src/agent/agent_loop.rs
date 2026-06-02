@@ -318,41 +318,51 @@ impl AgentExecutor {
                 result.tool_call_id = parsed.id.clone();
 
                 // Compute diff summary for file modification tools
-                let diff_summary: Option<FileDiffSummary> = if let (Some(file_path), Some(original), Some(new_content)) = (
+                // Only compute if we have original content; new content will be read lazily if needed
+                let diff_summary: Option<FileDiffSummary> = if let (Some(file_path), Some(original)) = (
                     &result.file_path,
                     &result.original_content,
-                    &result.new_content,
                 ) {
-                    let diff_result = diff::compute_diff(original, new_content);
-                    let file_name = std::path::Path::new(file_path)
-                        .file_name()
-                        .map(|s| s.to_string_lossy().to_string())
-                        .unwrap_or_else(|| file_path.clone());
+                    // Try to read new content for diff, but don't fail if it can't be read
+                    let new_content = std::path::Path::new(file_path)
+                        .exists()
+                        .then(|| std::fs::read_to_string(file_path).ok())
+                        .flatten();
 
-                    let hunks = diff_result.hunks.into_iter().map(|h| StreamDiffHunk {
-                        id: h.id,
-                        old_start: h.old_range.start_line,
-                        old_lines: h.old_range.end_line.saturating_sub(h.old_range.start_line) + 1,
-                        new_start: h.new_range.start_line,
-                        new_lines: h.new_range.end_line.saturating_sub(h.new_range.start_line) + 1,
-                        changes: h.changes.into_iter().map(|c| StreamDiffChange {
-                            tag: match c.tag {
-                                diff::ChangeType::Delete => "delete".to_string(),
-                                diff::ChangeType::Insert => "insert".to_string(),
-                                diff::ChangeType::Equal => "equal".to_string(),
-                            },
-                            old_line: c.old_line,
-                            new_line: c.new_line,
-                            content: c.content,
-                        }).collect(),
-                    }).collect();
+                    if let Some(new_content) = new_content {
+                        let diff_result = diff::compute_diff(original, &new_content);
+                        let file_name = std::path::Path::new(file_path)
+                            .file_name()
+                            .map(|s| s.to_string_lossy().to_string())
+                            .unwrap_or_else(|| file_path.clone());
 
-                    Some(FileDiffSummary {
-                        file_name,
-                        added_lines: diff_result.summary.added_lines,
-                        deleted_lines: diff_result.summary.deleted_lines,
-                        hunks,
-                    })
+                        let hunks = diff_result.hunks.into_iter().map(|h| StreamDiffHunk {
+                            id: h.id,
+                            old_start: h.old_range.start_line,
+                            old_lines: h.old_range.end_line.saturating_sub(h.old_range.start_line) + 1,
+                            new_start: h.new_range.start_line,
+                            new_lines: h.new_range.end_line.saturating_sub(h.new_range.start_line) + 1,
+                            changes: h.changes.into_iter().map(|c| StreamDiffChange {
+                                tag: match c.tag {
+                                    diff::ChangeType::Delete => "delete".to_string(),
+                                    diff::ChangeType::Insert => "insert".to_string(),
+                                    diff::ChangeType::Equal => "equal".to_string(),
+                                },
+                                old_line: c.old_line,
+                                new_line: c.new_line,
+                                content: c.content,
+                            }).collect(),
+                        }).collect();
+
+                        Some(FileDiffSummary {
+                            file_name,
+                            added_lines: diff_result.summary.added_lines,
+                            deleted_lines: diff_result.summary.deleted_lines,
+                            hunks,
+                        })
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 };

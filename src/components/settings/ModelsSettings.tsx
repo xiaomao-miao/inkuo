@@ -94,12 +94,12 @@ export const ModelsSettings: React.FC<ModelsSettingsProps> = ({ onClose }) => {
         },
       });
       setTestResults((prev) => ({ ...prev, [config.id]: result }));
-    } catch (err: any) {
+    } catch (err) {
       setTestResults((prev) => ({
         ...prev,
         [config.id]: {
           success: false,
-          message: err.message || '连接失败，请检查配置',
+          message: err instanceof Error ? err.message : '连接失败，请检查配置',
         },
       }));
     } finally {

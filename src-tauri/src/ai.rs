@@ -142,6 +142,87 @@ impl AIProviderAdapter {
         Self { config }
     }
 
+    // ─── Helper: Build chat request body ────────────────────────────────────────
+    fn build_chat_body(&self, system_prompt: &str, user_prompt: &str) -> serde_json::Value {
+        serde_json::json!({
+            "model": self.config.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            "temperature": self.config.temperature,
+            "max_tokens": self.config.max_tokens,
+        })
+    }
+
+    fn build_ollama_body(&self, system_prompt: &str, user_prompt: &str) -> serde_json::Value {
+        serde_json::json!({
+            "model": self.config.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            "stream": false,
+            "options": {
+                "temperature": self.config.temperature,
+            }
+        })
+    }
+
+    // ─── Helper: Handle HTTP error response ───────────────────────────────────
+    fn handle_http_error(status: reqwest::StatusCode, error_body: &str) -> AIError {
+        match status.as_u16() {
+            401 => AIError::AuthError("Invalid API key".to_string()),
+            429 => AIError::RateLimited,
+            503 => AIError::ModelError(format!(
+                "Service Unavailable (503) - The API service is temporarily unavailable. \
+                Please try again later or switch to a different API provider. Details: {}",
+                error_body
+            )),
+            _ => AIError::ModelError(format!(
+                "HTTP {} - {}: {}",
+                status,
+                status.canonical_reason().unwrap_or("Unknown"),
+                error_body
+            )),
+        }
+    }
+
+    // ─── Helper: Stream SSE and collect text delta ─────────────────────────────
+    async fn stream_sse_text(
+        response: reqwest::Response,
+        mut on_delta: impl FnMut(String) + Send,
+    ) -> Result<String, AIError> {
+        let mut full = String::new();
+        let mut buffer = String::new();
+
+        let mut stream = response.bytes_stream();
+        while let Some(item) = stream.next().await {
+            let bytes = item.map_err(|e| AIError::NetworkError(e.to_string()))?;
+            let chunk = String::from_utf8_lossy(&bytes);
+            buffer.push_str(chunk.as_ref());
+
+            while let Some((event, rest)) = crate::openai_stream::take_next_sse_event(&buffer) {
+                buffer = rest;
+
+                for data in crate::openai_stream::iter_sse_event_data_lines(&event) {
+                    if data.trim() == "[DONE]" {
+                        return Ok(full);
+                    }
+
+                    if let Some(delta) = crate::openai_stream::extract_openai_delta_content(data)? {
+                        if !delta.is_empty() {
+                            full.push_str(&delta);
+                            on_delta(delta);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(full)
+    }
+
     pub async fn chat_stream<F>(
         &self,
         mode: String,
@@ -307,16 +388,7 @@ Context (optional references):
         user_prompt: &str,
     ) -> Result<String, AIError> {
         let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
-
-        let body = serde_json::json!({
-            "model": self.config.model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            "temperature": self.config.temperature,
-            "max_tokens": self.config.max_tokens,
-        });
+        let body = self.build_chat_body(system_prompt, user_prompt);
 
         let response = HTTP_CLIENT
             .post(&url)
@@ -330,25 +402,7 @@ Context (optional references):
         if !response.status().is_success() {
             let status = response.status();
             let error_body = response.text().await.unwrap_or_default();
-
-            if status.as_u16() == 401 {
-                return Err(AIError::AuthError("Invalid API key".to_string()));
-            } else if status.as_u16() == 429 {
-                return Err(AIError::RateLimited);
-            } else if status.as_u16() == 503 {
-                return Err(AIError::ModelError(format!(
-                    "Service Unavailable (503) - The API service is temporarily unavailable. \
-                    Please try again later or switch to a different API provider. \
-                    Details: {}",
-                    error_body
-                )));
-            }
-            return Err(AIError::ModelError(format!(
-                "HTTP {} - {}. Details: {}",
-                status,
-                status.canonical_reason().unwrap_or("Unknown"),
-                error_body
-            )));
+            return Err(Self::handle_http_error(status, &error_body));
         }
 
         let response_json: serde_json::Value = response
@@ -375,7 +429,6 @@ Context (optional references):
         F: FnMut(String) + Send,
     {
         let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
-
         let body = serde_json::json!({
             "model": self.config.model,
             "messages": [
@@ -399,56 +452,10 @@ Context (optional references):
         if !response.status().is_success() {
             let status = response.status();
             let error_body = response.text().await.unwrap_or_default();
-
-            if status.as_u16() == 401 {
-                return Err(AIError::AuthError("Invalid API key".to_string()));
-            } else if status.as_u16() == 429 {
-                return Err(AIError::RateLimited);
-            } else if status.as_u16() == 503 {
-                return Err(AIError::ModelError(format!(
-                    "Service Unavailable (503) - The API service is temporarily unavailable. \
-                    Please try again later or switch to a different API provider. \
-                    Details: {}",
-                    error_body
-                )));
-            }
-            return Err(AIError::ModelError(format!(
-                "HTTP {} - {}. Details: {}",
-                status,
-                status.canonical_reason().unwrap_or("Unknown"),
-                error_body
-            )));
+            return Err(Self::handle_http_error(status, &error_body));
         }
 
-        let mut full = String::new();
-        let mut buffer = String::new();
-
-        let mut stream = response.bytes_stream();
-        while let Some(item) = stream.next().await {
-            let bytes = item.map_err(|e| AIError::NetworkError(e.to_string()))?;
-            let chunk = String::from_utf8_lossy(&bytes);
-            buffer.push_str(chunk.as_ref());
-
-            // Parse complete SSE events (delimited by a blank line).
-            while let Some((event, rest)) = crate::openai_stream::take_next_sse_event(&buffer) {
-                buffer = rest;
-
-                for data in crate::openai_stream::iter_sse_event_data_lines(&event) {
-                    if data.trim() == "[DONE]" {
-                        return Ok(full);
-                    }
-
-                    if let Some(delta) = crate::openai_stream::extract_openai_delta_content(data)? {
-                        if !delta.is_empty() {
-                            full.push_str(&delta);
-                            on_delta(delta);
-                        }
-                    }
-                }
-            }
-        }
-
-        Ok(full)
+        Self::stream_sse_text(response, on_delta).await
     }
 
     async fn call_ollama_chat(
@@ -457,42 +464,7 @@ Context (optional references):
         system_prompt: &str,
         user_prompt: &str,
     ) -> Result<String, AIError> {
-        let url = format!("{}/api/chat", base_url.trim_end_matches('/'));
-
-        let body = serde_json::json!({
-            "model": self.config.model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            "stream": false,
-            "options": {
-                "temperature": self.config.temperature,
-            }
-        });
-
-        let response = HTTP_CLIENT
-            .post(&url)
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| AIError::NetworkError(e.to_string()))?;
-
-        if !response.status().is_success() {
-            return Err(AIError::ModelError(format!("HTTP {}", response.status())));
-        }
-
-        let response_json: serde_json::Value = response
-            .json()
-            .await
-            .map_err(|e| AIError::InvalidResponse(e.to_string()))?;
-
-        let content = response_json["message"]["content"]
-            .as_str()
-            .ok_or_else(|| AIError::InvalidResponse("Missing content in response".to_string()))?;
-
-        Ok(content.to_string())
+        self.call_ollama_chat_only(base_url, system_prompt, user_prompt).await
     }
 
     async fn call_openai_compatible_edit_stream<F>(
@@ -507,7 +479,6 @@ Context (optional references):
         F: FnMut(String) + Send,
     {
         let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
-
         let body = serde_json::json!({
             "model": self.config.model,
             "messages": [
@@ -531,55 +502,10 @@ Context (optional references):
         if !response.status().is_success() {
             let status = response.status();
             let error_body = response.text().await.unwrap_or_default();
-
-            if status.as_u16() == 401 {
-                return Err(AIError::AuthError("Invalid API key".to_string()));
-            } else if status.as_u16() == 429 {
-                return Err(AIError::RateLimited);
-            } else if status.as_u16() == 503 {
-                return Err(AIError::ModelError(format!(
-                    "Service Unavailable (503) - The API service is temporarily unavailable. \
-                    Please try again later or switch to a different API provider. \
-                    Details: {}",
-                    error_body
-                )));
-            }
-            return Err(AIError::ModelError(format!(
-                "HTTP {} - {}. Details: {}",
-                status,
-                status.canonical_reason().unwrap_or("Unknown"),
-                error_body
-            )));
+            return Err(Self::handle_http_error(status, &error_body));
         }
 
-        let mut full = String::new();
-        let mut buffer = String::new();
-
-        let mut stream = response.bytes_stream();
-        while let Some(item) = stream.next().await {
-            let bytes = item.map_err(|e| AIError::NetworkError(e.to_string()))?;
-            let chunk = String::from_utf8_lossy(&bytes);
-            buffer.push_str(chunk.as_ref());
-
-            // Parse complete SSE events (delimited by a blank line).
-            while let Some((event, rest)) = crate::openai_stream::take_next_sse_event(&buffer) {
-                buffer = rest;
-
-                for data in crate::openai_stream::iter_sse_event_data_lines(&event) {
-                    if data.trim() == "[DONE]" {
-                        return self.parse_ai_response(&full);
-                    }
-
-                    if let Some(delta) = crate::openai_stream::extract_openai_delta_content(data)? {
-                        if !delta.is_empty() {
-                            full.push_str(&delta);
-                            on_delta(delta);
-                        }
-                    }
-                }
-            }
-        }
-
+        let full = Self::stream_sse_text(response, on_delta).await?;
         self.parse_ai_response(&full)
     }
 
@@ -591,16 +517,7 @@ Context (optional references):
         user_prompt: &str,
     ) -> Result<AIEditResponse, AIError> {
         let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
-        
-        let body = serde_json::json!({
-            "model": self.config.model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            "temperature": self.config.temperature,
-            "max_tokens": self.config.max_tokens,
-        });
+        let body = self.build_chat_body(system_prompt, user_prompt);
 
         let response = HTTP_CLIENT
             .post(&url)
@@ -614,25 +531,7 @@ Context (optional references):
         if !response.status().is_success() {
             let status = response.status();
             let error_body = response.text().await.unwrap_or_default();
-
-            if status.as_u16() == 401 {
-                return Err(AIError::AuthError("Invalid API key".to_string()));
-            } else if status.as_u16() == 429 {
-                return Err(AIError::RateLimited);
-            } else if status.as_u16() == 503 {
-                return Err(AIError::ModelError(format!(
-                    "Service Unavailable (503) - The API service is temporarily unavailable. \
-                    Please try again later or switch to a different API provider. \
-                    Details: {}",
-                    error_body
-                )));
-            }
-            return Err(AIError::ModelError(format!(
-                "HTTP {} - {}. Details: {}",
-                status,
-                status.canonical_reason().unwrap_or("Unknown"),
-                error_body
-            )));
+            return Err(Self::handle_http_error(status, &error_body));
         }
 
         let response_json: serde_json::Value = response
@@ -646,26 +545,10 @@ Context (optional references):
 
         self.parse_ai_response(content)
     }
-    
-    async fn call_ollama(
-        &self,
-        base_url: &str,
-        system_prompt: &str,
-        user_prompt: &str,
-    ) -> Result<AIEditResponse, AIError> {
+
+    async fn call_ollama_chat_only(&self, base_url: &str, system_prompt: &str, user_prompt: &str) -> Result<String, AIError> {
         let url = format!("{}/api/chat", base_url.trim_end_matches('/'));
-        
-        let body = serde_json::json!({
-            "model": self.config.model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            "stream": false,
-            "options": {
-                "temperature": self.config.temperature,
-            }
-        });
+        let body = self.build_ollama_body(system_prompt, user_prompt);
 
         let response = HTTP_CLIENT
             .post(&url)
@@ -684,13 +567,22 @@ Context (optional references):
             .await
             .map_err(|e| AIError::InvalidResponse(e.to_string()))?;
 
-        let content = response_json["message"]["content"]
+        response_json["message"]["content"]
             .as_str()
-            .ok_or_else(|| AIError::InvalidResponse("Missing content in response".to_string()))?;
-
-        self.parse_ai_response(content)
+            .map(String::from)
+            .ok_or_else(|| AIError::InvalidResponse("Missing content in response".to_string()))
     }
-    
+
+    async fn call_ollama(
+        &self,
+        base_url: &str,
+        system_prompt: &str,
+        user_prompt: &str,
+    ) -> Result<AIEditResponse, AIError> {
+        let content = self.call_ollama_chat_only(base_url, system_prompt, user_prompt).await?;
+        self.parse_ai_response(&content)
+    }
+
     fn parse_ai_response(&self, content: &str) -> Result<AIEditResponse, AIError> {
         // Try to parse as JSON
         let trimmed = content.trim();

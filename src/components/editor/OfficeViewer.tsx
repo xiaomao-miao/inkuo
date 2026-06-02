@@ -219,6 +219,8 @@ export const WordEditor: React.FC<WordEditorProps> = ({
 
     // No cached buffer — must read from disk
     loadFromDisk();
+    // Note: Uses ref-based version tracking (wordLastVersionRef) to avoid duplicate loads.
+    // Deps exclude loadFromDisk and setDocumentBuffer intentionally.
   }, [officeBufferVersion, initialBuffer]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── When the store cache becomes available (e.g., restored after reload) ─
@@ -231,6 +233,7 @@ export const WordEditor: React.FC<WordEditorProps> = ({
       setDocumentBuffer(initialBuffer);
       setLoading(false);
     }
+    // Note: Uses loading state to detect when cache becomes available.
   }, [initialBuffer, loading]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Sync dirty state to sidebar on mount (handles restored dirty state) ───
@@ -238,6 +241,7 @@ export const WordEditor: React.FC<WordEditorProps> = ({
     if (isActive && isDirty) {
       setOpenTabDirty(filePath, true);
     }
+    // Note: Only syncs on mount/isDirty changes, not on every setOpenTabDirty reference change.
   }, [isActive, isDirty]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Hide DocxEditor's top menu buttons ─────────────────────────────────
@@ -469,6 +473,7 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
     }
 
     loadFromDisk();
+    // Note: Uses ref-based version tracking (excelLastVersionRef) to avoid duplicate loads.
   }, [officeBufferVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Sync dirty state to sidebar ─────────────────────────────────────────
@@ -476,6 +481,7 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
     if (isActive && isDirty) {
       setOpenTabDirty(filePath, true);
     }
+    // Note: Only syncs when active or dirty state changes.
   }, [isActive, isDirty]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSave = useCallback(async () => {

@@ -88,8 +88,12 @@ function getSnippet(view: EditorView) {
   return { snippetText, cursorInSnippet, from };
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const isComposing = (view: EditorView) => (view as any).composing === true;
+// ProseMirror's EditorView has a 'composing' property not in the type definitions
+// This is used to detect IME composition state
+const isComposing = (view: EditorView) => {
+  const viewWithComposing = view as EditorView & { composing?: boolean };
+  return viewWithComposing.composing === true;
+};
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 

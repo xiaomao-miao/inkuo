@@ -364,12 +364,22 @@ impl ToolRegistry {
             "write_file" | "edit_file" | "write_office_file"
         );
 
+        let file_path = is_file_modification
+            .then(|| tool_call.arguments.get("path").and_then(|v| v.as_str()))
+            .flatten();
+
+        // Only read original content if we need it and it's not already provided
         let original_content: Option<String> = if is_file_modification {
-            if let Some(path) = tool_call.arguments.get("path").and_then(|v| v.as_str()) {
+            if let Some(path) = file_path {
                 if let Err(e) = validate_workspace_path(path, &workspace) {
                     return ToolResult::error(&tool_call.id, e.to_string());
                 }
-                tokio::fs::read_to_string(path).await.ok()
+                // Only read if file exists
+                if std::path::Path::new(path).exists() {
+                    tokio::fs::read_to_string(path).await.ok()
+                } else {
+                    None
+                }
             } else {
                 None
             }
@@ -380,19 +390,14 @@ impl ToolRegistry {
         match executor.execute(tool_call.arguments.clone(), workspace).await {
             Ok(output) => {
                 if is_file_modification {
-                    let file_path = tool_call.arguments.get("path").and_then(|v| v.as_str());
-                    let new_content = if let Some(path) = file_path {
-                        tokio::fs::read_to_string(path).await.ok()
-                    } else {
-                        None
-                    };
-
+                    // Don't read file again - reuse original_content for diff
+                    // The file has been written, we don't need to read it again
                     ToolResult {
                         tool_call_id: tool_call.id.clone(),
                         output,
                         is_error: false,
                         original_content,
-                        new_content,
+                        new_content: None, // Will be computed by caller if needed
                         file_path: file_path.map(String::from),
                     }
                 } else {

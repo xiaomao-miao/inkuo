@@ -124,19 +124,25 @@ impl Default for AppState {
 pub struct ReadDocumentResult {
     pub document: document::Document,
     pub content: String,
+    pub mtime: i64,  // Unix timestamp in milliseconds
 }
 
 #[tauri::command]
 pub async fn read_document(path: String) -> Result<ReadDocumentResult, String> {
     tracing::info!("Reading document: {}", path);
-    
+
     let content = std::fs::read_to_string(&path)
         .map_err(|e| format!("Failed to read file: {}", e))?;
-    
+
+    let mtime = std::fs::metadata(&path)
+        .and_then(|m| m.modified())
+        .map(|t| t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as i64)
+        .unwrap_or(0);
+
     let doc = document::Document::from_markdown(&content, &path)
         .map_err(|e| format!("Failed to parse document: {}", e))?;
-    
-    Ok(ReadDocumentResult { document: doc, content })
+
+    Ok(ReadDocumentResult { document: doc, content, mtime })
 }
 
 #[tauri::command]

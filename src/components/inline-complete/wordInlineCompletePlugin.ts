@@ -1,7 +1,7 @@
 import { Plugin, PluginKey, TextSelection } from 'prosemirror-state';
-import { Decoration, DecorationSet } from 'prosemirror-view';
-import type { EditorView } from 'prosemirror-view';
+import { Decoration, DecorationSet, type EditorView } from 'prosemirror-view';
 import { useInlineCompleteStore } from '../../store';
+import type { InlineStyle } from '../../types/inline-complete';
 import { markAccepted } from './useWordInlineCompleteTrigger';
 import {
   toggleBold,
@@ -48,7 +48,7 @@ export function clearWordInlineCompletion(view: EditorView) {
   view.dispatch(tr);
 }
 
-function buildDecorations(doc: any, state: WordInlineCompletePluginState): DecorationSet {
+function buildDecorations(doc: import('prosemirror-model').Node, state: WordInlineCompletePluginState): DecorationSet {
   if (!state.active || !state.text) return DecorationSet.empty;
 
   const deco = Decoration.widget(
@@ -66,12 +66,12 @@ function buildDecorations(doc: any, state: WordInlineCompletePluginState): Decor
   return DecorationSet.create(doc, [deco]);
 }
 
-function applyInlineStylesToInsertedText(view: EditorView, from: number, to: number, styles: any[] | undefined) {
+function applyInlineStylesToInsertedText(view: EditorView, from: number, to: number, styles: InlineStyle[] | undefined) {
   if (!styles || styles.length === 0) return;
 
   // Apply per-range formatting by selecting the range then running commands.
   // Commands are provided by docx-editor-core and operate on EditorState.
-  const applyForRange = (rangeFrom: number, rangeTo: number, s: any) => {
+  const applyForRange = (rangeFrom: number, rangeTo: number, s: InlineStyle) => {
     if (rangeFrom >= rangeTo) return;
 
     const trSel = view.state.tr.setSelection(TextSelection.create(view.state.doc, rangeFrom, rangeTo));

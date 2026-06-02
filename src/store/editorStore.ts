@@ -2,9 +2,12 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Document } from '../types';
 
+const STORAGE_VERSION = 2;
+
 interface DocumentState {
   document: Document | null;
   content: string;
+  mtime: number;  // Unix timestamp in ms, used for cache invalidation
   isDirty: boolean;
   selection: { from: number; to: number } | null;
   diffHunks: DiffHunk[];
@@ -34,7 +37,7 @@ export interface DiffChange {
 interface EditorState {
   documentContents: Record<string, DocumentState>;
 
-  setDocumentContent: (path: string, doc: Document, content: string) => void;
+  setDocumentContent: (path: string, doc: Document, content: string, mtime?: number) => void;
   setContent: (path: string, content: string) => void;
   setSelection: (path: string, selection: { from: number; to: number } | null) => void;
   setDiffHunks: (path: string, hunks: DiffHunk[]) => void;
@@ -62,12 +65,13 @@ export const useEditorStore = create<EditorState>()(
     (set) => ({
       documentContents: {},
 
-      setDocumentContent: (path, doc, content) => set((state) => ({
+      setDocumentContent: (path, doc, content, mtime = 0) => set((state) => ({
         documentContents: {
           ...state.documentContents,
           [path]: {
             document: doc,
             content: content,
+            mtime: mtime,
             isDirty: false,
             selection: null,
             diffHunks: [] as DiffHunk[],
@@ -280,6 +284,7 @@ export const useEditorStore = create<EditorState>()(
               [path]: {
                 document: null,
                 content: '',
+                mtime: 0,
                 isDirty: false,
                 selection: null,
                 diffHunks: [],
@@ -309,6 +314,7 @@ export const useEditorStore = create<EditorState>()(
               [path]: {
                 document: null,
                 content: '',
+                mtime: 0,
                 isDirty: false,
                 selection: null,
                 diffHunks: [],
@@ -367,24 +373,19 @@ export const useEditorStore = create<EditorState>()(
     }),
     {
       name: 'inkuo-editor',
+      onRehydrateStorage: () => (state) => {
+        if (state) {
+          // Migrate old format or clear corrupted data
+          const version = localStorage.getItem('inkuo-editor-version');
+          if (version !== String(STORAGE_VERSION)) {
+            localStorage.setItem('inkuo-editor-version', String(STORAGE_VERSION));
+            // Clear old document contents to force reload from disk
+            state.documentContents = {};
+          }
+        }
+      },
       partialize: (state) => ({
-        documentContents: Object.fromEntries(
-          Object.entries(state.documentContents).map(([path, doc]) => [
-            path,
-            {
-              document: doc.document,
-              content: doc.content,
-              isDirty: doc.isDirty,
-              selection: doc.selection,
-              diffHunks: doc.diffHunks,
-              activeHunkIndex: doc.activeHunkIndex,
-              isDiffMode: doc.isDiffMode,
-              docxBuffer: doc.docxBuffer,
-              excelData: doc.excelData,
-              officeBufferVersion: doc.officeBufferVersion ?? 0,
-            }
-          ])
-        ),
+        documentContents: state.documentContents,
       }),
     }
   )

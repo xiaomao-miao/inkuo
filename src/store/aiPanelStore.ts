@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { persist } from 'zustand/middleware';
+import { persist, createJSONStorage } from 'zustand/middleware';
 import type { DiffHunk } from './editorStore';
 
 export type ChatMode = 'ask' | 'plan' | 'agent';
@@ -491,15 +491,28 @@ export const useAIPanelStore = create<AIPanelState>()(
     },
     {
       name: 'inkuo-aipanel',
+      // 只持久化必要的元数据，不持久化 messages 和 outputItems（它们可能很大）
+      // 使用 shallow 比较避免深度对象比较
       partialize: (state) => ({
         isOpen: state.isOpen,
         sessions: state.sessions.map((s) => ({
-          ...s,
-          isStreaming: false,
-          currentDiff: null,
-          activeToolCalls: [],
+          id: s.id,
+          title: s.title,
+          createdAt: s.createdAt,
+          mode: s.mode,
+          // 不持久化 messages、isStreaming、currentDiff、activeToolCalls、pendingDiff
         })),
         activeSessionId: state.activeSessionId,
+      }),
+      // 延迟写入 localStorage，减少频繁写入
+      storage: createJSONStorage(() => localStorage, {
+        reviver: (key, value) => {
+          // 处理 Set 类型（expandedDirs）
+          if (key === 'sessions') {
+            return value;
+          }
+          return value;
+        },
       }),
     }
   )

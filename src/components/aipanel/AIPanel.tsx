@@ -105,6 +105,8 @@ export const AIPanel: React.FC = () => {
   const flushTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingFlushRef = useRef<Set<string>>(new Set());
 
+  // Note: Empty deps intentionally - this callback uses refs to access latest state,
+  // avoiding stale closure issues without needing to re-create the callback.
   const flushTextDeltas = useCallback(() => {
     const deltas = pendingTextDeltasRef.current;
     const toFlush = [...pendingFlushRef.current];
@@ -141,13 +143,14 @@ export const AIPanel: React.FC = () => {
         }),
       };
     });
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  // Note: Empty deps intentionally - scheduleTextFlush calls flushTextDeltas via ref pattern
+  // to avoid stale closure issues with the store update callback.
   const scheduleTextFlush = useCallback(() => {
     if (flushTimeoutRef.current !== null) return;
     flushTimeoutRef.current = setTimeout(flushTextDeltas, 16);
-  }, [flushTextDeltas]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const flushAllPending = useCallback(() => {
     if (flushTimeoutRef.current !== null) {
@@ -454,7 +457,9 @@ export const AIPanel: React.FC = () => {
       pendingFlushRef.current = new Set();
       streamingContentRef.current = {};
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Note: Empty deps intentionally - this effect sets up event listener once.
+    // It uses refs (unlistenRef, isSettingUpRef, flushAllPending) to access latest state
+    // without triggering re-runs, avoiding stale closures and listener duplication.
   }, []);
 
   const handleSetInput = useCallback((v: string) => setInput(v), []);

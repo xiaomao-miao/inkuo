@@ -12,6 +12,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 import { useSettingsStore } from '../../store';
+import type { AIProviderType } from '../../types';
 import styles from './Settings.module.css';
 
 interface SettingsProps {
@@ -39,10 +40,10 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
         model: settings.ai_model,
       });
       setTestResult(result);
-    } catch (err: any) {
+    } catch (err) {
       setTestResult({
         success: false,
-        message: err.message || '连接失败，请检查配置',
+        message: err instanceof Error ? err.message : '连接失败，请检查配置',
       });
     } finally {
       setTesting(false);
@@ -86,7 +87,7 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
               <select
                 className={styles.select}
                 value={settings.ai_provider}
-                onChange={e => updateSetting('ai_provider', e.target.value as any)}
+                onChange={e => updateSetting('ai_provider', e.target.value as AIProviderType)}
               >
                 <option value="openai">OpenAI (兼容)</option>
                 <option value="ollama">Ollama (本地)</option>

@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useRef } from 'react';
-import { Decoration } from '@codemirror/view';
+import { Decoration, type DecorationSet } from '@codemirror/view';
 import CodeMirror, { ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
-import { EditorView, keymap, lineNumbers, drawSelection, rectangularSelection } from '@codemirror/view';
+import { EditorView, keymap, lineNumbers, drawSelection, rectangularSelection, type ViewUpdate } from '@codemirror/view';
 import { Prec, StateField, RangeSetBuilder } from '@codemirror/state';
 import { inlineDiffTheme } from './inlineDiffDecorations';
 import { historyKeymap } from '@codemirror/commands';
@@ -12,6 +12,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { Sparkles } from 'lucide-react';
 import { useEditorStore, useSidebarStore, useInlineCompleteStore } from '../../store';
 import { SETTINGS_TAB_ID } from '../../store';
+import type { Document } from '../../types';
 import { DiffOverlay } from './DiffOverlay';
 import { DiffActionBar } from './DiffActionBar';
 import { SettingsPanel } from '../settings/SettingsPanel';
@@ -205,15 +206,13 @@ const EditorContent: React.FC<{
   const diffHunksRef = useRef(diffHunks);
   diffHunksRef.current = diffHunks;
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const diffDecorationsField = StateField.define<any>({
+  const diffDecorationsField = StateField.define<DecorationSet>({
     create() {
       return Decoration.none;
     },
     update(_decorations, tr) {
       const hunks = diffHunksRef.current || [];
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const builder = new RangeSetBuilder<any>();
+      const builder = new RangeSetBuilder<Decoration>();
 
       for (const hunk of hunks) {
         for (const change of hunk.changes) {
@@ -243,31 +242,46 @@ const EditorContent: React.FC<{
   });
 
   // Load document when file is selected.
-  // Only load from disk if the file has no cached content in the store.
-  // This preserves unsaved changes when switching between tabs.
+  // Smart caching: only reload if file was modified (mtime changed) or no valid cache.
   useEffect(() => {
+    let cancelled = false;
+
     const loadDocument = async () => {
       if (!selectedFile) return;
 
-      // Use getState() to always read the latest from store,
-      // avoiding stale closures and preventing re-render triggers.
       const cached = useEditorStore.getState().documentContents[selectedFile];
-      if (cached && cached.content !== '') {
-        return;
-      }
 
       try {
-        const result = await invoke<{ document: any; content: string }>('read_document', {
+        const result = await invoke<{ document: Document; content: string; mtime: number }>('read_document', {
           path: selectedFile,
         });
-        setDocumentContent(selectedFile, result.document, result.content);
-        setOpenTabDirty(selectedFile, false);
+
+        // Check if we need to update:
+        // - No cache exists
+        // - Cache content is empty
+        // - Cache mtime is 0 (legacy/invalid cache)
+        // - File mtime differs from cache
+        const needsReload = !cached ||
+          cached.content === '' ||
+          cached.mtime === 0 ||
+          result.mtime !== cached.mtime;
+
+        if (!cancelled) {
+          if (needsReload) {
+            setDocumentContent(selectedFile, result.document, result.content, result.mtime);
+            setOpenTabDirty(selectedFile, false);
+          }
+        }
       } catch (err) {
         console.error('Failed to load document:', err);
       }
     };
 
     loadDocument();
+
+    return () => {
+      cancelled = true;
+    };
   }, [selectedFile, setDocumentContent, setOpenTabDirty]);
 
   // Save document
@@ -300,8 +314,8 @@ const EditorContent: React.FC<{
     }
   }, [selectedFile, setContent]);
 
-  const handleUpdate = useCallback((viewUpdate: any) => {
-    if (viewUpdate.selection && selectedFile) {
+  const handleUpdate = useCallback((viewUpdate: ViewUpdate) => {
+    if (viewUpdate.selectionSet && selectedFile) {
       const { from, to } = viewUpdate.state.selection.main;
       const currentDoc = useEditorStore.getState().documentContents[selectedFile];
       if (from !== to) {

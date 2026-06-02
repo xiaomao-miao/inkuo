@@ -94,6 +94,7 @@ export function InlineCompleteProvider({ children }: InlineCompleteProviderProps
     cursorPosition: number;
     language: string;
     filePath?: string;
+    snippet?: { text: string; start_offset: number };
   }) => {
     const seq = requestSeqRef.current + 1;
     requestSeqRef.current = seq;
@@ -136,8 +137,6 @@ export function InlineCompleteProvider({ children }: InlineCompleteProviderProps
           cursor_position: params.cursorPosition,
           language: params.language,
           file_path: params.filePath,
-          // pass snippet when available (Cursor-like)
-          snippet: (params as any).snippet,
         };
 
         if (import.meta.env.DEV) {

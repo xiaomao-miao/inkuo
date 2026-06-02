@@ -202,7 +202,7 @@ const OutputItemView: React.FC<OutputItemViewProps> = ({
           result={item.result}
           error={item.status === 'error' ? item.result : undefined}
           duration={item.duration}
-          diffSummary={item.diffSummary as any}
+          diffSummary={item.diffSummary}
         />
       </div>
     );
@@ -279,7 +279,7 @@ const LegacyMessageContent: React.FC<LegacyMessageContentProps> = ({
               result={result.result}
               error={result.isError ? result.result : undefined}
               duration={result.duration}
-              diffSummary={result.diffSummary as any}
+              diffSummary={result.diffSummary}
             />
           </div>
         );
