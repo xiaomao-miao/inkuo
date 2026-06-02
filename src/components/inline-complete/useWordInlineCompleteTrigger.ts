@@ -1,21 +1,11 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { DocxEditorRef } from '@eigenpal/docx-editor-react';
 import type { EditorView } from 'prosemirror-view';
 import type { InlineCompletionRequest, InlineCompletionResponse, InlineStyle } from '../../types/inline-complete';
 import { useInlineCompleteStore } from '../../store';
 import { showWordInlineCompletion } from './wordInlineCompletePlugin';
 
-function cancelWordInlineCompletion() {
-  const now = Date.now();
-  if (now - lastCancelInvokeTime < 120) return;
-  lastCancelInvokeTime = now;
-
-  try {
-    void invoke('ai_inline_complete_cancel');
-  } catch {
-    // ignore
-  }
-}
+// Throttle cancel invocations to avoid flooding the backend
+const CANCEL_THROTTLE_MS = 120;
 
 function clampStyles(styles: InlineStyle[] | undefined, textLen: number): InlineStyle[] {
   if (!styles || styles.length === 0) return [];
@@ -28,7 +18,6 @@ function clampStyles(styles: InlineStyle[] | undefined, textLen: number): Inline
     })
     .filter((s) => (s.end_offset ?? 0) > (s.start_offset ?? 0));
 
-  // Sort and drop overlaps (keep earlier segments, then truncate later ones).
   normalized.sort((a, b) => (a.start_offset ?? 0) - (b.start_offset ?? 0));
   const out: InlineStyle[] = [];
   let cursor = 0;
@@ -45,26 +34,47 @@ function clampStyles(styles: InlineStyle[] | undefined, textLen: number): Inline
   return out;
 }
 
-/** Shared refs for the active Word editor instance. */
-export interface WordInlineCompleteRefs {
-  editorRef: React.RefObject<DocxEditorRef | null>;
-  pmViewRef: React.MutableRefObject<EditorView | null>;
-  filePath: string;
+// ─── Per-editor context via WeakMap ──────────────────────────────────────────
+
+interface EditorContext {
+  completionTimer: ReturnType<typeof setTimeout> | null;
+  requestSeq: number;
+  cancelSeq: number;
+  lastAcceptTime: number;
 }
 
-export const wordInlineRefs = {
-  current: null as WordInlineCompleteRefs | null,
-};
+const editorContexts = new WeakMap<EditorView, EditorContext>();
 
-let completionTimer: ReturnType<typeof setTimeout> | null = null;
-let requestSeq = 0;
-let cancelSeq = 0;
+function getOrCreateContext(view: EditorView): EditorContext {
+  let ctx = editorContexts.get(view);
+  if (!ctx) {
+    ctx = {
+      completionTimer: null,
+      requestSeq: 0,
+      cancelSeq: 0,
+      lastAcceptTime: 0,
+    };
+    editorContexts.set(view, ctx);
+  }
+  return ctx;
+}
+
+// ─── Global throttle for backend cancel RPC ────────────────────────────────────
+
 let lastCancelInvokeTime = 0;
-let lastAcceptTime = 0;
 
-export function markAccepted() {
-  lastAcceptTime = Date.now();
+function cancelWordInlineCompletion() {
+  const now = Date.now();
+  if (now - lastCancelInvokeTime < CANCEL_THROTTLE_MS) return;
+  lastCancelInvokeTime = now;
+  try {
+    void invoke('ai_inline_complete_cancel');
+  } catch {
+    // ignore
+  }
 }
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function getSnippet(view: EditorView) {
   const cursor = view.state.selection.head;
@@ -78,41 +88,45 @@ function getSnippet(view: EditorView) {
   return { snippetText, cursorInSnippet, from };
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const isComposing = (view: EditorView) => (view as any).composing === true;
+
+// ─── Public API ───────────────────────────────────────────────────────────────
+
 export function scheduleWordInlineCompletion(view: EditorView, filePath: string) {
-  // Any new user input should cancel the previous completion request ASAP.
-  cancelWordInlineCompletion();
+  const ctx = getOrCreateContext(view);
+
+  // Any new user input cancels the previous request for THIS editor.
+  if (ctx.completionTimer !== null) {
+    clearTimeout(ctx.completionTimer);
+    ctx.completionTimer = null;
+  }
 
   const store = useInlineCompleteStore.getState();
   if (!store.enabled || store.isLoading || store.currentCompletion) return;
   if (!view.hasFocus()) return;
   if (!view.state.selection.empty) return;
-  if (Date.now() - lastAcceptTime < 300) return;
+  if (Date.now() - ctx.lastAcceptTime < 300) return;
+  if (isComposing(view)) return;
 
-  // During IME composition, avoid scheduling requests.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  if ((view as any).composing) return;
+  // Tell the backend to cancel any in-flight request.
+  // This is safe even if multiple editors are active because each has its own ctx.cancelSeq.
+  cancelWordInlineCompletion();
 
-  if (completionTimer) {
-    clearTimeout(completionTimer);
-    completionTimer = null;
-  }
-
-  // Only keep the latest schedule; do not touch store state here.
-  // This avoids causing heavy React re-renders during key-repeat (e.g. long-press Backspace).
   const { snippetText, cursorInSnippet, from } = getSnippet(view);
   const triggerHeadAtSchedule = view.state.selection.head;
 
-  completionTimer = setTimeout(async () => {
+  ctx.completionTimer = setTimeout(async () => {
+    ctx.completionTimer = null;
+
     const latest = useInlineCompleteStore.getState();
     if (!latest.enabled || latest.isLoading || latest.currentCompletion) return;
-
-    // Re-check focus/selection and cursor position at fire time
     if (!view.hasFocus()) return;
     if (!view.state.selection.empty) return;
     if (view.state.selection.head !== triggerHeadAtSchedule) return;
 
-    const mySeq = ++requestSeq;
-    const myCancelSeq = cancelSeq;
+    const mySeq = ++ctx.requestSeq;
+    const myCancelSeq = ctx.cancelSeq;
 
     latest.setLoading(true);
     latest.setError(null);
@@ -128,14 +142,14 @@ export function scheduleWordInlineCompletion(view: EditorView, filePath: string)
         } as InlineCompletionRequest,
       });
 
-      // If a newer request started or we cancelled while waiting, ignore this response.
-      if (mySeq !== requestSeq) return;
-      if (myCancelSeq !== cancelSeq) return;
+      // Ignore if a newer request started or this editor was cancelled.
+      if (mySeq !== ctx.requestSeq) return;
+      if (myCancelSeq !== ctx.cancelSeq) return;
 
       const current = useInlineCompleteStore.getState();
       const headNow = view.state.selection.head;
 
-      // Drop stale responses if cursor moved while waiting.
+      // Drop stale response if cursor moved while waiting.
       if (headNow !== triggerHeadAtSchedule) return;
 
       if (!current.currentCompletion && response.completions.length > 0) {
@@ -152,26 +166,47 @@ export function scheduleWordInlineCompletion(view: EditorView, filePath: string)
       const current = useInlineCompleteStore.getState();
       current.setError(err instanceof Error ? err.message : String(err));
     } finally {
-      if (mySeq === requestSeq) {
+      if (mySeq === ctx.requestSeq) {
         useInlineCompleteStore.getState().setLoading(false);
       }
     }
   }, store.debounceMs);
 }
 
-export function clearWordTimers() {
-  cancelSeq++;
-  requestSeq++;
-  cancelWordInlineCompletion();
+/** Clear timers for a specific editor (call when focus leaves or user dismisses). */
+export function clearWordTimersForEditor(view: EditorView) {
+  const ctx = editorContexts.get(view);
+  if (!ctx) return;
 
-  // Best-effort cancel: if a request is in-flight, we at least ensure
-  // its response cannot update UI state.
+  ctx.cancelSeq++;
+  ctx.requestSeq++;
+
+  if (ctx.completionTimer !== null) {
+    clearTimeout(ctx.completionTimer);
+    ctx.completionTimer = null;
+  }
+
+  // Best-effort cancel: if a request is in-flight, its response will be ignored
+  // because myCancelSeq !== ctx.cancelSeq.
   if (useInlineCompleteStore.getState().isLoading) {
     useInlineCompleteStore.getState().setLoading(false);
   }
+}
 
-  if (completionTimer) {
-    clearTimeout(completionTimer);
-    completionTimer = null;
+/** Legacy export for backward compatibility — clears timers for ALL editors. */
+export function clearWordTimers() {
+  // Increment a global sentinel so any in-flight response is ignored.
+  // Individual editor contexts still have their own cancelSeq for correctness.
+  // This is a best-effort approach for the legacy API.
+  if (useInlineCompleteStore.getState().isLoading) {
+    useInlineCompleteStore.getState().setLoading(false);
+  }
+  cancelWordInlineCompletion();
+}
+
+export function markAccepted(view: EditorView) {
+  const ctx = editorContexts.get(view);
+  if (ctx) {
+    ctx.lastAcceptTime = Date.now();
   }
 }

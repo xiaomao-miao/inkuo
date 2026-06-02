@@ -179,7 +179,7 @@ export function createWordInlineCompletePlugin(options: {
           }
 
           // Mark accept time to avoid immediate re-trigger
-          markAccepted();
+          markAccepted(view);
 
           // Clear store and plugin state
           useInlineCompleteStore.getState().clearCompletion();
