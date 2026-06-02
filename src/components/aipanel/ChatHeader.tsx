@@ -24,7 +24,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
 }) => {
 
   const getTitle = (session: ChatSession): string => {
-    const firstUserMsg = session.messages.find(m => m.role === 'user');
+    const firstUserMsg = session.messages?.find(m => m.role === 'user');
     if (firstUserMsg?.content) {
       return firstUserMsg.content.slice(0, MAX_TITLE_LEN) +
         (firstUserMsg.content.length > MAX_TITLE_LEN ? '...' : '');
