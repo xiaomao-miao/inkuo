@@ -29,6 +29,11 @@ pub enum ToolError {
 
 pub type ToolOpResult<T> = Result<T, ToolError>;
 
+/// Validates that a path is within the workspace boundary (security check).
+/// This does NOT check if the path exists - use validate_path_exists for that.
+///
+/// Uses canonicalization to resolve relative paths and symlinks,
+/// ensuring the final resolved path is within the workspace.
 pub fn validate_workspace_path(path: &str, workspace: &Option<String>) -> Result<(), ToolError> {
     let Some(workspace_root) = workspace else {
         return Ok(());
@@ -43,11 +48,31 @@ pub fn validate_workspace_path(path: &str, workspace: &Option<String>) -> Result
         }
     };
 
+    // For security, we need to resolve the actual path to catch symlinks
+    // But we allow the path to not exist yet (for write operations)
     let canonical_requested = match std::fs::canonicalize(Path::new(path)) {
         Ok(p) => p,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            // Path doesn't exist yet - this is OK for write operations
+            // But we still need to validate that the PARENT directory is within workspace
+            if let Some(parent) = Path::new(path).parent() {
+                match std::fs::canonicalize(parent) {
+                    Ok(p) => p,
+                    Err(_) => {
+                        return Err(ToolError::PathValidationError(
+                            format!("Parent directory does not exist or is inaccessible: {}", parent.display())
+                        ));
+                    }
+                }
+            } else {
+                return Err(ToolError::PathValidationError(
+                    format!("Cannot determine parent directory for path: {}", path)
+                ));
+            }
+        }
         Err(e) => {
             return Err(ToolError::PathValidationError(
-                format!("Path does not exist or is inaccessible: {} ({})", path, e)
+                format!("Path is inaccessible: {} ({})", path, e)
             ));
         }
     };
