@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef } from 'react';
 import { PlusCircle, MessageSquare, X } from 'lucide-react';
 import type { ChatSession } from '../../store';
 import styles from './AIPanel.module.css';
@@ -22,6 +22,13 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   onDeleteSession,
   onClose,
 }) => {
+  const sessionListRef = useRef<HTMLDivElement>(null);
+
+  const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    if (sessionListRef.current) {
+      sessionListRef.current.scrollLeft += e.deltaY;
+    }
+  };
 
   const getTitle = (session: ChatSession): string => {
     const firstUserMsg = session.messages?.find(m => m.role === 'user');
@@ -43,7 +50,7 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
         >
           <PlusCircle size={16} />
         </button>
-        <div className={styles.sessionList}>
+        <div className={styles.sessionList} ref={sessionListRef} onWheel={handleWheel}>
           {sessions.map((session) => (
             <button
               key={session.id}
