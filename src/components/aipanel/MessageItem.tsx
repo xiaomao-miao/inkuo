@@ -188,6 +188,7 @@ const OutputItemView: React.FC<OutputItemViewProps> = ({
           name={item.toolName}
           arguments={item.arguments}
           rawArguments={item.rawArguments}
+          streamingContent={item.streamingContent}
           status={item.isExecuting ? 'executing' : 'pending'}
           isStreamingArguments={item.isExecuting}
         />

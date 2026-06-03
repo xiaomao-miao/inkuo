@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { parse as parsePartialJson } from 'jsonchunk';
 import {
   useAIPanelStore,
   useEditorStore,
@@ -109,10 +110,10 @@ export const AIPanel: React.FC = () => {
   // Batching for tool-call args streaming. We receive dozens of small SSE deltas
   // per second from the backend; merging them at 16ms keeps the React render
   // cost flat regardless of how large the streamed content is.
-  //   pendingToolArgsRef[toolCallId] = { sessionId, messageId, rawArgs, parsedArgs }
+  //   pendingToolArgsRef[toolCallId] = { sessionId, messageId, rawArgs, parsedArgs, streamingContent }
   const pendingToolArgsRef = useRef<Record<
     string,
-    { sessionId: string; messageId: string; rawArgs: string; parsedArgs: Record<string, unknown> }
+    { sessionId: string; messageId: string; rawArgs: string; parsedArgs: Record<string, unknown>; streamingContent?: string }
   >>({});
   const pendingToolArgsOrderRef = useRef<string[]>([]);
   const flushToolArgsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -202,6 +203,7 @@ export const AIPanel: React.FC = () => {
                   ...item,
                   arguments: e.parsedArgs,
                   rawArguments: e.rawArgs,
+                  streamingContent: e.streamingContent,
                   isExecuting: true,
                 };
               });
@@ -394,12 +396,18 @@ export const AIPanel: React.FC = () => {
           // decides to call a tool — no more waiting for the entire 10000-char
           // payload to be received.
           if (event_type === 'tool_call_start' && tool_call_id && tool_name) {
+            const rawArgs = tool_args ?? '';
+
+            // Use jsonchunk to parse partial JSON and extract content field
+            const partial = parsePartialJson(rawArgs) as Record<string, unknown> | undefined;
+            const streamingContent = (partial?.content || partial?.new_text || partial?.json_content) as string | undefined;
+
             let args: Record<string, unknown> = {};
-            let rawArgs: string = tool_args ?? '';
             try {
               if (rawArgs) args = JSON.parse(rawArgs);
             } catch {
-              // Partial JSON during streaming — keep raw string for live preview.
+              // Partial JSON during streaming — keep partial parsed values
+              args = partial || {};
             }
 
             useAIPanelStore.getState().updateSession(session_id, (s) => {
@@ -423,45 +431,47 @@ export const AIPanel: React.FC = () => {
                     },
                   ];
 
-              return {
-                ...s,
-                activeToolCalls: updatedActiveToolCalls,
-                messages: s.messages.map((m) => {
-                  if (m.id !== message_id) return m;
-                  // If the assistant message already has a tool_call_start item
-                  // for this id, update it; otherwise append a new one.
-                  const existingIdx = m.outputItems.findIndex(
-                    (it) => it.type === 'tool_call_start' && it.toolCallId === tool_call_id
-                  );
-                  if (existingIdx >= 0) {
-                    const updated = [...m.outputItems];
-                    const prev = updated[existingIdx] as Extract<OutputItem, { type: 'tool_call_start' }>;
-                    updated[existingIdx] = {
-                      ...prev,
-                      toolName: tool_name,
-                      arguments: args,
-                      rawArguments: rawArgs,
-                      isExecuting: true,
-                    };
-                    return { ...m, outputItems: updated };
-                  }
-                  return {
-                    ...m,
-                    toolCalls: [...(m.toolCalls || []), { id: tool_call_id, name: tool_name, arguments: args }],
-                    outputItems: [
-                      ...m.outputItems,
-                      {
-                        type: 'tool_call_start' as const,
-                        toolCallId: tool_call_id,
-                        toolName: tool_name,
-                        arguments: args,
-                        rawArguments: rawArgs,
-                        isExecuting: true,
-                      },
-                    ],
+return {
+                    ...s,
+                    activeToolCalls: updatedActiveToolCalls,
+                    messages: s.messages.map((m) => {
+                      if (m.id !== message_id) return m;
+                      // If the assistant message already has a tool_call_start item
+                      // for this id, update it; otherwise append a new one.
+                      const existingIdx = m.outputItems.findIndex(
+                        (it) => it.type === 'tool_call_start' && it.toolCallId === tool_call_id
+                      );
+                      if (existingIdx >= 0) {
+                        const updated = [...m.outputItems];
+                        const prev = updated[existingIdx] as Extract<OutputItem, { type: 'tool_call_start' }>;
+                        updated[existingIdx] = {
+                          ...prev,
+                          toolName: tool_name,
+                          arguments: args,
+                          rawArguments: rawArgs,
+                          streamingContent: streamingContent ?? undefined,
+                          isExecuting: true,
+                        };
+                        return { ...m, outputItems: updated };
+                      }
+                      return {
+                        ...m,
+                        toolCalls: [...(m.toolCalls || []), { id: tool_call_id, name: tool_name, arguments: args }],
+                        outputItems: [
+                          ...m.outputItems,
+                          {
+                            type: 'tool_call_start' as const,
+                            toolCallId: tool_call_id,
+                            toolName: tool_name,
+                            arguments: args,
+                            rawArguments: rawArgs,
+                            streamingContent: streamingContent ?? undefined,
+                            isExecuting: true,
+                          },
+                        ],
+                      };
+                    }),
                   };
-                }),
-              };
             });
             return;
           }
@@ -473,8 +483,13 @@ export const AIPanel: React.FC = () => {
           // the *full* current string; we just overwrite the cached value.
           if (event_type === 'tool_call_args_delta' && tool_call_id) {
             const rawArgs = tool_args ?? '';
+
+            // Use jsonchunk to parse partial JSON and extract content field
+            const partial = parsePartialJson(rawArgs) as Record<string, unknown> | undefined;
+            const streamingContent = (partial?.content || partial?.new_text || partial?.json_content) as string | undefined;
+
             let args: Record<string, unknown> = {};
-            try { if (rawArgs) args = JSON.parse(rawArgs); } catch { /* partial JSON */ }
+            try { if (rawArgs) args = JSON.parse(rawArgs); } catch { /* fallback to partial */ }
 
             const prev = pendingToolArgsRef.current[tool_call_id];
             // Skip the work if the raw payload hasn't actually changed (defensive).
@@ -484,6 +499,7 @@ export const AIPanel: React.FC = () => {
                 messageId: message_id,
                 rawArgs,
                 parsedArgs: args,
+                streamingContent: streamingContent ?? undefined,
               };
               if (!prev) pendingToolArgsOrderRef.current.push(tool_call_id);
             }

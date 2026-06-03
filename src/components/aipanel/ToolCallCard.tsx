@@ -10,6 +10,9 @@ interface ToolCallCardProps {
   /** Raw, possibly incomplete JSON string of the arguments. Used to render the
    * streaming preview when full JSON parsing is not yet possible. */
   rawArguments?: string;
+  /** Streaming content extracted from partial JSON using jsonchunk. This is
+   * the actual file content being written, displayed in real-time. */
+  streamingContent?: string;
   status: 'pending' | 'executing' | 'success' | 'error';
   result?: string;
   error?: string;
@@ -41,6 +44,7 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = React.memo(function Too
   name,
   arguments: args,
   rawArguments,
+  streamingContent,
   status,
   error,
   duration,
@@ -54,25 +58,33 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = React.memo(function Too
     : null;
 
   // Pick the most "interesting" string field to stream-preview (e.g. the
-  // long `content` payload of write_file). Fall back to the raw JSON.
-  // Depend on the raw args string + tool name only — the parsed `args` object
-  // gets a new reference every store update, so depending on it would defeat
-  // the memo and force work on every flush tick.
+  // long `content` payload of write_file). Priority:
+  // 1. streamingContent (extracted via jsonchunk from partial JSON)
+  // 2. Long string fields from parsed args (content, new_text, etc.)
+  // 3. Raw JSON string (fallback when JSON parsing fails)
   const preview = useMemo(() => {
+    // Priority 1: Use streamingContent directly if available
+    if (streamingContent && streamingContent.length > 0) {
+      return { key: 'content', text: streamingContent };
+    }
+
     if (!isFileModification && !rawArguments) return null;
-    // First try the parsed object's long string fields.
+
+    // Priority 2: Try the parsed object's long string fields.
     for (const key of PREVIEW_STRING_KEYS) {
       const v = args?.[key];
       if (typeof v === 'string' && v.length > 0) {
         return { key, text: v };
       }
     }
+
+    // Priority 3: Fall back to raw JSON
     if (rawArguments && rawArguments.length > 0) {
       return { key: 'raw', text: rawArguments };
     }
     return null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rawArguments, isFileModification, name]);
+  }, [rawArguments, streamingContent, isFileModification, name, args]);
 
   const previewRef = useRef<HTMLPreElement | null>(null);
   const [isExpanded, setIsExpanded] = React.useState(true);

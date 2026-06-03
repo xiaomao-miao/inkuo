@@ -38,6 +38,9 @@ export type OutputItem =
       // tool call is still being received.
       arguments: Record<string, unknown>;
       rawArguments?: string;
+      // Extracted content field from partial JSON parsing. This is updated
+      // incrementally as the AI streams the content, allowing real-time preview.
+      streamingContent?: string;
       // When true the tool has been registered as "executing" and the UI
       // should show the running indicator. After `tool_result` arrives this
       // item is left in place (for visual continuity) but the matching
