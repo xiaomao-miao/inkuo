@@ -430,6 +430,15 @@
   white-space: nowrap;
 }
 
+.compactArrow {
+  color: var(--fg-muted);
+  margin: 0 2px;
+}
+
+.compactDest {
+  color: #22c55e;
+}
+
 .compactRight {
   display: flex;
   align-items: center;

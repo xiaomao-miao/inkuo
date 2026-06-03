@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef } from 'react';
-import { Check, Loader2, FileEdit, Terminal, X, ChevronDown, ChevronRight, FolderOpen, FileText, Search } from 'lucide-react';
+import { Check, Loader2, FileEdit, Terminal, X, ChevronDown, ChevronRight, FolderOpen, FileText, Search, FolderPlus, Move } from 'lucide-react';
 import type { DiffSummary } from '../../store';
 import styles from './ToolCallCard.module.css';
 
@@ -33,6 +33,8 @@ const getToolDisplayName = (name: string): string => {
     grep: '搜索文本',
     read_office_file: '读取 Office',
     write_office_file: '写入 Office',
+    create_dir: '创建目录',
+    move_file: '移动文件',
   };
   return names[name] || name;
 };
@@ -41,7 +43,7 @@ const PREVIEW_STRING_KEYS = new Set(['content', 'new_text', 'pattern', 'json_con
 
 // Tool categories for compact display
 const FILE_MODIFICATION_TOOLS = new Set(['write_file', 'edit_file', 'write_office_file']);
-export const COMPACT_TOOLS = new Set(['list_dir', 'glob', 'grep', 'read_file', 'read_office_file']);
+export const COMPACT_TOOLS = new Set(['list_dir', 'glob', 'grep', 'read_file', 'read_office_file', 'create_dir', 'move_file']);
 
 export const ToolCallCard: React.FC<ToolCallCardProps> = React.memo(function ToolCallCard({
   id,
@@ -265,6 +267,10 @@ const getToolIcon = (name: string) => {
   switch (name) {
     case 'list_dir':
       return <FolderOpen size={12} />;
+    case 'create_dir':
+      return <FolderPlus size={12} />;
+    case 'move_file':
+      return <Move size={12} />;
     case 'read_file':
     case 'read_office_file':
       return <FileText size={12} />;
@@ -289,6 +295,13 @@ export const CompactToolCard: React.FC<CompactToolCardProps> = React.memo(functi
     ? filePath.split('/').pop() || filePath.split('\\').pop() || filePath
     : null;
   const pattern = (args?.pattern as string | undefined) ?? (args?.glob as string | undefined);
+  
+  const sourcePath = (args?.source_path as string | undefined) ?? (args?.source as string | undefined);
+  const isMoveFile = name === 'move_file';
+  
+  // For create_dir
+  const dirPath = (args?.dir_path as string | undefined) ?? (args?.directory as string | undefined) ?? filePath;
+  const isCreateDir = name === 'create_dir';
 
   return (
     <div className={`${styles.compactCard} ${styles[status]}`} data-tool-call-id={id}>
@@ -297,14 +310,20 @@ export const CompactToolCard: React.FC<CompactToolCardProps> = React.memo(functi
           {getToolIcon(name)}
         </div>
         <span className={styles.compactName}>{getToolDisplayName(name)}</span>
-        {fileName && <span className={styles.compactFileName}>{fileName}</span>}
-        {pattern && !fileName && <span className={styles.compactFileName}>{pattern}</span>}
+        {isMoveFile && sourcePath && (
+          <span className={styles.compactFileName}>
+            {sourcePath.split('/').pop()}
+          </span>
+        )}
+        {isCreateDir && dirPath && (
+          <span className={styles.compactFileName}>{dirPath}</span>
+        )}
+        {!isMoveFile && !isCreateDir && fileName && <span className={styles.compactFileName}>{fileName}</span>}
+        {!isMoveFile && !isCreateDir && pattern && !fileName && <span className={styles.compactFileName}>{pattern}</span>}
       </div>
       <div className={styles.compactRight}>
         {isExecuting && (
-          <>
-            <Loader2 size={10} className={styles.spinning} />
-          </>
+          <Loader2 size={10} className={styles.spinning} />
         )}
         {!isExecuting && status === 'success' && (
           <Check size={10} className={styles.compactSuccessIcon} />
