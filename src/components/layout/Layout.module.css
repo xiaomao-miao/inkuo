@@ -20,6 +20,14 @@
   overflow: hidden;
 }
 
+.sidebar > :global(*) {
+  height: 100%;
+}
+
+.hidden {
+  display: none;
+}
+
 .main {
   flex: 1;
   display: flex;

@@ -65,26 +65,19 @@ export const Layout: React.FC = () => {
           onToggleSidebar={handleToggleSidebar}
         />
         
-        {/* Left Sidebar */}
+        {/* Left Sidebar — always mounted so state persists across view switches */}
         {isSidebarVisible && (
           <>
             <div className={styles.sidebar} style={{ width: sidebarWidth }}>
-              {activeView === 'files' && <Sidebar />}
-              {activeView === 'search' && (
+              {activeView === 'files' ? (
+                <Sidebar />
+              ) : (
                 <div className={styles.placeholder}>
-                  <p>搜索</p>
-                  <span>功能开发中...</span>
-                </div>
-              )}
-              {activeView === 'git' && (
-                <div className={styles.placeholder}>
-                  <p>源代码管理</p>
-                  <span>功能开发中...</span>
-                </div>
-              )}
-              {activeView === 'extensions' && (
-                <div className={styles.placeholder}>
-                  <p>扩展</p>
+                  <p>
+                    {activeView === 'search' && '搜索'}
+                    {activeView === 'git' && '源代码管理'}
+                    {activeView === 'extensions' && '扩展'}
+                  </p>
                   <span>功能开发中...</span>
                 </div>
               )}
