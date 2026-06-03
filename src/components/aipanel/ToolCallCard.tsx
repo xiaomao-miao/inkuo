@@ -57,6 +57,12 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = React.memo(function Too
     ? filePath.split('/').pop() || filePath.split('\\').pop() || filePath
     : null;
 
+  // Determine if tool is still executing
+  const isExecuting = status === 'executing';
+
+  // Determine final status - prefer merged card status if available
+  const finalStatus = status === 'pending' && diffSummary ? 'success' : status;
+
   // Pick the most "interesting" string field to stream-preview (e.g. the
   // long `content` payload of write_file). Priority:
   // 1. streamingContent (extracted via jsonchunk from partial JSON)
@@ -88,6 +94,7 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = React.memo(function Too
 
   const previewRef = useRef<HTMLPreElement | null>(null);
   const [isExpanded, setIsExpanded] = React.useState(true);
+  const [isDiffExpanded, setIsDiffExpanded] = React.useState(false);
 
   // Auto-scroll the live preview to the bottom as new text streams in.
   useEffect(() => {
@@ -102,7 +109,7 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = React.memo(function Too
   }, [preview?.text, isStreamingArguments]);
 
   return (
-    <div className={`${styles.card} ${styles[status]}`} data-tool-call-id={id}>
+    <div className={`${styles.card} ${styles[finalStatus]}`} data-tool-call-id={id}>
       {/* Header */}
       <div className={styles.header}>
         <div className={styles.headerLeft}>
@@ -119,25 +126,25 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = React.memo(function Too
           )}
         </div>
         <div className={styles.headerRight}>
-          {status === 'executing' && (
+          {isExecuting && (
             <>
               <Loader2 size={12} className={styles.spinning} />
               <span>{isStreamingArguments ? '生成参数中...' : '执行中'}</span>
             </>
           )}
-          {status === 'success' && (
+          {!isExecuting && finalStatus === 'success' && (
             <>
               <Check size={12} />
               <span>成功</span>
             </>
           )}
-          {status === 'error' && (
+          {!isExecuting && finalStatus === 'error' && (
             <>
               <X size={12} />
               <span>失败</span>
             </>
           )}
-          {status === 'pending' && (
+          {!isExecuting && finalStatus === 'pending' && (
             <span>等待</span>
           )}
           {duration !== undefined && (
@@ -167,12 +174,6 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = React.memo(function Too
                   {preview.text.length.toLocaleString()} 字符
                 </span>
               )}
-              {isStreamingArguments && (
-                <span className={styles.streamingHint}>
-                  <span className={styles.streamingDot} />
-                  实时写入中
-                </span>
-              )}
             </span>
           </button>
           {isExpanded && (
@@ -189,14 +190,21 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = React.memo(function Too
       {/* Line counts for file modifications */}
       {diffSummary && (
         <div className={styles.lineCounts}>
-          <span className={styles.added}>+{diffSummary.added_lines}</span>
-          <span className={styles.deleted}>-{diffSummary.deleted_lines}</span>
-          <span className={styles.fileNameLabel}>{diffSummary.file_name}</span>
+          <button
+            type="button"
+            className={styles.diffToggle}
+            onClick={() => setIsDiffExpanded((v) => !v)}
+          >
+            {isDiffExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            <span className={styles.added}>+{diffSummary.added_lines}</span>
+            <span className={styles.deleted}>-{diffSummary.deleted_lines}</span>
+            <span className={styles.fileNameLabel}>{diffSummary.file_name}</span>
+          </button>
         </div>
       )}
 
-      {/* Line-level diff */}
-      {diffSummary && diffSummary.hunks.length > 0 && (
+      {/* Line-level diff - collapsed by default */}
+      {diffSummary && diffSummary.hunks.length > 0 && isDiffExpanded && (
         <div className={styles.diffContainer}>
           {diffSummary.hunks.map((hunk) => (
             <div key={hunk.id} className={styles.hunk}>

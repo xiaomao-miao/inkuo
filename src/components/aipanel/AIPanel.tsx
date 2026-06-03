@@ -528,21 +528,25 @@ return {
               ),
               messages: s.messages.map((m) => {
                 if (m.id !== message_id) return m;
-                // If the same message already has a tool_call_start for this id,
-                // patch it in-place to clear the executing flag — keeps the
-                // visual flow stable. We still append a separate tool_result
-                // item so the diff/result block renders after the live preview.
-                const updatedItems = m.outputItems.map((it) => {
-                  if (it.type !== 'tool_call_start' || it.toolCallId !== tool_call_id) return it;
-                  return { ...it, isExecuting: false };
-                });
+                // Update the existing tool_call_start in-place with result info
+                // and filter out the tool_result item since we merged it into tool_call_start
+                const updatedItems = m.outputItems
+                  .filter((it) => !(it.type === 'tool_result' && (it as { toolCallId?: string }).toolCallId === tool_call_id))
+                  .map((it) => {
+                    if (it.type !== 'tool_call_start' || (it as { toolCallId?: string }).toolCallId !== tool_call_id) return it;
+                    return {
+                      ...it,
+                      isExecuting: false,
+                      status: isError ? 'error' as const : 'success' as const,
+                      result: content || '',
+                      duration,
+                      diffSummary: diff_summary ?? undefined,
+                    };
+                  });
                 return {
                   ...m,
                   toolResults: [...(m.toolResults || []), toolResult],
-                  outputItems: [
-                    ...updatedItems,
-                    { type: 'tool_result' as const, toolCallId: tool_call_id, status: isError ? 'error' : 'success', result: content || '', duration, diffSummary: diff_summary ?? undefined },
-                  ],
+                  outputItems: updatedItems,
                 };
               }),
             }));

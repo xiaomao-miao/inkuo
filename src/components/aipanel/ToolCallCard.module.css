@@ -108,6 +108,25 @@
   font-family: var(--font-mono);
 }
 
+.diffToggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--fg-secondary);
+  text-align: left;
+}
+
+.diffToggle:hover {
+  color: var(--fg-primary);
+}
+
 .added {
   color: #22c55e;
   font-weight: 600;

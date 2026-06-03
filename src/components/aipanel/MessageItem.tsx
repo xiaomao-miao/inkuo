@@ -191,26 +191,22 @@ const OutputItemView: React.FC<OutputItemViewProps> = ({
           arguments={item.arguments}
           rawArguments={item.rawArguments}
           streamingContent={item.streamingContent}
-          status={item.isExecuting ? 'executing' : 'pending'}
+          status={item.status || (item.isExecuting ? 'executing' : 'pending')}
           isStreamingArguments={item.isExecuting}
+          result={item.result}
+          duration={item.duration}
+          diffSummary={item.diffSummary}
         />
       </div>
     );
   }
 
   if (item.type === 'tool_result') {
+    // This item is now merged into tool_call_start, so we render it as hidden
+    // to maintain backward compatibility. The actual rendering happens in tool_call_start.
     const toolCall = message.toolCalls?.find(tc => tc.id === item.toolCallId);
     return (
-      <div className={styles.toolResultItem}>
-        {isThisStreaming && isLastItem && (
-          <div className={styles.continueGenerating}>
-            <span className={styles.continueDots}>
-              <span className={styles.dot} />
-              <span className={styles.dot} />
-              <span className={styles.dot} />
-            </span>
-          </div>
-        )}
+      <div className={styles.toolResultItem} style={{ display: 'none' }}>
         <ToolCallCard
           id={item.toolCallId}
           name={toolCall?.name || 'unknown'}

@@ -43,9 +43,13 @@ export type OutputItem =
       streamingContent?: string;
       // When true the tool has been registered as "executing" and the UI
       // should show the running indicator. After `tool_result` arrives this
-      // item is left in place (for visual continuity) but the matching
-      // `tool_result` item takes over with a final status.
+      // item is updated in-place (for visual continuity) with result info.
       isExecuting?: boolean;
+      // Result info populated when tool execution completes
+      result?: string;
+      status?: 'success' | 'error';
+      duration?: number;
+      diffSummary?: DiffSummary;
     }
   | { type: 'tool_result'; toolCallId: string; status: 'success' | 'error'; result: string; duration?: number; diffSummary?: DiffSummary }
   | { type: 'tool_error'; toolCallId: string; error: string };
