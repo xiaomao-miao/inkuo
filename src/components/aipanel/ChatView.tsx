@@ -59,10 +59,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
       <div className={styles.content} ref={contentRef}>
         <div className={styles.emptyState}>
           <div className={styles.emptyIcon}><Sparkles size={32} /></div>
-          <h3>开始对话</h3>
+          <h3>文档助手</h3>
           <p>
             {mode === 'agent'
-              ? '使用 Agent 模式，可以帮你读写文件、搜索代码'
+              ? '使用自然语言处理文档、总结内容、解释代码'
               : '询问关于文档的问题或请求 AI 帮助你写作'}
           </p>
           <div className={styles.quickActions}>
@@ -70,8 +70,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
             <QuickActionButton label="解释内容" hint="解释这段代码/文本的工作原理" onSetInput={onSetInput} />
             {mode === 'agent' && (
               <QuickActionButton
-                label="查看项目结构"
-                hint="查看项目结构，列出 src 目录下的所有文件"
+                label="列出文档目录"
+                hint="查看当前文档目录结构"
                 onSetInput={onSetInput}
               />
             )}
