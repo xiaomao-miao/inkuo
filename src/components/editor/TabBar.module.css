@@ -24,6 +24,7 @@
   align-items: stretch;
   height: 100%;
   min-width: 0;
+  flex-shrink: 0;
 }
 
 .tab {
@@ -38,6 +39,7 @@
   cursor: pointer;
   min-width: 100px;
   max-width: 200px;
+  flex-shrink: 0;
   transition: background-color var(--transition-fast), color var(--transition-fast);
   position: relative;
   user-select: none;
