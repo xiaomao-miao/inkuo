@@ -201,3 +201,56 @@ impl EditFileTool {
 impl Default for EditFileTool {
     fn default() -> Self { Self::new() }
 }
+
+// ─── MoveFile ─────────────────────────────────────────────────────────────────
+
+pub struct MoveFileTool;
+
+impl MoveFileTool {
+    pub fn new() -> Self { Self }
+    pub fn definition(&self) -> ToolDefinition {
+        ToolDefinition::new(
+            "move_file",
+            "Move or rename a file or directory.",
+            ToolParameters::new(
+                vec!["source", "destination"],
+                vec![
+                    ("source", "string", Some("Absolute path of the file or directory to move")),
+                    ("destination", "string", Some("Absolute path of the destination (can be new name for rename)")),
+                ],
+            ),
+        )
+    }
+    pub async fn execute(&self, arguments: Value, workspace: Option<String>) -> Result<String, ToolError> {
+        let source = arguments["source"]
+            .as_str()
+            .ok_or_else(|| ToolError::InvalidArguments("move_file".to_string(), "source must be a string".into()))?;
+
+        let destination = arguments["destination"]
+            .as_str()
+            .ok_or_else(|| ToolError::InvalidArguments("move_file".to_string(), "destination must be a string".into()))?;
+
+        validate_workspace_path(source, &workspace)?;
+        validate_workspace_path(destination, &workspace)?;
+
+        if !Path::new(source).exists() {
+            return Err(ToolError::IoError(format!("Source path does not exist: {}", source)));
+        }
+
+        if let Some(parent) = Path::new(destination).parent() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|e| ToolError::IoError(format!("Failed to create destination directory: {}", e)))?;
+        }
+
+        tokio::fs::rename(source, destination)
+            .await
+            .map_err(|e| ToolError::IoError(format!("Failed to move file from '{}' to '{}': {}", source, destination, e)))?;
+
+        Ok(format!("Moved '{}' to '{}' successfully", source, destination))
+    }
+}
+
+impl Default for MoveFileTool {
+    fn default() -> Self { Self::new() }
+}
