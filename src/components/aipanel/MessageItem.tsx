@@ -1,6 +1,7 @@
 import React from 'react';
 import { Loader2, Pencil, X, RotateCcw } from 'lucide-react';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { StreamingMarkdownRenderer } from './StreamingMarkdownRenderer';
 import { ToolCallCard } from './ToolCallCard';
 import { InlineDiffPreview } from './InlineDiffPreview';
 import { parsePlanBlocks, type PlanBlock } from './planRender';
@@ -161,9 +162,10 @@ const OutputItemView: React.FC<OutputItemViewProps> = ({
     return (
       <div className={styles.outputTextItem}>
         {item.isPendingMarkdown ? (
-          <pre style={{ margin: 0, padding: 0, fontFamily: 'inherit', fontSize: 'inherit', lineHeight: 'inherit', whiteSpace: 'pre-wrap', background: 'transparent' }}>
-            {item.content}
-          </pre>
+          <StreamingMarkdownRenderer
+            content={item.content}
+            isStreaming={isThisStreaming}
+          />
         ) : (
           <MarkdownRenderer content={item.content} />
         )}
@@ -273,9 +275,10 @@ const LegacyMessageContent: React.FC<LegacyMessageContentProps> = ({
         </div>
       ) : message.content ? (
         isThisStreaming ? (
-          <pre style={{ margin: 0, padding: 0, fontFamily: 'inherit', fontSize: 'inherit', lineHeight: 'inherit', whiteSpace: 'pre-wrap', background: 'transparent' }}>
-            {message.content}
-          </pre>
+          <StreamingMarkdownRenderer
+            content={message.content}
+            isStreaming={true}
+          />
         ) : (
           <MarkdownRenderer content={message.content} />
         )
