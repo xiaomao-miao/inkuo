@@ -105,6 +105,43 @@ impl Default for WriteFileTool {
     fn default() -> Self { Self::new() }
 }
 
+// ─── CreateDir ─────────────────────────────────────────────────────────────────
+
+pub struct CreateDirTool;
+
+impl CreateDirTool {
+    pub fn new() -> Self { Self }
+    pub fn definition(&self) -> ToolDefinition {
+        ToolDefinition::new(
+            "create_dir",
+            "Create a new directory. Creates parent directories as needed (like mkdir -p).",
+            ToolParameters::new(
+                vec!["path"],
+                vec![
+                    ("path", "string", Some("Absolute path of the directory to create")),
+                ],
+            ),
+        )
+    }
+    pub async fn execute(&self, arguments: Value, workspace: Option<String>) -> Result<String, ToolError> {
+        let path = arguments["path"]
+            .as_str()
+            .ok_or_else(|| ToolError::InvalidArguments("create_dir".to_string(), "path must be a string".into()))?;
+
+        validate_workspace_path(path, &workspace)?;
+
+        tokio::fs::create_dir_all(path)
+            .await
+            .map_err(|e| ToolError::IoError(format!("Failed to create directory {}: {}", path, e)))?;
+
+        Ok(format!("Directory '{}' created successfully", path))
+    }
+}
+
+impl Default for CreateDirTool {
+    fn default() -> Self { Self::new() }
+}
+
 // ─── EditFile ──────────────────────────────────────────────────────────────
 
 pub struct EditFileTool;

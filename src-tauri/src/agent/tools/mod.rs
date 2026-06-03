@@ -221,7 +221,7 @@ mod file_tools;
 mod search_tools;
 mod office_tools;
 
-pub use file_tools::{ReadFileTool, WriteFileTool, EditFileTool};
+pub use file_tools::{ReadFileTool, WriteFileTool, EditFileTool, CreateDirTool};
 pub use search_tools::{ListDirTool, GlobTool, GrepTool};
 pub use office_tools::{ReadOfficeFileTool, WriteOfficeFileTool};
 
@@ -230,6 +230,7 @@ pub enum ToolExecutor {
     ReadFile(file_tools::ReadFileTool),
     WriteFile(file_tools::WriteFileTool),
     EditFile(file_tools::EditFileTool),
+    CreateDir(file_tools::CreateDirTool),
     ListDir(search_tools::ListDirTool),
     Glob(search_tools::GlobTool),
     Grep(search_tools::GrepTool),
@@ -243,6 +244,7 @@ impl ToolExecutor {
             ToolExecutor::ReadFile(_) => "read_file",
             ToolExecutor::WriteFile(_) => "write_file",
             ToolExecutor::EditFile(_) => "edit_file",
+            ToolExecutor::CreateDir(_) => "create_dir",
             ToolExecutor::ListDir(_) => "list_dir",
             ToolExecutor::Glob(_) => "glob",
             ToolExecutor::Grep(_) => "grep",
@@ -256,6 +258,7 @@ impl ToolExecutor {
             ToolExecutor::ReadFile(t) => t.definition(),
             ToolExecutor::WriteFile(t) => t.definition(),
             ToolExecutor::EditFile(t) => t.definition(),
+            ToolExecutor::CreateDir(t) => t.definition(),
             ToolExecutor::ListDir(t) => t.definition(),
             ToolExecutor::Glob(t) => t.definition(),
             ToolExecutor::Grep(t) => t.definition(),
@@ -269,6 +272,7 @@ impl ToolExecutor {
             ToolExecutor::ReadFile(t) => t.execute(arguments, workspace).await,
             ToolExecutor::WriteFile(t) => t.execute(arguments, workspace).await,
             ToolExecutor::EditFile(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::CreateDir(t) => t.execute(arguments, workspace).await,
             ToolExecutor::ListDir(t) => t.execute(arguments, workspace).await,
             ToolExecutor::Glob(t) => t.execute(arguments, workspace).await,
             ToolExecutor::Grep(t) => t.execute(arguments, workspace).await,
@@ -337,6 +341,7 @@ impl ToolRegistry {
             ToolExecutor::ReadFile(ReadFileTool),
             ToolExecutor::WriteFile(WriteFileTool),
             ToolExecutor::EditFile(EditFileTool),
+            ToolExecutor::CreateDir(CreateDirTool),
             ToolExecutor::ListDir(ListDirTool),
             ToolExecutor::Glob(GlobTool),
             ToolExecutor::Grep(GrepTool),
@@ -386,7 +391,7 @@ impl ToolRegistry {
 
         let is_file_modification = matches!(
             tool_call.name.as_str(),
-            "write_file" | "edit_file" | "write_office_file"
+            "write_file" | "edit_file" | "write_office_file" | "create_dir"
         );
 
         let file_path = is_file_modification
