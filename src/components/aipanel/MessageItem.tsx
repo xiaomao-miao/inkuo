@@ -2,7 +2,7 @@ import React from 'react';
 import { Loader2, Pencil, X, RotateCcw } from 'lucide-react';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { StreamingMarkdownRenderer } from './StreamingMarkdownRenderer';
-import { ToolCallCard } from './ToolCallCard';
+import { ToolCallCard, CompactToolCard, COMPACT_TOOLS } from './ToolCallCard';
 import { InlineDiffPreview } from './InlineDiffPreview';
 import { parsePlanBlocks, type PlanBlock } from './planRender';
 import type {
@@ -174,6 +174,31 @@ const OutputItemView: React.FC<OutputItemViewProps> = ({
   }
 
   if (item.type === 'tool_call_start') {
+    const isCompact = COMPACT_TOOLS.has(item.toolName);
+
+    if (isCompact) {
+      return (
+        <div className={styles.toolResultItem}>
+          {isThisStreaming && isLastItem && (
+            <div className={styles.continueGenerating}>
+              <span className={styles.continueDots}>
+                <span className={styles.dot} />
+                <span className={styles.dot} />
+                <span className={styles.dot} />
+              </span>
+            </div>
+          )}
+          <CompactToolCard
+            id={item.toolCallId}
+            name={item.toolName}
+            arguments={item.arguments}
+            status={item.status || (item.isExecuting ? 'executing' : 'pending')}
+            duration={item.duration}
+          />
+        </div>
+      );
+    }
+
     return (
       <div className={styles.toolResultItem}>
         {isThisStreaming && isLastItem && (

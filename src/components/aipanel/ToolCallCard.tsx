@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef } from 'react';
-import { Check, Loader2, FileEdit, Terminal, X, ChevronDown, ChevronRight } from 'lucide-react';
+import { Check, Loader2, FileEdit, Terminal, X, ChevronDown, ChevronRight, FolderOpen, FileText, Search } from 'lucide-react';
 import type { DiffSummary } from '../../store';
 import styles from './ToolCallCard.module.css';
 
@@ -39,6 +39,10 @@ const getToolDisplayName = (name: string): string => {
 
 const PREVIEW_STRING_KEYS = new Set(['content', 'new_text', 'pattern', 'json_content']);
 
+// Tool categories for compact display
+const FILE_MODIFICATION_TOOLS = new Set(['write_file', 'edit_file', 'write_office_file']);
+export const COMPACT_TOOLS = new Set(['list_dir', 'glob', 'grep', 'read_file', 'read_office_file']);
+
 export const ToolCallCard: React.FC<ToolCallCardProps> = React.memo(function ToolCallCard({
   id,
   name,
@@ -51,7 +55,7 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = React.memo(function Too
   diffSummary,
   isStreamingArguments = false,
 }) {
-  const isFileModification = name === 'write_file' || name === 'edit_file' || name === 'write_office_file';
+  const isFileModification = FILE_MODIFICATION_TOOLS.has(name);
   const filePath = (args?.path as string | undefined) ?? (args?.file_path as string | undefined);
   const fileName = filePath
     ? filePath.split('/').pop() || filePath.split('\\').pop() || filePath
@@ -62,6 +66,9 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = React.memo(function Too
 
   // Determine final status - prefer merged card status if available
   const finalStatus = status === 'pending' && diffSummary ? 'success' : status;
+
+  // Hide cursor when not streaming
+  const showCursor = isStreamingArguments && isExecuting;
 
   // Pick the most "interesting" string field to stream-preview (e.g. the
   // long `content` payload of write_file). Priority:
@@ -180,7 +187,7 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = React.memo(function Too
             <div className={styles.previewContainer}>
               <pre ref={previewRef} className={styles.previewContent}>
                 {preview.text}
-                {isStreamingArguments && <span className={styles.streamingCaret} />}
+                {showCursor && <span className={styles.streamingCaret} />}
               </pre>
             </div>
           )}
@@ -241,6 +248,74 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = React.memo(function Too
           <pre className={styles.errorContent}>{error}</pre>
         </div>
       )}
+    </div>
+  );
+});
+
+// Compact card for non-file-modification tools (list_dir, read_file, glob, grep, etc.)
+interface CompactToolCardProps {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+  status: 'pending' | 'executing' | 'success' | 'error';
+  duration?: number;
+}
+
+const getToolIcon = (name: string) => {
+  switch (name) {
+    case 'list_dir':
+      return <FolderOpen size={12} />;
+    case 'read_file':
+    case 'read_office_file':
+      return <FileText size={12} />;
+    case 'glob':
+    case 'grep':
+      return <Search size={12} />;
+    default:
+      return <Terminal size={12} />;
+  }
+};
+
+export const CompactToolCard: React.FC<CompactToolCardProps> = React.memo(function CompactToolCard({
+  id,
+  name,
+  arguments: args,
+  status,
+  duration,
+}) {
+  const isExecuting = status === 'executing';
+  const filePath = (args?.path as string | undefined) ?? (args?.file_path as string | undefined);
+  const fileName = filePath
+    ? filePath.split('/').pop() || filePath.split('\\').pop() || filePath
+    : null;
+  const pattern = (args?.pattern as string | undefined) ?? (args?.glob as string | undefined);
+
+  return (
+    <div className={`${styles.compactCard} ${styles[status]}`} data-tool-call-id={id}>
+      <div className={styles.compactLeft}>
+        <div className={`${styles.compactIcon} ${isExecuting ? styles.compactIconExecuting : ''}`}>
+          {getToolIcon(name)}
+        </div>
+        <span className={styles.compactName}>{getToolDisplayName(name)}</span>
+        {fileName && <span className={styles.compactFileName}>{fileName}</span>}
+        {pattern && !fileName && <span className={styles.compactFileName}>{pattern}</span>}
+      </div>
+      <div className={styles.compactRight}>
+        {isExecuting && (
+          <>
+            <Loader2 size={10} className={styles.spinning} />
+          </>
+        )}
+        {!isExecuting && status === 'success' && (
+          <Check size={10} className={styles.compactSuccessIcon} />
+        )}
+        {!isExecuting && status === 'error' && (
+          <X size={10} className={styles.compactErrorIcon} />
+        )}
+        {duration !== undefined && (
+          <span className={styles.compactDuration}>{duration}ms</span>
+        )}
+      </div>
     </div>
   );
 });

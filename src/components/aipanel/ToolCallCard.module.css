@@ -365,3 +365,87 @@
   white-space: pre-wrap;
   word-break: break-all;
 }
+
+/* Compact card styles for non-file-modification tools */
+.compactCard {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  transition: border-color 0.15s ease;
+}
+
+.compactCard.executing {
+  border-color: var(--accent-primary);
+}
+
+.compactCard.success {
+  border-color: #22c55e;
+}
+
+.compactCard.error {
+  border-color: #ef4444;
+}
+
+.compactLeft {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.compactIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  background-color: var(--bg-tertiary);
+  color: var(--fg-secondary);
+}
+
+.compactIconExecuting {
+  background-color: var(--accent-subtle);
+  color: var(--accent-primary);
+}
+
+.compactName {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--fg-primary);
+}
+
+.compactFileName {
+  font-size: 10px;
+  color: var(--fg-muted);
+  padding: 1px 6px;
+  background-color: var(--bg-tertiary);
+  border-radius: 3px;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compactRight {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.compactSuccessIcon {
+  color: #22c55e;
+}
+
+.compactErrorIcon {
+  color: #ef4444;
+}
+
+.compactDuration {
+  font-size: 10px;
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+}
