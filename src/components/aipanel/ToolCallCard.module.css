@@ -220,6 +220,110 @@
   padding-right: 8px;
 }
 
+/* Live streaming preview of tool arguments (write_file content, etc.) */
+.previewSection {
+  border-bottom: 1px solid var(--border-color);
+  background-color: var(--bg-secondary);
+}
+
+.previewToggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 12px;
+  background: transparent;
+  border: none;
+  color: var(--fg-secondary);
+  font-size: 11px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: color var(--transition-fast), background-color var(--transition-fast);
+}
+
+.previewToggle:hover {
+  color: var(--fg-primary);
+  background-color: var(--bg-hover);
+}
+
+.previewSize {
+  color: var(--fg-muted);
+  font-weight: 400;
+  font-family: var(--font-mono);
+}
+
+.streamingHint {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--accent-primary);
+  background-color: var(--accent-subtle);
+  border-radius: 4px;
+}
+
+.streamingDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: var(--accent-primary);
+  animation: streamPulse 1s ease-in-out infinite;
+}
+
+@keyframes streamPulse {
+  0%, 100% { opacity: 0.4; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+
+.previewContainer {
+  max-height: 280px;
+  overflow-y: auto;
+  background-color: var(--bg-primary);
+  border-top: 1px solid var(--border-color);
+  scrollbar-width: thin;
+  scrollbar-color: var(--fg-muted) transparent;
+}
+
+.previewContainer::-webkit-scrollbar {
+  width: 6px;
+}
+
+.previewContainer::-webkit-scrollbar-thumb {
+  background-color: var(--fg-muted);
+  border-radius: 3px;
+}
+
+.previewContent {
+  margin: 0;
+  padding: 10px 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--fg-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  background-color: var(--bg-primary);
+}
+
+.streamingCaret {
+  display: inline-block;
+  width: 7px;
+  height: 1em;
+  margin-left: 1px;
+  background-color: var(--accent-primary);
+  vertical-align: text-bottom;
+  animation: caretBlink 0.9s ease-in-out infinite;
+}
+
+@keyframes caretBlink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
 /* Error */
 .error {
   padding: 10px 12px;

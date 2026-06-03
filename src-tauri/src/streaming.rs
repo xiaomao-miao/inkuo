@@ -10,8 +10,10 @@ pub enum StreamEventType {
     Summary,
     /// Error occurred
     Error,
-    /// Tool call started
+    /// Tool call started (also used as first-time arrival: a new tool call appeared in stream)
     ToolCallStart,
+    /// Tool call arguments delta (sent repeatedly as the AI streams the JSON argument string)
+    ToolCallArgsDelta,
     /// Tool call completed
     ToolCallEnd,
     /// Tool execution result

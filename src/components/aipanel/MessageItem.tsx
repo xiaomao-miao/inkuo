@@ -173,10 +173,24 @@ const OutputItemView: React.FC<OutputItemViewProps> = ({
 
   if (item.type === 'tool_call_start') {
     return (
-      <div className={styles.toolExecutingIndicator}>
-        <Loader2 size={12} className={styles.spinning} />
-        <span className={styles.streamingToolName}>{item.toolName}</span>
-        <span className={styles.toolExecutingText}>正在执行...</span>
+      <div className={styles.toolResultItem}>
+        {isThisStreaming && isLastItem && (
+          <div className={styles.continueGenerating}>
+            <span className={styles.continueDots}>
+              <span className={styles.dot} />
+              <span className={styles.dot} />
+              <span className={styles.dot} />
+            </span>
+          </div>
+        )}
+        <ToolCallCard
+          id={item.toolCallId}
+          name={item.toolName}
+          arguments={item.arguments}
+          rawArguments={item.rawArguments}
+          status={item.isExecuting ? 'executing' : 'pending'}
+          isStreamingArguments={item.isExecuting}
+        />
       </div>
     );
   }

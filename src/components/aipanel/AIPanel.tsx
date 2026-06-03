@@ -9,6 +9,7 @@ import {
   type ChatMode,
   type ChatMessage,
   type DiffHunk,
+  type OutputItem,
 } from '../../store';
 import { ChatHeader } from './ChatHeader';
 import { ChatView } from './ChatView';
@@ -105,6 +106,17 @@ export const AIPanel: React.FC = () => {
   const flushTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingFlushRef = useRef<Set<string>>(new Set());
 
+  // Batching for tool-call args streaming. We receive dozens of small SSE deltas
+  // per second from the backend; merging them at 16ms keeps the React render
+  // cost flat regardless of how large the streamed content is.
+  //   pendingToolArgsRef[toolCallId] = { sessionId, messageId, rawArgs, parsedArgs }
+  const pendingToolArgsRef = useRef<Record<
+    string,
+    { sessionId: string; messageId: string; rawArgs: string; parsedArgs: Record<string, unknown> }
+  >>({});
+  const pendingToolArgsOrderRef = useRef<string[]>([]);
+  const flushToolArgsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Note: Empty deps intentionally - this callback uses refs to access latest state,
   // avoiding stale closure issues without needing to re-create the callback.
   const flushTextDeltas = useCallback(() => {
@@ -152,12 +164,69 @@ export const AIPanel: React.FC = () => {
     flushTimeoutRef.current = setTimeout(flushTextDeltas, 16);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Note: Empty deps intentionally - the flush reads from refs only.
+  // We do a single setState that touches exactly one outputItem per tool call,
+  // so React re-renders are bounded by the number of distinct tool calls rather
+  // than the number of SSE deltas.
+  const flushToolArgs = useCallback(() => {
+    const pending = pendingToolArgsRef.current;
+    const order = pendingToolArgsOrderRef.current;
+    if (order.length === 0) return;
+
+    pendingToolArgsRef.current = {};
+    pendingToolArgsOrderRef.current = [];
+    flushToolArgsTimeoutRef.current = null;
+
+    useAIPanelStore.setState((state) => {
+      // Group pending tool call ids by session so we can early-out sessions
+      // that have nothing to update without iterating their messages.
+      const sessionIds = new Set<string>();
+      for (const id of order) {
+        const e = pending[id];
+        if (e) sessionIds.add(e.sessionId);
+      }
+
+      return {
+        sessions: state.sessions.map((s) => {
+          if (!sessionIds.has(s.id)) return s;
+          return {
+            ...s,
+            messages: s.messages.map((m) => {
+              let mutated = false;
+              const updatedItems = m.outputItems.map((item) => {
+                if (item.type !== 'tool_call_start') return item;
+                const e = pending[item.toolCallId];
+                if (!e || e.messageId !== m.id) return item;
+                mutated = true;
+                return {
+                  ...item,
+                  arguments: e.parsedArgs,
+                  rawArguments: e.rawArgs,
+                  isExecuting: true,
+                };
+              });
+              return mutated ? { ...m, outputItems: updatedItems } : m;
+            }),
+          };
+        }),
+      };
+    });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Note: Empty deps intentionally - reads refs only. Coalesces many args_delta
+  // events into a single 16ms tick.
+  const scheduleToolArgsFlush = useCallback(() => {
+    if (flushToolArgsTimeoutRef.current !== null) return;
+    flushToolArgsTimeoutRef.current = setTimeout(flushToolArgs, 16);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const flushAllPending = useCallback(() => {
     if (flushTimeoutRef.current !== null) {
       clearTimeout(flushTimeoutRef.current);
       flushTimeoutRef.current = null;
     }
     flushTextDeltas();
+    flushToolArgs();
   }, [flushTextDeltas]);
 
   // Refs for event handlers
@@ -318,29 +387,107 @@ export const AIPanel: React.FC = () => {
             return;
           }
 
-          // Handle tool call start
+          // Handle tool call start — fired by the backend the first time a
+          // tool_call index appears in the streaming response (i.e. the first
+          // SSE delta for that call). We immediately create a card in
+          // "executing" state so the user sees feedback the moment the AI
+          // decides to call a tool — no more waiting for the entire 10000-char
+          // payload to be received.
           if (event_type === 'tool_call_start' && tool_call_id && tool_name) {
-            let args = {};
-            try { if (tool_args) args = JSON.parse(tool_args); } catch { /* ignore */ }
+            let args: Record<string, unknown> = {};
+            let rawArgs: string = tool_args ?? '';
+            try {
+              if (rawArgs) args = JSON.parse(rawArgs);
+            } catch {
+              // Partial JSON during streaming — keep raw string for live preview.
+            }
 
-            const newToolCall = {
-              id: tool_call_id, name: tool_name, arguments: args,
-              status: 'executing' as const, startTime: Date.now(),
-            };
+            useAIPanelStore.getState().updateSession(session_id, (s) => {
+              // Check if a tool_call_start for this id already exists (idempotency
+              // in case the backend re-emits start for the same call).
+              const alreadyExists = s.activeToolCalls.some((tc) => tc.id === tool_call_id);
+              const updatedActiveToolCalls = alreadyExists
+                ? s.activeToolCalls.map((tc) =>
+                    tc.id === tool_call_id
+                      ? { ...tc, name: tool_name, arguments: args, status: 'executing' as const }
+                      : tc
+                  )
+                : [
+                    ...s.activeToolCalls,
+                    {
+                      id: tool_call_id,
+                      name: tool_name,
+                      arguments: args,
+                      status: 'executing' as const,
+                      startTime: Date.now(),
+                    },
+                  ];
 
-            useAIPanelStore.getState().updateSession(session_id, (s) => ({
-              ...s,
-              messages: s.messages.map((m) =>
-                m.id === message_id
-                  ? {
-                      ...m,
-                      toolCalls: [...(m.toolCalls || []), { id: tool_call_id, name: tool_name, arguments: args }],
-                      outputItems: [...m.outputItems, { type: 'tool_call_start' as const, toolCallId: tool_call_id, toolName: tool_name, arguments: args }],
-                    }
-                  : m
-              ),
-              activeToolCalls: [...s.activeToolCalls, newToolCall],
-            }));
+              return {
+                ...s,
+                activeToolCalls: updatedActiveToolCalls,
+                messages: s.messages.map((m) => {
+                  if (m.id !== message_id) return m;
+                  // If the assistant message already has a tool_call_start item
+                  // for this id, update it; otherwise append a new one.
+                  const existingIdx = m.outputItems.findIndex(
+                    (it) => it.type === 'tool_call_start' && it.toolCallId === tool_call_id
+                  );
+                  if (existingIdx >= 0) {
+                    const updated = [...m.outputItems];
+                    const prev = updated[existingIdx] as Extract<OutputItem, { type: 'tool_call_start' }>;
+                    updated[existingIdx] = {
+                      ...prev,
+                      toolName: tool_name,
+                      arguments: args,
+                      rawArguments: rawArgs,
+                      isExecuting: true,
+                    };
+                    return { ...m, outputItems: updated };
+                  }
+                  return {
+                    ...m,
+                    toolCalls: [...(m.toolCalls || []), { id: tool_call_id, name: tool_name, arguments: args }],
+                    outputItems: [
+                      ...m.outputItems,
+                      {
+                        type: 'tool_call_start' as const,
+                        toolCallId: tool_call_id,
+                        toolName: tool_name,
+                        arguments: args,
+                        rawArguments: rawArgs,
+                        isExecuting: true,
+                      },
+                    ],
+                  };
+                }),
+              };
+            });
+            return;
+          }
+
+          // Handle tool call args delta — fired on every subsequent SSE chunk
+          // for the same tool call. We coalesce many deltas into one store
+          // update at ~16ms granularity to keep React renders bounded. The
+          // raw args accumulate server-side, so each event already carries
+          // the *full* current string; we just overwrite the cached value.
+          if (event_type === 'tool_call_args_delta' && tool_call_id) {
+            const rawArgs = tool_args ?? '';
+            let args: Record<string, unknown> = {};
+            try { if (rawArgs) args = JSON.parse(rawArgs); } catch { /* partial JSON */ }
+
+            const prev = pendingToolArgsRef.current[tool_call_id];
+            // Skip the work if the raw payload hasn't actually changed (defensive).
+            if (!prev || prev.rawArgs !== rawArgs) {
+              pendingToolArgsRef.current[tool_call_id] = {
+                sessionId: session_id,
+                messageId: message_id,
+                rawArgs,
+                parsedArgs: args,
+              };
+              if (!prev) pendingToolArgsOrderRef.current.push(tool_call_id);
+            }
+            scheduleToolArgsFlush();
             return;
           }
 
@@ -363,15 +510,25 @@ export const AIPanel: React.FC = () => {
                   ? { ...tc, status: isError ? 'error' : 'success', result: content, error: isError ? error : undefined, duration }
                   : tc
               ),
-              messages: s.messages.map((m) =>
-                m.id === message_id
-                  ? {
-                      ...m,
-                      toolResults: [...(m.toolResults || []), toolResult],
-                      outputItems: [...m.outputItems, { type: 'tool_result' as const, toolCallId: tool_call_id, status: isError ? 'error' : 'success', result: content || '', duration, diffSummary: diff_summary ?? undefined }],
-                    }
-                  : m
-              ),
+              messages: s.messages.map((m) => {
+                if (m.id !== message_id) return m;
+                // If the same message already has a tool_call_start for this id,
+                // patch it in-place to clear the executing flag — keeps the
+                // visual flow stable. We still append a separate tool_result
+                // item so the diff/result block renders after the live preview.
+                const updatedItems = m.outputItems.map((it) => {
+                  if (it.type !== 'tool_call_start' || it.toolCallId !== tool_call_id) return it;
+                  return { ...it, isExecuting: false };
+                });
+                return {
+                  ...m,
+                  toolResults: [...(m.toolResults || []), toolResult],
+                  outputItems: [
+                    ...updatedItems,
+                    { type: 'tool_result' as const, toolCallId: tool_call_id, status: isError ? 'error' : 'success', result: content || '', duration, diffSummary: diff_summary ?? undefined },
+                  ],
+                };
+              }),
             }));
 
             // Add standalone tool message
@@ -453,8 +610,14 @@ export const AIPanel: React.FC = () => {
         clearTimeout(flushTimeoutRef.current);
         flushTimeoutRef.current = null;
       }
+      if (flushToolArgsTimeoutRef.current !== null) {
+        clearTimeout(flushToolArgsTimeoutRef.current);
+        flushToolArgsTimeoutRef.current = null;
+      }
       pendingTextDeltasRef.current = {};
       pendingFlushRef.current = new Set();
+      pendingToolArgsRef.current = {};
+      pendingToolArgsOrderRef.current = [];
       streamingContentRef.current = {};
     };
     // Note: Empty deps intentionally - this effect sets up event listener once.

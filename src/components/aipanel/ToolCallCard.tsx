@@ -1,5 +1,5 @@
-import React from 'react';
-import { Check, Loader2, FileEdit, Terminal, X } from 'lucide-react';
+import React, { useEffect, useMemo, useRef } from 'react';
+import { Check, Loader2, FileEdit, Terminal, X, ChevronDown, ChevronRight } from 'lucide-react';
 import type { DiffSummary } from '../../store';
 import styles from './ToolCallCard.module.css';
 
@@ -7,11 +7,17 @@ interface ToolCallCardProps {
   id: string;
   name: string;
   arguments: Record<string, unknown>;
+  /** Raw, possibly incomplete JSON string of the arguments. Used to render the
+   * streaming preview when full JSON parsing is not yet possible. */
+  rawArguments?: string;
   status: 'pending' | 'executing' | 'success' | 'error';
   result?: string;
   error?: string;
   duration?: number;
   diffSummary?: DiffSummary;
+  /** When true the arguments preview is treated as still streaming in and
+   * the live container auto-scrolls to the bottom as new content arrives. */
+  isStreamingArguments?: boolean;
 }
 
 const getToolDisplayName = (name: string): string => {
@@ -22,26 +28,69 @@ const getToolDisplayName = (name: string): string => {
     list_dir: '列出目录',
     glob: '查找文件',
     grep: '搜索文本',
+    read_office_file: '读取 Office',
+    write_office_file: '写入 Office',
   };
   return names[name] || name;
 };
 
-export const ToolCallCard: React.FC<ToolCallCardProps> = ({
+const PREVIEW_STRING_KEYS = new Set(['content', 'new_text', 'pattern', 'json_content']);
+
+export const ToolCallCard: React.FC<ToolCallCardProps> = React.memo(function ToolCallCard({
+  id,
   name,
   arguments: args,
+  rawArguments,
   status,
   error,
   duration,
   diffSummary,
-}) => {
-  const isFileModification = name === 'write_file' || name === 'edit_file';
-  const filePath = args.path as string | undefined;
+  isStreamingArguments = false,
+}) {
+  const isFileModification = name === 'write_file' || name === 'edit_file' || name === 'write_office_file';
+  const filePath = (args?.path as string | undefined) ?? (args?.file_path as string | undefined);
   const fileName = filePath
-    ? filePath.split('/').pop() || filePath
+    ? filePath.split('/').pop() || filePath.split('\\').pop() || filePath
     : null;
 
+  // Pick the most "interesting" string field to stream-preview (e.g. the
+  // long `content` payload of write_file). Fall back to the raw JSON.
+  // Depend on the raw args string + tool name only — the parsed `args` object
+  // gets a new reference every store update, so depending on it would defeat
+  // the memo and force work on every flush tick.
+  const preview = useMemo(() => {
+    if (!isFileModification && !rawArguments) return null;
+    // First try the parsed object's long string fields.
+    for (const key of PREVIEW_STRING_KEYS) {
+      const v = args?.[key];
+      if (typeof v === 'string' && v.length > 0) {
+        return { key, text: v };
+      }
+    }
+    if (rawArguments && rawArguments.length > 0) {
+      return { key: 'raw', text: rawArguments };
+    }
+    return null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rawArguments, isFileModification, name]);
+
+  const previewRef = useRef<HTMLPreElement | null>(null);
+  const [isExpanded, setIsExpanded] = React.useState(true);
+
+  // Auto-scroll the live preview to the bottom as new text streams in.
+  useEffect(() => {
+    if (!isStreamingArguments) return;
+    const el = previewRef.current;
+    if (!el) return;
+    // Stick to bottom — only when user hasn't scrolled up manually.
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    if (distanceFromBottom < 80) {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, [preview?.text, isStreamingArguments]);
+
   return (
-    <div className={`${styles.card} ${styles[status]}`}>
+    <div className={`${styles.card} ${styles[status]}`} data-tool-call-id={id}>
       {/* Header */}
       <div className={styles.header}>
         <div className={styles.headerLeft}>
@@ -61,7 +110,7 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = ({
           {status === 'executing' && (
             <>
               <Loader2 size={12} className={styles.spinning} />
-              <span>执行中</span>
+              <span>{isStreamingArguments ? '生成参数中...' : '执行中'}</span>
             </>
           )}
           {status === 'success' && (
@@ -84,6 +133,46 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = ({
           )}
         </div>
       </div>
+
+      {/* Live streaming preview of the tool arguments (e.g. write_file content).
+          This is the key piece: it appears the moment the tool card is shown
+          (the first SSE delta) and the content inside streams in real time. */}
+      {preview && preview.text.length > 0 && (
+        <div className={styles.previewSection}>
+          <button
+            type="button"
+            className={styles.previewToggle}
+            onClick={() => setIsExpanded((v) => !v)}
+          >
+            {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+            <span>
+              {preview.key === 'content' || preview.key === 'new_text' || preview.key === 'json_content'
+                ? `内容预览`
+                : '参数预览'}
+              {preview.text.length > 0 && (
+                <span className={styles.previewSize}>
+                  {' · '}
+                  {preview.text.length.toLocaleString()} 字符
+                </span>
+              )}
+              {isStreamingArguments && (
+                <span className={styles.streamingHint}>
+                  <span className={styles.streamingDot} />
+                  实时写入中
+                </span>
+              )}
+            </span>
+          </button>
+          {isExpanded && (
+            <div className={styles.previewContainer}>
+              <pre ref={previewRef} className={styles.previewContent}>
+                {preview.text}
+                {isStreamingArguments && <span className={styles.streamingCaret} />}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Line counts for file modifications */}
       {diffSummary && (
@@ -134,4 +223,4 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = ({
       )}
     </div>
   );
-};
+});

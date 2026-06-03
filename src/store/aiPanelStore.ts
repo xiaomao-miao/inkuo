@@ -29,7 +29,21 @@ export interface MessageToolResult {
 
 export type OutputItem =
   | { type: 'text'; content: string; isPendingMarkdown?: boolean }
-  | { type: 'tool_call_start'; toolCallId: string; toolName: string; arguments: Record<string, unknown> }
+  | {
+      type: 'tool_call_start';
+      toolCallId: string;
+      toolName: string;
+      // The latest accumulated arguments JSON string. Updated incrementally as
+      // the AI streams the JSON argument. May be an incomplete JSON while the
+      // tool call is still being received.
+      arguments: Record<string, unknown>;
+      rawArguments?: string;
+      // When true the tool has been registered as "executing" and the UI
+      // should show the running indicator. After `tool_result` arrives this
+      // item is left in place (for visual continuity) but the matching
+      // `tool_result` item takes over with a final status.
+      isExecuting?: boolean;
+    }
   | { type: 'tool_result'; toolCallId: string; status: 'success' | 'error'; result: string; duration?: number; diffSummary?: DiffSummary }
   | { type: 'tool_error'; toolCallId: string; error: string };
 
@@ -118,6 +132,18 @@ interface AIPanelState {
   updateSession: (sessionId: string, updater: (session: ChatSession) => ChatSession) => void;
   updateMessageOutput: (sessionId: string, messageId: string, outputItems: OutputItem[]) => void;
   addOutputToMessage: (sessionId: string, messageId: string, outputItem: OutputItem) => void;
+  /**
+   * Locate an output item by predicate (typically by toolCallId or content) and
+   * merge a partial patch into it. Used to stream incremental updates — for
+   * example extending a `tool_call_start` item's arguments as the AI emits
+   * the JSON argument string chunk-by-chunk.
+   */
+  patchOutputItem: (
+    sessionId: string,
+    messageId: string,
+    matchKey: { toolCallId: string } | { contentContains: string },
+    patch: Partial<OutputItem>,
+  ) => void;
   finishMessageStreaming: (sessionId: string, messageId: string, finalContent: string) => void;
   setErrorMessage: (sessionId: string, messageId: string, error: string) => void;
 }
@@ -444,6 +470,34 @@ export const useAIPanelStore = create<AIPanelState>()(
                   }
                 : s
             ),
+          })),
+
+        patchOutputItem: (sessionId, messageId, matchKey, patch) =>
+          set((state) => ({
+            sessions: state.sessions.map((s) => {
+              if (s.id !== sessionId) return s;
+              return {
+                ...s,
+                messages: s.messages.map((m) => {
+                  if (m.id !== messageId) return m;
+                  let matched = false;
+                  const updatedItems = m.outputItems.map((item) => {
+                    if (matched) return item;
+                    if ('toolCallId' in matchKey) {
+                      const tcId = (item as { toolCallId?: string }).toolCallId;
+                      if (tcId !== matchKey.toolCallId) return item;
+                    } else {
+                      const text = (item as { content?: string }).content ?? '';
+                      if (!text.includes(matchKey.contentContains)) return item;
+                    }
+                    matched = true;
+                    return { ...item, ...patch } as OutputItem;
+                  });
+                  if (!matched) return m;
+                  return { ...m, outputItems: updatedItems };
+                }),
+              };
+            }),
           })),
 
         finishMessageStreaming: (sessionId, messageId, finalContent) =>

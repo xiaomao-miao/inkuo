@@ -510,6 +510,24 @@ impl AgentExecutor {
         let mut stream = response.bytes_stream();
         let mut bytes_received = 0;
 
+        // Track which tool_call indices have already had their `tool_call_start` event
+        // emitted, so we can fire the start event the first time a new index appears,
+        // and emit incremental args deltas on every subsequent chunk.
+        let mut tool_call_started: std::collections::HashSet<usize> = std::collections::HashSet::new();
+
+        // Throttle: avoid emitting a `tool_call_args_delta` for the same tool
+        // call index more than once per `TOOL_ARGS_EMIT_INTERVAL_MS`. The raw
+        // arg string is still accumulated fully into `entry.function.arguments`
+        // regardless, so the next emission carries the up-to-date state. This
+        // caps both the per-chunk IPC payload size (which scales with the
+        // accumulated args) and the React render rate, without blocking the
+        // SSE receive loop.
+        const TOOL_ARGS_EMIT_INTERVAL_MS: u128 = 60;
+        let mut last_tool_args_emit: std::collections::HashMap<usize, std::time::Instant> =
+            std::collections::HashMap::new();
+        let mut tool_args_has_pending: std::collections::HashSet<usize> =
+            std::collections::HashSet::new();
+
         tracing::debug!("Starting to process stream...");
 
         while let Some(item) = stream.next().await {
@@ -603,7 +621,7 @@ impl AgentExecutor {
                                 }
                             }
 
-                            // Collect tool calls
+                            // Collect tool calls and emit progressive events
                             if let Some(tool_calls) = delta.tool_calls {
                                 for tc in tool_calls {
                                     // Grow capacity to include this index
@@ -624,16 +642,110 @@ impl AgentExecutor {
                                     // Only update the ID if the model provided a non-empty one.
                                     // This prevents placeholder IDs (call_1, call_2...) from
                                     // overwriting real IDs returned by the model.
-                                    if let Some(id) = tc.id {
+                                    let new_id = if let Some(id) = &tc.id {
                                         if !id.is_empty() {
-                                            entry.id = id;
+                                            entry.id = id.clone();
+                                            true
+                                        } else {
+                                            false
                                         }
-                                    }
-                                    if let Some(name) = tc.function.name {
-                                        entry.function.name = name;
-                                    }
-                                    if let Some(args) = tc.function.arguments {
-                                        entry.function.arguments.push_str(&args);
+                                    } else {
+                                        false
+                                    };
+
+                                    let new_name = if let Some(name) = &tc.function.name {
+                                        if !name.is_empty() {
+                                            entry.function.name = name.clone();
+                                            true
+                                        } else {
+                                            false
+                                        }
+                                    } else {
+                                        false
+                                    };
+
+                                    // Capture the argument delta BEFORE appending so we can
+                                    // emit a true incremental `args_delta` event.
+                                    let arg_delta: Option<String> = if let Some(args) = &tc.function.arguments {
+                                        if !args.is_empty() {
+                                            entry.function.arguments.push_str(args);
+                                            Some(args.clone())
+                                        } else {
+                                            None
+                                        }
+                                    } else {
+                                        None
+                                    };
+
+                                    // Emit `tool_call_start` the first time we see this index.
+                                    if !tool_call_started.contains(&tc.index) {
+                                        tool_call_started.insert(tc.index);
+                                        let live_id = entry.id.clone();
+                                        let live_name = entry.function.name.clone();
+                                        let live_args = entry.function.arguments.clone();
+                                        // Initialise the throttle clock for this index.
+                                        last_tool_args_emit
+                                            .insert(tc.index, std::time::Instant::now());
+                                        on_event(StreamPayload {
+                                            session_id: session_id.to_string(),
+                                            message_id: message_id.to_string(),
+                                            event_type: "tool_call_start".to_string(),
+                                            content: None,
+                                            summary: None,
+                                            tool_call_id: Some(live_id),
+                                            tool_name: Some(live_name),
+                                            tool_args: Some(live_args),
+                                            final_content: None,
+                                            error: None,
+                                            done: false,
+                                            file_path: None,
+                                            original_content: None,
+                                            new_content: None,
+                                            diff_summary: None,
+                                            office_file_modified: None,
+                                        });
+                                    } else if new_id || new_name || arg_delta.is_some() {
+                                        // Subsequent chunk for the same tool call index.
+                                        // Throttle the emission so we don't flood the IPC
+                                        // channel with 10000-char payloads at SSE rate.
+                                        let now = std::time::Instant::now();
+                                        let should_emit = tool_args_has_pending.contains(&tc.index)
+                                            || now.duration_since(
+                                                last_tool_args_emit
+                                                    .get(&tc.index)
+                                                    .copied()
+                                                    .unwrap_or(now),
+                                            ).as_millis() >= TOOL_ARGS_EMIT_INTERVAL_MS;
+                                        if should_emit {
+                                            tool_args_has_pending.remove(&tc.index);
+                                            last_tool_args_emit.insert(tc.index, now);
+                                            let live_id = entry.id.clone();
+                                            let live_name = entry.function.name.clone();
+                                            let live_args = entry.function.arguments.clone();
+                                            on_event(StreamPayload {
+                                                session_id: session_id.to_string(),
+                                                message_id: message_id.to_string(),
+                                                event_type: "tool_call_args_delta".to_string(),
+                                                content: arg_delta,
+                                                summary: None,
+                                                tool_call_id: Some(live_id),
+                                                tool_name: Some(live_name),
+                                                tool_args: Some(live_args),
+                                                final_content: None,
+                                                error: None,
+                                                done: false,
+                                                file_path: None,
+                                                original_content: None,
+                                                new_content: None,
+                                                diff_summary: None,
+                                                office_file_modified: None,
+                                            });
+                                        } else {
+                                            // Mark that we owe a delta so the *next* chunk
+                                            // (or the post-loop flush below) sends the
+                                            // current accumulated state.
+                                            tool_args_has_pending.insert(tc.index);
+                                        }
                                     }
                                 }
                             }
@@ -667,6 +779,38 @@ impl AgentExecutor {
                 }
             }
         }
+
+        // Flush any throttled tool-call args deltas so the frontend receives
+        // the final accumulated state. The actual tool execution will fire
+        // `tool_result` next, which already carries the full state — but
+        // emitting once more here keeps the streaming UI in sync when the
+        // last delta happened to be skipped by the throttle.
+        for idx in &tool_args_has_pending {
+            if let Some(entry) = current_tool_calls.get(*idx) {
+                if !tool_call_started.contains(idx) {
+                    continue;
+                }
+                on_event(StreamPayload {
+                    session_id: session_id.to_string(),
+                    message_id: message_id.to_string(),
+                    event_type: "tool_call_args_delta".to_string(),
+                    content: None,
+                    summary: None,
+                    tool_call_id: Some(entry.id.clone()),
+                    tool_name: Some(entry.function.name.clone()),
+                    tool_args: Some(entry.function.arguments.clone()),
+                    final_content: None,
+                    error: None,
+                    done: false,
+                    file_path: None,
+                    original_content: None,
+                    new_content: None,
+                    diff_summary: None,
+                    office_file_modified: None,
+                });
+            }
+        }
+        tool_args_has_pending.clear();
 
         tracing::debug!("Stream processing complete. bytes_received: {}, current_content_len: {}", bytes_received, current_content.len());
 
