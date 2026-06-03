@@ -31,6 +31,12 @@ interface SidebarState {
   closeTab: (tabId: string) => void;
   setActiveTab: (tabId: string) => void;
   setOpenTabDirty: (path: string, isDirty: boolean) => void;
+  /** Add a file entry (for incremental file creation events). */
+  addFileEntry: (entry: FileEntry) => void;
+  /** Remove a file entry and all its descendants (for incremental file deletion events). */
+  removeFileEntry: (path: string) => void;
+  /** Remove all file entries under a directory path. */
+  removeDescendants: (parentPath: string) => void;
 }
 
 export const useSidebarStore = create<SidebarState>()(
@@ -109,6 +115,19 @@ export const useSidebarStore = create<SidebarState>()(
           ...state.openTabDirtyMap,
           [path]: isDirty,
         }
+      })),
+      addFileEntry: (entry) => set((state) => {
+        // Avoid duplicates
+        if (state.files.some(f => f.path === entry.path)) {
+          return state;
+        }
+        return { files: [...state.files, entry] };
+      }),
+      removeFileEntry: (path) => set((state) => ({
+        files: state.files.filter(f => !f.path.startsWith(path)),
+      })),
+      removeDescendants: (parentPath) => set((state) => ({
+        files: state.files.filter(f => !f.path.startsWith(parentPath + '/')),
       })),
     }),
     {

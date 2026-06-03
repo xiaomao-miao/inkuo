@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -18,6 +18,41 @@ import {
 import { useSidebarStore } from '../../store';
 import type { FileEntry } from '../../types';
 import styles from './Sidebar.module.css';
+
+/// Debounce utility - batches rapid calls into a single invocation after the
+/// quiet window expires. Returns a wrapped function.
+function useDebouncedCallback<T extends (...args: Parameters<T>) => void>(
+  callback: T,
+  delayMs: number
+): T {
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingRef = useRef<Parameters<T> | null>(null);
+  const callbackRef = useRef(callback);
+  callbackRef.current = callback;
+
+  // Keep delay stable across renders
+  const delayRef = useRef(delayMs);
+  delayRef.current = delayMs;
+
+  return useCallback(
+    ((...args: Parameters<T>) => {
+      pendingRef.current = args;
+      if (timerRef.current !== null) {
+        clearTimeout(timerRef.current);
+      }
+      timerRef.current = setTimeout(() => {
+        timerRef.current = null;
+        if (pendingRef.current !== null) {
+          const pending = pendingRef.current as Parameters<T>;
+          callbackRef.current(...pending);
+          pendingRef.current = null;
+        }
+      }, delayRef.current);
+    }) as T,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [] // intentionally empty – all state lives in refs
+  );
+}
 
 // Helper function to get all parent folders for search results
 function getEntriesWithParents(matchingEntries: FileEntry[], allEntries: FileEntry[]): FileEntry[] {
@@ -52,6 +87,8 @@ export const Sidebar: React.FC = () => {
     toggleDir,
     setIsLoading,
     openTab,
+    addFileEntry,
+    removeFileEntry,
   } = useSidebarStore();
 
   const [searchQuery, setSearchQuery] = useState('');
@@ -64,6 +101,96 @@ export const Sidebar: React.FC = () => {
     }
   }, [workspacePath]);
 
+  // --- Incremental file update handlers ---
+
+  const handleFileCreated = useCallback(async (changedPath: string) => {
+    try {
+      const entries = await invoke<FileEntry[]>('list_directory', {
+        path: workspacePath,
+      });
+      const entry = entries.find(e => e.path === changedPath);
+      if (!entry) return;
+
+      const parentPath = entry.path.substring(
+        workspacePath!.length + 1
+      ).split('/').slice(0, -1).join('/');
+      const parentDir = parentPath
+        ? `${workspacePath}/${parentPath}`
+        : workspacePath!;
+
+      // Read expandedDirs fresh from the store to avoid stale closures
+      const currentExpandedDirs = useSidebarStore.getState().expandedDirs;
+      const needsChildRefresh = currentExpandedDirs.has(parentDir);
+
+      if (needsChildRefresh) {
+        // Re-fetch the parent's children to get accurate order + new entry
+        const refreshedChildren = await invoke<FileEntry[]>('list_directory', {
+          path: parentDir,
+        });
+        setFiles(prev => {
+          // Remove old children of this parent
+          const cleaned = prev.filter(
+            f => !f.path.startsWith(parentDir + '/') || f.path === parentDir
+          );
+          return [...cleaned, ...refreshedChildren];
+        });
+      } else {
+        // Parent is collapsed – just store the entry so it's visible when
+        // the user expands the parent later
+        addFileEntry(entry);
+      }
+    } catch (err) {
+      console.error('[FileWatcher] Failed to handle file creation:', err);
+    }
+  }, [workspacePath, addFileEntry, setFiles]);
+
+  const handleFileDeleted = useCallback((deletedPath: string) => {
+    removeFileEntry(deletedPath);
+  }, [removeFileEntry]);
+
+  const handleFileModified = useCallback((_modifiedPath: string) => {
+    // For file tree display, modification doesn't require any structural change.
+    // The tree order/name stays the same; re-render is sufficient.
+    // Force a re-render by touching files (same reference is fine – React
+    // compares by identity, but the display only depends on `files` which
+    // hasn't changed structurally here).
+    setFiles(prev => [...prev]);
+  }, [setFiles]);
+
+  // Debounced top-level refresh – used as a safety net when incremental
+  // logic cannot handle a situation (e.g. bulk rename outside the workspace).
+  const debouncedFullRefresh = useDebouncedCallback(() => {
+    const wp = useSidebarStore.getState().workspacePath;
+    if (wp) {
+      loadDirectory(wp, false);
+    }
+  }, 500);
+
+  const handleFileChange = useCallback((event: { type: string; data: { path: string } }) => {
+    const { type, data } = event;
+    const changedPath = data?.path;
+    if (!changedPath) return;
+
+    // Ignore paths outside the workspace
+    if (!changedPath.startsWith(workspacePath!)) return;
+
+    switch (type) {
+      case 'Created':
+        handleFileCreated(changedPath);
+        break;
+      case 'Deleted':
+        handleFileDeleted(changedPath);
+        break;
+      case 'Modified':
+        handleFileModified(changedPath);
+        break;
+      default:
+        // Unknown event type – fall back to full refresh
+        debouncedFullRefresh();
+        break;
+    }
+  }, [workspacePath, handleFileCreated, handleFileDeleted, handleFileModified, debouncedFullRefresh]);
+
   // Set up file watcher when workspacePath changes
   useEffect(() => {
     let unlisten: UnlistenFn | null = null;
@@ -72,14 +199,12 @@ export const Sidebar: React.FC = () => {
       if (!workspacePath) return;
 
       try {
-        // Start watching the workspace directory
         await invoke('watch_directory', { path: workspacePath });
 
-        // Listen for file change events
-        unlisten = await listen<{ type: string; data: { path: string } }>('file-change', () => {
-          // Refresh the file tree on any file change
-          loadDirectory(workspacePath, true);
-        });
+        unlisten = await listen<{ type: string; data: { path: string } }>(
+          'file-change',
+          (ev) => handleFileChange(ev.payload)
+        );
       } catch (err) {
         console.error('Failed to set up file watcher:', err);
       }
@@ -91,10 +216,9 @@ export const Sidebar: React.FC = () => {
       if (unlisten) {
         unlisten();
       }
-      // Stop watching when workspace changes or component unmounts
       invoke('unwatch_directory').catch(console.error);
     };
-  }, [workspacePath]);
+  }, [workspacePath, handleFileChange]);
 
   const openWorkspace = async () => {
     try {
@@ -113,15 +237,20 @@ export const Sidebar: React.FC = () => {
     }
   };
 
-  const loadDirectory = async (path: string, mergeWithExisting: boolean = true) => {
+  const loadDirectory = useCallback(async (path: string, mergeWithExisting: boolean = true) => {
+    // Read current state from the store directly inside the async function
+    // to avoid stale closures.
+    const currentFiles = useSidebarStore.getState().files;
+    const currentExpandedDirs = useSidebarStore.getState().expandedDirs;
+
     setIsLoading(true);
     try {
       const entries = await invoke<FileEntry[]>('list_directory', { path });
 
-      if (mergeWithExisting && files.length > 0) {
-        // 保留展开目录的子项
-        const childrenToKeep = files.filter(f =>
-          [...expandedDirs].some(expanded => f.path.startsWith(expanded + '/'))
+      if (mergeWithExisting && currentFiles.length > 0) {
+        // Keep children of expanded directories
+        const childrenToKeep = currentFiles.filter(f =>
+          [...currentExpandedDirs].some(expanded => f.path.startsWith(expanded + '/'))
         );
 
         setFiles([...childrenToKeep, ...entries]);
@@ -133,12 +262,14 @@ export const Sidebar: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [setFiles, setIsLoading, workspacePath]);
 
   // 展开文件夹时添加子项，折叠时移除子项
   const handleFileClick = async (entry: FileEntry) => {
+    const currentExpandedDirs = useSidebarStore.getState().expandedDirs;
+
     if (entry.is_dir) {
-      const wasExpanded = expandedDirs.has(entry.path);
+      const wasExpanded = currentExpandedDirs.has(entry.path);
 
       if (wasExpanded) {
         // 折叠：移除该目录的所有子项
