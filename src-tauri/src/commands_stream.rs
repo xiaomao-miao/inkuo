@@ -1,5 +1,106 @@
-use crate::{ai, commands::AppState, streaming::StreamPayload};
+use crate::{
+    ai,
+    commands::AppState,
+    commands_agent::AIConfigInput,
+    knowledge,
+    streaming::{KnowledgeSearchResult, StreamPayload},
+};
+use std::collections::BTreeSet;
 use tauri::{AppHandle, Emitter, State};
+
+fn build_ai_config(config_input: AIConfigInput) -> ai::AIConfig {
+    ai::AIConfig {
+        provider: match config_input.provider.as_str() {
+            "openai" | "deepseek" => ai::AIProvider::OpenAI {
+                api_key: config_input.api_key.unwrap_or_default(),
+                base_url: config_input.base_url.unwrap_or_else(|| "https://api.deepseek.com".to_string()),
+            },
+            "ollama" => ai::AIProvider::Ollama {
+                base_url: config_input.base_url.unwrap_or_else(|| "http://localhost:11434".to_string()),
+            },
+            "official" => ai::AIProvider::Official {
+                api_key: config_input.api_key.unwrap_or_default(),
+            },
+            _ => ai::AIProvider::OpenAI {
+                api_key: config_input.api_key.unwrap_or_default(),
+                base_url: config_input.base_url.unwrap_or_else(|| "https://api.deepseek.com".to_string()),
+            },
+        },
+        model: config_input.model,
+        temperature: config_input.temperature.unwrap_or(0.7),
+        max_tokens: config_input.max_tokens,
+    }
+}
+
+fn build_knowledge_context(results: &[knowledge::SearchResult]) -> String {
+    if results.is_empty() {
+        return "未检索到可用的知识库片段。".to_string();
+    }
+
+    results
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            format!(
+                "[片段 {idx}]\n标题: {title}\n路径: {path}\n相似度: {score:.4}\n内容:\n{content}",
+                idx = index + 1,
+                title = item.document_title,
+                path = item.file_path,
+                score = item.score,
+                content = item.content,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn build_knowledge_instruction(user_question: &str, results: &[knowledge::SearchResult]) -> String {
+    format!(
+        "用户问题：\n{question}\n\n知识库片段：\n{context}",
+        question = user_question,
+        context = build_knowledge_context(results),
+    )
+}
+
+fn build_knowledge_references(results: &[knowledge::SearchResult]) -> String {
+    let references: BTreeSet<String> = results
+        .iter()
+        .map(|item| format!("- {} (`{}`)", item.document_title, item.file_path))
+        .collect();
+
+    if references.is_empty() {
+        "## 参考来源\n- 未检索到可用于回答当前问题的知识库片段".to_string()
+    } else {
+        format!("## 参考来源\n{}", references.into_iter().collect::<Vec<_>>().join("\n"))
+    }
+}
+
+fn append_knowledge_references(answer: &str, results: &[knowledge::SearchResult]) -> String {
+    let trimmed = answer.trim_end();
+    let references = build_knowledge_references(results);
+
+    if trimmed.contains("## 参考来源") {
+        trimmed.to_string()
+    } else if trimmed.is_empty() {
+        references
+    } else {
+        format!("{}\n\n{}", trimmed, references)
+    }
+}
+
+fn map_search_results(results: &[knowledge::SearchResult]) -> Vec<KnowledgeSearchResult> {
+    results
+        .iter()
+        .map(|item| KnowledgeSearchResult {
+            chunk_id: item.chunk_id.clone(),
+            document_id: item.document_id.clone(),
+            content: item.content.clone(),
+            score: item.score,
+            document_title: item.document_title.clone(),
+            file_path: item.file_path.clone(),
+        })
+        .collect()
+}
 
 fn emit(app: &AppHandle, payload: StreamPayload) {
     let _ = app.emit("ai://stream", payload);
@@ -20,19 +121,45 @@ pub async fn ai_chat_stream(
     message_id: String,
     mode: String,
     instruction: String,
-    original_text: String,
+    original_text: Option<String>,
+    workspace_path: Option<String>,
+    config_input: AIConfigInput,
     state: State<'_, AppState>,
+    knowledge_state: State<'_, knowledge::commands::KnowledgeState>,
     app: AppHandle,
 ) -> Result<(), String> {
     tracing::info!("ai_chat_stream start - session: {}, mode: {}", session_id, mode);
-    let config = state.ai_config.read().await.clone();
+    let _ = state;
+    let config = build_ai_config(config_input);
     let adapter = ai::AIProviderAdapter::new(config);
+    let original_text = original_text.unwrap_or_default();
+
+    let (instruction, original_text, knowledge_results) = if mode == "knowledge" {
+        let workspace_path = workspace_path.unwrap_or_default().trim().to_string();
+        if workspace_path.is_empty() {
+            return Err("Knowledge mode requires a workspace path".to_string());
+        }
+
+        let results = knowledge::commands::knowledge_search(
+            app.clone(),
+            knowledge_state,
+            workspace_path,
+            instruction.clone(),
+            8,
+        )
+        .await?;
+
+        let knowledge_instruction = build_knowledge_instruction(&instruction, &results);
+        (knowledge_instruction, String::new(), Some(results))
+    } else {
+        (instruction, original_text, None)
+    };
 
     let session_id_for_cb = session_id.clone();
     let message_id_for_cb = message_id.clone();
 
     let result = adapter
-        .chat_stream(mode, instruction, original_text, |delta| {
+        .chat_stream(mode.clone(), instruction, original_text, |delta| {
             if crate::commands::STREAM_CANCELLED.lock().contains(&session_id_for_cb) {
                 return;
             }
@@ -49,6 +176,7 @@ pub async fn ai_chat_stream(
                     tool_args: None,
                     final_content: None,
                     error: None,
+                    search_results: None,
                     done: false,
                     file_path: None,
                     original_content: None,
@@ -77,6 +205,7 @@ pub async fn ai_chat_stream(
                 tool_args: None,
                 final_content: None,
                 error: Some(e.to_string()),
+                search_results: None,
                 done: true,
                 file_path: None,
                 original_content: None,
@@ -102,6 +231,7 @@ pub async fn ai_chat_stream(
                 tool_args: None,
                 final_content: None,
                 error: Some("cancelled".to_string()),
+                search_results: None,
                 done: true,
                 file_path: None,
                 original_content: None,
@@ -112,6 +242,20 @@ pub async fn ai_chat_stream(
         );
         return Ok(());
     }
+
+    let final_result = result.unwrap();
+    let final_content = if mode == "knowledge" {
+        append_knowledge_references(&final_result, knowledge_results.as_deref().unwrap_or(&[]))
+    } else {
+        final_result
+    };
+    let search_results = if mode == "knowledge" {
+        knowledge_results
+            .as_deref()
+            .map(map_search_results)
+    } else {
+        None
+    };
 
     emit(
         &app,
@@ -124,8 +268,9 @@ pub async fn ai_chat_stream(
             tool_call_id: None,
             tool_name: None,
             tool_args: None,
-            final_content: Some(result.unwrap()),
+            final_content: Some(final_content),
             error: None,
+            search_results,
             done: true,
             file_path: None,
             original_content: None,
@@ -189,6 +334,7 @@ pub async fn ai_edit_stream(
                     tool_args: None,
                     final_content: None,
                     error: None,
+                    search_results: None,
                     done: false,
                     file_path: None,
                     original_content: None,
@@ -215,6 +361,7 @@ pub async fn ai_edit_stream(
                 tool_args: None,
                 final_content: None,
                 error: Some("cancelled".to_string()),
+                search_results: None,
                 done: true,
                 file_path: None,
                 original_content: None,
@@ -239,6 +386,7 @@ pub async fn ai_edit_stream(
             tool_args: None,
             final_content: Some(result.content),
             error: None,
+            search_results: None,
             done: true,
             file_path: None,
             original_content: None,

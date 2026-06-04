@@ -547,21 +547,29 @@ export const useAIPanelStore = create<AIPanelState>()(
                 ? {
                     ...s,
                     isStreaming: false,
-                    messages: s.messages.map((m) =>
-                      m.id === messageId
-                        ? {
-                            ...m,
-                            content: m.content || finalContent,
-                            outputItems: m.outputItems.length > 0
-                              ? m.outputItems.map((item) =>
-                                  item.type === 'text'
-                                    ? { ...item, isPendingMarkdown: false }
-                                    : item
-                                )
-                              : [{ type: 'text' as const, content: finalContent, isPendingMarkdown: false }],
-                          }
-                        : m
-                    ),
+                    messages: s.messages.map((m) => {
+                      if (m.id !== messageId) return m;
+
+                      const textItemIndexes = m.outputItems
+                        .map((item, index) => (item.type === 'text' ? index : -1))
+                        .filter((index) => index >= 0);
+
+                      const updatedOutputItems = textItemIndexes.length > 0
+                        ? m.outputItems.map((item, index) => {
+                            if (item.type !== 'text') return item;
+                            const isLastTextItem = index === textItemIndexes[textItemIndexes.length - 1];
+                            return isLastTextItem
+                              ? { ...item, content: finalContent, isPendingMarkdown: false }
+                              : item;
+                          })
+                        : [{ type: 'text' as const, content: finalContent, isPendingMarkdown: false }];
+
+                      return {
+                        ...m,
+                        content: finalContent,
+                        outputItems: updatedOutputItems,
+                      };
+                    }),
                   }
                 : s
             ),
@@ -574,9 +582,21 @@ export const useAIPanelStore = create<AIPanelState>()(
                 ? {
                     ...s,
                     isStreaming: false,
-                    messages: s.messages.map((m) =>
-                      m.id === messageId ? { ...m, content: error } : m
-                    ),
+                    messages: s.messages.map((m) => {
+                      if (m.id !== messageId) return m;
+
+                      const hasVisibleOutput = m.outputItems.some((item) =>
+                        item.type === 'text' || item.type === 'tool_call_start' || item.type === 'tool_error'
+                      );
+
+                      return {
+                        ...m,
+                        content: error,
+                        outputItems: hasVisibleOutput
+                          ? m.outputItems
+                          : [{ type: 'text' as const, content: error, isPendingMarkdown: false }],
+                      };
+                    }),
                   }
                 : s
             ),

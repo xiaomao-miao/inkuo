@@ -33,6 +33,7 @@ interface StreamPayload {
   tool_args?: string;
   final_content?: string;
   error?: string;
+  search_results?: SearchResult[];
   done: boolean;
   file_path?: string;
   original_content?: string;
@@ -81,7 +82,6 @@ export const AIPanel: React.FC = () => {
     clearToolCalls,
     setMessageDiff,
     setKnowledgeBase,
-    setSearchResults,
     clearSearchResults,
   } = useAIPanelStore();
 
@@ -287,6 +287,7 @@ export const AIPanel: React.FC = () => {
     setEditingMessageId(null);
     setEditingContent('');
     setInput('');
+    setIsStreaming(sessionId, true);
 
     clearToolCalls(sessionId);
 
@@ -295,6 +296,30 @@ export const AIPanel: React.FC = () => {
       const { apiConfigs, activeApiConfigId } = useSettingsStore.getState().settings;
       const activeConfig = apiConfigs.find(c => c.id === activeApiConfigId) ?? apiConfigs[0];
       const conversationHistory = buildConversationHistory(messages);
+
+        if (mode === 'knowledge') {
+        clearSearchResults(sessionId);
+        invoke('ai_chat_stream', {
+          sessionId,
+          messageId: assistantMessageId,
+          mode,
+          instruction,
+          originalText: '',
+          workspacePath,
+          configInput: {
+            provider: activeConfig.provider,
+            api_key: activeConfig.apiKey,
+            base_url: activeConfig.baseUrl,
+            model: activeConfig.model,
+            temperature: activeConfig.temperature,
+            max_tokens: activeConfig.maxTokens,
+          },
+        }).catch((err) => {
+          useAIPanelStore.getState().setErrorMessage(sessionId, assistantMessageId, `抱歉，发生了错误：${err}`);
+          setIsStreaming(sessionId, false);
+        });
+        return;
+      }
 
       invoke('ai_agent_stream', {
         sessionId,
@@ -425,24 +450,6 @@ export const AIPanel: React.FC = () => {
     }
   }, [activeSession, workspacePath, setKnowledgeBase, setBuildProgress]);
 
-  const handleKnowledgeSearch = useCallback(async (query: string) => {
-    if (!activeSession || !workspacePath) return;
-
-    const sessionId = activeSession.id;
-
-    try {
-      const results = await invoke<SearchResult[]>('knowledge_search', {
-        workspacePath,
-        query,
-        topK: 10,
-      });
-
-      setSearchResults(sessionId, results);
-    } catch (err) {
-      console.error('Failed to search knowledge base:', err);
-    }
-  }, [activeSession, workspacePath, setSearchResults]);
-
   const handleKnowledgeClear = useCallback(async () => {
     if (!activeSession || !workspacePath) return;
 
@@ -490,7 +497,7 @@ export const AIPanel: React.FC = () => {
           const {
             session_id, message_id, event_type, content, done, summary,
             final_content, error, tool_call_id, tool_name, tool_args,
-            diff_summary, office_file_modified,
+            diff_summary, office_file_modified, search_results,
           } = payload;
 
           if (!payload || !session_id || !message_id) return;
@@ -500,6 +507,9 @@ export const AIPanel: React.FC = () => {
             flushAllPending();
             delete streamingContentRef.current[message_id];
             useAIPanelStore.getState().setErrorMessage(session_id, message_id, error ?? '发生错误');
+            if (modeRef.current === 'knowledge') {
+              useAIPanelStore.getState().setSearchResults(session_id, []);
+            }
             return;
           }
 
@@ -706,6 +716,10 @@ return {
 
             setTimeout(() => clearToolCalls(session_id), TOOL_CALL_CLEAR_DELAY_MS);
 
+            if (currentMode === 'knowledge' && search_results) {
+              useAIPanelStore.getState().setSearchResults(session_id, search_results);
+            }
+
             if (effectiveContent) {
               useAIPanelStore.getState().finishMessageStreaming(session_id, message_id, effectiveContent);
             } else {
@@ -772,14 +786,15 @@ return {
         onClose={() => setIsOpen(false)}
       />
 
-      {mode === 'knowledge' && activeSession ? (
-        <KnowledgeView
-          sessionId={activeSession.id}
-          onBuild={handleKnowledgeBuild}
-          onSearch={handleKnowledgeSearch}
-          onClear={handleKnowledgeClear}
-        />
-      ) : (
+      <div className={styles.panelBody}>
+        {mode === 'knowledge' && activeSession && (
+          <KnowledgeView
+            sessionId={activeSession.id}
+            onBuild={handleKnowledgeBuild}
+            onClear={handleKnowledgeClear}
+          />
+        )}
+
         <ChatView
           messages={messages}
           activeSession={activeSession}
@@ -795,7 +810,7 @@ return {
           onSetEditingContent={setEditingContent}
           onSetInput={handleSetInput}
         />
-      )}
+      </div>
 
       <ChatInput
         input={input}

@@ -1,5 +1,15 @@
 use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KnowledgeSearchResult {
+    pub chunk_id: String,
+    pub document_id: String,
+    pub content: String,
+    pub score: f32,
+    pub document_title: String,
+    pub file_path: String,
+}
+
 /// Stream event types
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(dead_code)]
@@ -68,6 +78,10 @@ pub struct StreamPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 
+    /// Knowledge search results for knowledge mode answers
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub search_results: Option<Vec<KnowledgeSearchResult>>,
+
     /// Whether this is the final event
     pub done: bool,
 
@@ -113,6 +127,7 @@ impl Default for StreamPayload {
             tool_args: None,
             final_content: None,
             error: None,
+            search_results: None,
             done: false,
             file_path: None,
             original_content: None,
@@ -136,6 +151,7 @@ impl StreamPayload {
             tool_args: None,
             final_content: None,
             error: None,
+            search_results: None,
             done: false,
             file_path: None,
             original_content: None,
@@ -157,6 +173,7 @@ impl StreamPayload {
             tool_args: None,
             final_content: None,
             error: Some(error.to_string()),
+            search_results: None,
             done: true,
             file_path: None,
             original_content: None,
@@ -184,6 +201,7 @@ impl StreamPayload {
             tool_args: Some(args.to_string()),
             final_content: None,
             error: None,
+            search_results: None,
             done: false,
             file_path: None,
             original_content: None,
@@ -212,6 +230,7 @@ impl StreamPayload {
             tool_args: None,
             final_content: None,
             error: if is_error { Some(result.to_string()) } else { None },
+            search_results: None,
             done: false,
             file_path: None,
             original_content: None,
@@ -233,6 +252,7 @@ impl StreamPayload {
             tool_args: None,
             final_content: final_content.map(String::from),
             error: None,
+            search_results: None,
             done: true,
             file_path: None,
             original_content: None,

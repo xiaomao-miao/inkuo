@@ -120,14 +120,14 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                 isLastItem={idx === message.outputItems.length - 1}
               />
             ))
-          ) : (
+          ) : message.content ? (
             <LegacyMessageContent
               message={message}
               isThisStreaming={isThisStreaming}
               mode={mode}
               activeToolCalls={activeToolCalls}
             />
-          )}
+          ) : null}
 
           {message.diff && !isThisStreaming && activeSession && (
             <InlineDiffPreview
