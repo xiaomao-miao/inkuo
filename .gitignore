@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local embedding models and caches
+src-tauri/.fastembed_cache/
+src-tauri/models/
