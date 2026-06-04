@@ -144,7 +144,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             />
           )}
 
-          {!isThisStreaming && mode === 'knowledge' && message.searchResults?.length ? (
+          {!isThisStreaming && message.searchResults?.length ? (
             <KnowledgeReferences results={message.searchResults} />
           ) : null}
 
@@ -346,8 +346,18 @@ const KnowledgeReferences: React.FC<KnowledgeReferencesProps> = ({ results }) =>
   const openTab = useSidebarStore((state) => state.openTab);
   const setSelection = useEditorStore((state) => state.setSelection);
 
+  const validResults = results.filter(
+    (result): result is SearchResult & { filePath: string } =>
+      typeof result.filePath === 'string' && result.filePath.trim().length > 0,
+  );
+
   const references = Array.from(
-    new Map(results.map((result) => [result.filePath, result])).values(),
+    new Map(
+      validResults.map((result) => [
+        `${result.filePath}:${result.startLine ?? 0}:${result.endLine ?? 0}:${result.chunkId}`,
+        result,
+      ]),
+    ).values(),
   );
 
   const lineStartOffset = (content: string, lineNumber: number) => {
@@ -366,31 +376,44 @@ const KnowledgeReferences: React.FC<KnowledgeReferencesProps> = ({ results }) =>
     return content.length;
   };
 
-  const handleOpenReference = (result: SearchResult) => {
+  const handleOpenReference = (result: SearchResult & { filePath: string }) => {
+    const fileName = result.filePath.split('/').pop() || '未命名文档';
+
     openTab({
-      id: crypto.randomUUID(),
+      id: result.filePath,
       path: result.filePath,
-      name: result.documentTitle || result.filePath.split('/').pop() || '未命名文档',
+      name: result.documentTitle || fileName,
       isDirty: false,
     });
 
     const startLine = result.startLine;
     if (!startLine) return;
 
-    window.setTimeout(() => {
+    const applySelection = () => {
       const docState = useEditorStore.getState().documentContents[result.filePath];
-      const content = docState?.content;
-      if (!content) return;
+      if (!docState || !docState.content) return false;
 
+      const content = docState.content;
       const from = lineStartOffset(content, startLine);
       const to = lineStartOffset(content, (result.endLine ?? startLine) + 1);
       setSelection(result.filePath, { from, to });
+      return true;
+    };
 
-      const editorView = document.querySelector('.cm-editor') as HTMLElement | null;
-      const lineElement = editorView?.querySelector(`.cm-line:nth-child(${startLine})`) as HTMLElement | null;
-      lineElement?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    }, 80);
+    if (applySelection()) return;
+
+    const pollInterval = window.setInterval(() => {
+      if (applySelection()) {
+        window.clearInterval(pollInterval);
+      }
+    }, 100);
+
+    window.setTimeout(() => window.clearInterval(pollInterval), 5000);
   };
+
+  if (references.length === 0) {
+    return null;
+  }
 
   return (
     <div className={styles.referencesSection}>
@@ -398,7 +421,7 @@ const KnowledgeReferences: React.FC<KnowledgeReferencesProps> = ({ results }) =>
       <div className={styles.referencesList}>
         {references.map((result) => (
           <button
-            key={result.filePath}
+            key={`${result.filePath}:${result.startLine ?? 0}:${result.endLine ?? 0}:${result.chunkId}`}
             type="button"
             className={styles.referenceItem}
             onClick={() => handleOpenReference(result)}
@@ -408,8 +431,8 @@ const KnowledgeReferences: React.FC<KnowledgeReferencesProps> = ({ results }) =>
               <span className={styles.referenceIcon}>
                 <FileText size={14} />
               </span>
-              <span className={styles.referenceName}>{result.documentTitle}</span>
-              <span className={styles.referenceScore}>{(result.score * 100).toFixed(1)}%</span>
+              <span className={styles.referenceName}>{result.documentTitle || result.filePath.split('/').pop() || '未命名文档'}</span>
+              <span className={styles.referenceScore}>{Number.isFinite(result.score) ? `${(result.score * 100).toFixed(1)}%` : ''}</span>
             </div>
             <div className={styles.referencePath}>{result.filePath}</div>
             {(result.startLine || result.endLine) && (

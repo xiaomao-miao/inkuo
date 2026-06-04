@@ -50,6 +50,23 @@ interface StreamPayload {
   };
 }
 
+function normalizeSearchResults(results: SearchResult[] | undefined): SearchResult[] | undefined {
+  if (!results?.length) return undefined;
+
+  return results
+    .filter((result): result is SearchResult & { filePath: string } => {
+      return !!result && typeof result.filePath === 'string' && result.filePath.trim().length > 0;
+    })
+    .map((result) => ({
+      ...result,
+      documentTitle:
+        typeof result.documentTitle === 'string' && result.documentTitle.trim().length > 0
+          ? result.documentTitle
+          : result.filePath.split('/').pop() || '未命名文档',
+      score: Number.isFinite(result.score) ? result.score : 0,
+    }));
+}
+
 // Helper: build conversation history from messages for AI API
 function buildConversationHistory(messages: ChatMessage[]) {
   return messages.map(m => {
@@ -544,6 +561,8 @@ export const AIPanel: React.FC = () => {
 
           if (!payload || !session_id || !message_id) return;
 
+          const normalizedSearchResults = normalizeSearchResults(search_results);
+
           // Handle error event
           if (event_type === 'error') {
             flushAllPending();
@@ -759,9 +778,9 @@ return {
 
             setTimeout(() => clearToolCalls(session_id), TOOL_CALL_CLEAR_DELAY_MS);
 
-            if (currentMode === 'knowledge' && search_results) {
-              useAIPanelStore.getState().setSearchResults(session_id, search_results);
-              useAIPanelStore.getState().setMessageSearchResults(session_id, message_id, search_results);
+            if (normalizedSearchResults) {
+              useAIPanelStore.getState().setSearchResults(session_id, normalizedSearchResults);
+              useAIPanelStore.getState().setMessageSearchResults(session_id, message_id, normalizedSearchResults);
             }
 
             if (effectiveContent) {

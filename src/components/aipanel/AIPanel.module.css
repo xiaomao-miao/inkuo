@@ -576,6 +576,8 @@
   margin-top: 12px;
   padding-top: 12px;
   border-top: 1px solid var(--border-color);
+  position: relative;
+  z-index: 1;
 }
 
 .referencesTitle {
@@ -592,6 +594,8 @@
 }
 
 .referenceItem {
+  appearance: none;
+  -webkit-appearance: none;
   width: 100%;
   display: flex;
   flex-direction: column;
@@ -603,11 +607,19 @@
   border-radius: 8px;
   cursor: pointer;
   transition: all var(--transition-fast);
+  pointer-events: auto;
+  position: relative;
+  z-index: 1;
 }
 
 .referenceItem:hover {
   border-color: var(--accent-primary);
   background-color: var(--bg-hover);
+}
+
+.referenceItem:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
 }
 
 .referenceHeader {

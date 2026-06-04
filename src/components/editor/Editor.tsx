@@ -292,6 +292,29 @@ const EditorContent: React.FC<{
     };
   }, [selectedFile, setDocumentContent, setOpenTabDirty, forceRefreshCount]);
 
+  // Restore selection from store when a new document loads.
+  // This handles the case where the knowledge panel sets a selection for a file
+  // that is not yet in the documentContents cache.
+  useEffect(() => {
+    const view = editorRef.current?.view;
+    if (!view) return;
+    const docState = useEditorStore.getState().documentContents[selectedFile ?? ''];
+    const sel = docState?.selection;
+    if (!sel) return;
+
+    const currentSel = view.state.selection.main;
+    // Only apply if the selection differs from what's in the store
+    if (currentSel.from !== sel.from || currentSel.to !== sel.to) {
+      view.dispatch({
+        selection: { anchor: sel.from, head: sel.to },
+        scrollIntoView: true,
+        userEvent: 'kb.navigate',
+      });
+    }
+  // Re-run when the document content changes (document loaded) or when the
+    // selection in the store changes (knowledge panel navigation).
+  }, [selectedFile, currentContent, editorRef]);
+
   // Listen for external file changes and force a reload by updating mtime in the store.
   useEffect(() => {
     let unlisten: (() => void) | null = null;

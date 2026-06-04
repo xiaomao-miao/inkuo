@@ -151,10 +151,11 @@ pub async fn knowledge_build(
         })?;
     tracing::info!("[KB_BUILD] Scan complete, found {} documents", documents.len());
 
-    // Build file paths map
+    // Build file paths map (absolute paths for frontend navigation)
     let mut file_paths: HashMap<String, String> = HashMap::new();
     for doc in &documents {
-        file_paths.insert(doc.id.clone(), doc.path.clone());
+        let abs_path = workspace.join(&doc.path);
+        file_paths.insert(doc.id.clone(), abs_path.to_string_lossy().to_string());
     }
 
     // Phase 2: Chunk documents
@@ -430,10 +431,11 @@ pub async fn knowledge_update(
         });
     }
 
-    // Build file paths map
+    // Build file paths map (absolute paths for frontend navigation)
     let mut file_paths: HashMap<String, String> = HashMap::new();
     for doc in &changed_docs {
-        file_paths.insert(doc.id.clone(), doc.path.clone());
+        let abs_path = workspace.join(&doc.path);
+        file_paths.insert(doc.id.clone(), abs_path.to_string_lossy().to_string());
     }
 
     // Re-index changed documents
