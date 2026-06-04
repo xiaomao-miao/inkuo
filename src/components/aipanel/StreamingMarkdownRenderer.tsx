@@ -1,9 +1,8 @@
-import React, { useMemo, useEffect } from 'react';
+import React, { useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import styles from './MarkdownRenderer.module.css';
-import { openKnowledgeReference } from './knowledgeReference';
 
 interface StreamingMarkdownRendererProps {
   content: string;
@@ -76,87 +75,6 @@ function findValidMarkdownPrefix(text: string): string {
   return text.slice(0, validUpTo);
 }
 
-const KNOWLEDGE_PREFIX = 'inkuo://knowledge-reference?';
-
-function isKnowledgeReferenceHref(href: string | undefined): boolean {
-  return !!href && href.startsWith(KNOWLEDGE_PREFIX);
-}
-
-function parseKnowledgeHref(href: string): { filePath: string; startLine?: number; endLine?: number } {
-  try {
-    const url = new URL(href);
-    return {
-      filePath: url.searchParams.get('path') || '',
-      startLine: Number(url.searchParams.get('startLine')) || undefined,
-      endLine: Number(url.searchParams.get('endLine')) || undefined,
-    };
-  } catch {
-    return { filePath: '' };
-  }
-}
-
-function parseFragmentAndPath(href: string): { filePath: string; startLine?: number; endLine?: number } {
-  const hashIndex = href.indexOf('#');
-  const encodedPath = hashIndex >= 0 ? href.slice(0, hashIndex) : href;
-  const fragment = hashIndex >= 0 ? href.slice(hashIndex + 1) : '';
-
-  let startLine: number | undefined;
-  let endLine: number | undefined;
-
-  if (fragment) {
-    const parts = fragment.split(',');
-    const s = Number(parts[0]);
-    startLine = isNaN(s) ? undefined : s;
-    if (parts.length >= 2) {
-      const e = Number(parts[1]);
-      endLine = isNaN(e) ? undefined : e;
-    }
-  }
-
-  let filePath: string;
-  try {
-    filePath = decodeURIComponent(encodedPath);
-  } catch {
-    filePath = encodedPath;
-  }
-
-  return { filePath, startLine, endLine };
-}
-
-function handleClick(event: MouseEvent) {
-  const target = event.target as HTMLElement;
-  const anchor = target.closest ? target.closest('a') : null;
-  if (!anchor) return;
-
-  const href = anchor.getAttribute('href');
-  if (!href) return;
-
-  if (isKnowledgeReferenceHref(href)) {
-    if (event.cancelable) event.preventDefault();
-    event.stopPropagation();
-    const { filePath, startLine, endLine } = parseKnowledgeHref(href);
-    if (filePath) openKnowledgeReference({ filePath, documentTitle: '', startLine, endLine });
-    return;
-  }
-
-  if (
-    href.startsWith('http://') ||
-    href.startsWith('https://') ||
-    href.startsWith('mailto:') ||
-    href.startsWith('tel:') ||
-    href.startsWith('#') ||
-    !href.startsWith('/')
-  ) {
-    return;
-  }
-
-  if (event.cancelable) event.preventDefault();
-  event.stopPropagation();
-
-  const { filePath, startLine, endLine } = parseFragmentAndPath(href);
-  if (filePath) openKnowledgeReference({ filePath, documentTitle: '', startLine, endLine });
-}
-
 export const StreamingMarkdownRenderer: React.FC<StreamingMarkdownRendererProps> = ({
   content,
   className,
@@ -176,12 +94,6 @@ export const StreamingMarkdownRenderer: React.FC<StreamingMarkdownRendererProps>
     const safeContent = findValidMarkdownPrefix(content);
     return { renderedContent: safeContent, hasMore: safeContent.length < content.length };
   }, [content, isStreaming]);
-
-  useEffect(() => {
-    const container = document; // attach globally to catch streaming content too
-    container.addEventListener('click', handleClick, true);
-    return () => container.removeEventListener('click', handleClick, true);
-  }, []);
 
   return (
     <div className={`${styles.markdown} ${className || ''}`}>
