@@ -2,6 +2,7 @@ import React, { useRef, useEffect } from 'react';
 import { Sparkles } from 'lucide-react';
 import { InlineDiffPreview } from './InlineDiffPreview';
 import { MessageItem } from './MessageItem';
+import { ToolCallCard } from './ToolCallCard';
 import type {
   ChatMessage, ChatSession, ChatMode, ActiveToolCall, CurrentDiff,
 } from '../../store';
@@ -21,6 +22,13 @@ interface ChatViewProps {
   onSaveEdit: () => void;
   onSetEditingContent: (v: string) => void;
   onSetInput: (v: string) => void;
+  knowledgeToolCall?: ActiveToolCall;
+  knowledgeBuildProgress?: {
+    phase: string;
+    current: number;
+    total: number;
+    currentFile?: string;
+  };
 }
 
 export const ChatView: React.FC<ChatViewProps> = ({
@@ -37,6 +45,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onSaveEdit,
   onSetEditingContent,
   onSetInput,
+  knowledgeToolCall,
+  knowledgeBuildProgress,
 }) => {
   const contentRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = { current: true };
@@ -109,6 +119,26 @@ export const ChatView: React.FC<ChatViewProps> = ({
             sessionId={activeSession.id}
             isStreaming={isStreaming}
           />
+        )}
+
+        {mode === 'knowledge' && knowledgeToolCall && (
+          <div className={styles.toolResultItem}>
+            <ToolCallCard
+              id={knowledgeToolCall.id}
+              name={knowledgeToolCall.name}
+              arguments={{
+                ...knowledgeToolCall.arguments,
+                progress: knowledgeBuildProgress
+                  ? `${knowledgeBuildProgress.phase} ${knowledgeBuildProgress.current}/${knowledgeBuildProgress.total}`
+                  : knowledgeToolCall.result,
+                current_file: knowledgeBuildProgress?.currentFile,
+              }}
+              status={knowledgeToolCall.status}
+              result={knowledgeToolCall.result}
+              error={knowledgeToolCall.error}
+              duration={knowledgeToolCall.duration}
+            />
+          </div>
         )}
         <div ref={messagesEndRef} />
       </div>

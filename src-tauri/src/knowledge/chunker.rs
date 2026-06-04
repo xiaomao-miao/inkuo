@@ -77,15 +77,9 @@ impl Chunker {
             // Extract by character index, convert to byte offset for slicing
             let byte_start = content
                 .chars()
-                .nth(char_index)
-                .map(|c| {
-                    content
-                        .chars()
-                        .take(char_index)
-                        .map(|c| c.len_utf8())
-                        .sum()
-                })
-                .unwrap_or(0);
+                .take(char_index)
+                .map(|c| c.len_utf8())
+                .sum();
             let byte_end = content
                 .chars()
                 .take(actual_char_end)
@@ -101,11 +95,15 @@ impl Chunker {
 
             // Only keep chunks that meet minimum size
             if chunk_text.len() >= self.config.min_size {
+                let chunk_start_line = line_number_for_byte_offset(content, byte_start);
+                let chunk_end_line = line_number_for_byte_offset(content, byte_end.saturating_sub(1));
                 let chunk = Chunk {
                     id: format!("{}_{}_{}", doc_id, doc_title, chunks.len()),
                     document_id: doc_id.to_string(),
                     content: chunk_text,
                     chunk_index: chunks.len(),
+                    start_line: chunk_start_line,
+                    end_line: chunk_end_line.max(chunk_start_line),
                     embedding: Vec::new(), // Will be filled later
                 };
                 chunks.push(chunk);
@@ -191,6 +189,26 @@ impl Default for Chunker {
     fn default() -> Self {
         Self::new(ChunkConfig::default())
     }
+}
+
+fn line_number_for_byte_offset(content: &str, byte_offset: usize) -> usize {
+    if content.is_empty() {
+        return 1;
+    }
+
+    let safe_offset = byte_offset.min(content.len());
+    let mut line = 1;
+
+    for (idx, ch) in content.char_indices() {
+        if idx >= safe_offset {
+            break;
+        }
+        if ch == '\n' {
+            line += 1;
+        }
+    }
+
+    line
 }
 
 #[cfg(test)]

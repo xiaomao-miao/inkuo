@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { Database } from 'lucide-react';
 import { parse as parsePartialJson } from 'jsonchunk';
 import {
   useAIPanelStore,
@@ -16,7 +17,6 @@ import {
 import { ChatHeader } from './ChatHeader';
 import { ChatView } from './ChatView';
 import { ChatInput } from './ChatInput';
-import { KnowledgeView } from './KnowledgeView';
 import styles from './AIPanel.module.css';
 
 // Type for stream payload from Rust backend (matches src-tauri/src/streaming.rs)
@@ -83,6 +83,7 @@ export const AIPanel: React.FC = () => {
     setMessageDiff,
     setKnowledgeBase,
     clearSearchResults,
+    setKnowledgeToolCall,
   } = useAIPanelStore();
 
   const activeSession = useMemo(
@@ -95,6 +96,9 @@ export const AIPanel: React.FC = () => {
   const pendingDiff = activeSession?.pendingDiff ?? null;
   const mode: ChatMode = activeSession?.mode ?? 'ask';
   const activeToolCalls = activeSession?.activeToolCalls ?? [];
+  const knowledgeBase = activeSession?.knowledgeBase;
+  const buildProgress = activeSession?.buildProgress;
+  const knowledgeToolCall = activeSession?.knowledgeToolCall;
 
   const [input, setInput] = useState('');
 
@@ -403,6 +407,17 @@ export const AIPanel: React.FC = () => {
     if (!activeSession || !workspacePath) return;
 
     const sessionId = activeSession.id;
+    const toolCallId = `knowledge-build-${sessionId}`;
+    const startedAt = Date.now();
+    setKnowledgeToolCall(sessionId, {
+      id: toolCallId,
+      name: 'knowledge_build',
+      arguments: {
+        workspacePath,
+      },
+      status: 'executing',
+      startTime: startedAt,
+    });
 
     // Listen to build progress events
     let unlistenProgress: (() => void) | undefined;
@@ -443,12 +458,37 @@ export const AIPanel: React.FC = () => {
         chunkCount: result.total_chunks,
         lastUpdated: Date.now(),
       });
+      setKnowledgeToolCall(sessionId, {
+        id: toolCallId,
+        name: 'knowledge_build',
+        arguments: {
+          workspacePath,
+          total_documents: result.total_documents,
+          total_chunks: result.total_chunks,
+        },
+        status: 'success',
+        result: `已构建 ${result.total_documents} 个文档，生成 ${result.total_chunks} 个分块。`,
+        startTime: startedAt,
+        duration: Date.now() - startedAt,
+      });
     } catch (err) {
       console.error('Failed to build knowledge base:', err);
+      setKnowledgeToolCall(sessionId, {
+        id: toolCallId,
+        name: 'knowledge_build',
+        arguments: {
+          workspacePath,
+        },
+        status: 'error',
+        error: String(err),
+        result: String(err),
+        startTime: startedAt,
+        duration: Date.now() - startedAt,
+      });
     } finally {
       unlistenProgress?.();
     }
-  }, [activeSession, workspacePath, setKnowledgeBase, setBuildProgress]);
+  }, [activeSession, workspacePath, setKnowledgeBase, setBuildProgress, setKnowledgeToolCall]);
 
   const handleKnowledgeClear = useCallback(async () => {
     if (!activeSession || !workspacePath) return;
@@ -459,10 +499,12 @@ export const AIPanel: React.FC = () => {
       await invoke('knowledge_clear', { workspacePath });
       setKnowledgeBase(sessionId, undefined);
       clearSearchResults(sessionId);
+      setBuildProgress(sessionId, undefined);
+      setKnowledgeToolCall(sessionId, undefined);
     } catch (err) {
       console.error('Failed to clear knowledge base:', err);
     }
-  }, [activeSession, workspacePath, setKnowledgeBase, clearSearchResults]);
+  }, [activeSession, workspacePath, setKnowledgeBase, clearSearchResults, setBuildProgress, setKnowledgeToolCall]);
 
   // Load knowledge base status on mount or workspace change
   useEffect(() => {
@@ -509,6 +551,7 @@ export const AIPanel: React.FC = () => {
             useAIPanelStore.getState().setErrorMessage(session_id, message_id, error ?? '发生错误');
             if (modeRef.current === 'knowledge') {
               useAIPanelStore.getState().setSearchResults(session_id, []);
+              useAIPanelStore.getState().setMessageSearchResults(session_id, message_id, []);
             }
             return;
           }
@@ -718,6 +761,7 @@ return {
 
             if (currentMode === 'knowledge' && search_results) {
               useAIPanelStore.getState().setSearchResults(session_id, search_results);
+              useAIPanelStore.getState().setMessageSearchResults(session_id, message_id, search_results);
             }
 
             if (effectiveContent) {
@@ -775,6 +819,42 @@ return {
 
   const handleSetInput = useCallback((v: string) => setInput(v), []);
 
+  const knowledgeStatusLabel = knowledgeBase
+    ? `已索引 ${knowledgeBase.documentCount} 文档 / ${knowledgeBase.chunkCount} 分块`
+    : buildProgress
+      ? '正在构建知识库…'
+      : '知识库未创建';
+
+  const knowledgePrimaryAction = useMemo(() => {
+    if (mode !== 'knowledge' || !activeSession) return null;
+
+    if (!knowledgeBase) {
+      return {
+        label: buildProgress ? '正在构建知识库…' : '创建知识库',
+        onClick: handleKnowledgeBuild,
+        disabled: !!buildProgress,
+        icon: <Database size={14} />,
+      };
+    }
+
+    return {
+      label: '重建知识库',
+      onClick: handleKnowledgeBuild,
+      disabled: !!buildProgress,
+      icon: <Database size={14} />,
+    };
+  }, [mode, activeSession, knowledgeBase, buildProgress, handleKnowledgeBuild]);
+
+  const knowledgeSecondaryAction = useMemo(() => {
+    if (mode !== 'knowledge' || !knowledgeBase) return null;
+
+    return {
+      label: '清空知识库',
+      onClick: handleKnowledgeClear,
+      disabled: !!buildProgress,
+    };
+  }, [mode, knowledgeBase, buildProgress, handleKnowledgeClear]);
+
   return (
     <aside className={styles.panel}>
       <ChatHeader
@@ -787,12 +867,39 @@ return {
       />
 
       <div className={styles.panelBody}>
-        {mode === 'knowledge' && activeSession && (
-          <KnowledgeView
-            sessionId={activeSession.id}
-            onBuild={handleKnowledgeBuild}
-            onClear={handleKnowledgeClear}
-          />
+        {mode === 'knowledge' && (
+          <div className={styles.knowledgeToolbar}>
+            <div className={styles.knowledgeToolbarSide}>
+              {knowledgePrimaryAction ? (
+                <button
+                  type="button"
+                  className={styles.knowledgeAction}
+                  onClick={knowledgePrimaryAction.onClick}
+                  disabled={knowledgePrimaryAction.disabled}
+                >
+                  {knowledgePrimaryAction.icon}
+                  <span>{knowledgePrimaryAction.label}</span>
+                </button>
+              ) : <div />}
+            </div>
+
+            <div className={styles.knowledgeStatus}>
+              <span>{knowledgeStatusLabel}</span>
+            </div>
+
+            <div className={`${styles.knowledgeToolbarSide} ${styles.knowledgeToolbarSideRight}`}>
+              {knowledgeSecondaryAction ? (
+                <button
+                  type="button"
+                  className={styles.knowledgeAction}
+                  onClick={knowledgeSecondaryAction.onClick}
+                  disabled={knowledgeSecondaryAction.disabled}
+                >
+                  <span>{knowledgeSecondaryAction.label}</span>
+                </button>
+              ) : <div />}
+            </div>
+          </div>
         )}
 
         <ChatView
@@ -809,6 +916,8 @@ return {
           onSaveEdit={handleSaveEdit}
           onSetEditingContent={setEditingContent}
           onSetInput={handleSetInput}
+          knowledgeToolCall={mode === 'knowledge' ? knowledgeToolCall : undefined}
+          knowledgeBuildProgress={mode === 'knowledge' ? buildProgress : undefined}
         />
       </div>
 

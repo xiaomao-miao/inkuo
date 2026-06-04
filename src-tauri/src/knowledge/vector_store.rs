@@ -171,6 +171,8 @@ impl VectorStore {
                         "content": chunk.content,
                         "chunk_index": chunk.chunk_index as i64,
                         "file_path": file_path,
+                        "start_line": chunk.start_line as i64,
+                        "end_line": chunk.end_line as i64,
                     }),
                 )
             })
@@ -246,6 +248,14 @@ impl VectorStore {
                     .unwrap_or("")
                     .to_string();
 
+                let start_line = payload.0.get("start_line")
+                    .and_then(|v| v.as_i64())
+                    .and_then(|n| usize::try_from(n).ok());
+
+                let end_line = payload.0.get("end_line")
+                    .and_then(|v| v.as_i64())
+                    .and_then(|n| usize::try_from(n).ok());
+
                 Some(SearchResult {
                     chunk_id,
                     document_id,
@@ -253,6 +263,8 @@ impl VectorStore {
                     score: scored.score,
                     document_title,
                     file_path,
+                    start_line,
+                    end_line,
                 })
             })
             .collect();

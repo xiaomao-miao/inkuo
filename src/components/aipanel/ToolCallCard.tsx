@@ -34,7 +34,7 @@ const getToolDisplayName = (name: string): string => {
     read_office_file: '读取 Office',
     write_office_file: '写入 Office',
     create_dir: '创建目录',
-    move_file: '移动文件',
+    knowledge_build: '构建知识库',
   };
   return names[name] || name;
 };
@@ -81,6 +81,19 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = React.memo(function Too
     // Priority 1: Use streamingContent directly if available
     if (streamingContent && streamingContent.length > 0) {
       return { key: 'content', text: streamingContent };
+    }
+
+    const knowledgeProgress = args?.progress;
+    const knowledgeCurrentFile = args?.current_file;
+    if (name === 'knowledge_build') {
+      const lines = ['正在构建知识库'];
+      if (typeof knowledgeProgress === 'string' && knowledgeProgress.length > 0) {
+        lines.push(`进度: ${knowledgeProgress}`);
+      }
+      if (typeof knowledgeCurrentFile === 'string' && knowledgeCurrentFile.length > 0) {
+        lines.push(`当前文件: ${knowledgeCurrentFile}`);
+      }
+      return { key: 'content', text: lines.join('\n') };
     }
 
     if (!isFileModification && !rawArguments) return null;

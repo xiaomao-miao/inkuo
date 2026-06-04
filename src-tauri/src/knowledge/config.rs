@@ -53,6 +53,8 @@ pub struct Chunk {
     pub document_id: String,
     pub content: String,
     pub chunk_index: usize,
+    pub start_line: usize,
+    pub end_line: usize,
     pub embedding: Vec<f32>,
 }
 
@@ -65,6 +67,8 @@ pub struct SearchResult {
     pub score: f32,
     pub document_title: String,
     pub file_path: String,
+    pub start_line: Option<usize>,
+    pub end_line: Option<usize>,
 }
 
 /// Build result

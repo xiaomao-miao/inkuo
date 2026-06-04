@@ -54,6 +54,17 @@ export type OutputItem =
   | { type: 'tool_result'; toolCallId: string; status: 'success' | 'error'; result: string; duration?: number; diffSummary?: DiffSummary }
   | { type: 'tool_error'; toolCallId: string; error: string };
 
+export interface SearchResult {
+  chunkId: string;
+  documentId: string;
+  content: string;
+  score: number;
+  documentTitle: string;
+  filePath: string;
+  startLine?: number;
+  endLine?: number;
+}
+
 export interface ChatMessage {
   id: string;
   role: MessageRole;
@@ -65,6 +76,7 @@ export interface ChatMessage {
   toolCallId?: string;
   toolResult?: MessageToolResult;
   diff?: CurrentDiff;
+  searchResults?: SearchResult[];
 }
 
 export interface CurrentDiff {
@@ -93,15 +105,6 @@ export interface KnowledgeBase {
   lastUpdated: number;
 }
 
-export interface SearchResult {
-  chunkId: string;
-  documentId: string;
-  content: string;
-  score: number;
-  documentTitle: string;
-  filePath: string;
-}
-
 export interface BuildProgress {
   phase: 'scanning' | 'chunking' | 'embedding' | 'storing' | 'done';
   current: number;
@@ -123,6 +126,7 @@ export interface ChatSession {
   knowledgeBase?: KnowledgeBase;
   searchResults?: SearchResult[];
   buildProgress?: BuildProgress;
+  knowledgeToolCall?: ActiveToolCall;
 }
 
 interface AIPanelState {
@@ -165,7 +169,9 @@ interface AIPanelState {
   setKnowledgeBase: (sessionId: string, kb: KnowledgeBase | undefined) => void;
   setSearchResults: (sessionId: string, results: SearchResult[]) => void;
   setBuildProgress: (sessionId: string, progress: BuildProgress | undefined) => void;
+  setKnowledgeToolCall: (sessionId: string, toolCall: ActiveToolCall | undefined) => void;
   clearSearchResults: (sessionId: string) => void;
+  setMessageSearchResults: (sessionId: string, messageId: string, results: SearchResult[]) => void;
 
   getSession: (sessionId: string) => ChatSession | undefined;
   getMessage: (sessionId: string, messageId: string) => ChatMessage | undefined;
@@ -575,6 +581,20 @@ export const useAIPanelStore = create<AIPanelState>()(
             ),
           })),
 
+        setMessageSearchResults: (sessionId, messageId, results) =>
+          set((state) => ({
+            sessions: state.sessions.map((s) =>
+              s.id === sessionId
+                ? {
+                    ...s,
+                    messages: s.messages.map((m) =>
+                      m.id === messageId ? { ...m, searchResults: results } : m
+                    ),
+                  }
+                : s
+            ),
+          })),
+
         setErrorMessage: (sessionId, messageId, error) =>
           set((state) => ({
             sessions: state.sessions.map((s) =>
@@ -624,6 +644,13 @@ export const useAIPanelStore = create<AIPanelState>()(
             ),
           })),
 
+        setKnowledgeToolCall: (sessionId, toolCall) =>
+          set((state) => ({
+            sessions: state.sessions.map((s) =>
+              s.id === sessionId ? { ...s, knowledgeToolCall: toolCall } : s
+            ),
+          })),
+
         clearSearchResults: (sessionId) =>
           set((state) => ({
             sessions: state.sessions.map((s) =>
@@ -646,6 +673,10 @@ export const useAIPanelStore = create<AIPanelState>()(
           currentDiff: null,
           activeToolCalls: [],
           pendingDiff: null,
+          knowledgeBase: s.knowledgeBase,
+          searchResults: s.searchResults,
+          buildProgress: s.buildProgress,
+          knowledgeToolCall: s.knowledgeToolCall,
         })),
         activeSessionId: state.activeSessionId,
       }),
@@ -664,6 +695,10 @@ export const useAIPanelStore = create<AIPanelState>()(
             currentDiff: null,
             activeToolCalls: s.activeToolCalls ?? [],
             pendingDiff: null,
+            knowledgeBase: s.knowledgeBase,
+            searchResults: s.searchResults,
+            buildProgress: s.buildProgress,
+            knowledgeToolCall: s.knowledgeToolCall,
           })),
         };
       },

@@ -98,6 +98,8 @@ fn map_search_results(results: &[knowledge::SearchResult]) -> Vec<KnowledgeSearc
             score: item.score,
             document_title: item.document_title.clone(),
             file_path: item.file_path.clone(),
+            start_line: item.start_line,
+            end_line: item.end_line,
         })
         .collect()
 }
