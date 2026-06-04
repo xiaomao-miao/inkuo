@@ -391,6 +391,11 @@ pub struct Settings {
     pub ai_max_tokens: Option<u32>,
     pub api_configs: Vec<ApiConfig>,
     pub active_api_config_id: Option<String>,
+    // Knowledge base settings
+    pub embedding_model: String,
+    pub embedding_model_path: Option<String>,
+    pub chunk_size: usize,
+    pub chunk_overlap: usize,
 }
 
 impl Default for Settings {
@@ -421,8 +426,27 @@ impl Default for Settings {
             ai_max_tokens: Some(4096),
             api_configs: vec![default_api_config.clone()],
             active_api_config_id: Some(default_api_config.id),
+            // Knowledge base defaults
+            embedding_model: "BAAI/bge-small-zh-v1.5".to_string(),
+            embedding_model_path: None,
+            chunk_size: 500,
+            chunk_overlap: 50,
         }
     }
+}
+
+/// Get embedding model name from settings
+pub fn get_embedding_model() -> String {
+    read_settings_from_disk()
+        .map(|s| s.embedding_model)
+        .unwrap_or_else(|_| "BAAI/bge-small-zh-v1.5".to_string())
+}
+
+/// Get chunk size from settings
+pub fn get_chunk_size() -> usize {
+    read_settings_from_disk()
+        .map(|s| s.chunk_size)
+        .unwrap_or(500)
 }
 
 fn get_settings_path() -> std::path::PathBuf {
@@ -432,7 +456,7 @@ fn get_settings_path() -> std::path::PathBuf {
         .join("settings.json")
 }
 
-fn read_settings_from_disk() -> Result<Settings, String> {
+pub fn read_settings_from_disk() -> Result<Settings, String> {
     let path = get_settings_path();
 
     if !path.exists() {
@@ -445,7 +469,27 @@ fn read_settings_from_disk() -> Result<Settings, String> {
     match serde_json::from_str::<Settings>(&content) {
         Ok(settings) => Ok(settings),
         Err(e) => {
-            tracing::warn!("Failed to parse settings as new format ({}), trying legacy format", e);
+            tracing::warn!("Failed to parse settings as new format ({}), trying merged format", e);
+
+            let value: serde_json::Value = serde_json::from_str(&content)
+                .map_err(|e| format!("Failed to parse settings JSON: {}", e))?;
+
+            if let Some(object) = value.as_object() {
+                let mut merged = serde_json::to_value(Settings::default())
+                    .map_err(|e| format!("Failed to serialize default settings: {}", e))?;
+
+                if let Some(merged_object) = merged.as_object_mut() {
+                    for (key, value) in object {
+                        merged_object.insert(key.clone(), value.clone());
+                    }
+                }
+
+                if let Ok(settings) = serde_json::from_value::<Settings>(merged) {
+                    return Ok(settings);
+                }
+            }
+
+            tracing::warn!("Falling back to legacy settings parser");
             #[derive(Debug, Deserialize)]
             struct LegacySettings {
                 theme: Option<String>,
@@ -490,6 +534,11 @@ fn read_settings_from_disk() -> Result<Settings, String> {
                 ai_max_tokens: legacy.ai_max_tokens,
                 api_configs: vec![default_api_config],
                 active_api_config_id: Some(default_api_config_id),
+                // Knowledge base defaults for legacy settings
+                embedding_model: "BAAI/bge-small-zh-v1.5".to_string(),
+                embedding_model_path: None,
+                chunk_size: 500,
+                chunk_overlap: 50,
             })
         }
     }

@@ -22,6 +22,7 @@ import { useSettingsStore } from '../../store';
 import { Select } from './Select';
 import type { APIConfig, AIProviderType } from '../../types';
 import styles from './ModelsSettings.module.css';
+import { toBackendSettings } from '../../utils/settings';
 
 interface ModelsSettingsProps {
   onClose?: () => void;
@@ -46,32 +47,7 @@ export const ModelsSettings: React.FC<ModelsSettingsProps> = ({ onClose }) => {
     try {
       const { invoke } = await import('@tauri-apps/api/core');
 
-      // Convert to snake_case for Rust backend
-      const backendSettings = {
-        theme: settings.theme,
-        accent_color: settings.accent_color,
-        editor_font_size: settings.editor_font_size,
-        editor_font_family: settings.editor_font_family,
-        ai_provider: settings.ai_provider,
-        ai_model: settings.ai_model,
-        ai_api_key: settings.ai_api_key,
-        ai_base_url: settings.ai_base_url,
-        ai_temperature: settings.ai_temperature,
-        ai_max_tokens: settings.ai_max_tokens,
-        api_configs: settings.apiConfigs.map(c => ({
-          id: c.id,
-          name: c.name,
-          provider: c.provider,
-          base_url: c.baseUrl,
-          api_key: c.apiKey,
-          model: c.model,
-          is_default: c.isDefault,
-          enabled: c.enabled,
-          temperature: c.temperature,
-          max_tokens: c.maxTokens,
-        })),
-        active_api_config_id: settings.activeApiConfigId,
-      };
+      const backendSettings = toBackendSettings(settings);
 
       await invoke('save_settings', { settings: backendSettings });
     } catch (err) {
