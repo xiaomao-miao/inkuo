@@ -86,7 +86,7 @@ export const Sidebar: React.FC = () => {
     setFiles,
     toggleDir,
     setIsLoading,
-    openTab,
+    openWorkspaceFile,
     addFileEntry,
     removeFileEntry,
   } = useSidebarStore();
@@ -288,12 +288,7 @@ export const Sidebar: React.FC = () => {
       toggleDir(entry.path);
     } else {
       // Open file in new tab
-      openTab({
-        id: entry.path,
-        path: entry.path,
-        name: entry.name,
-        isDirty: false,
-      });
+      openWorkspaceFile(entry.path, { name: entry.name });
     }
   };
 

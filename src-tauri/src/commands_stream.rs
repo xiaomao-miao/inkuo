@@ -7,6 +7,7 @@ use crate::{
 };
 use std::collections::BTreeSet;
 use tauri::{AppHandle, Emitter, State};
+use urlencoding;
 
 fn build_ai_config(config_input: AIConfigInput) -> ai::AIConfig {
     ai::AIConfig {
@@ -65,7 +66,23 @@ fn build_knowledge_instruction(user_question: &str, results: &[knowledge::Search
 fn build_knowledge_references(results: &[knowledge::SearchResult]) -> String {
     let references: BTreeSet<String> = results
         .iter()
-        .map(|item| format!("- {} (`{}`)", item.document_title, item.file_path))
+        .map(|item| {
+            // Fragment encodes line range: #startLine,endLine or just #startLine
+            let fragment = match (item.start_line, item.end_line) {
+                (Some(sl), Some(el)) if sl != el => format!("#{},{}", sl, el),
+                (Some(sl), _) => format!("#{}", sl),
+                _ => String::new(),
+            };
+            // href = URL-encoded file path; display text = raw path for readability
+            let encoded_path = urlencoding::encode(&item.file_path);
+            format!(
+                "- [{} — {}]({}{})",
+                item.document_title,
+                item.file_path,
+                encoded_path,
+                fragment,
+            )
+        })
         .collect();
 
     if references.is_empty() {

@@ -1,19 +1,16 @@
 import React from 'react';
-import { Loader2, Pencil, X, RotateCcw, FileText } from 'lucide-react';
+import { Loader2, Pencil, X, RotateCcw } from 'lucide-react';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { StreamingMarkdownRenderer } from './StreamingMarkdownRenderer';
 import { ToolCallCard, CompactToolCard, COMPACT_TOOLS } from './ToolCallCard';
 import { InlineDiffPreview } from './InlineDiffPreview';
 import { parsePlanBlocks, type PlanBlock } from './planRender';
 import {
-  useEditorStore,
-  useSidebarStore,
   type ChatMessage,
   type ChatSession,
   type ChatMode,
   type OutputItem,
   type ActiveToolCall,
-  type SearchResult,
 } from '../../store';
 import styles from './AIPanel.module.css';
 
@@ -144,9 +141,6 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             />
           )}
 
-          {!isThisStreaming && message.searchResults?.length ? (
-            <KnowledgeReferences results={message.searchResults} />
-          ) : null}
 
           {isThisStreaming && !hasOutputItems && (
             <span className={styles.streamingCursor} />
@@ -335,114 +329,5 @@ const LegacyMessageContent: React.FC<LegacyMessageContentProps> = ({
         );
       })}
     </>
-  );
-};
-
-interface KnowledgeReferencesProps {
-  results: SearchResult[];
-}
-
-const KnowledgeReferences: React.FC<KnowledgeReferencesProps> = ({ results }) => {
-  const openTab = useSidebarStore((state) => state.openTab);
-  const setSelection = useEditorStore((state) => state.setSelection);
-
-  const validResults = results.filter(
-    (result): result is SearchResult & { filePath: string } =>
-      typeof result.filePath === 'string' && result.filePath.trim().length > 0,
-  );
-
-  const references = Array.from(
-    new Map(
-      validResults.map((result) => [
-        `${result.filePath}:${result.startLine ?? 0}:${result.endLine ?? 0}:${result.chunkId}`,
-        result,
-      ]),
-    ).values(),
-  );
-
-  const lineStartOffset = (content: string, lineNumber: number) => {
-    if (lineNumber <= 1) return 0;
-
-    let currentLine = 1;
-    for (let i = 0; i < content.length; i += 1) {
-      if (currentLine === lineNumber) {
-        return i;
-      }
-      if (content[i] === '\n') {
-        currentLine += 1;
-      }
-    }
-
-    return content.length;
-  };
-
-  const handleOpenReference = (result: SearchResult & { filePath: string }) => {
-    const fileName = result.filePath.split('/').pop() || '未命名文档';
-
-    openTab({
-      id: result.filePath,
-      path: result.filePath,
-      name: result.documentTitle || fileName,
-      isDirty: false,
-    });
-
-    const startLine = result.startLine;
-    if (!startLine) return;
-
-    const applySelection = () => {
-      const docState = useEditorStore.getState().documentContents[result.filePath];
-      if (!docState || !docState.content) return false;
-
-      const content = docState.content;
-      const from = lineStartOffset(content, startLine);
-      const to = lineStartOffset(content, (result.endLine ?? startLine) + 1);
-      setSelection(result.filePath, { from, to });
-      return true;
-    };
-
-    if (applySelection()) return;
-
-    const pollInterval = window.setInterval(() => {
-      if (applySelection()) {
-        window.clearInterval(pollInterval);
-      }
-    }, 100);
-
-    window.setTimeout(() => window.clearInterval(pollInterval), 5000);
-  };
-
-  if (references.length === 0) {
-    return null;
-  }
-
-  return (
-    <div className={styles.referencesSection}>
-      <div className={styles.referencesTitle}>参考来源</div>
-      <div className={styles.referencesList}>
-        {references.map((result) => (
-          <button
-            key={`${result.filePath}:${result.startLine ?? 0}:${result.endLine ?? 0}:${result.chunkId}`}
-            type="button"
-            className={styles.referenceItem}
-            onClick={() => handleOpenReference(result)}
-            title={`打开 ${result.filePath}`}
-          >
-            <div className={styles.referenceHeader}>
-              <span className={styles.referenceIcon}>
-                <FileText size={14} />
-              </span>
-              <span className={styles.referenceName}>{result.documentTitle || result.filePath.split('/').pop() || '未命名文档'}</span>
-              <span className={styles.referenceScore}>{Number.isFinite(result.score) ? `${(result.score * 100).toFixed(1)}%` : ''}</span>
-            </div>
-            <div className={styles.referencePath}>{result.filePath}</div>
-            {(result.startLine || result.endLine) && (
-              <div className={styles.referenceRange}>
-                第 {result.startLine ?? '?'} 行{result.endLine && result.endLine !== result.startLine ? ` - ${result.endLine} 行` : ''}
-              </div>
-            )}
-          </button>
-        ))}
-      </div>
-    </div>
   );
 };
