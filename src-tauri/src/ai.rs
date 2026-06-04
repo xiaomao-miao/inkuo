@@ -24,6 +24,11 @@ fn get_plan_prompt() -> &'static str {
     include_str!("../prompts/plan.md")
 }
 
+/// System prompt for knowledge mode (retrieval-grounded Q&A)
+fn get_knowledge_prompt() -> &'static str {
+    include_str!("../prompts/knowledge.md")
+}
+
 /// System prompt for edit mode (document editing)
 fn get_edit_prompt() -> &'static str {
     include_str!("../prompts/edit.md")
@@ -235,6 +240,7 @@ impl AIProviderAdapter {
     {
         let system_prompt = match mode.as_str() {
             "plan" => get_plan_prompt(),
+            "knowledge" => get_knowledge_prompt(),
             _ => get_ask_prompt(),
         };
 
@@ -316,6 +322,7 @@ Context (optional references):
     pub async fn chat(&self, mode: String, instruction: String, original_text: String) -> Result<String, AIError> {
         let system_prompt = match mode.as_str() {
             "plan" => get_plan_prompt(),
+            "knowledge" => get_knowledge_prompt(),
             _ => get_ask_prompt(),
         };
 

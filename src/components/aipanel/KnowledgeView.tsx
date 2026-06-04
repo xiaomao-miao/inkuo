@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { Database, Search, RefreshCw, Trash2, FileText, Layers, Clock, AlertTriangle, Settings } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Database, RefreshCw, Trash2, FileText, Layers, Clock, AlertTriangle, Settings } from 'lucide-react';
 import { useAIPanelStore, useSettingsStore, type SearchResult, type BuildProgress } from '../../store';
 import { useSidebarStore, SETTINGS_TAB_ID } from '../../store';
 import styles from './KnowledgeView.module.css';
@@ -7,7 +7,6 @@ import styles from './KnowledgeView.module.css';
 interface KnowledgeViewProps {
   sessionId: string;
   onBuild: () => void;
-  onSearch: (query: string) => void;
   onClear: () => void;
 }
 
@@ -22,12 +21,10 @@ interface AvailableModel {
 export const KnowledgeView: React.FC<KnowledgeViewProps> = ({
   sessionId,
   onBuild,
-  onSearch,
   onClear,
 }) => {
   const session = useAIPanelStore((state) => state.sessions.find((s) => s.id === sessionId));
   const { settings } = useSettingsStore();
-  const [searchQuery, setSearchQuery] = useState('');
   const [modelAvailable, setModelAvailable] = useState<{ available: boolean; name: string | null }>({
     available: false,
     name: null,
@@ -36,7 +33,6 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({
 
   const isBuilding = !!session?.buildProgress && !session?.knowledgeBase;
 
-  // Check if selected model is available
   useEffect(() => {
     const checkModel = async () => {
       try {
@@ -46,7 +42,6 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({
         if (selectedModel) {
           setModelAvailable({ available: selectedModel.available, name: selectedModel.name });
         } else {
-          // Default to BGE small
           const defaultModel = models.find((m) => m.name === 'BAAI/bge-small-zh-v1.5');
           setModelAvailable({ available: defaultModel?.available ?? false, name: defaultModel?.name ?? null });
         }
@@ -54,15 +49,9 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({
         console.error('Failed to check model availability:', err);
       }
     };
+
     checkModel();
   }, [settings.embedding_model]);
-
-  const handleSearch = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (searchQuery.trim()) {
-      onSearch(searchQuery.trim());
-    }
-  };
 
   const openSettings = () => {
     openTab({
@@ -123,7 +112,7 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({
           <Database size={48} className={styles.emptyIcon} />
           <h3 className={styles.emptyTitle}>知识库未初始化</h3>
           <p className={styles.emptyDescription}>
-            构建知识库后，你可以使用语义搜索在工作区的文档中查找相关内容。
+            构建知识库后，你可以直接在底部输入框提问，系统会自动检索工作区文档并生成带引用来源的回答。
           </p>
           <button className={styles.buildButton} onClick={onBuild}>
             <Layers size={16} />
@@ -161,34 +150,11 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({
         </div>
       </div>
 
-      <form className={styles.searchForm} onSubmit={handleSearch}>
-        <Search size={16} className={styles.searchIcon} />
-        <input
-          type="text"
-          className={styles.searchInput}
-          placeholder="搜索知识库..."
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-        />
-        <button type="submit" className={styles.searchButton} disabled={!searchQuery.trim()}>
-          搜索
-        </button>
-      </form>
-
       {session.searchResults && session.searchResults.length > 0 && (
         <div className={styles.results}>
-          <div className={styles.resultsHeader}>
-            找到 {session.searchResults.length} 个相关结果
-          </div>
           {session.searchResults.map((result) => (
             <SearchResultCard key={result.chunkId} result={result} />
           ))}
-        </div>
-      )}
-
-      {session.searchResults && session.searchResults.length === 0 && (
-        <div className={styles.noResults}>
-          未找到相关结果，尝试其他搜索词。
         </div>
       )}
 
