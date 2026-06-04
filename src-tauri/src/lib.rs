@@ -22,6 +22,7 @@ mod file_watcher;
 mod inline_complete;
 mod office;
 pub mod agent;
+pub mod knowledge;
 
 pub use document::*;
 pub use diff::*;
@@ -35,8 +36,8 @@ fn setup_logging() {
     // Simple logging setup - write to stdout
     // In production, would use tracing-appender with proper guard handling
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
-        .with_target(false)
+        .with_max_level(tracing::Level::DEBUG)
+        .with_target(true)
         .init();
 
     // Set up panic hook to log panics
@@ -89,6 +90,7 @@ pub fn run() {
         })
         .manage(commands::AppState::default())
         .manage(file_watcher::FileWatcherState::new())
+        .manage(knowledge::commands::KnowledgeState::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
@@ -121,6 +123,13 @@ pub fn run() {
             commands::write_office_file,
             commands::read_office_text,
             commands::write_office_text,
+            knowledge::commands::knowledge_build,
+            knowledge::commands::knowledge_search,
+            knowledge::commands::knowledge_status,
+            knowledge::commands::knowledge_update,
+            knowledge::commands::knowledge_clear,
+            knowledge::commands::check_available_models,
+            knowledge::commands::download_model_files,
         ])
         .run(tauri::generate_context!())
         .expect("error while running inkuo application");

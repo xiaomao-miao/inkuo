@@ -1,6 +1,6 @@
 import React from 'react';
 import {
-  Send, Trash2, StopCircle, Terminal, Loader2,
+  Send, Trash2, StopCircle, Terminal, Loader2, Database,
 } from 'lucide-react';
 import type { ChatMode } from '../../store';
 import styles from './AIPanel.module.css';
@@ -9,12 +9,14 @@ const MODE_LABELS: Record<ChatMode, string> = {
   ask: 'Ask',
   plan: 'Plan',
   agent: 'Agent',
+  knowledge: 'KB',
 };
 
 const MODE_HINTS: Record<ChatMode, string> = {
   ask: '只回答（不修改文件）',
   plan: '只输出计划（不修改文件）',
   agent: 'Full Agent（可调用工具读写文件）',
+  knowledge: '知识库模式（语义搜索文档）',
 };
 
 interface ChatInputProps {
@@ -41,6 +43,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           placeholder={
             mode === 'agent'
               ? '输入指令... (例如：帮我创建一个 README.md)'
+              : mode === 'knowledge'
+              ? '搜索知识库...'
               : '输入消息... (Enter 发送，Shift+Enter 换行)'
           }
           value={input}
@@ -56,11 +60,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         <div className={styles.inputBottomRow}>
           <button
             type="button"
-            className={`${styles.modeButton} ${mode === 'agent' ? styles.agentModeActive : ''}`}
+            className={`${styles.modeButton} ${mode === 'agent' ? styles.agentModeActive : ''} ${mode === 'knowledge' ? styles.knowledgeModeActive : ''}`}
             onClick={onCycleMode}
             title={MODE_HINTS[mode]}
           >
             {mode === 'agent' && <Terminal size={12} />}
+            {mode === 'knowledge' && <Database size={12} />}
             {MODE_LABELS[mode]}
           </button>
 

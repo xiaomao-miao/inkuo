@@ -11,10 +11,12 @@ import {
   type ChatMessage,
   type DiffHunk,
   type OutputItem,
+  type SearchResult,
 } from '../../store';
 import { ChatHeader } from './ChatHeader';
 import { ChatView } from './ChatView';
 import { ChatInput } from './ChatInput';
+import { KnowledgeView } from './KnowledgeView';
 import styles from './AIPanel.module.css';
 
 // Type for stream payload from Rust backend (matches src-tauri/src/streaming.rs)
@@ -78,6 +80,9 @@ export const AIPanel: React.FC = () => {
     setIsOpen,
     clearToolCalls,
     setMessageDiff,
+    setKnowledgeBase,
+    setSearchResults,
+    clearSearchResults,
   } = useAIPanelStore();
 
   const activeSession = useMemo(
@@ -331,7 +336,7 @@ export const AIPanel: React.FC = () => {
 
   const cycleMode = () => {
     if (!activeSession) return;
-    const order: ChatMode[] = ['ask', 'plan', 'agent'];
+    const order: ChatMode[] = ['ask', 'plan', 'agent', 'knowledge'];
     const idx = order.indexOf(mode);
     setSessionMode(activeSession.id, order[(idx + 1) % order.length]);
   };
@@ -363,6 +368,115 @@ export const AIPanel: React.FC = () => {
 
     await handleSend();
   };
+
+  // Knowledge base handlers
+  const workspacePath = useSidebarStore((state) => state.workspacePath);
+
+  const { setBuildProgress } = useAIPanelStore();
+
+  const handleKnowledgeBuild = useCallback(async () => {
+    if (!activeSession || !workspacePath) return;
+
+    const sessionId = activeSession.id;
+
+    // Listen to build progress events
+    let unlistenProgress: (() => void) | undefined;
+    try {
+      const { listen } = await import('@tauri-apps/api/event');
+      unlistenProgress = await listen<{
+        session_id: string;
+        phase: string;
+        current: number;
+        total: number;
+        message: string;
+      }>('kb://build-progress', (event) => {
+        if (event.payload.session_id !== sessionId) return;
+        if (event.payload.phase === 'done') {
+          setBuildProgress(sessionId, undefined);
+        } else {
+          setBuildProgress(sessionId, {
+            phase: event.payload.phase as 'scanning' | 'chunking' | 'embedding' | 'storing',
+            current: event.payload.current,
+            total: event.payload.total,
+            currentFile: event.payload.message,
+          });
+        }
+      });
+    } catch (err) {
+      console.error('Failed to listen to build progress:', err);
+    }
+
+    try {
+      const result = await invoke<{ total_documents: number; total_chunks: number; workspace_id: string }>('knowledge_build', {
+        workspacePath,
+        sessionId,
+      });
+
+      setKnowledgeBase(sessionId, {
+        workspaceId: result.workspace_id,
+        documentCount: result.total_documents,
+        chunkCount: result.total_chunks,
+        lastUpdated: Date.now(),
+      });
+    } catch (err) {
+      console.error('Failed to build knowledge base:', err);
+    } finally {
+      unlistenProgress?.();
+    }
+  }, [activeSession, workspacePath, setKnowledgeBase, setBuildProgress]);
+
+  const handleKnowledgeSearch = useCallback(async (query: string) => {
+    if (!activeSession || !workspacePath) return;
+
+    const sessionId = activeSession.id;
+
+    try {
+      const results = await invoke<SearchResult[]>('knowledge_search', {
+        workspacePath,
+        query,
+        topK: 10,
+      });
+
+      setSearchResults(sessionId, results);
+    } catch (err) {
+      console.error('Failed to search knowledge base:', err);
+    }
+  }, [activeSession, workspacePath, setSearchResults]);
+
+  const handleKnowledgeClear = useCallback(async () => {
+    if (!activeSession || !workspacePath) return;
+
+    const sessionId = activeSession.id;
+
+    try {
+      await invoke('knowledge_clear', { workspacePath });
+      setKnowledgeBase(sessionId, undefined);
+      clearSearchResults(sessionId);
+    } catch (err) {
+      console.error('Failed to clear knowledge base:', err);
+    }
+  }, [activeSession, workspacePath, setKnowledgeBase, clearSearchResults]);
+
+  // Load knowledge base status on mount or workspace change
+  useEffect(() => {
+    if (!activeSession || !workspacePath) return;
+
+    const sessionId = activeSession.id;
+
+    invoke<{ workspace_id: string; document_count: number; chunk_count: number; last_updated: string } | null>(
+      'knowledge_status',
+      { workspacePath }
+    ).then((status) => {
+      if (status) {
+        setKnowledgeBase(sessionId, {
+          workspaceId: status.workspace_id,
+          documentCount: status.document_count,
+          chunkCount: status.chunk_count,
+          lastUpdated: new Date(status.last_updated).getTime(),
+        });
+      }
+    }).catch(console.error);
+  }, [activeSession?.id, workspacePath, setKnowledgeBase]);
 
   // Streaming events
   useEffect(() => {
@@ -658,21 +772,30 @@ return {
         onClose={() => setIsOpen(false)}
       />
 
-      <ChatView
-        messages={messages}
-        activeSession={activeSession}
-        isStreaming={isStreaming}
-        pendingDiff={pendingDiff}
-        mode={mode}
-        activeToolCalls={activeToolCalls}
-        editingMessageId={editingMessageId}
-        editingContent={editingContent}
-        onStartEdit={handleStartEdit}
-        onCancelEdit={handleCancelEdit}
-        onSaveEdit={handleSaveEdit}
-        onSetEditingContent={setEditingContent}
-        onSetInput={handleSetInput}
-      />
+      {mode === 'knowledge' && activeSession ? (
+        <KnowledgeView
+          sessionId={activeSession.id}
+          onBuild={handleKnowledgeBuild}
+          onSearch={handleKnowledgeSearch}
+          onClear={handleKnowledgeClear}
+        />
+      ) : (
+        <ChatView
+          messages={messages}
+          activeSession={activeSession}
+          isStreaming={isStreaming}
+          pendingDiff={pendingDiff}
+          mode={mode}
+          activeToolCalls={activeToolCalls}
+          editingMessageId={editingMessageId}
+          editingContent={editingContent}
+          onStartEdit={handleStartEdit}
+          onCancelEdit={handleCancelEdit}
+          onSaveEdit={handleSaveEdit}
+          onSetEditingContent={setEditingContent}
+          onSetInput={handleSetInput}
+        />
+      )}
 
       <ChatInput
         input={input}

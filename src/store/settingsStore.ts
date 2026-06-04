@@ -48,6 +48,11 @@ const defaultSettings: Settings = {
   ai_max_tokens: 4096,
   apiConfigs: [defaultAPIConfig],
   activeApiConfigId: defaultAPIConfig.id,
+  // Knowledge base settings
+  embedding_model: 'BAAI/bge-small-zh-v1.5',
+  embedding_model_path: null,
+  chunk_size: 500,
+  chunk_overlap: 50,
 };
 
 export const useSettingsStore = create<SettingsState>()(
@@ -158,6 +163,20 @@ export const useSettingsStore = create<SettingsState>()(
 
         mergedSettings.apiConfigs = apiConfigs.length > 0 ? apiConfigs : currentState.settings.apiConfigs;
         mergedSettings.activeApiConfigId = persistedSettings?.activeApiConfigId ?? mergedSettings.apiConfigs[0]?.id ?? null;
+
+        // Merge embedding settings with defaults
+        if (persistedSettings?.embedding_model) {
+          mergedSettings.embedding_model = persistedSettings.embedding_model as Settings['embedding_model'];
+        }
+        if (persistedSettings?.embedding_model_path !== undefined) {
+          mergedSettings.embedding_model_path = persistedSettings.embedding_model_path as Settings['embedding_model_path'];
+        }
+        if (typeof persistedSettings?.chunk_size === 'number') {
+          mergedSettings.chunk_size = persistedSettings.chunk_size;
+        }
+        if (typeof persistedSettings?.chunk_overlap === 'number') {
+          mergedSettings.chunk_overlap = persistedSettings.chunk_overlap;
+        }
 
         if (!mergedSettings.apiConfigs.some((c) => c.isDefault)) {
           mergedSettings.apiConfigs = mergedSettings.apiConfigs.map((c, i) => ({

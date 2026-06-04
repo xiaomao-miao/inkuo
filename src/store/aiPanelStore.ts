@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { DiffHunk } from './editorStore';
 
-export type ChatMode = 'ask' | 'plan' | 'agent';
+export type ChatMode = 'ask' | 'plan' | 'agent' | 'knowledge';
 
 export type MessageRole = 'user' | 'assistant' | 'system' | 'tool';
 
@@ -86,6 +86,29 @@ export interface ActiveToolCall {
   diffSummary?: DiffSummary;
 }
 
+export interface KnowledgeBase {
+  workspaceId: string;
+  documentCount: number;
+  chunkCount: number;
+  lastUpdated: number;
+}
+
+export interface SearchResult {
+  chunkId: string;
+  documentId: string;
+  content: string;
+  score: number;
+  documentTitle: string;
+  filePath: string;
+}
+
+export interface BuildProgress {
+  phase: 'scanning' | 'chunking' | 'embedding' | 'storing' | 'done';
+  current: number;
+  total: number;
+  currentFile?: string;
+}
+
 export interface ChatSession {
   id: string;
   title: string;
@@ -96,6 +119,10 @@ export interface ChatSession {
   currentDiff: CurrentDiff | null;
   activeToolCalls: ActiveToolCall[];
   pendingDiff: CurrentDiff | null;
+  // Knowledge base state
+  knowledgeBase?: KnowledgeBase;
+  searchResults?: SearchResult[];
+  buildProgress?: BuildProgress;
 }
 
 interface AIPanelState {
@@ -133,6 +160,12 @@ interface AIPanelState {
   rejectHunk: (sessionId: string, hunkId: string) => void;
   acceptAllHunks: (sessionId: string) => void;
   rejectAllHunks: (sessionId: string) => void;
+
+  // Knowledge base state
+  setKnowledgeBase: (sessionId: string, kb: KnowledgeBase | undefined) => void;
+  setSearchResults: (sessionId: string, results: SearchResult[]) => void;
+  setBuildProgress: (sessionId: string, progress: BuildProgress | undefined) => void;
+  clearSearchResults: (sessionId: string) => void;
 
   getSession: (sessionId: string) => ChatSession | undefined;
   getMessage: (sessionId: string, messageId: string) => ChatMessage | undefined;
@@ -546,6 +579,35 @@ export const useAIPanelStore = create<AIPanelState>()(
                     ),
                   }
                 : s
+            ),
+          })),
+
+        // Knowledge base state management
+        setKnowledgeBase: (sessionId, kb) =>
+          set((state) => ({
+            sessions: state.sessions.map((s) =>
+              s.id === sessionId ? { ...s, knowledgeBase: kb } : s
+            ),
+          })),
+
+        setSearchResults: (sessionId, results) =>
+          set((state) => ({
+            sessions: state.sessions.map((s) =>
+              s.id === sessionId ? { ...s, searchResults: results } : s
+            ),
+          })),
+
+        setBuildProgress: (sessionId, progress) =>
+          set((state) => ({
+            sessions: state.sessions.map((s) =>
+              s.id === sessionId ? { ...s, buildProgress: progress } : s
+            ),
+          })),
+
+        clearSearchResults: (sessionId) =>
+          set((state) => ({
+            sessions: state.sessions.map((s) =>
+              s.id === sessionId ? { ...s, searchResults: undefined } : s
             ),
           })),
       };

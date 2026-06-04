@@ -259,6 +259,26 @@ export interface Settings {
   // New multi-API config
   apiConfigs: APIConfig[];
   activeApiConfigId: string | null;
+  // Knowledge base settings
+  embedding_model: EmbeddingModelType;
+  embedding_model_path: string | null;
+  chunk_size: number;
+  chunk_overlap: number;
+}
+
+/** Supported embedding models */
+export type EmbeddingModelType =
+  | 'BAAI/bge-small-zh-v1.5'
+  | 'BAAI/bge-base-zh-v1.5'
+  | 'BAAI/bge-large-zh-v1.5';
+
+/** Embedding model info for display */
+export interface EmbeddingModelInfo {
+  id: EmbeddingModelType;
+  name: string;
+  dimensions: number;
+  size: string;
+  description: string;
 }
 
 export type ThemeType = 'cursor-dark' | 'cursor-light' | 'high-contrast-dark' | 'high-contrast-light';

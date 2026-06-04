@@ -1152,3 +1152,13 @@
   border-color: var(--accent-primary);
   background-color: var(--accent-subtle);
 }
+
+/* Knowledge mode active button */
+.knowledgeModeActive {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: #10b981;
+  border-color: #10b981;
+  background-color: rgba(16, 185, 129, 0.1);
+}
