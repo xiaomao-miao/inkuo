@@ -12,7 +12,7 @@ import {
   type OutputItem,
   type ActiveToolCall,
 } from '../../store';
-import styles from './AIPanel.module.css';
+import styles from './AIPanelMessage.module.css';
 
 interface MessageItemProps {
   message: ChatMessage;

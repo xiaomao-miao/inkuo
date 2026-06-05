@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { Document } from '../types';
+import type { DiffHunk, Document } from '../types';
 
 const STORAGE_VERSION = 2;
 
@@ -16,22 +16,6 @@ interface DocumentState {
   docxBuffer: number[] | null;
   excelData: string[][] | null;
   officeBufferVersion: number;
-}
-
-export interface DiffHunk {
-  id: string;
-  old_start: number;
-  old_lines: number;
-  new_start: number;
-  new_lines: number;
-  changes: DiffChange[];
-}
-
-export interface DiffChange {
-  tag: 'delete' | 'insert' | 'equal';
-  old_line: number | null;
-  new_line: number | null;
-  content: string;
 }
 
 interface EditorState {

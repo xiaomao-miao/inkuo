@@ -1,7 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { FileEntry } from '../types';
-import type { ActiveToolCall, KnowledgeBase, BuildProgress } from './aiPanelStore';
+import type { FileEntry, ActiveToolCall, KnowledgeBase, BuildProgress } from '../types';
 
 export interface OpenTab {
   id: string;

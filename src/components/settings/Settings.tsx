@@ -1,3 +1,4 @@
+import { invoke } from '@tauri-apps/api/core';
 import React, { useState } from 'react';
 import { 
   X, 
@@ -32,8 +33,6 @@ export const Settings: React.FC<SettingsProps> = ({ onClose }) => {
     setTestResult(null);
     
     try {
-      // Call the Rust backend to test the AI connection
-      const { invoke } = await import('@tauri-apps/api/core');
       const result = await invoke<{ success: boolean; message: string }>('test_ai_connection', {
         apiKey: settings.ai_api_key,
         baseUrl: settings.ai_base_url,

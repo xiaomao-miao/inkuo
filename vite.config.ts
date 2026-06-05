@@ -4,6 +4,40 @@ import react from "@vitejs/plugin-react";
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
 
+const VENDOR_CHUNKS: Array<[string, string]> = [
+  ["node_modules/xlsx", "xlsx"],
+  ["node_modules/@syncfusion", "syncfusion"],
+  ["node_modules/@eigenpal", "office-editor"],
+  ["node_modules/prosemirror", "prosemirror"],
+  ["node_modules/@codemirror", "codemirror"],
+  ["node_modules/@uiw", "codemirror-ui"],
+  ["node_modules/react-dom", "react-vendor"],
+  ["node_modules/react", "react-vendor"],
+  ["node_modules/lucide-react", "icon-vendor"],
+  ["node_modules/marked", "markdown-vendor"],
+  ["node_modules/react-markdown", "markdown-vendor"],
+  ["node_modules/remark-gfm", "markdown-vendor"],
+  ["node_modules/rehype-highlight", "markdown-vendor"],
+  ["node_modules/rehype-raw", "markdown-vendor"],
+  ["node_modules/diff", "diff-vendor"],
+  ["node_modules/zustand", "state-vendor"],
+  ["node_modules/@tauri-apps", "tauri-vendor"],
+];
+
+function getManualChunk(id: string) {
+  for (const [matcher, chunkName] of VENDOR_CHUNKS) {
+    if (id.indexOf(matcher) !== -1) {
+      return chunkName;
+    }
+  }
+
+  if (id.indexOf("node_modules") !== -1) {
+    return "vendor";
+  }
+
+  return undefined;
+}
+
 // https://vite.dev/config/
 export default defineConfig(async () => ({
   plugins: [react()],
@@ -27,6 +61,13 @@ export default defineConfig(async () => ({
     watch: {
       // 3. tell Vite to ignore watching `src-tauri`
       ignored: ["**/src-tauri/**"],
+    },
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: getManualChunk,
+      },
     },
   },
 }));

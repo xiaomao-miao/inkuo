@@ -1,3 +1,5 @@
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import React, { useState, useEffect } from 'react';
 import {
   Brain,
@@ -82,7 +84,6 @@ export const KnowledgeSettings: React.FC = () => {
   useEffect(() => {
     const fetchModels = async () => {
       try {
-        const { invoke } = await import('@tauri-apps/api/core');
         const models = await invoke<AvailableModel[]>('check_available_models');
         setAvailableModels(models);
       } catch (err) {
@@ -98,16 +99,13 @@ export const KnowledgeSettings: React.FC = () => {
 
     const setupListener = async () => {
       try {
-        const { listen } = await import('@tauri-apps/api/event');
         unlisten = await listen<DownloadProgress>('model-download-progress', (event) => {
           setDownloadProgress(event.payload);
           if (event.payload.status === 'complete') {
             setDownloadingModel(null);
             setDownloadProgress(null);
             // Refresh available models
-            import('@tauri-apps/api/core').then(({ invoke }) => {
-              invoke<AvailableModel[]>('check_available_models').then(setAvailableModels);
-            });
+            invoke<AvailableModel[]>('check_available_models').then(setAvailableModels);
           }
         });
       } catch (err) {
@@ -124,7 +122,6 @@ export const KnowledgeSettings: React.FC = () => {
 
   const saveSettings = async (nextSettings = settings) => {
     try {
-      const { invoke } = await import('@tauri-apps/api/core');
       await invoke('save_settings', { settings: toBackendSettings(nextSettings) });
     } catch (err) {
       console.error('Failed to save settings:', err);
@@ -144,7 +141,6 @@ export const KnowledgeSettings: React.FC = () => {
     setDownloadingModel(modelName);
     setDownloadProgress({ model: modelName, current: 0, total: 5, filename: '准备下载...', status: 'downloading' });
     try {
-      const { invoke } = await import('@tauri-apps/api/core');
       await invoke('download_model_files', { modelName });
     } catch (err) {
       console.error('Failed to download model:', err);

@@ -6,7 +6,7 @@ import { ToolCallCard } from './ToolCallCard';
 import type {
   ChatMessage, ChatSession, ChatMode, ActiveToolCall, CurrentDiff,
 } from '../../store';
-import styles from './AIPanel.module.css';
+import styles from './AIPanelChatView.module.css';
 
 interface ChatViewProps {
   messages: ChatMessage[];

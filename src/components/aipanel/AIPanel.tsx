@@ -7,7 +7,7 @@ import { KnowledgeToolbar, buildKnowledgeToolbarModel } from './KnowledgeToolbar
 import { useAgentStream } from './useAgentStream';
 import { useChatComposer } from './useChatComposer';
 import { useKnowledgeBase } from './useKnowledgeBase';
-import styles from './AIPanel.module.css';
+import layoutStyles from './AIPanelLayout.module.css';
 
 export const AIPanel: React.FC = () => {
   const {
@@ -76,7 +76,7 @@ export const AIPanel: React.FC = () => {
   }), [mode, activeSession, knowledgeBase, buildProgress, handleKnowledgeBuild, handleKnowledgeClear]);
 
   return (
-    <aside className={styles.panel}>
+    <aside className={layoutStyles.panel}>
       <ChatHeader
         sessions={sessions}
         activeSessionId={activeSessionId}
@@ -86,7 +86,7 @@ export const AIPanel: React.FC = () => {
         onClose={() => setIsOpen(false)}
       />
 
-      <div className={styles.panelBody}>
+      <div className={layoutStyles.panelBody}>
         {mode === 'knowledge' && (
           <KnowledgeToolbar
             statusLabel={knowledgeStatusLabel}

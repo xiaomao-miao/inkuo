@@ -1,6 +1,6 @@
 import React from 'react';
 import { Database } from 'lucide-react';
-import styles from './AIPanel.module.css';
+import styles from './AIPanelChatView.module.css';
 
 interface KnowledgeToolbarAction {
   label: string;

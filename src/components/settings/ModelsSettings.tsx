@@ -1,3 +1,4 @@
+import { invoke } from '@tauri-apps/api/core';
 import React, { useState } from 'react';
 import {
   Key,
@@ -45,8 +46,6 @@ export const ModelsSettings: React.FC<ModelsSettingsProps> = ({ onClose }) => {
 
   const saveSettings = async () => {
     try {
-      const { invoke } = await import('@tauri-apps/api/core');
-
       const backendSettings = toBackendSettings(settings);
 
       await invoke('save_settings', { settings: backendSettings });
@@ -60,7 +59,6 @@ export const ModelsSettings: React.FC<ModelsSettingsProps> = ({ onClose }) => {
     setTestResults((prev) => ({ ...prev, [config.id]: { success: false, message: '' } }));
 
     try {
-      const { invoke } = await import('@tauri-apps/api/core');
       const result = await invoke<{ success: boolean; message: string }>('test_api_config', {
         request: {
           api_key: config.apiKey,

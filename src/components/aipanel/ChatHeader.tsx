@@ -1,7 +1,7 @@
 import React, { useRef } from 'react';
 import { PlusCircle, MessageSquare, X } from 'lucide-react';
 import type { ChatSession } from '../../store';
-import styles from './AIPanel.module.css';
+import styles from './AIPanelHeader.module.css';
 
 const MAX_TITLE_LEN = 20;
 

@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { useCallback } from 'react';
 import {
   useSidebarStore,
@@ -45,7 +46,6 @@ export function useKnowledgeBase({ activeSessionId }: UseKnowledgeBaseArgs): Use
 
     let unlistenProgress: (() => void) | undefined;
     try {
-      const { listen } = await import('@tauri-apps/api/event');
       unlistenProgress = await listen<{
         session_id: string;
         phase: string;

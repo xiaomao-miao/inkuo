@@ -67,28 +67,37 @@ export interface DiffSummary {
   description: string;
 }
 
-/** Stream-specific diff types for UI display */
-export interface StreamDiffChange {
-  tag: 'delete' | 'insert' | 'equal';
-  old_line: number | null;
-  new_line: number | null;
-  content: string;
-}
-
-export interface StreamDiffHunk {
-  id: string;
-  old_start: number;
-  old_lines: number;
-  new_start: number;
-  new_lines: number;
-  changes: StreamDiffChange[];
-}
-
 export interface StreamDiffSummary {
   file_name: string;
   added_lines: number;
   deleted_lines: number;
-  hunks: StreamDiffHunk[];
+  hunks: DiffHunk[];
+}
+
+// Stream types
+export interface OfficeFileModifiedPayload {
+  path: string;
+  format: string;
+}
+
+export interface StreamPayload {
+  session_id: string;
+  message_id: string;
+  event_type: StreamEventType | 'tool_call_args_delta';
+  content?: string;
+  summary?: string;
+  tool_call_id?: string;
+  tool_name?: string;
+  tool_args?: string;
+  final_content?: string;
+  error?: string;
+  search_results?: KnowledgeSearchResult[];
+  done: boolean;
+  file_path?: string;
+  original_content?: string;
+  new_content?: string;
+  diff_summary?: StreamDiffSummary;
+  office_file_modified?: OfficeFileModifiedPayload;
 }
 
 // AI types
@@ -212,6 +221,132 @@ export type AgentMode = 'ask' | 'plan' | 'agent';
 
 /** Agent status */
 export type AgentStatus = 'idle' | 'thinking' | 'executing' | 'error';
+
+// ============================================================================
+// AI panel types
+// ============================================================================
+
+export type ChatMode = 'ask' | 'plan' | 'agent' | 'knowledge';
+
+export interface MessageToolCall {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+}
+
+export interface MessageToolResult {
+  toolCallId: string;
+  result: string;
+  isError: boolean;
+  duration?: number;
+  diffSummary?: StreamDiffSummary;
+}
+
+export type OutputItem =
+  | { type: 'text'; content: string; isPendingMarkdown?: boolean }
+  | {
+      type: 'tool_call_start';
+      toolCallId: string;
+      toolName: string;
+      arguments: Record<string, unknown>;
+      rawArguments?: string;
+      streamingContent?: string;
+      isExecuting?: boolean;
+      result?: string;
+      status?: 'success' | 'error';
+      duration?: number;
+      diffSummary?: StreamDiffSummary;
+    }
+  | {
+      type: 'tool_result';
+      toolCallId: string;
+      status: 'success' | 'error';
+      result: string;
+      duration?: number;
+      diffSummary?: StreamDiffSummary;
+    }
+  | { type: 'tool_error'; toolCallId: string; error: string };
+
+export interface SearchResult {
+  chunkId: string;
+  documentId: string;
+  content: string;
+  score: number;
+  documentTitle: string;
+  filePath: string;
+  startLine?: number;
+  endLine?: number;
+}
+
+export interface KnowledgeSearchResult {
+  chunk_id: string;
+  document_id: string;
+  content: string;
+  score: number;
+  document_title: string;
+  file_path: string;
+  start_line?: number;
+  end_line?: number;
+}
+
+export interface CurrentDiff {
+  originalText: string;
+  newText: string;
+  hunks: DiffHunk[];
+  summary: string;
+}
+
+export interface ActiveToolCall {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+  status: 'pending' | 'executing' | 'success' | 'error';
+  result?: string;
+  error?: string;
+  startTime: number;
+  duration?: number;
+  diffSummary?: StreamDiffSummary;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: MessageRole;
+  timestamp: number;
+  content?: string;
+  outputItems: OutputItem[];
+  toolCalls?: MessageToolCall[];
+  toolResults?: MessageToolResult[];
+  toolCallId?: string;
+  toolResult?: MessageToolResult;
+  diff?: CurrentDiff;
+  searchResults?: SearchResult[];
+}
+
+export interface KnowledgeBase {
+  workspaceId: string;
+  documentCount: number;
+  chunkCount: number;
+  lastUpdated: number;
+}
+
+export interface BuildProgress {
+  phase: 'scanning' | 'chunking' | 'embedding' | 'storing' | 'done';
+  current: number;
+  total: number;
+  currentFile?: string;
+}
+
+export interface ChatSession {
+  id: string;
+  title: string;
+  createdAt: number;
+  mode: ChatMode;
+  messages: ChatMessage[];
+  isStreaming: boolean;
+  currentDiff: CurrentDiff | null;
+  activeToolCalls: ActiveToolCall[];
+  pendingDiff: CurrentDiff | null;
+}
 
 // ============================================================================
 // File types

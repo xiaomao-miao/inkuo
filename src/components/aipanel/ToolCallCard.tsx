@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import { Check, Loader2, FileEdit, Terminal, X, ChevronDown, ChevronRight, FolderOpen, FileText, Search, FolderPlus, Move } from 'lucide-react';
-import type { DiffSummary } from '../../store';
+import type { StreamDiffSummary } from '../../store';
 import styles from './ToolCallCard.module.css';
 
 interface ToolCallCardProps {
@@ -17,7 +17,7 @@ interface ToolCallCardProps {
   result?: string;
   error?: string;
   duration?: number;
-  diffSummary?: DiffSummary;
+  diffSummary?: StreamDiffSummary;
   /** When true the arguments preview is treated as still streaming in and
    * the live container auto-scrolls to the bottom as new content arrives. */
   isStreamingArguments?: boolean;

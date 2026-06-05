@@ -1,3 +1,4 @@
+import { invoke } from '@tauri-apps/api/core';
 import React, { useState } from 'react';
 import {
   Settings2,
@@ -25,8 +26,6 @@ export const SettingsPanel: React.FC = () => {
 
   const saveSettings = async () => {
     try {
-      const { invoke } = await import('@tauri-apps/api/core');
-
       const backendSettings = toBackendSettings(settings);
 
       await invoke('save_settings', { settings: backendSettings });

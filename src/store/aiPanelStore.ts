@@ -1,142 +1,18 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { DiffHunk } from './editorStore';
-
-export type ChatMode = 'ask' | 'plan' | 'agent' | 'knowledge';
-
-export type MessageRole = 'user' | 'assistant' | 'system' | 'tool';
-
-export interface MessageToolCall {
-  id: string;
-  name: string;
-  arguments: Record<string, unknown>;
-}
-
-export interface DiffSummary {
-  file_name: string;
-  added_lines: number;
-  deleted_lines: number;
-  hunks: DiffHunk[];
-}
-
-export interface MessageToolResult {
-  toolCallId: string;
-  result: string;
-  isError: boolean;
-  duration?: number;
-  diffSummary?: DiffSummary;
-}
-
-export type OutputItem =
-  | { type: 'text'; content: string; isPendingMarkdown?: boolean }
-  | {
-      type: 'tool_call_start';
-      toolCallId: string;
-      toolName: string;
-      // The latest accumulated arguments JSON string. Updated incrementally as
-      // the AI streams the JSON argument. May be an incomplete JSON while the
-      // tool call is still being received.
-      arguments: Record<string, unknown>;
-      rawArguments?: string;
-      // Extracted content field from partial JSON parsing. This is updated
-      // incrementally as the AI streams the content, allowing real-time preview.
-      streamingContent?: string;
-      // When true the tool has been registered as "executing" and the UI
-      // should show the running indicator. After `tool_result` arrives this
-      // item is updated in-place (for visual continuity) with result info.
-      isExecuting?: boolean;
-      // Result info populated when tool execution completes
-      result?: string;
-      status?: 'success' | 'error';
-      duration?: number;
-      diffSummary?: DiffSummary;
-    }
-  | { type: 'tool_result'; toolCallId: string; status: 'success' | 'error'; result: string; duration?: number; diffSummary?: DiffSummary }
-  | { type: 'tool_error'; toolCallId: string; error: string };
-
-export interface SearchResult {
-  chunkId: string;
-  documentId: string;
-  content: string;
-  score: number;
-  documentTitle: string;
-  filePath: string;
-  startLine?: number;
-  endLine?: number;
-}
-
-/// Snake_case wire format for knowledge search results, matching the Rust
-/// KnowledgeSearchResult struct sent over Tauri IPC. Converted to SearchResult
-/// via normalizeSearchResults() before use in the UI layer.
-export interface KnowledgeSearchResult {
-  chunk_id: string;
-  document_id: string;
-  content: string;
-  score: number;
-  document_title: string;
-  file_path: string;
-  start_line?: number;
-  end_line?: number;
-}
-
-export interface ChatMessage {
-  id: string;
-  role: MessageRole;
-  timestamp: number;
-  content?: string;
-  outputItems: OutputItem[];
-  toolCalls?: MessageToolCall[];
-  toolResults?: MessageToolResult[];
-  toolCallId?: string;
-  toolResult?: MessageToolResult;
-  diff?: CurrentDiff;
-  searchResults?: SearchResult[];
-}
-
-export interface CurrentDiff {
-  originalText: string;
-  newText: string;
-  hunks: DiffHunk[];
-  summary: string;
-}
-
-export interface ActiveToolCall {
-  id: string;
-  name: string;
-  arguments: Record<string, unknown>;
-  status: 'pending' | 'executing' | 'success' | 'error';
-  result?: string;
-  error?: string;
-  startTime: number;
-  duration?: number;
-  diffSummary?: DiffSummary;
-}
-
-export interface KnowledgeBase {
-  workspaceId: string;
-  documentCount: number;
-  chunkCount: number;
-  lastUpdated: number;
-}
-
-export interface BuildProgress {
-  phase: 'scanning' | 'chunking' | 'embedding' | 'storing' | 'done';
-  current: number;
-  total: number;
-  currentFile?: string;
-}
-
-export interface ChatSession {
-  id: string;
-  title: string;
-  createdAt: number;
-  mode: ChatMode;
-  messages: ChatMessage[];
-  isStreaming: boolean;
-  currentDiff: CurrentDiff | null;
-  activeToolCalls: ActiveToolCall[];
-  pendingDiff: CurrentDiff | null;
-}
+import type {
+  ActiveToolCall,
+  BuildProgress,
+  ChatMessage,
+  ChatMode,
+  ChatSession,
+  CurrentDiff,
+  MessageRole,
+  MessageToolCall,
+  MessageToolResult,
+  OutputItem,
+  SearchResult,
+} from '../types';
 
 interface AIPanelState {
   isOpen: boolean;
@@ -179,12 +55,6 @@ interface AIPanelState {
   updateSession: (sessionId: string, updater: (session: ChatSession) => ChatSession) => void;
   updateMessageOutput: (sessionId: string, messageId: string, outputItems: OutputItem[]) => void;
   addOutputToMessage: (sessionId: string, messageId: string, outputItem: OutputItem) => void;
-  /**
-   * Locate an output item by predicate (typically by toolCallId or content) and
-   * merge a partial patch into it. Used to stream incremental updates — for
-   * example extending a `tool_call_start` item's arguments as the AI emits
-   * the JSON argument string chunk-by-chunk.
-   */
   patchOutputItem: (
     sessionId: string,
     messageId: string,
@@ -259,290 +129,266 @@ export const useAIPanelStore = create<AIPanelState>()(
 
         setSessionMode: (sessionId, mode) =>
           set((state) => ({
-            sessions: state.sessions.map((s) => (s.id === sessionId ? { ...s, mode } : s)),
+            sessions: state.sessions.map((session) =>
+              session.id === sessionId ? { ...session, mode } : session
+            ),
           })),
 
         addMessage: (sessionId, message) =>
           set((state) => ({
-            sessions: state.sessions.map((s) =>
-              s.id === sessionId ? { ...s, messages: [...s.messages, message] } : s
+            sessions: state.sessions.map((session) =>
+              session.id === sessionId
+                ? { ...session, messages: [...session.messages, message] }
+                : session
             ),
           })),
 
         updateMessage: (sessionId, messageId, content) =>
           set((state) => ({
-            sessions: state.sessions.map((s) =>
-              s.id === sessionId
+            sessions: state.sessions.map((session) =>
+              session.id === sessionId
                 ? {
-                    ...s,
-                    messages: s.messages.map((m) => (m.id === messageId ? { ...m, content } : m)),
+                    ...session,
+                    messages: session.messages.map((message) =>
+                      message.id === messageId ? { ...message, content } : message
+                    ),
                   }
-                : s
+                : session
             ),
           })),
 
         appendMessageContent: (sessionId, messageId, content) =>
           set((state) => ({
-            sessions: state.sessions.map((s) =>
-              s.id === sessionId
+            sessions: state.sessions.map((session) =>
+              session.id === sessionId
                 ? {
-                    ...s,
-                    messages: s.messages.map((m) =>
-                      m.id === messageId
-                        ? { ...m, content: m.content + content }
-                        : m
+                    ...session,
+                    messages: session.messages.map((message) =>
+                      message.id === messageId
+                        ? { ...message, content: (message.content || '') + content }
+                        : message
                     ),
                   }
-                : s
+                : session
             ),
           })),
 
         setIsStreaming: (sessionId, streaming) =>
           set((state) => ({
-            sessions: state.sessions.map((s) => (s.id === sessionId ? { ...s, isStreaming: streaming } : s)),
+            sessions: state.sessions.map((session) =>
+              session.id === sessionId ? { ...session, isStreaming: streaming } : session
+            ),
           })),
 
         clearMessages: (sessionId) =>
           set((state) => ({
-            sessions: state.sessions.map((s) =>
-              s.id === sessionId ? { ...s, messages: [], isStreaming: false, currentDiff: null, activeToolCalls: [], pendingDiff: null } : s
+            sessions: state.sessions.map((session) =>
+              session.id === sessionId
+                ? {
+                    ...session,
+                    messages: [],
+                    currentDiff: null,
+                    pendingDiff: null,
+                    activeToolCalls: [],
+                  }
+                : session
             ),
           })),
 
         truncateMessagesAfter: (sessionId, messageId) =>
           set((state) => ({
-            sessions: state.sessions.map((s) =>
-              s.id === sessionId
-                ? {
-                    ...s,
-                    messages: s.messages.slice(0, s.messages.findIndex((m) => m.id === messageId) + 1),
-                    isStreaming: false,
-                    currentDiff: null,
-                    activeToolCalls: [],
-                    pendingDiff: null,
-                  }
-                : s
-            ),
+            sessions: state.sessions.map((session) => {
+              if (session.id !== sessionId) return session;
+              const index = session.messages.findIndex((message) => message.id === messageId);
+              if (index === -1) return session;
+              return {
+                ...session,
+                messages: session.messages.slice(0, index + 1),
+              };
+            }),
           })),
 
         addToolCall: (sessionId, toolCall) =>
           set((state) => ({
-            sessions: state.sessions.map((s) =>
-              s.id === sessionId
-                ? { ...s, activeToolCalls: [...s.activeToolCalls, toolCall] }
-                : s
+            sessions: state.sessions.map((session) =>
+              session.id === sessionId
+                ? { ...session, activeToolCalls: [...session.activeToolCalls, toolCall] }
+                : session
             ),
           })),
 
         updateToolCall: (sessionId, toolCallId, update) =>
           set((state) => ({
-            sessions: state.sessions.map((s) =>
-              s.id === sessionId
+            sessions: state.sessions.map((session) =>
+              session.id === sessionId
                 ? {
-                    ...s,
-                    activeToolCalls: s.activeToolCalls.map((tc) =>
-                      tc.id === toolCallId ? { ...tc, ...update } : tc
+                    ...session,
+                    activeToolCalls: session.activeToolCalls.map((toolCall) =>
+                      toolCall.id === toolCallId ? { ...toolCall, ...update } : toolCall
                     ),
                   }
-                : s
+                : session
             ),
           })),
 
         removeToolCall: (sessionId, toolCallId) =>
           set((state) => ({
-            sessions: state.sessions.map((s) =>
-              s.id === sessionId
-                ? { ...s, activeToolCalls: s.activeToolCalls.filter((tc) => tc.id !== toolCallId) }
-                : s
+            sessions: state.sessions.map((session) =>
+              session.id === sessionId
+                ? {
+                    ...session,
+                    activeToolCalls: session.activeToolCalls.filter((toolCall) => toolCall.id !== toolCallId),
+                  }
+                : session
             ),
           })),
 
         clearToolCalls: (sessionId) =>
           set((state) => ({
-            sessions: state.sessions.map((s) =>
-              s.id === sessionId
-                ? { ...s, activeToolCalls: [] }
-                : s
+            sessions: state.sessions.map((session) =>
+              session.id === sessionId ? { ...session, activeToolCalls: [] } : session
             ),
           })),
 
         setCurrentDiff: (sessionId, diff) =>
           set((state) => ({
-            sessions: state.sessions.map((s) => (s.id === sessionId ? { ...s, currentDiff: diff } : s)),
+            sessions: state.sessions.map((session) =>
+              session.id === sessionId ? { ...session, currentDiff: diff } : session
+            ),
           })),
 
         setMessageDiff: (sessionId, messageId, diff) =>
           set((state) => ({
-            sessions: state.sessions.map((s) =>
-              s.id === sessionId
+            sessions: state.sessions.map((session) =>
+              session.id === sessionId
                 ? {
-                    ...s,
-                    messages: s.messages.map((m) =>
-                      m.id === messageId ? { ...m, diff: diff ?? undefined } as ChatMessage : m
+                    ...session,
+                    messages: session.messages.map((message) =>
+                      message.id === messageId ? { ...message, diff: diff ?? undefined } : message
                     ),
                   }
-                : s
+                : session
             ),
           })),
 
         setPendingDiff: (sessionId, diff) =>
           set((state) => ({
-            sessions: state.sessions.map((s) =>
-              s.id === sessionId ? { ...s, pendingDiff: diff } : s
+            sessions: state.sessions.map((session) =>
+              session.id === sessionId ? { ...session, pendingDiff: diff } : session
             ),
           })),
 
         acceptHunk: (sessionId, hunkId) =>
           set((state) => ({
-            sessions: state.sessions.map((s) => {
-              if (s.id !== sessionId) return s;
-
-              if (s.currentDiff) {
-                const newHunks = s.currentDiff.hunks.filter((h) => h.id !== hunkId);
-                return {
-                  ...s,
-                  currentDiff: newHunks.length > 0 ? { ...s.currentDiff, hunks: newHunks } : null,
-                };
-              }
-
-              const updatedMessages = s.messages.map((m) => {
-                if (!m.diff) return m;
-                const newHunks = m.diff.hunks.filter((h) => h.id !== hunkId);
-                const { diff: _, ...rest } = m;
-                return { ...rest, diff: newHunks.length > 0 ? { ...m.diff, hunks: newHunks } : undefined } as ChatMessage;
-              });
-
-              return { ...s, messages: updatedMessages };
+            sessions: state.sessions.map((session) => {
+              if (session.id !== sessionId || !session.pendingDiff) return session;
+              const remainingHunks = session.pendingDiff.hunks.filter((hunk) => hunk.id !== hunkId);
+              return {
+                ...session,
+                pendingDiff:
+                  remainingHunks.length > 0
+                    ? { ...session.pendingDiff, hunks: remainingHunks }
+                    : null,
+              };
             }),
           })),
 
         rejectHunk: (sessionId, hunkId) =>
           set((state) => ({
-            sessions: state.sessions.map((s) => {
-              if (s.id !== sessionId) return s;
-
-              if (s.currentDiff) {
-                const newHunks = s.currentDiff.hunks.filter((h) => h.id !== hunkId);
-                return {
-                  ...s,
-                  currentDiff: newHunks.length > 0 ? { ...s.currentDiff, hunks: newHunks } : null,
-                };
-              }
-
-              const updatedMessages = s.messages.map((m) => {
-                if (!m.diff) return m;
-                const newHunks = m.diff.hunks.filter((h) => h.id !== hunkId);
-                const { diff: _, ...rest } = m;
-                return { ...rest, diff: newHunks.length > 0 ? { ...m.diff, hunks: newHunks } : undefined } as ChatMessage;
-              });
-
-              return { ...s, messages: updatedMessages };
+            sessions: state.sessions.map((session) => {
+              if (session.id !== sessionId || !session.pendingDiff) return session;
+              const remainingHunks = session.pendingDiff.hunks.filter((hunk) => hunk.id !== hunkId);
+              return {
+                ...session,
+                pendingDiff:
+                  remainingHunks.length > 0
+                    ? { ...session.pendingDiff, hunks: remainingHunks }
+                    : null,
+              };
             }),
           })),
 
         acceptAllHunks: (sessionId) =>
           set((state) => ({
-            sessions: state.sessions.map((s) => {
-              if (s.id !== sessionId) return s;
-
-              if (s.currentDiff || s.pendingDiff) {
-                return { ...s, currentDiff: null, pendingDiff: null };
-              }
-
-              const updatedMessages = s.messages.map((m) => {
-                const { diff: _, ...rest } = m;
-                return { ...rest, diff: undefined } as ChatMessage;
-              });
-
-              return { ...s, messages: updatedMessages };
-            }),
+            sessions: state.sessions.map((session) =>
+              session.id === sessionId ? { ...session, pendingDiff: null } : session
+            ),
           })),
 
         rejectAllHunks: (sessionId) =>
           set((state) => ({
-            sessions: state.sessions.map((s) => {
-              if (s.id !== sessionId) return s;
-
-              if (s.currentDiff || s.pendingDiff) {
-                return { ...s, currentDiff: null, pendingDiff: null };
-              }
-
-              const updatedMessages = s.messages.map((m) => {
-                const { diff: _, ...rest } = m;
-                return { ...rest, diff: undefined } as ChatMessage;
-              });
-
-              return { ...s, messages: updatedMessages };
-            }),
+            sessions: state.sessions.map((session) =>
+              session.id === sessionId ? { ...session, pendingDiff: null } : session
+            ),
           })),
 
-        getSession: (sessionId) => get().sessions.find((s) => s.id === sessionId),
+        getSession: (sessionId) => get().sessions.find((session) => session.id === sessionId),
 
-        getMessage: (sessionId, messageId) => {
-          const session = get().sessions.find((s) => s.id === sessionId);
-          return session?.messages.find((m) => m.id === messageId);
-        },
+        getMessage: (sessionId, messageId) =>
+          get().sessions
+            .find((session) => session.id === sessionId)
+            ?.messages.find((message) => message.id === messageId),
 
         updateSession: (sessionId, updater) =>
           set((state) => ({
-            sessions: state.sessions.map((s) =>
-              s.id === sessionId ? updater(s) : s
+            sessions: state.sessions.map((session) =>
+              session.id === sessionId ? updater(session) : session
             ),
           })),
 
         updateMessageOutput: (sessionId, messageId, outputItems) =>
           set((state) => ({
-            sessions: state.sessions.map((s) =>
-              s.id === sessionId
+            sessions: state.sessions.map((session) =>
+              session.id === sessionId
                 ? {
-                    ...s,
-                    messages: s.messages.map((m) =>
-                      m.id === messageId ? { ...m, outputItems } : m
+                    ...session,
+                    messages: session.messages.map((message) =>
+                      message.id === messageId ? { ...message, outputItems } : message
                     ),
                   }
-                : s
+                : session
             ),
           })),
 
         addOutputToMessage: (sessionId, messageId, outputItem) =>
           set((state) => ({
-            sessions: state.sessions.map((s) =>
-              s.id === sessionId
+            sessions: state.sessions.map((session) =>
+              session.id === sessionId
                 ? {
-                    ...s,
-                    messages: s.messages.map((m) =>
-                      m.id === messageId
-                        ? { ...m, outputItems: [...m.outputItems, outputItem] }
-                        : m
+                    ...session,
+                    messages: session.messages.map((message) =>
+                      message.id === messageId
+                        ? { ...message, outputItems: [...message.outputItems, outputItem] }
+                        : message
                     ),
                   }
-                : s
+                : session
             ),
           })),
 
         patchOutputItem: (sessionId, messageId, matchKey, patch) =>
           set((state) => ({
-            sessions: state.sessions.map((s) => {
-              if (s.id !== sessionId) return s;
+            sessions: state.sessions.map((session) => {
+              if (session.id !== sessionId) return session;
               return {
-                ...s,
-                messages: s.messages.map((m) => {
-                  if (m.id !== messageId) return m;
-                  let matched = false;
-                  const updatedItems = m.outputItems.map((item) => {
-                    if (matched) return item;
-                    if ('toolCallId' in matchKey) {
-                      const tcId = (item as { toolCallId?: string }).toolCallId;
-                      if (tcId !== matchKey.toolCallId) return item;
-                    } else {
-                      const text = (item as { content?: string }).content ?? '';
-                      if (!text.includes(matchKey.contentContains)) return item;
-                    }
-                    matched = true;
-                    return { ...item, ...patch } as OutputItem;
+                ...session,
+                messages: session.messages.map((message) => {
+                  if (message.id !== messageId) return message;
+                  const outputItems = message.outputItems.map((item) => {
+                    const matchesByToolCallId =
+                      'toolCallId' in matchKey &&
+                      'toolCallId' in item &&
+                      item.toolCallId === matchKey.toolCallId;
+                    const matchesByContent =
+                      'contentContains' in matchKey &&
+                      'content' in item &&
+                      typeof item.content === 'string' &&
+                      item.content.includes(matchKey.contentContains);
+                    return matchesByToolCallId || matchesByContent
+                      ? ({ ...item, ...patch } as OutputItem)
+                      : item;
                   });
-                  if (!matched) return m;
-                  return { ...m, outputItems: updatedItems };
+                  return { ...message, outputItems };
                 }),
               };
             }),
@@ -550,117 +396,95 @@ export const useAIPanelStore = create<AIPanelState>()(
 
         finishMessageStreaming: (sessionId, messageId, finalContent) =>
           set((state) => ({
-            sessions: state.sessions.map((s) =>
-              s.id === sessionId
+            sessions: state.sessions.map((session) =>
+              session.id === sessionId
                 ? {
-                    ...s,
+                    ...session,
                     isStreaming: false,
-                    messages: s.messages.map((m) => {
-                      if (m.id !== messageId) return m;
-
-                      const textItemIndexes = m.outputItems
-                        .map((item, index) => (item.type === 'text' ? index : -1))
-                        .filter((index) => index >= 0);
-
-                      const updatedOutputItems = textItemIndexes.length > 0
-                        ? m.outputItems.map((item, index) => {
-                            if (item.type !== 'text') return item;
-                            const isLastTextItem = index === textItemIndexes[textItemIndexes.length - 1];
-                            return isLastTextItem
-                              ? { ...item, content: finalContent, isPendingMarkdown: false }
-                              : item;
-                          })
-                        : [{ type: 'text' as const, content: finalContent, isPendingMarkdown: false }];
-
-                      return {
-                        ...m,
-                        content: finalContent,
-                        outputItems: updatedOutputItems,
-                      };
-                    }),
-                  }
-                : s
-            ),
-          })),
-
-        setMessageSearchResults: (sessionId: string, messageId: string, results: SearchResult[]) =>
-          set((state) => ({
-            sessions: state.sessions.map((s) =>
-              s.id === sessionId
-                ? {
-                    ...s,
-                    messages: s.messages.map((m) =>
-                      m.id === messageId ? { ...m, searchResults: results } : m
+                    messages: session.messages.map((message) =>
+                      message.id === messageId
+                        ? { ...message, content: finalContent }
+                        : message
                     ),
                   }
-                : s
+                : session
             ),
           })),
 
         setErrorMessage: (sessionId, messageId, error) =>
           set((state) => ({
-            sessions: state.sessions.map((s) =>
-              s.id === sessionId
+            sessions: state.sessions.map((session) =>
+              session.id === sessionId
                 ? {
-                    ...s,
+                    ...session,
                     isStreaming: false,
-                    messages: s.messages.map((m) => {
-                      if (m.id !== messageId) return m;
-
-                      const hasVisibleOutput = m.outputItems.some((item) =>
-                        item.type === 'text' || item.type === 'tool_call_start' || item.type === 'tool_error'
-                      );
-
-                      return {
-                        ...m,
-                        content: error,
-                        outputItems: hasVisibleOutput
-                          ? m.outputItems
-                          : [{ type: 'text' as const, content: error, isPendingMarkdown: false }],
-                      };
-                    }),
+                    messages: session.messages.map((message) =>
+                      message.id === messageId ? { ...message, content: error } : message
+                    ),
                   }
-                : s
+                : session
             ),
           })),
 
+        setMessageSearchResults: (sessionId, messageId, results) =>
+          set((state) => ({
+            sessions: state.sessions.map((session) =>
+              session.id === sessionId
+                ? {
+                    ...session,
+                    messages: session.messages.map((message) =>
+                      message.id === messageId ? { ...message, searchResults: results } : message
+                    ),
+                  }
+                : session
+            ),
+          })),
       };
     },
     {
-      name: 'inkuo-aipanel',
+      name: 'inkuo-ai-panel',
+      version: 1,
       partialize: (state) => ({
         isOpen: state.isOpen,
-        sessions: state.sessions.map((s) => ({
-          id: s.id,
-          title: s.title,
-          createdAt: s.createdAt,
-          mode: s.mode,
-          messages: s.messages,
-          isStreaming: false,
-          currentDiff: null,
-          activeToolCalls: [],
-          pendingDiff: null,
-        })),
+        activeTab: state.activeTab,
+        sessions: state.sessions,
         activeSessionId: state.activeSessionId,
       }),
-      merge: (persisted, current) => {
-        const persistedState = persisted as { isOpen?: boolean; sessions?: Partial<ChatSession>[]; activeSessionId?: string } | undefined;
+      merge: (persistedState, currentState) => {
+        const typedState = persistedState as Partial<{
+          isOpen: boolean;
+          activeTab: 'chat' | 'edit';
+          sessions: ChatSession[];
+          activeSessionId: string;
+        }>;
+
+        const sessions = typedState.sessions?.length ? typedState.sessions : currentState.sessions;
+        const activeSessionId =
+          typedState.activeSessionId && sessions.some((session) => session.id === typedState.activeSessionId)
+            ? typedState.activeSessionId
+            : sessions[0]?.id ?? currentState.activeSessionId;
+
         return {
-          ...current,
-          ...persistedState,
-          sessions: (persistedState?.sessions ?? []).map((s) => ({
-            id: s.id ?? '',
-            title: s.title ?? '',
-            createdAt: s.createdAt ?? 0,
-            mode: s.mode ?? 'ask',
-            messages: s.messages ?? [],
-            isStreaming: false,
-            currentDiff: null,
-            activeToolCalls: s.activeToolCalls ?? [],
-            pendingDiff: null,
-          })),
+          ...currentState,
+          ...typedState,
+          sessions,
+          activeSessionId,
         };
       },
     }
   )
 );
+
+export type {
+  ActiveToolCall,
+  BuildProgress,
+  ChatMessage,
+  ChatMode,
+  ChatSession,
+  CurrentDiff,
+  MessageRole,
+  MessageToolCall,
+  MessageToolResult,
+  OutputItem,
+  SearchResult,
+};

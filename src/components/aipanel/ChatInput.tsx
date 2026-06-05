@@ -3,7 +3,7 @@ import {
   Send, Trash2, StopCircle, Terminal, Loader2, Database,
 } from 'lucide-react';
 import type { ChatMode } from '../../store';
-import styles from './AIPanel.module.css';
+import styles from './AIPanelInput.module.css';
 
 const MODE_LABELS: Record<ChatMode, string> = {
   ask: 'Ask',

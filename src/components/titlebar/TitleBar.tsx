@@ -1,3 +1,4 @@
+import { open } from '@tauri-apps/plugin-dialog';
 import React, { useState, useRef, useEffect } from 'react';
 import { 
   Minus,
@@ -103,7 +104,6 @@ export const TitleBar: React.FC = () => {
   };
 
   const handleOpenFolder = async () => {
-    const { open } = await import('@tauri-apps/plugin-dialog');
     try {
       const selected = await open({
         directory: true,

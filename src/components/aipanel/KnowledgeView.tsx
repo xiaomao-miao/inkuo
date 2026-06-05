@@ -1,3 +1,4 @@
+import { invoke } from '@tauri-apps/api/core';
 import React, { useEffect, useState } from 'react';
 import { Database, RefreshCw, Trash2, FileText, Layers, Clock, AlertTriangle, Settings } from 'lucide-react';
 import { useSettingsStore, type BuildProgress } from '../../store';
@@ -34,7 +35,6 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({
   useEffect(() => {
     const checkModel = async () => {
       try {
-        const { invoke } = await import('@tauri-apps/api/core');
         const models = await invoke<AvailableModel[]>('check_available_models');
         const selectedModel = models.find((m) => m.name === settings.embedding_model);
         if (selectedModel) {
