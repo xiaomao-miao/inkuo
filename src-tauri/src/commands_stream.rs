@@ -1,37 +1,13 @@
 use crate::{
     ai,
+    ai_config::{self, AIConfigInput},
     commands::AppState,
-    commands_agent::AIConfigInput,
     knowledge,
     streaming::{KnowledgeSearchResult, StreamPayload},
 };
 use std::collections::BTreeSet;
 use tauri::{AppHandle, Emitter, State};
 use urlencoding;
-
-fn build_ai_config(config_input: AIConfigInput) -> ai::AIConfig {
-    ai::AIConfig {
-        provider: match config_input.provider.as_str() {
-            "openai" | "deepseek" => ai::AIProvider::OpenAI {
-                api_key: config_input.api_key.unwrap_or_default(),
-                base_url: config_input.base_url.unwrap_or_else(|| "https://api.deepseek.com".to_string()),
-            },
-            "ollama" => ai::AIProvider::Ollama {
-                base_url: config_input.base_url.unwrap_or_else(|| "http://localhost:11434".to_string()),
-            },
-            "official" => ai::AIProvider::Official {
-                api_key: config_input.api_key.unwrap_or_default(),
-            },
-            _ => ai::AIProvider::OpenAI {
-                api_key: config_input.api_key.unwrap_or_default(),
-                base_url: config_input.base_url.unwrap_or_else(|| "https://api.deepseek.com".to_string()),
-            },
-        },
-        model: config_input.model,
-        temperature: config_input.temperature.unwrap_or(0.7),
-        max_tokens: config_input.max_tokens,
-    }
-}
 
 fn build_knowledge_context(results: &[knowledge::SearchResult]) -> String {
     if results.is_empty() {
@@ -148,7 +124,7 @@ pub async fn ai_chat_stream(
 ) -> Result<(), String> {
     tracing::info!("ai_chat_stream start - session: {}, mode: {}", session_id, mode);
     let _ = state;
-    let config = build_ai_config(config_input);
+    let config = ai_config::build_input_ai_config(config_input);
     let adapter = ai::AIProviderAdapter::new(config);
     let original_text = original_text.unwrap_or_default();
 

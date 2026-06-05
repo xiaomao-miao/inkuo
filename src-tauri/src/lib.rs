@@ -11,6 +11,7 @@ mod backup;
 mod document;
 mod diff;
 mod ai;
+mod ai_config;
 mod commands;
 mod commands_stream;
 mod commands_agent;
@@ -26,7 +27,6 @@ pub use document::*;
 pub use diff::*;
 pub use ai::*;
 use std::panic;
-use tauri::Manager;
 
 fn setup_logging() {
     // Simple logging setup - write to stdout

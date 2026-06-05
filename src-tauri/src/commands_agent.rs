@@ -8,6 +8,7 @@ use crate::agent::{
     SharedToolRegistry, AgentError, ToolCallMessage, ToolCallFunction,
 };
 use crate::agent::tools::ToolRegistry;
+use crate::ai_config::{self, AIConfigInput};
 use crate::streaming::StreamPayload;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -112,16 +113,6 @@ fn convert_message(msg: &FrontendMessage) -> Option<Message> {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AIConfigInput {
-    pub provider: String,
-    pub api_key: Option<String>,
-    pub base_url: Option<String>,
-    pub model: String,
-    pub temperature: Option<f32>,
-    pub max_tokens: Option<u32>,
-}
-
 #[tauri::command]
 pub async fn ai_agent_stream(
     session_id: String,
@@ -139,24 +130,7 @@ pub async fn ai_agent_stream(
     update_registry_workspace(workspace_path.clone()).await;
 
     // Create AI config from input
-    let ai_config = crate::ai::AIConfig {
-        provider: match config_input.provider.as_str() {
-            "openai" | "deepseek" => crate::ai::AIProvider::OpenAI {
-                api_key: config_input.api_key.unwrap_or_default(),
-                base_url: config_input.base_url.unwrap_or_else(|| "https://api.deepseek.com".to_string()),
-            },
-            "ollama" => crate::ai::AIProvider::Ollama {
-                base_url: config_input.base_url.unwrap_or_else(|| "http://localhost:11434".to_string()),
-            },
-            _ => crate::ai::AIProvider::OpenAI {
-                api_key: config_input.api_key.unwrap_or_default(),
-                base_url: config_input.base_url.unwrap_or_else(|| "https://api.deepseek.com".to_string()),
-            },
-        },
-        model: config_input.model,
-        temperature: config_input.temperature.unwrap_or(0.7),
-        max_tokens: config_input.max_tokens,
-    };
+    let ai_config = ai_config::build_input_ai_config(config_input);
 
     tracing::info!("Using AI provider: {:?}", ai_config.provider);
 

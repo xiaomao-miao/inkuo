@@ -10,13 +10,9 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 
-const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
-const DEFAULT_DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com";
-const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434";
-
 use crate::backup::{create_backup_path, get_backup_dir, request_backup_cleanup};
 use crate::office;
-use crate::{ai, diff, document, file_watcher};
+use crate::{ai, ai_config::{self, AITestResult, AIProviderKind, TestApiConfigRequest}, diff, document, file_watcher};
 
 pub static STREAM_CANCELLED: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
@@ -24,99 +20,11 @@ pub struct AppState {
     pub ai_config: Arc<tokio::sync::RwLock<ai::AIConfig>>,
 }
 
-fn default_base_url(provider: &str) -> &'static str {
-    match provider {
-        "openai" => DEFAULT_OPENAI_BASE_URL,
-        "deepseek" => DEFAULT_DEEPSEEK_BASE_URL,
-        "ollama" => DEFAULT_OLLAMA_BASE_URL,
-        _ => DEFAULT_DEEPSEEK_BASE_URL,
-    }
-}
-
-fn build_ai_provider(settings: &Settings) -> ai::AIProvider {
-    match settings.ai_provider.as_str() {
-        "openai" => ai::AIProvider::OpenAI {
-            api_key: settings.ai_api_key.clone().unwrap_or_default(),
-            base_url: settings
-                .ai_base_url
-                .clone()
-                .unwrap_or_else(|| default_base_url("openai").to_string()),
-        },
-        "deepseek" => ai::AIProvider::OpenAI {
-            api_key: settings.ai_api_key.clone().unwrap_or_default(),
-            base_url: settings
-                .ai_base_url
-                .clone()
-                .unwrap_or_else(|| default_base_url("deepseek").to_string()),
-        },
-        "ollama" => ai::AIProvider::Ollama {
-            base_url: settings
-                .ai_base_url
-                .clone()
-                .unwrap_or_else(|| default_base_url("ollama").to_string()),
-        },
-        "official" => ai::AIProvider::Official {
-            api_key: settings.ai_api_key.clone().unwrap_or_default(),
-        },
-        _ => ai::AIProvider::OpenAI {
-            api_key: settings.ai_api_key.clone().unwrap_or_default(),
-            base_url: settings
-                .ai_base_url
-                .clone()
-                .unwrap_or_else(|| default_base_url("deepseek").to_string()),
-        },
-    }
-}
-
-fn active_api_config<'a>(settings: &'a Settings) -> Option<&'a ApiConfig> {
-    let active_id = settings.active_api_config_id.as_ref()?;
-    settings.api_configs.iter().find(|config| config.id == *active_id)
-}
-
-fn build_provider_from_api_config(config: &ApiConfig) -> ai::AIProvider {
-    match config.provider.as_str() {
-        "openai" | "deepseek" => ai::AIProvider::OpenAI {
-            api_key: config.api_key.clone().unwrap_or_default(),
-            base_url: config
-                .base_url
-                .clone(),
-        },
-        "ollama" => ai::AIProvider::Ollama {
-            base_url: config.base_url.clone(),
-        },
-        "official" => ai::AIProvider::Official {
-            api_key: config.api_key.clone().unwrap_or_default(),
-        },
-        _ => ai::AIProvider::OpenAI {
-            api_key: config.api_key.clone().unwrap_or_default(),
-            base_url: config.base_url.clone(),
-        },
-    }
-}
-
-fn build_ai_config(settings: &Settings) -> ai::AIConfig {
-    if let Some(config) = active_api_config(settings) {
-        return ai::AIConfig {
-            provider: build_provider_from_api_config(config),
-            model: config.model.clone(),
-            temperature: config.temperature,
-            max_tokens: config.max_tokens,
-        };
-    }
-
-    ai::AIConfig {
-        provider: build_ai_provider(settings),
-        model: settings.ai_model.clone(),
-        temperature: settings.ai_temperature,
-        max_tokens: settings.ai_max_tokens,
-    }
-}
-
 impl Default for AppState {
     fn default() -> Self {
         let settings = read_settings_from_disk().unwrap_or_else(|_| Settings::default());
 
-        let ai_config = build_ai_config(&settings);
+        let ai_config = ai_config::build_settings_ai_config(&settings);
 
         Self {
             ai_config: Arc::new(tokio::sync::RwLock::new(ai_config)),
@@ -282,7 +190,7 @@ pub async fn ai_edit(
 pub struct ApiConfig {
     pub id: String,
     pub name: String,
-    pub provider: String,
+    pub provider: AIProviderKind,
     pub base_url: String,
     pub api_key: Option<String>,
     pub model: String,
@@ -298,7 +206,7 @@ pub struct Settings {
     pub accent_color: String,
     pub editor_font_size: u32,
     pub editor_font_family: String,
-    pub ai_provider: String,
+    pub ai_provider: AIProviderKind,
     pub ai_model: String,
     pub ai_api_key: Option<String>,
     pub ai_base_url: Option<String>,
@@ -318,7 +226,7 @@ impl Default for Settings {
         let default_api_config = ApiConfig {
             id: uuid::Uuid::new_v4().to_string(),
             name: "DeepSeek V3".to_string(),
-            provider: "deepseek".to_string(),
+            provider: AIProviderKind::DeepSeek,
             base_url: "https://api.deepseek.com".to_string(),
             api_key: None,
             model: "deepseek-chat".to_string(),
@@ -333,7 +241,7 @@ impl Default for Settings {
             accent_color: "#7C5CFF".to_string(),
             editor_font_size: 14,
             editor_font_family: "JetBrains Mono, monospace".to_string(),
-            ai_provider: "deepseek".to_string(),
+            ai_provider: AIProviderKind::DeepSeek,
             ai_model: "deepseek-chat".to_string(),
             ai_api_key: None,
             ai_base_url: Some("https://api.deepseek.com".to_string()),
@@ -411,7 +319,7 @@ pub fn read_settings_from_disk() -> Result<Settings, String> {
                 accent_color: Option<String>,
                 editor_font_size: Option<u32>,
                 editor_font_family: Option<String>,
-                ai_provider: Option<String>,
+                ai_provider: Option<AIProviderKind>,
                 ai_model: Option<String>,
                 ai_api_key: Option<String>,
                 ai_base_url: Option<String>,
@@ -426,7 +334,7 @@ pub fn read_settings_from_disk() -> Result<Settings, String> {
             let default_api_config = ApiConfig {
                 id: default_api_config_id.clone(),
                 name: legacy.ai_model.clone().unwrap_or_else(|| "Default".to_string()),
-                provider: legacy.ai_provider.clone().unwrap_or_else(|| "openai".to_string()),
+                provider: legacy.ai_provider.unwrap_or(AIProviderKind::OpenAI),
                 base_url: legacy.ai_base_url.clone().unwrap_or_else(|| "https://api.deepseek.com".to_string()),
                 api_key: legacy.ai_api_key.clone(),
                 model: legacy.ai_model.clone().unwrap_or_else(|| "deepseek-chat".to_string()),
@@ -441,7 +349,7 @@ pub fn read_settings_from_disk() -> Result<Settings, String> {
                 accent_color: legacy.accent_color.unwrap_or_else(|| "#7C5CFF".to_string()),
                 editor_font_size: legacy.editor_font_size.unwrap_or(14),
                 editor_font_family: legacy.editor_font_family.unwrap_or_else(|| "JetBrains Mono, monospace".to_string()),
-                ai_provider: legacy.ai_provider.unwrap_or_else(|| "deepseek".to_string()),
+                ai_provider: legacy.ai_provider.unwrap_or(AIProviderKind::DeepSeek),
                 ai_model: legacy.ai_model.unwrap_or_else(|| "deepseek-chat".to_string()),
                 ai_api_key: legacy.ai_api_key,
                 ai_base_url: legacy.ai_base_url,
@@ -487,84 +395,24 @@ pub async fn save_settings(settings: Settings, state: State<'_, AppState>) -> Re
     std::fs::write(&path, content)
         .map_err(|e| format!("Failed to write settings: {}", e))?;
 
-    *state.ai_config.write().await = build_ai_config(&settings);
+    *state.ai_config.write().await = ai_config::build_settings_ai_config(&settings);
 
     Ok(())
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct TestResult {
-    pub success: bool,
-    pub message: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct TestApiConfigRequest {
-    pub api_key: Option<String>,
-    pub base_url: String,
-    pub model: String,
-    pub provider: String,
-}
+pub type TestResult = AITestResult;
 
 #[tauri::command]
 pub async fn test_api_config(
     request: TestApiConfigRequest,
 ) -> Result<TestResult, String> {
     tracing::info!("Testing API config: {} ({})", request.model, request.provider);
-
-    let client = reqwest::Client::new();
-    let url = format!("{}/chat/completions", request.base_url.trim_end_matches('/'));
-
-    let body = serde_json::json!({
-        "model": request.model,
-        "messages": [
-            {"role": "user", "content": "Say 'Hello, connection successful!' in exactly those words."}
-        ],
-        "max_tokens": 50,
-    });
-
-    let mut request_builder = client.post(&url);
-
-    if let Some(key) = &request.api_key {
-        if !key.is_empty() {
-            request_builder = request_builder.header("Authorization", format!("Bearer {}", key));
-        }
-    }
-
-    request_builder = request_builder.header("Content-Type", "application/json");
-
-    let response = request_builder
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("Network error: {}", e))?;
-
-    if response.status().is_success() {
-        let response_json: serde_json::Value = response
-            .json()
-            .await
-            .map_err(|e| format!("Failed to parse response: {}", e))?;
-
-        if let Some(content) = response_json["choices"][0]["message"]["content"].as_str() {
-            Ok(TestResult {
-                success: true,
-                message: format!("连接成功！AI 回复: {}", content),
-            })
-        } else {
-            Ok(TestResult {
-                success: true,
-                message: "连接成功！".to_string(),
-            })
-        }
-    } else {
-        let status = response.status();
-        let error_text = response.text().await.unwrap_or_default();
-
-        Ok(TestResult {
-            success: false,
-            message: format!("连接失败 (HTTP {}): {}", status.as_u16(), error_text),
-        })
-    }
+    ai_config::test_ai_connection_impl(
+        request.api_key.as_deref(),
+        &request.base_url,
+        &request.model,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -574,60 +422,7 @@ pub async fn test_ai_connection(
     model: String,
 ) -> Result<TestResult, String> {
     tracing::info!("Testing AI connection to: {}", base_url);
-
-    let client = reqwest::Client::new();
-    let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
-
-    let body = serde_json::json!({
-        "model": model,
-        "messages": [
-            {"role": "user", "content": "Say 'Hello, connection successful!' in exactly those words."}
-        ],
-        "max_tokens": 50,
-    });
-
-    let mut request = client.post(&url);
-
-    if let Some(key) = &api_key {
-        if !key.is_empty() {
-            request = request.header("Authorization", format!("Bearer {}", key));
-        }
-    }
-
-    request = request.header("Content-Type", "application/json");
-
-    let response = request
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("Network error: {}", e))?;
-
-    if response.status().is_success() {
-        let response_json: serde_json::Value = response
-            .json()
-            .await
-            .map_err(|e| format!("Failed to parse response: {}", e))?;
-
-        if let Some(content) = response_json["choices"][0]["message"]["content"].as_str() {
-            Ok(TestResult {
-                success: true,
-                message: format!("连接成功！AI 回复: {}", content),
-            })
-        } else {
-            Ok(TestResult {
-                success: true,
-                message: "连接成功！".to_string(),
-            })
-        }
-    } else {
-        let status = response.status();
-        let error_text = response.text().await.unwrap_or_default();
-
-        Ok(TestResult {
-            success: false,
-            message: format!("连接失败 (HTTP {}): {}", status.as_u16(), error_text),
-        })
-    }
+    ai_config::test_ai_connection_impl(api_key.as_deref(), &base_url, &model).await
 }
 
 #[tauri::command]
