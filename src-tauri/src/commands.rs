@@ -2,14 +2,17 @@
 //!
 //! Exposes Rust backend functionality to the frontend via IPC.
 
-use crate::{diff, document, ai, rag, file_watcher};
-use crate::backup::{create_backup_path, get_backup_dir, request_backup_cleanup};
 use std::collections::HashSet;
-use parking_lot::Mutex;
-use once_cell::sync::Lazy;
-use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tauri::{State, AppHandle};
+
+use once_cell::sync::Lazy;
+use parking_lot::Mutex;
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, State};
+
+use crate::backup::{create_backup_path, get_backup_dir, request_backup_cleanup};
+use crate::office;
+use crate::{ai, diff, document, file_watcher, rag};
 
 pub static STREAM_CANCELLED: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
@@ -18,35 +21,44 @@ pub struct AppState {
     pub ai_config: Arc<tokio::sync::RwLock<ai::AIConfig>>,
 }
 
+fn build_ai_provider(settings: &Settings) -> ai::AIProvider {
+    match settings.ai_provider.as_str() {
+        "openai" => ai::AIProvider::OpenAI {
+            api_key: settings.ai_api_key.clone().unwrap_or_default(),
+            base_url: settings
+                .ai_base_url
+                .clone()
+                .unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
+        },
+        "deepseek" => ai::AIProvider::OpenAI {
+            api_key: settings.ai_api_key.clone().unwrap_or_default(),
+            base_url: settings
+                .ai_base_url
+                .clone()
+                .unwrap_or_else(|| "https://api.deepseek.com".to_string()),
+        },
+        "ollama" => ai::AIProvider::Ollama {
+            base_url: settings
+                .ai_base_url
+                .clone()
+                .unwrap_or_else(|| "http://localhost:11434".to_string()),
+        },
+        _ => ai::AIProvider::OpenAI {
+            api_key: settings.ai_api_key.clone().unwrap_or_default(),
+            base_url: settings
+                .ai_base_url
+                .clone()
+                .unwrap_or_else(|| "https://api.deepseek.com".to_string()),
+        },
+    }
+}
+
 impl Default for AppState {
     fn default() -> Self {
         let settings = read_settings_from_disk().unwrap_or_else(|_| Settings::default());
 
-        let ai_provider = match settings.ai_provider.as_str() {
-            "openai" | "deepseek" => ai::AIProvider::OpenAI {
-                api_key: settings.ai_api_key.clone().unwrap_or_default(),
-                base_url: settings
-                    .ai_base_url
-                    .clone()
-                    .unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
-            },
-            "ollama" => ai::AIProvider::Ollama {
-                base_url: settings
-                    .ai_base_url
-                    .clone()
-                    .unwrap_or_else(|| "http://localhost:11434".to_string()),
-            },
-            _ => ai::AIProvider::OpenAI {
-                api_key: settings.ai_api_key.clone().unwrap_or_default(),
-                base_url: settings
-                    .ai_base_url
-                    .clone()
-                    .unwrap_or_else(|| "https://api.deepseek.com".to_string()),
-            },
-        };
-
         let ai_config = ai::AIConfig {
-            provider: ai_provider,
+            provider: build_ai_provider(&settings),
             model: settings.ai_model.clone(),
             temperature: settings.ai_temperature,
             max_tokens: settings.ai_max_tokens,
@@ -236,38 +248,9 @@ pub async fn index_workspace(
     let mut count = 0;
     let index = Arc::clone(&state.rag_index);
 
-    fn index_dir(dir: &std::path::Path, count: &mut usize) -> Result<(), String> {
-        if !dir.is_dir() {
-            return Ok(());
-        }
-
-        for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
-            let path = entry.path();
-
-            if path.is_dir() {
-                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                if !name.starts_with('.') {
-                    index_dir(&path, count)?;
-                }
-            } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                if matches!(ext, "md" | "markdown") {
-                    if std::fs::read_to_string(&path).is_ok() {
-                        *count += 1;
-                        tracing::debug!("Found markdown file: {:?}", path);
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    index_dir(std::path::Path::new(&path), &mut count)?;
-
-    fn index_dir_recursive(
+    fn visit_markdown_files(
         dir: &std::path::Path,
-        index: &rag::RAGIndex,
-        count: &mut usize,
+        on_file: &mut dyn FnMut(&std::path::Path) -> Result<(), String>,
     ) -> Result<(), String> {
         if !dir.is_dir() {
             return Ok(());
@@ -280,24 +263,41 @@ pub async fn index_workspace(
             if path.is_dir() {
                 let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                 if !name.starts_with('.') {
-                    index_dir_recursive(&path, index, count)?;
+                    visit_markdown_files(&path, on_file)?;
                 }
             } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
                 if matches!(ext, "md" | "markdown") {
-                    if let Ok(content) = std::fs::read_to_string(&path) {
-                        let doc_id = uuid::Uuid::new_v4().to_string();
-                        let blocks = vec![];
-                        index.index_document(&doc_id, path.to_str().unwrap_or(""), &content, &blocks);
-                        *count += 1;
-                    }
+                    on_file(&path)?;
                 }
             }
         }
+
         Ok(())
     }
 
+    visit_markdown_files(std::path::Path::new(&path), &mut |markdown_path| {
+        if std::fs::read_to_string(markdown_path).is_ok() {
+            count += 1;
+            tracing::debug!("Found markdown file: {:?}", markdown_path);
+        }
+        Ok(())
+    })?;
+
     let index_guard = index.read().await;
-    index_dir_recursive(std::path::Path::new(&path), &index_guard, &mut count)?;
+    visit_markdown_files(std::path::Path::new(&path), &mut |markdown_path| {
+        if let Ok(content) = std::fs::read_to_string(markdown_path) {
+            let doc_id = uuid::Uuid::new_v4().to_string();
+            let blocks = vec![];
+            index_guard.index_document(
+                &doc_id,
+                markdown_path.to_str().unwrap_or(""),
+                &content,
+                &blocks,
+            );
+            count += 1;
+        }
+        Ok(())
+    })?;
 
     Ok(count)
 }
@@ -728,8 +728,6 @@ pub async fn write_office_file(path: String, data: Vec<u8>) -> Result<(), String
     tracing::info!("Writing office file: {}", path);
     std::fs::write(&path, &data).map_err(|e| format!("Failed to write file: {}", e))
 }
-
-use crate::office;
 
 #[tauri::command]
 pub async fn read_office_text(path: String) -> Result<OfficeFileResult, String> {

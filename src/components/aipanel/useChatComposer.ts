@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useState } from 'react';
 import {
   useAIPanelStore,
   useSidebarStore,
@@ -173,7 +173,7 @@ export function useChatComposer({
     await sendMessage(newContent);
   }, [activeSession, editingMessageId, editingContent, isStreaming, truncateMessagesAfter, clearEditingState, sendMessage]);
 
-  return useMemo(() => ({
+  return {
     input,
     setInput,
     editingMessageId,
@@ -185,15 +185,5 @@ export function useChatComposer({
     handleStartEdit,
     handleCancelEdit,
     handleSaveEdit,
-  }), [
-    input,
-    editingMessageId,
-    editingContent,
-    handleSend,
-    handleStop,
-    cycleMode,
-    handleStartEdit,
-    handleCancelEdit,
-    handleSaveEdit,
-  ]);
+  };
 }
