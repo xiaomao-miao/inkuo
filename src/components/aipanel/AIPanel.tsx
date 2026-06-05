@@ -98,10 +98,18 @@ export const AIPanel: React.FC = () => {
     setIsOpen,
     clearToolCalls,
     setMessageDiff,
-    setKnowledgeBase,
-    clearSearchResults,
-    setKnowledgeToolCall,
   } = useAIPanelStore();
+
+  // Workspace-level knowledge base state (shared across all sessions)
+  const {
+    knowledgeBase,
+    buildProgress,
+    knowledgeToolCall,
+    setKnowledgeBase,
+    setBuildProgress,
+    setKnowledgeToolCall,
+    setSearchResults,
+  } = useSidebarStore();
 
   const activeSession = useMemo(
     () => sessions.find((s) => s.id === activeSessionId) ?? sessions[0],
@@ -113,9 +121,7 @@ export const AIPanel: React.FC = () => {
   const pendingDiff = activeSession?.pendingDiff ?? null;
   const mode: ChatMode = activeSession?.mode ?? 'ask';
   const activeToolCalls = activeSession?.activeToolCalls ?? [];
-  const knowledgeBase = activeSession?.knowledgeBase;
-  const buildProgress = activeSession?.buildProgress;
-  const knowledgeToolCall = activeSession?.knowledgeToolCall;
+  // Note: knowledgeBase, buildProgress, knowledgeToolCall moved to workspace-level (sidebarStore)
 
   const [input, setInput] = useState('');
 
@@ -143,6 +149,12 @@ export const AIPanel: React.FC = () => {
   >>({});
   const pendingToolArgsOrderRef = useRef<string[]>([]);
   const flushToolArgsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Track previous workspacePath to only query backend on actual changes.
+  // Zustand persist restores sessions + knowledgeBase from localStorage on startup,
+  // so we should reuse that persisted knowledgeBase rather than overwriting it with
+  // a backend query that might race with rehydration.
+  const prevWorkspacePathRef = useRef<string | null>(null);
 
   // Note: Empty deps intentionally - this callback uses refs to access latest state,
   // avoiding stale closure issues without needing to re-create the callback.
@@ -319,7 +331,7 @@ export const AIPanel: React.FC = () => {
       const conversationHistory = buildConversationHistory(messages);
 
         if (mode === 'knowledge') {
-        clearSearchResults(sessionId);
+        setSearchResults(undefined);
         invoke('ai_chat_stream', {
           sessionId,
           messageId: assistantMessageId,
@@ -418,15 +430,13 @@ export const AIPanel: React.FC = () => {
   // Knowledge base handlers
   const workspacePath = useSidebarStore((state) => state.workspacePath);
 
-  const { setBuildProgress } = useAIPanelStore();
-
   const handleKnowledgeBuild = useCallback(async () => {
     if (!activeSession || !workspacePath) return;
 
     const sessionId = activeSession.id;
     const toolCallId = `knowledge-build-${sessionId}`;
     const startedAt = Date.now();
-    setKnowledgeToolCall(sessionId, {
+    setKnowledgeToolCall({
       id: toolCallId,
       name: 'knowledge_build',
       arguments: {
@@ -449,9 +459,9 @@ export const AIPanel: React.FC = () => {
       }>('kb://build-progress', (event) => {
         if (event.payload.session_id !== sessionId) return;
         if (event.payload.phase === 'done') {
-          setBuildProgress(sessionId, undefined);
+          setBuildProgress(undefined);
         } else {
-          setBuildProgress(sessionId, {
+          setBuildProgress({
             phase: event.payload.phase as 'scanning' | 'chunking' | 'embedding' | 'storing',
             current: event.payload.current,
             total: event.payload.total,
@@ -469,13 +479,13 @@ export const AIPanel: React.FC = () => {
         sessionId,
       });
 
-      setKnowledgeBase(sessionId, {
+      setKnowledgeBase({
         workspaceId: result.workspace_id,
         documentCount: result.total_documents,
         chunkCount: result.total_chunks,
         lastUpdated: Date.now(),
       });
-      setKnowledgeToolCall(sessionId, {
+      setKnowledgeToolCall({
         id: toolCallId,
         name: 'knowledge_build',
         arguments: {
@@ -490,7 +500,7 @@ export const AIPanel: React.FC = () => {
       });
     } catch (err) {
       console.error('Failed to build knowledge base:', err);
-      setKnowledgeToolCall(sessionId, {
+      setKnowledgeToolCall({
         id: toolCallId,
         name: 'knowledge_build',
         arguments: {
@@ -510,39 +520,36 @@ export const AIPanel: React.FC = () => {
   const handleKnowledgeClear = useCallback(async () => {
     if (!activeSession || !workspacePath) return;
 
-    const sessionId = activeSession.id;
-
     try {
       await invoke('knowledge_clear', { workspacePath });
-      setKnowledgeBase(sessionId, undefined);
-      clearSearchResults(sessionId);
-      setBuildProgress(sessionId, undefined);
-      setKnowledgeToolCall(sessionId, undefined);
+      setKnowledgeBase(undefined);
+      setSearchResults(undefined);
+      setBuildProgress(undefined);
+      setKnowledgeToolCall(undefined);
     } catch (err) {
       console.error('Failed to clear knowledge base:', err);
     }
-  }, [activeSession, workspacePath, setKnowledgeBase, clearSearchResults, setBuildProgress, setKnowledgeToolCall]);
+  }, [activeSession, workspacePath, setKnowledgeBase, setSearchResults, setBuildProgress, setKnowledgeToolCall]);
 
-  // Load knowledge base status on mount or workspace change
+  // Load knowledge base status when the user switches to a different workspace.
+  // On startup, we TRUST the persisted knowledgeBase from localStorage — no backend call needed.
+  // The Zustand persist merge runs synchronously (localStorage), so by the time React renders,
+  // the store already has the correct knowledgeBase from localStorage.
+  // Only query the backend when the workspacePath actually changes (user opens a different workspace).
   useEffect(() => {
     if (!activeSession || !workspacePath) return;
 
-    const sessionId = activeSession.id;
+    const prev = prevWorkspacePathRef.current;
 
-    invoke<{ workspace_id: string; document_count: number; chunk_count: number; last_updated: string } | null>(
-      'knowledge_status',
-      { workspacePath }
-    ).then((status) => {
-      if (status) {
-        setKnowledgeBase(sessionId, {
-          workspaceId: status.workspace_id,
-          documentCount: status.document_count,
-          chunkCount: status.chunk_count,
-          lastUpdated: new Date(status.last_updated).getTime(),
-        });
-      }
-    }).catch(console.error);
-  }, [activeSession?.id, workspacePath, setKnowledgeBase]);
+    if (prev !== null && prev === workspacePath) {
+      // Workspace unchanged — persisted knowledgeBase is already in state, nothing to do.
+      return;
+    }
+
+    // First run (prev === null): workspace changed from null to current path.
+    // Just record the path, trust persisted knowledgeBase, skip backend call.
+    prevWorkspacePathRef.current = workspacePath;
+  }, [activeSession?.id, workspacePath]);
 
   // Streaming events
   useEffect(() => {
@@ -569,7 +576,7 @@ export const AIPanel: React.FC = () => {
             delete streamingContentRef.current[message_id];
             useAIPanelStore.getState().setErrorMessage(session_id, message_id, error ?? '发生错误');
             if (modeRef.current === 'knowledge') {
-              useAIPanelStore.getState().setSearchResults(session_id, []);
+              useSidebarStore.getState().setSearchResults(undefined);
               useAIPanelStore.getState().setMessageSearchResults(session_id, message_id, []);
             }
             return;
@@ -779,7 +786,7 @@ return {
             setTimeout(() => clearToolCalls(session_id), TOOL_CALL_CLEAR_DELAY_MS);
 
             if (normalizedSearchResults) {
-              useAIPanelStore.getState().setSearchResults(session_id, normalizedSearchResults);
+              useSidebarStore.getState().setSearchResults(normalizedSearchResults);
               useAIPanelStore.getState().setMessageSearchResults(session_id, message_id, normalizedSearchResults);
             }
 

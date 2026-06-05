@@ -1,6 +1,6 @@
 //! Agent module - Full tool calling capability
 
-mod tools;
+pub mod tools;
 mod agent_loop;
 mod prompts;
 

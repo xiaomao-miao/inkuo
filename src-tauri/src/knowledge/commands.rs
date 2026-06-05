@@ -4,23 +4,57 @@ use crate::knowledge::{
     BuildResult, Chunker, ChunkConfig, DocScanner, Embedder, ModelInfo,
     MetadataStore, SearchResult, UpdateResult, VectorStore,
 };
-use crate::commands::{get_embedding_model as get_model_from_settings, get_chunk_size as get_size_from_settings};
+use crate::commands::{get_embedding_model, get_chunk_size};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::Arc;
+use tokio::sync::Mutex as TokioMutex;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 /// Knowledge state - manages vector store per workspace
 pub struct KnowledgeState {
-    pub vector_stores: Mutex<std::collections::HashMap<String, VectorStore>>,
+    pub vector_stores: TokioMutex<HashMap<String, VectorStore>>,
 }
 
 impl Default for KnowledgeState {
     fn default() -> Self {
         Self {
-            vector_stores: Mutex::new(std::collections::HashMap::new()),
+            vector_stores: TokioMutex::new(HashMap::new()),
         }
     }
+}
+
+/// Shared vector store cache accessible from both KB commands and agent tools.
+/// This ensures both code paths use the SAME VectorStore instance, avoiding
+/// WAL lock conflicts (Qdrant Edge WAL only allows single-process access).
+static SHARED_STORES: std::sync::OnceLock<
+    tokio::sync::RwLock<HashMap<String, VectorStore>>
+> = std::sync::OnceLock::new();
+
+fn shared_stores() -> &'static tokio::sync::RwLock<HashMap<String, VectorStore>> {
+    SHARED_STORES.get_or_init(|| {
+        tracing::info!("Initializing shared vector store cache");
+        tokio::sync::RwLock::new(HashMap::new())
+    })
+}
+
+/// Initialize the shared cache from the Tauri-managed KnowledgeState.
+/// Called once during app startup to ensure KB commands and agent tools share the same cache.
+pub fn register_shared_stores() {
+    // The shared_stores() static is self-initializing; this call just ensures it's created early.
+    let _ = shared_stores();
+    tracing::info!("Shared vector store cache initialized");
+}
+
+/// Get a shared vector store for a workspace.
+/// This is the entry point used by agent tools. KB commands use get_or_create_vector_store
+/// which also stores into the shared cache.
+pub async fn get_vector_store_for_search(
+    workspace_path: &str,
+    model_name: &str,
+) -> Result<VectorStore, String> {
+    let store = get_or_create_vector_store(None, workspace_path, model_name).await?;
+    Ok(store)
 }
 
 /// Generate workspace ID from path
@@ -35,9 +69,10 @@ fn get_workspace_id(workspace_path: &str) -> String {
     format!("{:x}", s.finish())
 }
 
-/// Get or create vector store for a workspace
-async fn get_vector_store(
-    state: &State<'_, KnowledgeState>,
+/// Get or create a vector store for a workspace.
+/// Writes to both the shared cache and the Tauri State (if provided).
+async fn get_or_create_vector_store(
+    state: Option<&State<'_, KnowledgeState>>,
     workspace_path: &str,
     model_name: &str,
 ) -> Result<VectorStore, String> {
@@ -45,19 +80,47 @@ async fn get_vector_store(
     let store_key = format!("{}::{}", workspace_id, model_name);
     let collection_name = format!("kb_{}", &workspace_id[..12]);
 
+    // Check shared cache first
     {
-        let stores = state.vector_stores.lock().map_err(|e| e.to_string())?;
+        let stores = shared_stores().read().await;
         if let Some(store) = stores.get(&store_key) {
+            tracing::debug!("Vector store shared cache hit for {}", store_key);
             return Ok(store.clone());
         }
     }
 
-    let store = VectorStore::new(&PathBuf::from(workspace_path), &collection_name, model_name)
-        .await
-        .map_err(|e| e.to_string())?;
+    // Check Tauri state if provided
+    if let Some(state) = state {
+        let stores = state.vector_stores.lock().await;
+        if let Some(store) = stores.get(&store_key) {
+            tracing::debug!("Vector store state cache hit for {}", store_key);
+            let store_clone = store.clone();
+            drop(stores);
+            let mut shared = shared_stores().write().await;
+            shared.insert(store_key, store_clone.clone());
+            return Ok(store_clone);
+        }
+    }
 
+    // Create new
+    tracing::info!("Creating new vector store for {}", store_key);
+    let store = VectorStore::new(
+        &PathBuf::from(workspace_path),
+        &collection_name,
+        model_name,
+    )
+    .await
+    .map_err(|e| e.to_string())?;
+
+    // Store in shared cache
     {
-        let mut stores = state.vector_stores.lock().map_err(|e| e.to_string())?;
+        let mut stores = shared_stores().write().await;
+        stores.insert(store_key.clone(), store.clone());
+    }
+
+    // Also store in Tauri state if provided
+    if let Some(state) = state {
+        let mut stores = state.vector_stores.lock().await;
         stores.insert(store_key, store.clone());
     }
 
@@ -101,7 +164,7 @@ pub async fn knowledge_build(
     tracing::info!("[KB_BUILD] Initializing DocScanner");
     let scanner = DocScanner::default();
 
-    let chunk_size = get_size_from_settings();
+    let chunk_size = get_chunk_size();
     tracing::info!("[KB_BUILD] Chunk size from settings: {}", chunk_size);
 
     let chunker = Chunker::new(ChunkConfig {
@@ -111,7 +174,7 @@ pub async fn knowledge_build(
         preserve_headers: true,
     });
 
-    let model_name = get_model_from_settings();
+    let model_name = get_embedding_model();
     let model_info = ModelInfo::new(&model_name)
         .map_err(|e| format!("Unsupported embedding model: {}", e))?;
     tracing::info!("[KB_BUILD] Model name from settings: {}", model_name);
@@ -220,9 +283,9 @@ pub async fn knowledge_build(
     }));
 
     tracing::info!("[KB_BUILD] Getting vector store");
-    let vector_store = get_vector_store(&state, &workspace_path, &model_name).await
+    let vector_store = get_or_create_vector_store(Some(&state), &workspace_path, &model_name).await
         .map_err(|e| {
-            tracing::error!("[KB_BUILD] get_vector_store failed: {}", e);
+            tracing::error!("[KB_BUILD] get_or_create_vector_store failed: {}", e);
             e
         })?;
 
@@ -301,20 +364,17 @@ pub async fn knowledge_search(
 ) -> Result<Vec<SearchResult>, String> {
     tracing::info!("Searching knowledge base: {}", query);
 
-    // Get model name from settings
-    let model_name = get_model_from_settings();
+    let model_name = get_embedding_model();
     let model_info = ModelInfo::new(&model_name)
         .map_err(|e| format!("Unsupported embedding model: {}", e))?;
 
-    // Get model path
     let model_path = resolve_model_dir(&app, &model_name)
         .ok_or_else(|| format!("Model '{}' not found (no model files)", model_name))?;
 
     let embedder = Embedder::new(&model_name, &model_path)
         .map_err(|e| format!("Failed to initialize embedder: {}", e))?;
 
-    // Get vector store
-    let vector_store = get_vector_store(&state, &workspace_path, &model_name).await?;
+    let vector_store = get_or_create_vector_store(Some(&state), &workspace_path, &model_name).await?;
 
     tracing::info!(
         "[KB_SEARCH] Using model {} (dim={})",
@@ -322,15 +382,48 @@ pub async fn knowledge_search(
         model_info.dimension
     );
 
-    // Generate query embedding
     let query_vector = embedder
         .encode_single(&query)
         .map_err(|e| format!("Failed to encode query: {}", e))?;
 
-    // Search
     let results = vector_store
         .search(&query_vector, top_k)
         .await
+        .map_err(|e| format!("Search failed: {}", e))?;
+
+    Ok(results)
+}
+
+/// Public search function for use by both Tauri commands and agent tools.
+/// Does NOT go through the Tauri command layer (avoids double-IPC in agent context).
+pub async fn search_knowledge_base(
+    app: &AppHandle,
+    workspace_path: &str,
+    query: &str,
+    top_k: usize,
+) -> Result<Vec<SearchResult>, String> {
+    let model_name = get_embedding_model();
+    let model_info = ModelInfo::new(&model_name)
+        .map_err(|e| format!("Unsupported embedding model: {}", e))?;
+
+    let model_path = resolve_model_dir(app, &model_name)
+        .ok_or_else(|| format!("Model '{}' not found (no model files)", model_name))?;
+
+    let embedder = Embedder::new(&model_name, &model_path)
+        .map_err(|e| format!("Failed to initialize embedder: {}", e))?;
+
+    let vector_store = get_vector_store_for_search(workspace_path, &model_name).await?;
+
+    tracing::debug!(
+        "search_knowledge_base: model={} (dim={})",
+        model_name,
+        model_info.dimension
+    );
+
+    let query_vector = embedder.encode_single(query)
+        .map_err(|e| format!("Failed to encode query: {}", e))?;
+
+    let results = vector_store.search(&query_vector, top_k).await
         .map_err(|e| format!("Search failed: {}", e))?;
 
     Ok(results)
@@ -373,9 +466,8 @@ pub async fn knowledge_update(
 
     let workspace = PathBuf::from(&workspace_path);
 
-    // Initialize components
     let scanner = DocScanner::default();
-    let chunk_size = get_size_from_settings();
+    let chunk_size = get_chunk_size();
     let chunker = Chunker::new(ChunkConfig {
         target_size: chunk_size,
         overlap: 50,
@@ -383,12 +475,10 @@ pub async fn knowledge_update(
         preserve_headers: true,
     });
 
-    // Get model name from settings
-    let model_name = get_model_from_settings();
+    let model_name = get_embedding_model();
     let model_info = ModelInfo::new(&model_name)
         .map_err(|e| format!("Unsupported embedding model: {}", e))?;
 
-    // Get model path
     let model_path = resolve_model_dir(&app, &model_name)
         .ok_or_else(|| format!("Model '{}' not found (no model files)", model_name))?;
 
@@ -401,26 +491,21 @@ pub async fn knowledge_update(
         model_info.dimension
     );
 
-    // Create or get vector store
-    let vector_store = get_vector_store(&state, &workspace_path, &model_name).await?;
+    let vector_store = get_or_create_vector_store(Some(&state), &workspace_path, &model_name).await?;
 
-    // Create metadata store
     let mut metadata_store = MetadataStore::new(&workspace)
         .map_err(|e| format!("Failed to create metadata store: {}", e))?;
 
-    // Load existing metadata if available
     if metadata_store.exists() {
         metadata_store
             .load()
             .map_err(|e| format!("Failed to load existing metadata: {}", e))?;
     }
 
-    // Scan current documents
     let current_docs = scanner
         .scan(&workspace)
         .map_err(|e| format!("Failed to scan documents: {}", e))?;
 
-    // Find changed files
     let (changed_docs, _removed) = metadata_store.find_changed_files(&current_docs);
 
     if changed_docs.is_empty() {
@@ -431,14 +516,12 @@ pub async fn knowledge_update(
         });
     }
 
-    // Build file paths map (absolute paths for frontend navigation)
     let mut file_paths: HashMap<String, String> = HashMap::new();
     for doc in &changed_docs {
         let abs_path = workspace.join(&doc.path);
         file_paths.insert(doc.id.clone(), abs_path.to_string_lossy().to_string());
     }
 
-    // Re-index changed documents
     let mut new_chunks = Vec::new();
     let mut owned_changed_docs = Vec::new();
     for doc in &changed_docs {
@@ -447,7 +530,6 @@ pub async fn knowledge_update(
         owned_changed_docs.push((*doc).clone());
     }
 
-    // Generate embeddings
     let batch_size = 64usize;
     let total_batches = new_chunks.len().div_ceil(batch_size.max(1));
     embedder
@@ -470,13 +552,11 @@ pub async fn knowledge_update(
         })
         .map_err(|e| format!("Failed to generate embeddings: {}", e))?;
 
-    // Store new vectors
     vector_store
         .upsert_chunks(&new_chunks, &file_paths)
         .await
         .map_err(|e| format!("Failed to store vectors: {}", e))?;
 
-    // Update metadata
     metadata_store
         .update(&owned_changed_docs, new_chunks.len())
         .map_err(|e| format!("Failed to update metadata: {}", e))?;
@@ -497,7 +577,6 @@ pub async fn knowledge_clear(
     let workspace = PathBuf::from(&workspace_path);
     let workspace_id = get_workspace_id(&workspace_path);
 
-    // Delete metadata store
     let metadata_store = MetadataStore::new(&workspace)
         .map_err(|e| format!("Failed to create metadata store: {}", e))?;
 
@@ -506,7 +585,6 @@ pub async fn knowledge_clear(
             .map_err(|e| format!("Failed to delete metadata: {}", e))?;
     }
 
-    // Delete vector storage directory
     let storage_path = dirs::data_dir()
         .map(|p| p.join("inkuo").join("knowledge").join(&workspace_id))
         .ok_or("Failed to get data directory")?;
@@ -516,10 +594,14 @@ pub async fn knowledge_clear(
             .map_err(|e| format!("Failed to delete storage: {}", e))?;
     }
 
-    // Remove from state
     {
-        let mut stores = state.vector_stores.lock().map_err(|e| e.to_string())?;
+        let mut stores = state.vector_stores.lock().await;
         stores.remove(&workspace_id);
+    }
+    {
+        let mut stores = shared_stores().write().await;
+        // Remove all keys for this workspace
+        stores.retain(|k, _| !k.starts_with(&format!("{}::", workspace_id)));
     }
 
     Ok(())
@@ -536,7 +618,6 @@ fn first_existing_path(paths: impl IntoIterator<Item = PathBuf>) -> Option<PathB
 }
 
 /// Returns the model directory for a given model name.
-/// Checks resource_dir first, then falls back to the compiled-in models directory.
 fn resolve_model_dir(app: &AppHandle, model_name: &str) -> Option<PathBuf> {
     let dir_name = model_name.replace('/', "-");
 
@@ -607,7 +688,7 @@ pub fn check_available_models(app: AppHandle) -> Vec<EmbeddingModelInfo> {
     models
 }
 
-/// Download model files (tokenizer, config) for a specific model
+/// Download model files for a specific model
 #[tauri::command]
 pub async fn download_model_files(
     app: AppHandle,
@@ -634,7 +715,6 @@ pub async fn download_model_files(
     let total = files.len();
     let mut downloaded = 0;
 
-    // Emit initial progress
     let _ = app.emit("model-download-progress", serde_json::json!({
         "model": model_name,
         "current": 0,
@@ -669,7 +749,6 @@ pub async fn download_model_files(
             }
             Err(e) => {
                 tracing::warn!("Failed to download {}: {}", filename, e);
-                // Try mirror
                 let mirror_url = url.replace("huggingface.co", "hf-mirror.com");
                 let mirror_result = download_file_with_progress(&app, &mirror_url, &path, &model_name, downloaded, total);
                 if mirror_result.is_ok() {
@@ -688,7 +767,6 @@ pub async fn download_model_files(
         }));
     }
 
-    // Create model.json for compatibility
     let model_json_path = model_dir.join("model.json");
     let dimensions = match model_name.as_str() {
         "BAAI/bge-small-zh-v1.5" => 512,

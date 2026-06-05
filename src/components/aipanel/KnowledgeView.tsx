@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Database, RefreshCw, Trash2, FileText, Layers, Clock, AlertTriangle, Settings } from 'lucide-react';
-import { useAIPanelStore, useSettingsStore, type SearchResult, type BuildProgress } from '../../store';
+import { useSettingsStore, type SearchResult, type BuildProgress } from '../../store';
 import { useSidebarStore, SETTINGS_TAB_ID } from '../../store';
 import styles from './KnowledgeView.module.css';
 
@@ -19,11 +19,12 @@ interface AvailableModel {
 }
 
 export const KnowledgeView: React.FC<KnowledgeViewProps> = ({
-  sessionId,
+  sessionId: _sessionId,
   onBuild,
   onClear,
 }) => {
-  const session = useAIPanelStore((state) => state.sessions.find((s) => s.id === sessionId));
+  // Workspace-level knowledge base state (shared across all sessions)
+  const { knowledgeBase, buildProgress, searchResults } = useSidebarStore();
   const { settings } = useSettingsStore();
   const [modelAvailable, setModelAvailable] = useState<{ available: boolean; name: string | null }>({
     available: false,
@@ -31,7 +32,7 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({
   });
   const { openTab } = useSidebarStore();
 
-  const isBuilding = !!session?.buildProgress && !session?.knowledgeBase;
+  const isBuilding = !!buildProgress && !knowledgeBase;
 
   useEffect(() => {
     const checkModel = async () => {
@@ -98,14 +99,14 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({
           </div>
         </div>
 
-        {session.buildProgress && (
-          <BuildProgressView progress={session.buildProgress} />
+        {buildProgress && (
+          <BuildProgressView progress={buildProgress} />
         )}
       </div>
     );
   }
 
-  if (!session?.knowledgeBase) {
+  if (!knowledgeBase) {
     return (
       <div className={styles.knowledgeView}>
         <div className={styles.emptyState}>
@@ -129,15 +130,15 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({
         <div className={styles.stats}>
           <div className={styles.stat}>
             <FileText size={14} />
-            <span>{session.knowledgeBase.documentCount} 文档</span>
+            <span>{knowledgeBase.documentCount} 文档</span>
           </div>
           <div className={styles.stat}>
             <Layers size={14} />
-            <span>{session.knowledgeBase.chunkCount} 块</span>
+            <span>{knowledgeBase.chunkCount} 块</span>
           </div>
           <div className={styles.stat}>
             <Clock size={14} />
-            <span>{formatTime(session.knowledgeBase.lastUpdated)}</span>
+            <span>{formatTime(knowledgeBase.lastUpdated)}</span>
           </div>
         </div>
         <div className={styles.actions}>
@@ -150,16 +151,16 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({
         </div>
       </div>
 
-      {session.searchResults && session.searchResults.length > 0 && (
+      {searchResults && searchResults.length > 0 && (
         <div className={styles.results}>
-          {session.searchResults.map((result) => (
+          {searchResults.map((result) => (
             <SearchResultCard key={result.chunkId} result={result} />
           ))}
         </div>
       )}
 
-      {session.buildProgress && (
-        <BuildProgressView progress={session.buildProgress} />
+      {buildProgress && (
+        <BuildProgressView progress={buildProgress} />
       )}
     </div>
   );

@@ -67,13 +67,15 @@ pub fn run() {
     });
 
     tauri::Builder::default()
+        .manage(commands::AppState::default())
+        .manage(file_watcher::FileWatcherState::new())
+        .manage(knowledge::commands::KnowledgeState::default())
         .setup(|app| {
             // Configure RAG index persistence path
             if let Some(app_data) = app.path().app_data_dir().ok() {
                 let state = app.state::<commands::AppState>();
                 let rag_index = state.rag_index.clone();
                 let app_data_clone = app_data.clone();
-                // Spawn a blocking task to configure persistence
                 std::thread::spawn(move || {
                     let rt = tokio::runtime::Builder::new_current_thread()
                         .enable_all()
@@ -86,11 +88,12 @@ pub fn run() {
                     });
                 });
             }
+
+            // Register shared vector store cache so both KB commands and agent tools
+            // use the same cache, avoiding WAL lock conflicts.
+            knowledge::commands::register_shared_stores();
             Ok(())
         })
-        .manage(commands::AppState::default())
-        .manage(file_watcher::FileWatcherState::new())
-        .manage(knowledge::commands::KnowledgeState::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())

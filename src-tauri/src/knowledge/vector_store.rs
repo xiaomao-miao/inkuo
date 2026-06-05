@@ -77,30 +77,21 @@ impl VectorStore {
                 tracing::info!("Loaded existing Qdrant Edge shard");
                 s
             }
-            Err(_) => {
-                let config = EdgeConfig {
-                    on_disk_payload: true,
-                    vectors: HashMap::from([(
-                        vector_name.clone(),
-                        EdgeVectorParams {
-                            size: vector_dimension,
-                            distance: qdrant_edge::Distance::Cosine,
-                            on_disk: Some(true),
-                            quantization_config: None,
-                            multivector_config: None,
-                            datatype: None,
-                            hnsw_config: None,
-                        },
-                    )]),
-                    sparse_vectors: HashMap::new(),
-                    hnsw_config: Default::default(),
-                    quantization_config: None,
-                    optimizers: Default::default(),
-                    wal_options: None,
-                };
-
-                EdgeShard::new(&storage_path, config)
-                    .map_err(|e| VectorStoreError::Init(format!("Failed to create EdgeShard: {}", e)))?
+            Err(load_err) => {
+                // Directory exists but load failed.
+                // We do NOT wipe data here — the KB was built successfully and should load.
+                // If load fails, surface the error so the user can investigate.
+                tracing::error!(
+                    "EdgeShard::load failed at {:?}: {:?}. \
+                    If the knowledge base was built successfully, this may indicate a version mismatch. \
+                    Try rebuilding the knowledge base.",
+                    storage_path, load_err
+                );
+                return Err(VectorStoreError::Init(format!(
+                    "Failed to load existing vector store: {:?}. \
+                    The knowledge base may need to be rebuilt.",
+                    load_err
+                )));
             }
         };
 

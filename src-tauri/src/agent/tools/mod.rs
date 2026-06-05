@@ -220,10 +220,12 @@ impl ToolResult {
 mod file_tools;
 mod search_tools;
 mod office_tools;
+mod database_tools;
 
 pub use file_tools::{ReadFileTool, WriteFileTool, EditFileTool, CreateDirTool, MoveFileTool};
 pub use search_tools::{ListDirTool, GlobTool, GrepTool};
 pub use office_tools::{ReadOfficeFileTool, WriteOfficeFileTool};
+pub use database_tools::DatabaseSearchTool;
 
 /// Unified executor enum combining all tool implementations
 pub enum ToolExecutor {
@@ -237,6 +239,7 @@ pub enum ToolExecutor {
     Grep(search_tools::GrepTool),
     ReadOfficeFile(office_tools::ReadOfficeFileTool),
     WriteOfficeFile(office_tools::WriteOfficeFileTool),
+    DatabaseSearch(database_tools::DatabaseSearchTool),
 }
 
 impl ToolExecutor {
@@ -252,6 +255,7 @@ impl ToolExecutor {
             ToolExecutor::Grep(_) => "grep",
             ToolExecutor::ReadOfficeFile(_) => "read_office_file",
             ToolExecutor::WriteOfficeFile(_) => "write_office_file",
+            ToolExecutor::DatabaseSearch(_) => "database_search",
         }
     }
 
@@ -267,6 +271,7 @@ impl ToolExecutor {
             ToolExecutor::Grep(t) => t.definition(),
             ToolExecutor::ReadOfficeFile(t) => t.definition(),
             ToolExecutor::WriteOfficeFile(t) => t.definition(),
+            ToolExecutor::DatabaseSearch(t) => t.definition(),
         }
     }
 
@@ -282,6 +287,7 @@ impl ToolExecutor {
             ToolExecutor::Grep(t) => t.execute(arguments, workspace).await,
             ToolExecutor::ReadOfficeFile(t) => t.execute(arguments, workspace).await,
             ToolExecutor::WriteOfficeFile(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::DatabaseSearch(t) => t.execute(arguments, workspace).await,
         }
     }
 }
@@ -290,12 +296,8 @@ pub struct ToolRegistry {
     definitions: HashMap<String, ToolDefinition>,
     executors: HashMap<String, ToolExecutor>,
     workspace: Option<String>,
-}
-
-impl Default for ToolRegistry {
-    fn default() -> Self {
-        Self::new()
-    }
+    /// AppHandle needed by tools like database_search; set once at call site.
+    app_handle: Option<tauri::AppHandle>,
 }
 
 impl ToolRegistry {
@@ -304,6 +306,7 @@ impl ToolRegistry {
             definitions: HashMap::new(),
             executors: HashMap::new(),
             workspace: None,
+            app_handle: None,
         };
         registry.register_builtin_tools();
         registry
@@ -314,6 +317,7 @@ impl ToolRegistry {
             definitions: HashMap::new(),
             executors: HashMap::new(),
             workspace: None,
+            app_handle: None,
         };
         let tools: Vec<ToolExecutor> = vec![
             ToolExecutor::ReadFile(ReadFileTool),
@@ -340,7 +344,20 @@ impl ToolRegistry {
         self.workspace.as_ref()
     }
 
+    pub fn set_app_handle(&mut self, app: tauri::AppHandle) {
+        self.app_handle = Some(app.clone());
+        // Lazily add database_search now that we have the AppHandle
+        if !self.has_tool("database_search") {
+            let tool = ToolExecutor::DatabaseSearch(DatabaseSearchTool::new(app));
+            let name = tool.name().to_string();
+            let def = tool.definition();
+            self.definitions.insert(name.clone(), def);
+            self.executors.insert(name, tool);
+        }
+    }
+
     fn register_builtin_tools(&mut self) {
+        // Note: AppHandle must be provided at call site via ToolRegistry::with_app_handle()
         let tools: Vec<ToolExecutor> = vec![
             ToolExecutor::ReadFile(ReadFileTool),
             ToolExecutor::WriteFile(WriteFileTool),
@@ -352,6 +369,7 @@ impl ToolRegistry {
             ToolExecutor::Grep(GrepTool),
             ToolExecutor::ReadOfficeFile(ReadOfficeFileTool),
             ToolExecutor::WriteOfficeFile(WriteOfficeFileTool),
+            // DatabaseSearchTool added lazily via with_app_handle()
         ];
 
         for tool in tools {
@@ -454,10 +472,10 @@ impl ToolRegistry {
 
 pub type SharedToolRegistry = Arc<RwLock<ToolRegistry>>;
 
-pub fn create_tool_registry() -> SharedToolRegistry {
+pub fn create_tool_registry(_app: Option<tauri::AppHandle>) -> SharedToolRegistry {
     Arc::new(RwLock::new(ToolRegistry::new()))
 }
 
-pub fn create_read_only_tool_registry() -> SharedToolRegistry {
+pub fn create_read_only_tool_registry(_app: Option<tauri::AppHandle>) -> SharedToolRegistry {
     Arc::new(RwLock::new(ToolRegistry::new_read_only()))
 }

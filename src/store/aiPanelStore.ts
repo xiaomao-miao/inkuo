@@ -122,11 +122,7 @@ export interface ChatSession {
   currentDiff: CurrentDiff | null;
   activeToolCalls: ActiveToolCall[];
   pendingDiff: CurrentDiff | null;
-  // Knowledge base state
-  knowledgeBase?: KnowledgeBase;
-  searchResults?: SearchResult[];
-  buildProgress?: BuildProgress;
-  knowledgeToolCall?: ActiveToolCall;
+  // Note: knowledgeBase, buildProgress, knowledgeToolCall moved to workspace-level (sidebarStore)
 }
 
 interface AIPanelState {
@@ -165,12 +161,8 @@ interface AIPanelState {
   acceptAllHunks: (sessionId: string) => void;
   rejectAllHunks: (sessionId: string) => void;
 
-  // Knowledge base state
-  setKnowledgeBase: (sessionId: string, kb: KnowledgeBase | undefined) => void;
-  setSearchResults: (sessionId: string, results: SearchResult[]) => void;
-  setBuildProgress: (sessionId: string, progress: BuildProgress | undefined) => void;
-  setKnowledgeToolCall: (sessionId: string, toolCall: ActiveToolCall | undefined) => void;
-  clearSearchResults: (sessionId: string) => void;
+  // Note: knowledgeBase, buildProgress, knowledgeToolCall moved to workspace-level (sidebarStore)
+  // Only per-message search results remain here:
   setMessageSearchResults: (sessionId: string, messageId: string, results: SearchResult[]) => void;
 
   getSession: (sessionId: string) => ChatSession | undefined;
@@ -622,41 +614,8 @@ export const useAIPanelStore = create<AIPanelState>()(
             ),
           })),
 
-        // Knowledge base state management
-        setKnowledgeBase: (sessionId, kb) =>
-          set((state) => ({
-            sessions: state.sessions.map((s) =>
-              s.id === sessionId ? { ...s, knowledgeBase: kb } : s
-            ),
-          })),
-
-        setSearchResults: (sessionId, results) =>
-          set((state) => ({
-            sessions: state.sessions.map((s) =>
-              s.id === sessionId ? { ...s, searchResults: results } : s
-            ),
-          })),
-
-        setBuildProgress: (sessionId, progress) =>
-          set((state) => ({
-            sessions: state.sessions.map((s) =>
-              s.id === sessionId ? { ...s, buildProgress: progress } : s
-            ),
-          })),
-
-        setKnowledgeToolCall: (sessionId, toolCall) =>
-          set((state) => ({
-            sessions: state.sessions.map((s) =>
-              s.id === sessionId ? { ...s, knowledgeToolCall: toolCall } : s
-            ),
-          })),
-
-        clearSearchResults: (sessionId) =>
-          set((state) => ({
-            sessions: state.sessions.map((s) =>
-              s.id === sessionId ? { ...s, searchResults: undefined } : s
-            ),
-          })),
+        // Knowledge base state moved to sidebarStore (workspace-level).
+        // Only per-message search results remain in session.
       };
     },
     {
@@ -673,10 +632,7 @@ export const useAIPanelStore = create<AIPanelState>()(
           currentDiff: null,
           activeToolCalls: [],
           pendingDiff: null,
-          knowledgeBase: s.knowledgeBase,
-          searchResults: s.searchResults,
-          buildProgress: s.buildProgress,
-          knowledgeToolCall: s.knowledgeToolCall,
+          // KB state (knowledgeBase, buildProgress, knowledgeToolCall) moved to sidebarStore
         })),
         activeSessionId: state.activeSessionId,
       }),
@@ -695,10 +651,7 @@ export const useAIPanelStore = create<AIPanelState>()(
             currentDiff: null,
             activeToolCalls: s.activeToolCalls ?? [],
             pendingDiff: null,
-            knowledgeBase: s.knowledgeBase,
-            searchResults: s.searchResults,
-            buildProgress: s.buildProgress,
-            knowledgeToolCall: s.knowledgeToolCall,
+            // KB state (knowledgeBase, buildProgress, knowledgeToolCall) moved to sidebarStore
           })),
         };
       },

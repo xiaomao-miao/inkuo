@@ -7,9 +7,12 @@ use crate::agent::{
     get_agent_system_prompt, get_ask_system_prompt, AgentSession, Message,
     SharedToolRegistry, AgentError, ToolCallMessage, ToolCallFunction,
 };
+use crate::agent::tools::ToolRegistry;
 use crate::streaming::StreamPayload;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
+use tokio::sync::RwLock;
 
 fn emit(app: &AppHandle, payload: StreamPayload) {
     let _ = app.emit("ai://stream", payload);
@@ -21,15 +24,25 @@ pub static FULL_TOOL_REGISTRY: std::sync::OnceLock<SharedToolRegistry> =
 pub static READ_ONLY_TOOL_REGISTRY: std::sync::OnceLock<SharedToolRegistry> =
     std::sync::OnceLock::new();
 
-fn get_full_tool_registry() -> SharedToolRegistry {
-    FULL_TOOL_REGISTRY
-        .get_or_init(|| create_tool_registry())
-        .clone()
+async fn get_full_tool_registry(app: &AppHandle) -> SharedToolRegistry {
+    let registry = FULL_TOOL_REGISTRY
+        .get_or_init(|| Arc::new(RwLock::new(ToolRegistry::new())))
+        .clone();
+    // Lazily add database_search tool with AppHandle (idempotent)
+    static DB_SEARCH_ADDED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    if DB_SEARCH_ADDED.get().is_none() {
+        let mut reg = registry.write().await;
+        if !reg.has_tool("database_search") {
+            reg.set_app_handle(app.clone());
+            DB_SEARCH_ADDED.get_or_init(|| {});
+        }
+    }
+    registry
 }
 
-fn get_read_only_tool_registry() -> SharedToolRegistry {
+async fn get_read_only_tool_registry(_app: &AppHandle) -> SharedToolRegistry {
     READ_ONLY_TOOL_REGISTRY
-        .get_or_init(|| create_read_only_tool_registry())
+        .get_or_init(|| Arc::new(RwLock::new(ToolRegistry::new_read_only())))
         .clone()
 }
 
@@ -150,11 +163,11 @@ pub async fn ai_agent_stream(
     let executor = create_agent_executor(ai_config);
 
     // Use different tool registry based on mode
-    let tool_registry = if read_only {
-        get_read_only_tool_registry()
-    } else {
-        get_full_tool_registry()
-    };
+        let tool_registry = if read_only {
+            get_read_only_tool_registry(&app).await
+        } else {
+            get_full_tool_registry(&app).await
+        };
     let mut session = AgentSession::new(tool_registry);
 
     // Use different system prompt based on mode
@@ -297,8 +310,8 @@ pub async fn ai_agent_cancel(session_id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn get_available_tools() -> Result<Vec<serde_json::Value>, String> {
-    let registry = get_full_tool_registry();
+pub async fn get_available_tools(app: AppHandle) -> Result<Vec<serde_json::Value>, String> {
+    let registry = get_full_tool_registry(&app).await;
     let tools = registry.read().await.get_all_definitions();
     let tools_json: Vec<serde_json::Value> = tools
         .iter()
