@@ -78,11 +78,11 @@ pub static BACKUP_CLEANUP_TX: std::sync::LazyLock<
     parking_lot::Mutex<Option<mpsc::Sender<()>>>,
 > = std::sync::LazyLock::new(|| parking_lot::Mutex::new(None));
 
-/// Initialize background backup cleanup task
+/// Initialize background backup cleanup task on the active async runtime
 pub fn init_backup_cleanup_task() {
     let (tx, mut rx) = mpsc::channel::<()>(32);
 
-    tokio::spawn(async move {
+    tauri::async_runtime::spawn(async move {
         let mut pending_cleanups: Vec<tokio::time::Instant> = Vec::new();
         let cleanup_interval = tokio::time::Duration::from_secs(60);
         let debounce_duration = tokio::time::Duration::from_secs(30);

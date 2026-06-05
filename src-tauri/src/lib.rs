@@ -25,9 +25,8 @@ pub mod knowledge;
 pub use document::*;
 pub use diff::*;
 pub use ai::*;
-use tauri::Manager;
-
 use std::panic;
+use tauri::Manager;
 
 fn setup_logging() {
     // Simple logging setup - write to stdout
@@ -49,22 +48,14 @@ pub fn run() {
 
     tracing::info!("Starting inkuo v{}", env!("CARGO_PKG_VERSION"));
 
-    // Spawn a background thread with Tokio runtime for backup cleanup
-    std::thread::spawn(|| {
-        let rt = tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()
-            .expect("Failed to create Tokio runtime");
-
-        rt.block_on(async {
-            crate::backup::init_backup_cleanup_task();
-        });
-    });
-
     tauri::Builder::default()
         .manage(commands::AppState::default())
         .manage(file_watcher::FileWatcherState::new())
         .setup(|_app| {
+            tauri::async_runtime::spawn(async {
+                crate::backup::init_backup_cleanup_task();
+            });
+
             // Register shared vector store cache so both KB commands and agent tools
             // use the same cache, avoiding WAL lock conflicts.
             knowledge::commands::register_shared_stores();
