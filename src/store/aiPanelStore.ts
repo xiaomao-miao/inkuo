@@ -85,6 +85,125 @@ function createNewSession(index: number): ChatSession {
   };
 }
 
+function updateSessions(
+  sessions: ChatSession[],
+  sessionId: string,
+  updater: (session: ChatSession) => ChatSession,
+): ChatSession[] {
+  return sessions.map((session) =>
+    session.id === sessionId ? updater(session) : session
+  );
+}
+
+function updateMessages(
+  session: ChatSession,
+  messageId: string,
+  updater: (message: ChatMessage) => ChatMessage,
+): ChatSession {
+  return {
+    ...session,
+    messages: session.messages.map((message) =>
+      message.id === messageId ? updater(message) : message
+    ),
+  };
+}
+
+function updateToolCalls(
+  session: ChatSession,
+  toolCallId: string,
+  updater: (toolCall: ActiveToolCall) => ActiveToolCall,
+): ChatSession {
+  return {
+    ...session,
+    activeToolCalls: session.activeToolCalls.map((toolCall) =>
+      toolCall.id === toolCallId ? updater(toolCall) : toolCall
+    ),
+  };
+}
+
+function clearSessionConversation(session: ChatSession): ChatSession {
+  return {
+    ...session,
+    messages: [],
+    currentDiff: null,
+    pendingDiff: null,
+    activeToolCalls: [],
+  };
+}
+
+function trimSessionMessagesAfter(session: ChatSession, messageId: string): ChatSession {
+  const index = session.messages.findIndex((message) => message.id === messageId);
+  if (index === -1) return session;
+  return {
+    ...session,
+    messages: session.messages.slice(0, index + 1),
+  };
+}
+
+function updatePendingDiffHunks(
+  session: ChatSession,
+  hunkId: string,
+): ChatSession {
+  if (!session.pendingDiff) return session;
+  const remainingHunks = session.pendingDiff.hunks.filter((hunk) => hunk.id !== hunkId);
+  return {
+    ...session,
+    pendingDiff:
+      remainingHunks.length > 0
+        ? { ...session.pendingDiff, hunks: remainingHunks }
+        : null,
+  };
+}
+
+function patchMessageOutputItems(
+  message: ChatMessage,
+  matchKey: { toolCallId: string } | { contentContains: string },
+  patch: Partial<OutputItem>,
+): ChatMessage {
+  const outputItems = message.outputItems.map((item) => {
+    const matchesByToolCallId =
+      'toolCallId' in matchKey &&
+      'toolCallId' in item &&
+      item.toolCallId === matchKey.toolCallId;
+    const matchesByContent =
+      'contentContains' in matchKey &&
+      'content' in item &&
+      typeof item.content === 'string' &&
+      item.content.includes(matchKey.contentContains);
+
+    return matchesByToolCallId || matchesByContent
+      ? ({ ...item, ...patch } as OutputItem)
+      : item;
+  });
+
+  return { ...message, outputItems };
+}
+
+function mergePersistedState(
+  persistedState: unknown,
+  currentState: AIPanelState,
+): AIPanelState {
+  const typedState = persistedState as Partial<{
+    isOpen: boolean;
+    activeTab: 'chat' | 'edit';
+    sessions: ChatSession[];
+    activeSessionId: string;
+  }>;
+
+  const sessions = typedState.sessions?.length ? typedState.sessions : currentState.sessions;
+  const activeSessionId =
+    typedState.activeSessionId && sessions.some((session) => session.id === typedState.activeSessionId)
+      ? typedState.activeSessionId
+      : sessions[0]?.id ?? currentState.activeSessionId;
+
+  return {
+    ...currentState,
+    ...typedState,
+    sessions,
+    activeSessionId,
+  };
+}
+
 export const useAIPanelStore = create<AIPanelState>()(
   persist(
     (set, get) => {
@@ -113,7 +232,7 @@ export const useAIPanelStore = create<AIPanelState>()(
 
         deleteSession: (sessionId) => {
           set((state) => {
-            const remaining = state.sessions.filter((s) => s.id !== sessionId);
+            const remaining = state.sessions.filter((session) => session.id !== sessionId);
             const safeRemaining = remaining.length > 0 ? remaining : [createNewSession(1)];
             const nextActiveId =
               state.activeSessionId === sessionId ? safeRemaining[0].id : state.activeSessionId;
@@ -129,197 +248,139 @@ export const useAIPanelStore = create<AIPanelState>()(
 
         setSessionMode: (sessionId, mode) =>
           set((state) => ({
-            sessions: state.sessions.map((session) =>
-              session.id === sessionId ? { ...session, mode } : session
-            ),
+            sessions: updateSessions(state.sessions, sessionId, (session) => ({ ...session, mode })),
           })),
 
         addMessage: (sessionId, message) =>
           set((state) => ({
-            sessions: state.sessions.map((session) =>
-              session.id === sessionId
-                ? { ...session, messages: [...session.messages, message] }
-                : session
-            ),
+            sessions: updateSessions(state.sessions, sessionId, (session) => ({
+              ...session,
+              messages: [...session.messages, message],
+            })),
           })),
 
         updateMessage: (sessionId, messageId, content) =>
           set((state) => ({
-            sessions: state.sessions.map((session) =>
-              session.id === sessionId
-                ? {
-                    ...session,
-                    messages: session.messages.map((message) =>
-                      message.id === messageId ? { ...message, content } : message
-                    ),
-                  }
-                : session
+            sessions: updateSessions(state.sessions, sessionId, (session) =>
+              updateMessages(session, messageId, (message) => ({ ...message, content }))
             ),
           })),
 
         appendMessageContent: (sessionId, messageId, content) =>
           set((state) => ({
-            sessions: state.sessions.map((session) =>
-              session.id === sessionId
-                ? {
-                    ...session,
-                    messages: session.messages.map((message) =>
-                      message.id === messageId
-                        ? { ...message, content: (message.content || '') + content }
-                        : message
-                    ),
-                  }
-                : session
+            sessions: updateSessions(state.sessions, sessionId, (session) =>
+              updateMessages(session, messageId, (message) => ({
+                ...message,
+                content: (message.content || '') + content,
+              }))
             ),
           })),
 
         setIsStreaming: (sessionId, streaming) =>
           set((state) => ({
-            sessions: state.sessions.map((session) =>
-              session.id === sessionId ? { ...session, isStreaming: streaming } : session
-            ),
+            sessions: updateSessions(state.sessions, sessionId, (session) => ({
+              ...session,
+              isStreaming: streaming,
+            })),
           })),
 
         clearMessages: (sessionId) =>
           set((state) => ({
-            sessions: state.sessions.map((session) =>
-              session.id === sessionId
-                ? {
-                    ...session,
-                    messages: [],
-                    currentDiff: null,
-                    pendingDiff: null,
-                    activeToolCalls: [],
-                  }
-                : session
-            ),
+            sessions: updateSessions(state.sessions, sessionId, clearSessionConversation),
           })),
 
         truncateMessagesAfter: (sessionId, messageId) =>
           set((state) => ({
-            sessions: state.sessions.map((session) => {
-              if (session.id !== sessionId) return session;
-              const index = session.messages.findIndex((message) => message.id === messageId);
-              if (index === -1) return session;
-              return {
-                ...session,
-                messages: session.messages.slice(0, index + 1),
-              };
-            }),
+            sessions: updateSessions(state.sessions, sessionId, (session) =>
+              trimSessionMessagesAfter(session, messageId)
+            ),
           })),
 
         addToolCall: (sessionId, toolCall) =>
           set((state) => ({
-            sessions: state.sessions.map((session) =>
-              session.id === sessionId
-                ? { ...session, activeToolCalls: [...session.activeToolCalls, toolCall] }
-                : session
-            ),
+            sessions: updateSessions(state.sessions, sessionId, (session) => ({
+              ...session,
+              activeToolCalls: [...session.activeToolCalls, toolCall],
+            })),
           })),
 
         updateToolCall: (sessionId, toolCallId, update) =>
           set((state) => ({
-            sessions: state.sessions.map((session) =>
-              session.id === sessionId
-                ? {
-                    ...session,
-                    activeToolCalls: session.activeToolCalls.map((toolCall) =>
-                      toolCall.id === toolCallId ? { ...toolCall, ...update } : toolCall
-                    ),
-                  }
-                : session
+            sessions: updateSessions(state.sessions, sessionId, (session) =>
+              updateToolCalls(session, toolCallId, (toolCall) => ({ ...toolCall, ...update }))
             ),
           })),
 
         removeToolCall: (sessionId, toolCallId) =>
           set((state) => ({
-            sessions: state.sessions.map((session) =>
-              session.id === sessionId
-                ? {
-                    ...session,
-                    activeToolCalls: session.activeToolCalls.filter((toolCall) => toolCall.id !== toolCallId),
-                  }
-                : session
-            ),
+            sessions: updateSessions(state.sessions, sessionId, (session) => ({
+              ...session,
+              activeToolCalls: session.activeToolCalls.filter((toolCall) => toolCall.id !== toolCallId),
+            })),
           })),
 
         clearToolCalls: (sessionId) =>
           set((state) => ({
-            sessions: state.sessions.map((session) =>
-              session.id === sessionId ? { ...session, activeToolCalls: [] } : session
-            ),
+            sessions: updateSessions(state.sessions, sessionId, (session) => ({
+              ...session,
+              activeToolCalls: [],
+            })),
           })),
 
         setCurrentDiff: (sessionId, diff) =>
           set((state) => ({
-            sessions: state.sessions.map((session) =>
-              session.id === sessionId ? { ...session, currentDiff: diff } : session
-            ),
+            sessions: updateSessions(state.sessions, sessionId, (session) => ({
+              ...session,
+              currentDiff: diff,
+            })),
           })),
 
         setMessageDiff: (sessionId, messageId, diff) =>
           set((state) => ({
-            sessions: state.sessions.map((session) =>
-              session.id === sessionId
-                ? {
-                    ...session,
-                    messages: session.messages.map((message) =>
-                      message.id === messageId ? { ...message, diff: diff ?? undefined } : message
-                    ),
-                  }
-                : session
+            sessions: updateSessions(state.sessions, sessionId, (session) =>
+              updateMessages(session, messageId, (message) => ({
+                ...message,
+                diff: diff ?? undefined,
+              }))
             ),
           })),
 
         setPendingDiff: (sessionId, diff) =>
           set((state) => ({
-            sessions: state.sessions.map((session) =>
-              session.id === sessionId ? { ...session, pendingDiff: diff } : session
-            ),
+            sessions: updateSessions(state.sessions, sessionId, (session) => ({
+              ...session,
+              pendingDiff: diff,
+            })),
           })),
 
         acceptHunk: (sessionId, hunkId) =>
           set((state) => ({
-            sessions: state.sessions.map((session) => {
-              if (session.id !== sessionId || !session.pendingDiff) return session;
-              const remainingHunks = session.pendingDiff.hunks.filter((hunk) => hunk.id !== hunkId);
-              return {
-                ...session,
-                pendingDiff:
-                  remainingHunks.length > 0
-                    ? { ...session.pendingDiff, hunks: remainingHunks }
-                    : null,
-              };
-            }),
+            sessions: updateSessions(state.sessions, sessionId, (session) =>
+              updatePendingDiffHunks(session, hunkId)
+            ),
           })),
 
         rejectHunk: (sessionId, hunkId) =>
           set((state) => ({
-            sessions: state.sessions.map((session) => {
-              if (session.id !== sessionId || !session.pendingDiff) return session;
-              const remainingHunks = session.pendingDiff.hunks.filter((hunk) => hunk.id !== hunkId);
-              return {
-                ...session,
-                pendingDiff:
-                  remainingHunks.length > 0
-                    ? { ...session.pendingDiff, hunks: remainingHunks }
-                    : null,
-              };
-            }),
+            sessions: updateSessions(state.sessions, sessionId, (session) =>
+              updatePendingDiffHunks(session, hunkId)
+            ),
           })),
 
         acceptAllHunks: (sessionId) =>
           set((state) => ({
-            sessions: state.sessions.map((session) =>
-              session.id === sessionId ? { ...session, pendingDiff: null } : session
-            ),
+            sessions: updateSessions(state.sessions, sessionId, (session) => ({
+              ...session,
+              pendingDiff: null,
+            })),
           })),
 
         rejectAllHunks: (sessionId) =>
           set((state) => ({
-            sessions: state.sessions.map((session) =>
-              session.id === sessionId ? { ...session, pendingDiff: null } : session
-            ),
+            sessions: updateSessions(state.sessions, sessionId, (session) => ({
+              ...session,
+              pendingDiff: null,
+            })),
           })),
 
         getSession: (sessionId) => get().sessions.find((session) => session.id === sessionId),
@@ -331,112 +392,64 @@ export const useAIPanelStore = create<AIPanelState>()(
 
         updateSession: (sessionId, updater) =>
           set((state) => ({
-            sessions: state.sessions.map((session) =>
-              session.id === sessionId ? updater(session) : session
-            ),
+            sessions: updateSessions(state.sessions, sessionId, updater),
           })),
 
         updateMessageOutput: (sessionId, messageId, outputItems) =>
           set((state) => ({
-            sessions: state.sessions.map((session) =>
-              session.id === sessionId
-                ? {
-                    ...session,
-                    messages: session.messages.map((message) =>
-                      message.id === messageId ? { ...message, outputItems } : message
-                    ),
-                  }
-                : session
+            sessions: updateSessions(state.sessions, sessionId, (session) =>
+              updateMessages(session, messageId, (message) => ({ ...message, outputItems }))
             ),
           })),
 
         addOutputToMessage: (sessionId, messageId, outputItem) =>
           set((state) => ({
-            sessions: state.sessions.map((session) =>
-              session.id === sessionId
-                ? {
-                    ...session,
-                    messages: session.messages.map((message) =>
-                      message.id === messageId
-                        ? { ...message, outputItems: [...message.outputItems, outputItem] }
-                        : message
-                    ),
-                  }
-                : session
+            sessions: updateSessions(state.sessions, sessionId, (session) =>
+              updateMessages(session, messageId, (message) => ({
+                ...message,
+                outputItems: [...message.outputItems, outputItem],
+              }))
             ),
           })),
 
         patchOutputItem: (sessionId, messageId, matchKey, patch) =>
           set((state) => ({
-            sessions: state.sessions.map((session) => {
-              if (session.id !== sessionId) return session;
-              return {
-                ...session,
-                messages: session.messages.map((message) => {
-                  if (message.id !== messageId) return message;
-                  const outputItems = message.outputItems.map((item) => {
-                    const matchesByToolCallId =
-                      'toolCallId' in matchKey &&
-                      'toolCallId' in item &&
-                      item.toolCallId === matchKey.toolCallId;
-                    const matchesByContent =
-                      'contentContains' in matchKey &&
-                      'content' in item &&
-                      typeof item.content === 'string' &&
-                      item.content.includes(matchKey.contentContains);
-                    return matchesByToolCallId || matchesByContent
-                      ? ({ ...item, ...patch } as OutputItem)
-                      : item;
-                  });
-                  return { ...message, outputItems };
-                }),
-              };
-            }),
+            sessions: updateSessions(state.sessions, sessionId, (session) =>
+              updateMessages(session, messageId, (message) =>
+                patchMessageOutputItems(message, matchKey, patch)
+              )
+            ),
           })),
 
         finishMessageStreaming: (sessionId, messageId, finalContent) =>
           set((state) => ({
-            sessions: state.sessions.map((session) =>
-              session.id === sessionId
-                ? {
-                    ...session,
-                    isStreaming: false,
-                    messages: session.messages.map((message) =>
-                      message.id === messageId
-                        ? { ...message, content: finalContent }
-                        : message
-                    ),
-                  }
-                : session
-            ),
+            sessions: updateSessions(state.sessions, sessionId, (session) => ({
+              ...updateMessages(session, messageId, (message) => ({
+                ...message,
+                content: finalContent,
+              })),
+              isStreaming: false,
+            })),
           })),
 
         setErrorMessage: (sessionId, messageId, error) =>
           set((state) => ({
-            sessions: state.sessions.map((session) =>
-              session.id === sessionId
-                ? {
-                    ...session,
-                    isStreaming: false,
-                    messages: session.messages.map((message) =>
-                      message.id === messageId ? { ...message, content: error } : message
-                    ),
-                  }
-                : session
-            ),
+            sessions: updateSessions(state.sessions, sessionId, (session) => ({
+              ...updateMessages(session, messageId, (message) => ({
+                ...message,
+                content: error,
+              })),
+              isStreaming: false,
+            })),
           })),
 
         setMessageSearchResults: (sessionId, messageId, results) =>
           set((state) => ({
-            sessions: state.sessions.map((session) =>
-              session.id === sessionId
-                ? {
-                    ...session,
-                    messages: session.messages.map((message) =>
-                      message.id === messageId ? { ...message, searchResults: results } : message
-                    ),
-                  }
-                : session
+            sessions: updateSessions(state.sessions, sessionId, (session) =>
+              updateMessages(session, messageId, (message) => ({
+                ...message,
+                searchResults: results,
+              }))
             ),
           })),
       };
@@ -450,27 +463,7 @@ export const useAIPanelStore = create<AIPanelState>()(
         sessions: state.sessions,
         activeSessionId: state.activeSessionId,
       }),
-      merge: (persistedState, currentState) => {
-        const typedState = persistedState as Partial<{
-          isOpen: boolean;
-          activeTab: 'chat' | 'edit';
-          sessions: ChatSession[];
-          activeSessionId: string;
-        }>;
-
-        const sessions = typedState.sessions?.length ? typedState.sessions : currentState.sessions;
-        const activeSessionId =
-          typedState.activeSessionId && sessions.some((session) => session.id === typedState.activeSessionId)
-            ? typedState.activeSessionId
-            : sessions[0]?.id ?? currentState.activeSessionId;
-
-        return {
-          ...currentState,
-          ...typedState,
-          sessions,
-          activeSessionId,
-        };
-      },
+      merge: mergePersistedState,
     }
   )
 );

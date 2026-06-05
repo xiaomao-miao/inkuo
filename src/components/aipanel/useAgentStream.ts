@@ -5,7 +5,7 @@ import {
   type ChatMode,
 } from '../../store';
 import type { StreamPayload } from './streamTypes';
-import { handleStreamDone, handleStreamError, handleToolResult } from './streamEventHandlers';
+import { dispatchStreamEvent } from './streamEventDispatcher';
 import { useTextStreaming } from './useTextStreaming';
 import { useToolCallStreaming } from './useToolCallStreaming';
 
@@ -55,50 +55,17 @@ export function useAgentStream({ mode }: UseAgentStreamArgs) {
 
       try {
         unlistenRef.current = await listen<StreamPayload>('ai://stream', async (event) => {
-          const payload = event.payload;
-          const { session_id, message_id, event_type, content, done } = payload;
-
-          if (!payload || !session_id || !message_id) return;
-
-          if (event_type === 'error') {
-            handleStreamError({
-              payload,
-              currentMode: modeRef.current,
-              flushAllPending: () => flushAllPendingRef.current(),
-              streamingContentRef,
-            });
-            return;
-          }
-
-          if (event_type === 'tool_call_start') {
-            handleToolCallStart(payload);
-            return;
-          }
-
-          if (event_type === 'tool_call_args_delta') {
-            handleToolCallArgsDelta(payload);
-            return;
-          }
-
-          if (event_type === 'tool_result') {
-            handleToolResult(payload);
-            return;
-          }
-
-          if (typeof content === 'string' && content.length > 0) {
-            appendTextDelta(message_id, content);
-          }
-
-          if (done) {
-            await handleStreamDone({
-              payload,
-              currentMode: modeRef.current,
-              clearToolCalls,
-              setMessageDiff,
-              flushAllPending: () => flushAllPendingRef.current(),
-              streamingContentRef,
-            });
-          }
+          await dispatchStreamEvent({
+            payload: event.payload,
+            currentMode: modeRef.current,
+            clearToolCalls,
+            setMessageDiff,
+            flushAllPending: () => flushAllPendingRef.current(),
+            streamingContentRef,
+            appendTextDelta,
+            handleToolCallStart,
+            handleToolCallArgsDelta,
+          });
         });
       } finally {
         isSettingUpRef.current = false;

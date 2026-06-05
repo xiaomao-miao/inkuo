@@ -1,44 +1,34 @@
-import React, { useMemo } from 'react';
-import { useAIPanelStore, type ChatMode } from '../../store';
+import React from 'react';
 import { ChatHeader } from './ChatHeader';
 import { ChatInput } from './ChatInput';
 import { ChatView } from './ChatView';
-import { KnowledgeToolbar, buildKnowledgeToolbarModel } from './KnowledgeToolbar';
+import { KnowledgeBuildToolCard } from './KnowledgeBuildToolCard';
+import { KnowledgeToolbar } from './KnowledgeToolbar';
 import { useAgentStream } from './useAgentStream';
 import { useChatComposer } from './useChatComposer';
-import { useKnowledgeBase } from './useKnowledgeBase';
+import { useAIPanelController } from './useAIPanelController';
 import layoutStyles from './AIPanelLayout.module.css';
 
 export const AIPanel: React.FC = () => {
   const {
     sessions,
     activeSessionId,
+    activeSession,
+    messages,
+    isStreaming,
+    pendingDiff,
+    mode,
+    activeToolCalls,
+    buildProgress,
+    knowledgeToolCall,
+    knowledgeStatusLabel,
+    knowledgeToolbar,
     createSession,
     deleteSession,
     setActiveSession,
     clearMessages,
-    setIsOpen,
-  } = useAIPanelStore();
-
-  const activeSession = useMemo(
-    () => sessions.find((session) => session.id === activeSessionId) ?? sessions[0],
-    [sessions, activeSessionId]
-  );
-
-  const messages = activeSession?.messages ?? [];
-  const isStreaming = activeSession?.isStreaming ?? false;
-  const pendingDiff = activeSession?.pendingDiff ?? null;
-  const mode: ChatMode = activeSession?.mode ?? 'ask';
-  const activeToolCalls = activeSession?.activeToolCalls ?? [];
-
-  const {
-    workspacePath: _workspacePath,
-    knowledgeBase,
-    buildProgress,
-    knowledgeToolCall,
-    handleKnowledgeBuild,
-    handleKnowledgeClear,
-  } = useKnowledgeBase({ activeSessionId: activeSession?.id });
+    closePanel,
+  } = useAIPanelController();
 
   const {
     input,
@@ -61,20 +51,6 @@ export const AIPanel: React.FC = () => {
 
   useAgentStream({ mode });
 
-  const knowledgeStatusLabel = knowledgeBase
-    ? `已建立知识库：${knowledgeBase.documentCount} 文档 / ${knowledgeBase.chunkCount} 分块`
-    : buildProgress
-      ? '正在构建知识库…'
-      : '知识库未初始化';
-
-  const knowledgeToolbar = useMemo(() => buildKnowledgeToolbarModel({
-    enabled: mode === 'knowledge' && !!activeSession,
-    hasKnowledgeBase: !!knowledgeBase,
-    isBuilding: !!buildProgress,
-    onBuild: handleKnowledgeBuild,
-    onClear: handleKnowledgeClear,
-  }), [mode, activeSession, knowledgeBase, buildProgress, handleKnowledgeBuild, handleKnowledgeClear]);
-
   return (
     <aside className={layoutStyles.panel}>
       <ChatHeader
@@ -83,7 +59,7 @@ export const AIPanel: React.FC = () => {
         onCreateSession={createSession}
         onSelectSession={setActiveSession}
         onDeleteSession={deleteSession}
-        onClose={() => setIsOpen(false)}
+        onClose={closePanel}
       />
 
       <div className={layoutStyles.panelBody}>
@@ -109,8 +85,12 @@ export const AIPanel: React.FC = () => {
           onSaveEdit={handleSaveEdit}
           onSetEditingContent={setEditingContent}
           onSetInput={setInput}
-          knowledgeToolCall={mode === 'knowledge' ? knowledgeToolCall : undefined}
-          knowledgeBuildProgress={mode === 'knowledge' ? buildProgress : undefined}
+          footer={mode === 'knowledge' && knowledgeToolCall ? (
+            <KnowledgeBuildToolCard
+              toolCall={knowledgeToolCall}
+              buildProgress={buildProgress}
+            />
+          ) : undefined}
         />
       </div>
 

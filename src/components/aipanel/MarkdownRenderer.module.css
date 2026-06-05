@@ -242,7 +242,6 @@
   background-color: var(--bg-hover);
 }
 
-/* Horizontal Rule */
 .markdown hr {
   margin: 0.8em 0 !important;
   border: none;

@@ -1,8 +1,7 @@
-import React, { useRef, useEffect } from 'react';
-import { Sparkles } from 'lucide-react';
+import React, { useEffect, useRef } from 'react';
 import { InlineDiffPreview } from './InlineDiffPreview';
+import { ChatEmptyState } from './ChatEmptyState';
 import { MessageItem } from './MessageItem';
-import { ToolCallCard } from './ToolCallCard';
 import type {
   ChatMessage, ChatSession, ChatMode, ActiveToolCall, CurrentDiff,
 } from '../../store';
@@ -22,13 +21,7 @@ interface ChatViewProps {
   onSaveEdit: () => void;
   onSetEditingContent: (v: string) => void;
   onSetInput: (v: string) => void;
-  knowledgeToolCall?: ActiveToolCall;
-  knowledgeBuildProgress?: {
-    phase: string;
-    current: number;
-    total: number;
-    currentFile?: string;
-  };
+  footer?: React.ReactNode;
 }
 
 export const ChatView: React.FC<ChatViewProps> = ({
@@ -45,11 +38,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onSaveEdit,
   onSetEditingContent,
   onSetInput,
-  knowledgeToolCall,
-  knowledgeBuildProgress,
+  footer,
 }) => {
   const contentRef = useRef<HTMLDivElement>(null);
-  const isAtBottomRef = { current: true };
+  const isAtBottomRef = useRef(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const checkIfAtBottom = () => {
@@ -67,26 +59,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   if (messages.length === 0) {
     return (
       <div className={styles.content} ref={contentRef}>
-        <div className={styles.emptyState}>
-          <div className={styles.emptyIcon}><Sparkles size={32} /></div>
-          <h3>文档助手</h3>
-          <p>
-            {mode === 'agent'
-              ? '使用自然语言处理文档、总结内容、解释代码'
-              : '询问关于文档的问题或请求 AI 帮助你写作'}
-          </p>
-          <div className={styles.quickActions}>
-            <QuickActionButton label="总结文档" hint="总结这篇文档的主要内容" onSetInput={onSetInput} />
-            <QuickActionButton label="解释内容" hint="解释这段代码/文本的工作原理" onSetInput={onSetInput} />
-            {mode === 'agent' && (
-              <QuickActionButton
-                label="列出文档目录"
-                hint="查看当前文档目录结构"
-                onSetInput={onSetInput}
-              />
-            )}
-          </div>
-        </div>
+        <ChatEmptyState mode={mode} onSetInput={onSetInput} />
       </div>
     );
   }
@@ -94,7 +67,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   return (
     <div className={styles.content} ref={contentRef} onScroll={checkIfAtBottom}>
       <div className={styles.messages}>
-        {messages.flatMap((message) => (
+        {messages.map((message) => (
           <MessageItem
             key={message.id}
             message={message}
@@ -121,44 +94,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
           />
         )}
 
-        {mode === 'knowledge' && knowledgeToolCall && (
-          <div className={styles.toolResultItem}>
-            <ToolCallCard
-              id={knowledgeToolCall.id}
-              name={knowledgeToolCall.name}
-              arguments={{
-                ...knowledgeToolCall.arguments,
-                progress: knowledgeBuildProgress
-                  ? `${knowledgeBuildProgress.phase} ${knowledgeBuildProgress.current}/${knowledgeBuildProgress.total}`
-                  : knowledgeToolCall.result,
-                current_file: knowledgeBuildProgress?.currentFile,
-              }}
-              status={knowledgeToolCall.status}
-              result={knowledgeToolCall.result}
-              error={knowledgeToolCall.error}
-              duration={knowledgeToolCall.duration}
-            />
-          </div>
-        )}
+        {footer}
         <div ref={messagesEndRef} />
       </div>
     </div>
-  );
-};
-
-interface QuickActionButtonProps {
-  label: string;
-  hint: string;
-  onSetInput: (v: string) => void;
-}
-
-const QuickActionButton: React.FC<QuickActionButtonProps> = ({ label, hint, onSetInput }) => {
-  return (
-    <button
-      className={styles.quickAction}
-      onClick={() => onSetInput(hint)}
-    >
-      {label}
-    </button>
   );
 };
