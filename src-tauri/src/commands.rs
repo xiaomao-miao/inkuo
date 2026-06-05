@@ -18,67 +18,6 @@ pub struct AppState {
     pub ai_config: Arc<tokio::sync::RwLock<ai::AIConfig>>,
 }
 
-impl AppState {
-    pub async fn get_ai_config(&self) -> Result<ai::AIConfig, String> {
-        let settings_result = read_settings_from_disk();
-
-        let (ai_provider, model, temperature, max_tokens) = if let Ok(settings) = settings_result {
-            if let Some(ref active_id) = settings.active_api_config_id {
-                if let Some(config) = settings.api_configs.iter().find(|c| c.id == *active_id) {
-                    let provider = match config.provider.as_str() {
-                        "ollama" => ai::AIProvider::Ollama {
-                            base_url: config.base_url.clone(),
-                        },
-                        "official" => ai::AIProvider::Official {
-                            api_key: config.api_key.clone().unwrap_or_default(),
-                        },
-                        _ => ai::AIProvider::OpenAI {
-                            api_key: config.api_key.clone().unwrap_or_default(),
-                            base_url: config.base_url.clone(),
-                        },
-                    };
-                    return Ok(ai::AIConfig {
-                        provider,
-                        model: config.model.clone(),
-                        temperature: config.temperature,
-                        max_tokens: config.max_tokens,
-                    });
-                }
-            }
-
-            let provider = match settings.ai_provider.as_str() {
-                "ollama" => ai::AIProvider::Ollama {
-                    base_url: settings.ai_base_url.clone()
-                        .unwrap_or_else(|| "http://localhost:11434".to_string()),
-                },
-                _ => ai::AIProvider::OpenAI {
-                    api_key: settings.ai_api_key.clone().unwrap_or_default(),
-                    base_url: settings.ai_base_url.clone()
-                        .unwrap_or_else(|| "https://api.deepseek.com".to_string()),
-                },
-            };
-            (provider, settings.ai_model, settings.ai_temperature, settings.ai_max_tokens)
-        } else {
-            tracing::warn!("Failed to read settings, using defaults");
-            (
-                ai::AIProvider::Ollama {
-                    base_url: "http://localhost:11434".to_string(),
-                },
-                "llama3".to_string(),
-                0.7,
-                Some(4096),
-            )
-        };
-
-        Ok(ai::AIConfig {
-            provider: ai_provider,
-            model,
-            temperature,
-            max_tokens,
-        })
-    }
-}
-
 impl Default for AppState {
     fn default() -> Self {
         let settings = read_settings_from_disk().unwrap_or_else(|_| Settings::default());

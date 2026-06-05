@@ -41,10 +41,8 @@ fn setup_logging() {
         .init();
 
     // Set up panic hook to log panics
-    let default_panic = panic::take_hook();
     panic::set_hook(Box::new(move |info| {
         eprintln!("Application panic: {:?}", info);
-        default_panic(info);
     }));
 }
 
@@ -69,7 +67,6 @@ pub fn run() {
     tauri::Builder::default()
         .manage(commands::AppState::default())
         .manage(file_watcher::FileWatcherState::new())
-        .manage(knowledge::commands::KnowledgeState::default())
         .setup(|app| {
             // Configure RAG index persistence path
             if let Some(app_data) = app.path().app_data_dir().ok() {

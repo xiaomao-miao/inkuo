@@ -1,25 +1,104 @@
-import type { ChatMessage, MessageRole, MessageToolCall, SearchResult } from '../../store';
+import type { ChatMessage, MessageRole, MessageToolCall, SearchResult, KnowledgeSearchResult } from '../../store';
+
+/**
+ * OpenAI-compatible tool history requires that an assistant message containing
+ * `tool_calls` must be followed immediately by one tool message per call ID.
+ * The UI may temporarily contain placeholder assistant messages, interrupted
+ * runs, or orphaned tool messages, so we sanitize before sending history.
+ */
+function sanitizeConversationHistory(messages: ChatMessage[]): ChatMessage[] {
+  const sanitized: ChatMessage[] = [];
+
+  for (let i = 0; i < messages.length; i += 1) {
+    const message = messages[i];
+
+    if (message.role === 'assistant') {
+      const toolCalls = message.toolCalls?.filter((call) => call?.id && call?.name) ?? [];
+      const hasAssistantText = typeof message.content === 'string' && message.content.trim().length > 0;
+
+      if (toolCalls.length === 0) {
+        if (hasAssistantText) {
+          sanitized.push(message);
+        }
+        continue;
+      }
+
+      const expectedIds = new Set(toolCalls.map((call) => call.id));
+      const collectedToolMessages: ChatMessage[] = [];
+      let cursor = i + 1;
+
+      while (cursor < messages.length) {
+        const candidate = messages[cursor];
+        if (candidate.role !== 'tool') break;
+        if (candidate.toolCallId && expectedIds.has(candidate.toolCallId)) {
+          collectedToolMessages.push(candidate);
+        }
+        cursor += 1;
+      }
+
+      const matchedIds = new Set(collectedToolMessages.map((toolMessage) => toolMessage.toolCallId).filter(Boolean));
+      const hasAllToolResponses = toolCalls.every((call) => matchedIds.has(call.id));
+
+      if (!hasAllToolResponses) {
+        continue;
+      }
+
+      sanitized.push({
+        ...message,
+        content: hasAssistantText ? message.content : '',
+        toolCalls,
+      });
+
+      const orderedToolMessages = toolCalls
+        .map((call) => collectedToolMessages.find((toolMessage) => toolMessage.toolCallId === call.id))
+        .filter((toolMessage): toolMessage is ChatMessage => Boolean(toolMessage));
+
+      sanitized.push(...orderedToolMessages);
+      i = cursor - 1;
+      continue;
+    }
+
+    if (message.role === 'tool') {
+      continue;
+    }
+
+    if (message.role === 'user' || message.role === 'system') {
+      if (typeof message.content === 'string' && message.content.trim().length > 0) {
+        sanitized.push(message);
+      }
+    }
+  }
+
+  return sanitized;
+}
 
 /**
  * Normalizes a list of search results for display:
  * - Strips entries with missing/invalid file paths
  * - Fills in missing document titles from file paths
  * - Ensures score is a finite number
+ *
+ * @param results - The raw wire-format search results from Rust (snake_case)
  */
-export function normalizeSearchResults(results: SearchResult[] | undefined): SearchResult[] | undefined {
+export function normalizeSearchResults(results: KnowledgeSearchResult[] | undefined): SearchResult[] | undefined {
   if (!results?.length) return undefined;
 
   return results
-    .filter((result): result is SearchResult & { filePath: string } => {
-      return !!result && typeof result.filePath === 'string' && result.filePath.trim().length > 0;
+    .filter((result): result is KnowledgeSearchResult & { file_path: string } => {
+      return !!result && typeof result.file_path === 'string' && result.file_path.trim().length > 0;
     })
     .map((result) => ({
-      ...result,
-      documentTitle:
-        typeof result.documentTitle === 'string' && result.documentTitle.trim().length > 0
-          ? result.documentTitle
-          : result.filePath.split('/').pop() ?? '未命名文档',
+      chunkId: result.chunk_id,
+      documentId: result.document_id,
+      content: result.content,
       score: Number.isFinite(result.score) ? result.score : 0,
+      documentTitle:
+        typeof result.document_title === 'string' && result.document_title.trim().length > 0
+          ? result.document_title
+          : result.file_path.split('/').pop() ?? '未命名文档',
+      filePath: result.file_path,
+      startLine: result.start_line,
+      endLine: result.end_line,
     }));
 }
 
@@ -67,5 +146,5 @@ export function toAgentPayload(message: ChatMessage): AgentMessagePayload {
 }
 
 export function buildConversationHistory(messages: ChatMessage[]): AgentMessagePayload[] {
-  return messages.map(toAgentPayload);
+  return sanitizeConversationHistory(messages).map(toAgentPayload);
 }

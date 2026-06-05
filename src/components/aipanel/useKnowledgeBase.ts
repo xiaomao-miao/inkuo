@@ -127,7 +127,7 @@ export function useKnowledgeBase({ activeSessionId }: UseKnowledgeBaseArgs): Use
   }, [activeSessionId, workspacePath, setKnowledgeBase, setBuildProgress, setKnowledgeToolCall]);
 
   return {
-    workspacePath,
+    workspacePath: workspacePath ?? undefined,
     knowledgeBase,
     buildProgress,
     knowledgeToolCall,

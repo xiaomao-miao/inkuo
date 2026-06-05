@@ -65,6 +65,20 @@ export interface SearchResult {
   endLine?: number;
 }
 
+/// Snake_case wire format for knowledge search results, matching the Rust
+/// KnowledgeSearchResult struct sent over Tauri IPC. Converted to SearchResult
+/// via normalizeSearchResults() before use in the UI layer.
+export interface KnowledgeSearchResult {
+  chunk_id: string;
+  document_id: string;
+  content: string;
+  score: number;
+  document_title: string;
+  file_path: string;
+  start_line?: number;
+  end_line?: number;
+}
+
 export interface ChatMessage {
   id: string;
   role: MessageRole;
@@ -179,6 +193,7 @@ interface AIPanelState {
   ) => void;
   finishMessageStreaming: (sessionId: string, messageId: string, finalContent: string) => void;
   setErrorMessage: (sessionId: string, messageId: string, error: string) => void;
+  setMessageSearchResults: (sessionId: string, messageId: string, results: SearchResult[]) => void;
 }
 
 function createSessionTitle(index: number) {

@@ -6,10 +6,9 @@ mod shared;
 mod docx;
 mod xlsx;
 
-pub use shared::{OfficeError, TableCell, TableRow};
-pub use docx::{WordParagraph, WordTable, WordDocument, read_word_document, word_document_to_text,
-               write_word_document};
-pub use xlsx::{ExcelSheet, ExcelWorkbook, read_excel_workbook, excel_workbook_to_text, write_excel_workbook};
+pub use shared::OfficeError;
+pub use docx::{WordDocument, read_word_document, word_document_to_text};
+pub use xlsx::{ExcelWorkbook, read_excel_workbook, excel_workbook_to_text};
 
 use std::path::Path;
 

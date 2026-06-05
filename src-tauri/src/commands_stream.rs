@@ -144,7 +144,6 @@ pub async fn ai_chat_stream(
     workspace_path: Option<String>,
     config_input: AIConfigInput,
     state: State<'_, AppState>,
-    knowledge_state: State<'_, knowledge::commands::KnowledgeState>,
     app: AppHandle,
 ) -> Result<(), String> {
     tracing::info!("ai_chat_stream start - session: {}, mode: {}", session_id, mode);
@@ -161,7 +160,6 @@ pub async fn ai_chat_stream(
 
         let results = knowledge::commands::knowledge_search(
             app.clone(),
-            knowledge_state,
             workspace_path,
             instruction.clone(),
             8,

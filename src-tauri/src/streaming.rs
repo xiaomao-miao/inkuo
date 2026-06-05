@@ -39,9 +39,6 @@ pub enum StreamEventType {
 /// Re-exports from diff module for external use
 pub use crate::diff::{FileDiffSummary, StreamDiffHunk, StreamDiffChange};
 
-/// Alias for streaming diff summary
-pub type StreamDiffSummary = FileDiffSummary;
-
 /// Stream payload with tool call support
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StreamPayload {

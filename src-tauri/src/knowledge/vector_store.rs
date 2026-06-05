@@ -6,12 +6,11 @@
 use crate::knowledge::config::{Chunk, SearchResult};
 use crate::knowledge::embedder::ModelInfo;
 use qdrant_edge::{
-    Condition, CountRequest, CreateIndex, EdgeConfig, EdgeShard, EdgeVectorParams,
+    Condition, CountRequest, CreateIndex, EdgeShard,
     FieldCondition, FieldIndexOperations, Filter, Match, MatchValue,
     NamedQuery, Payload, PayloadSchemaType, PointInsertOperations, PointOperations,
     PointId, PointStruct, QueryEnum, QueryRequest, ScoringQuery,
     ScoredPoint, UpdateOperation, ValueVariants, WithPayloadInterface, WithVector, Vectors,
-    VectorPersisted, VectorStructPersisted,
 };
 use serde_json::json;
 use std::collections::HashMap;
@@ -35,7 +34,6 @@ pub enum VectorStoreError {
 /// Inner state of the vector store
 struct VectorStoreInner {
     shard: EdgeShard,
-    dimension: usize,
     vector_name: String,
 }
 
@@ -117,7 +115,6 @@ impl VectorStore {
 
         let inner = VectorStoreInner {
             shard,
-            dimension: vector_dimension,
             vector_name,
         };
 

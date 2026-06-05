@@ -14,11 +14,6 @@ static CHINESE_SENTENCE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"[。！？\.\!\?]").expect("Invalid regex")
 });
 
-/// Regex for code block detection
-static CODE_BLOCK_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"```[\s\S]*?```").expect("Invalid regex")
-});
-
 /// Chunking configuration
 #[derive(Debug, Clone)]
 pub struct ChunkConfig {

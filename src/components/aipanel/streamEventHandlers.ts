@@ -126,7 +126,7 @@ export function handleToolResult(payload: StreamPayload) {
   useAIPanelStore.getState().addMessage(session_id, {
     id: `tool-${tool_call_id}-${crypto.randomUUID()}`,
     role: 'tool',
-    content: content || '',
+    content: content ?? error ?? '',
     toolCallId: tool_call_id,
     timestamp: Date.now(),
     outputItems: [],

@@ -1,7 +1,7 @@
 import type {
   DiffHunk,
-  SearchResult,
 } from '../../store';
+import type { KnowledgeSearchResult as WireSearchResult } from '../../store/aiPanelStore';
 
 export const TOOL_CALL_CLEAR_DELAY_MS = 2000;
 
@@ -28,7 +28,7 @@ export interface StreamPayload {
   tool_args?: string;
   final_content?: string;
   error?: string;
-  search_results?: SearchResult[];
+  search_results?: WireSearchResult[];
   done: boolean;
   file_path?: string;
   original_content?: string;

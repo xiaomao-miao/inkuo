@@ -11,6 +11,8 @@ export interface OpenTab {
   isSettings?: boolean;
 }
 
+export type { KnowledgeBase, BuildProgress };
+
 interface PersistedSidebarState {
   workspacePath: string | null;
   openTabs: OpenTab[];
@@ -96,6 +98,7 @@ export const useSidebarStore = create<SidebarState>()(
       knowledgeBase: undefined,
       buildProgress: undefined,
       knowledgeToolCall: undefined,
+      hasRestoredFromPersist: false,
 
       setWorkspacePath: (path) => set({ workspacePath: path }),
       setFiles: (files) => set((state) => ({
@@ -225,6 +228,7 @@ export const useSidebarStore = create<SidebarState>()(
           ...current,
           ...persistedState,
           expandedDirs: new Set(persistedState?.expandedDirs ?? []),
+          hasRestoredFromPersist: true,
         };
       },
     },

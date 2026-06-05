@@ -5,7 +5,7 @@ export { useSidebarStore, SETTINGS_TAB_ID, type OpenTab,
          type BuildProgress as SidebarBuildProgress } from './sidebarStore';
 export { useAIPanelStore, type ChatMode, type MessageRole, type MessageToolCall, type MessageToolResult,
          type OutputItem, type ChatMessage, type ChatSession, type ActiveToolCall, type DiffSummary,
-         type KnowledgeBase, type SearchResult, type BuildProgress } from './aiPanelStore';
+         type KnowledgeBase, type SearchResult, type KnowledgeSearchResult, type BuildProgress } from './aiPanelStore';
 export { useSettingsStore } from './settingsStore';
 export { useCmdKStore } from './cmdKStore';
 export { useInlineCompleteStore } from './inlineCompleteStore';

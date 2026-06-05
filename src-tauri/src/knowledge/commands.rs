@@ -7,22 +7,7 @@ use crate::knowledge::{
 use crate::commands::{get_embedding_model, get_chunk_size};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
-use tokio::sync::Mutex as TokioMutex;
-use tauri::{AppHandle, Emitter, Manager, State};
-
-/// Knowledge state - manages vector store per workspace
-pub struct KnowledgeState {
-    pub vector_stores: TokioMutex<HashMap<String, VectorStore>>,
-}
-
-impl Default for KnowledgeState {
-    fn default() -> Self {
-        Self {
-            vector_stores: TokioMutex::new(HashMap::new()),
-        }
-    }
-}
+use tauri::{AppHandle, Emitter, Manager};
 
 /// Shared vector store cache accessible from both KB commands and agent tools.
 /// This ensures both code paths use the SAME VectorStore instance, avoiding
@@ -38,23 +23,19 @@ fn shared_stores() -> &'static tokio::sync::RwLock<HashMap<String, VectorStore>>
     })
 }
 
-/// Initialize the shared cache from the Tauri-managed KnowledgeState.
-/// Called once during app startup to ensure KB commands and agent tools share the same cache.
+/// Initialize the shared cache. Called once during app startup.
 pub fn register_shared_stores() {
-    // The shared_stores() static is self-initializing; this call just ensures it's created early.
     let _ = shared_stores();
     tracing::info!("Shared vector store cache initialized");
 }
 
 /// Get a shared vector store for a workspace.
-/// This is the entry point used by agent tools. KB commands use get_or_create_vector_store
-/// which also stores into the shared cache.
+/// Used by agent tools; KB commands use get_or_create_vector_store.
 pub async fn get_vector_store_for_search(
     workspace_path: &str,
     model_name: &str,
 ) -> Result<VectorStore, String> {
-    let store = get_or_create_vector_store(None, workspace_path, model_name).await?;
-    Ok(store)
+    get_or_create_vector_store(workspace_path, model_name).await
 }
 
 /// Generate workspace ID from path
@@ -70,9 +51,7 @@ fn get_workspace_id(workspace_path: &str) -> String {
 }
 
 /// Get or create a vector store for a workspace.
-/// Writes to both the shared cache and the Tauri State (if provided).
 async fn get_or_create_vector_store(
-    state: Option<&State<'_, KnowledgeState>>,
     workspace_path: &str,
     model_name: &str,
 ) -> Result<VectorStore, String> {
@@ -80,25 +59,12 @@ async fn get_or_create_vector_store(
     let store_key = format!("{}::{}", workspace_id, model_name);
     let collection_name = format!("kb_{}", &workspace_id[..12]);
 
-    // Check shared cache first
+    // Check shared cache
     {
         let stores = shared_stores().read().await;
         if let Some(store) = stores.get(&store_key) {
-            tracing::debug!("Vector store shared cache hit for {}", store_key);
+            tracing::debug!("Vector store cache hit for {}", store_key);
             return Ok(store.clone());
-        }
-    }
-
-    // Check Tauri state if provided
-    if let Some(state) = state {
-        let stores = state.vector_stores.lock().await;
-        if let Some(store) = stores.get(&store_key) {
-            tracing::debug!("Vector store state cache hit for {}", store_key);
-            let store_clone = store.clone();
-            drop(stores);
-            let mut shared = shared_stores().write().await;
-            shared.insert(store_key, store_clone.clone());
-            return Ok(store_clone);
         }
     }
 
@@ -113,16 +79,8 @@ async fn get_or_create_vector_store(
     .map_err(|e| e.to_string())?;
 
     // Store in shared cache
-    {
-        let mut stores = shared_stores().write().await;
-        stores.insert(store_key.clone(), store.clone());
-    }
-
-    // Also store in Tauri state if provided
-    if let Some(state) = state {
-        let mut stores = state.vector_stores.lock().await;
-        stores.insert(store_key, store.clone());
-    }
+    let mut stores = shared_stores().write().await;
+    stores.insert(store_key, store.clone());
 
     Ok(store)
 }
@@ -131,7 +89,6 @@ async fn get_or_create_vector_store(
 #[tauri::command]
 pub async fn knowledge_build(
     app: AppHandle,
-    state: State<'_, KnowledgeState>,
     workspace_path: String,
     session_id: String,
 ) -> Result<BuildResult, String> {
@@ -175,7 +132,7 @@ pub async fn knowledge_build(
     });
 
     let model_name = get_embedding_model();
-    let model_info = ModelInfo::new(&model_name)
+    ModelInfo::new(&model_name)
         .map_err(|e| format!("Unsupported embedding model: {}", e))?;
     tracing::info!("[KB_BUILD] Model name from settings: {}", model_name);
 
@@ -283,7 +240,7 @@ pub async fn knowledge_build(
     }));
 
     tracing::info!("[KB_BUILD] Getting vector store");
-    let vector_store = get_or_create_vector_store(Some(&state), &workspace_path, &model_name).await
+    let vector_store = get_or_create_vector_store(&workspace_path, &model_name).await
         .map_err(|e| {
             tracing::error!("[KB_BUILD] get_or_create_vector_store failed: {}", e);
             e
@@ -357,7 +314,6 @@ pub async fn knowledge_build(
 #[tauri::command]
 pub async fn knowledge_search(
     app: AppHandle,
-    state: State<'_, KnowledgeState>,
     workspace_path: String,
     query: String,
     top_k: usize,
@@ -374,7 +330,7 @@ pub async fn knowledge_search(
     let embedder = Embedder::new(&model_name, &model_path)
         .map_err(|e| format!("Failed to initialize embedder: {}", e))?;
 
-    let vector_store = get_or_create_vector_store(Some(&state), &workspace_path, &model_name).await?;
+    let vector_store = get_or_create_vector_store(&workspace_path, &model_name).await?;
 
     tracing::info!(
         "[KB_SEARCH] Using model {} (dim={})",
@@ -458,7 +414,6 @@ pub fn knowledge_status(workspace_path: String) -> Result<Option<serde_json::Val
 #[tauri::command]
 pub async fn knowledge_update(
     app: AppHandle,
-    state: State<'_, KnowledgeState>,
     workspace_path: String,
     session_id: String,
 ) -> Result<UpdateResult, String> {
@@ -491,7 +446,7 @@ pub async fn knowledge_update(
         model_info.dimension
     );
 
-    let vector_store = get_or_create_vector_store(Some(&state), &workspace_path, &model_name).await?;
+    let vector_store = get_or_create_vector_store(&workspace_path, &model_name).await?;
 
     let mut metadata_store = MetadataStore::new(&workspace)
         .map_err(|e| format!("Failed to create metadata store: {}", e))?;
@@ -571,7 +526,6 @@ pub async fn knowledge_update(
 /// Clear knowledge base for a workspace
 #[tauri::command]
 pub async fn knowledge_clear(
-    state: State<'_, KnowledgeState>,
     workspace_path: String,
 ) -> Result<(), String> {
     let workspace = PathBuf::from(&workspace_path);
@@ -594,15 +548,8 @@ pub async fn knowledge_clear(
             .map_err(|e| format!("Failed to delete storage: {}", e))?;
     }
 
-    {
-        let mut stores = state.vector_stores.lock().await;
-        stores.remove(&workspace_id);
-    }
-    {
-        let mut stores = shared_stores().write().await;
-        // Remove all keys for this workspace
-        stores.retain(|k, _| !k.starts_with(&format!("{}::", workspace_id)));
-    }
+    let mut stores = shared_stores().write().await;
+    stores.retain(|k, _| !k.starts_with(&format!("{}::", workspace_id)));
 
     Ok(())
 }
@@ -650,17 +597,15 @@ pub struct EmbeddingModelInfo {
 pub fn check_available_models(app: AppHandle) -> Vec<EmbeddingModelInfo> {
     let mut models = Vec::new();
 
-    for (name, dir_name, dims, size) in [
-        ("BAAI/bge-small-zh-v1.5", "BAAI-bge-small-zh-v1.5", 512, "~25MB"),
+    for (name, dims, size) in [
+        ("BAAI/bge-small-zh-v1.5", 512, "~25MB"),
         (
             "BAAI/bge-base-zh-v1.5",
-            "BAAI-bge-base-zh-v1.5",
             768,
             "~390MB",
         ),
         (
             "BAAI/bge-large-zh-v1.5",
-            "BAAI-bge-large-zh-v1.5",
             1024,
             "~1.3GB",
         ),
@@ -830,29 +775,6 @@ fn download_file_with_progress(
         "status": "downloading",
         "size": bytes.len()
     }));
-
-    std::fs::write(path, bytes)
-        .map_err(|e| format!("Failed to write file: {}", e))?;
-
-    Ok(())
-}
-
-fn download_file(url: &str, path: &std::path::Path) -> Result<(), String> {
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(300))
-        .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
-
-    let response = client.get(url)
-        .send()
-        .map_err(|e| format!("Failed to send request: {}", e))?;
-
-    if !response.status().is_success() {
-        return Err(format!("HTTP error: {}", response.status()));
-    }
-
-    let bytes = response.bytes()
-        .map_err(|e| format!("Failed to read response: {}", e))?;
 
     std::fs::write(path, bytes)
         .map_err(|e| format!("Failed to write file: {}", e))?;

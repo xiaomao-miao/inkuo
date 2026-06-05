@@ -6,7 +6,6 @@
 use serde_json::Value;
 
 use super::{ToolDefinition, ToolError, ToolParameters};
-use crate::knowledge::search_knowledge_base;
 
 /// Database search tool — semantic search over the workspace knowledge base.
 /// Requires that the knowledge base has been built first (via knowledge_build).

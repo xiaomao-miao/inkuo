@@ -366,10 +366,7 @@ pub async fn ai_inline_complete(
         request.snippet.as_ref().map(|s| format!("len={}", s.text.len()))
     );
 
-    let config = state.get_ai_config().await.map_err(|e| {
-        tracing::error!("Failed to get AI config: {}", e);
-        e
-    })?;
+    let config = state.ai_config.read().await.clone();
 
     tracing::debug!("Using AI config - model: {}, provider: {:?}", config.model, config.provider);
 

@@ -105,8 +105,8 @@ pub struct ToolParameters {
     pub properties: HashMap<String, ToolParameter>,
     #[serde(default)]
     pub required: Vec<String>,
-    #[serde(default)]
-    pub additionalProperties: bool,
+    #[serde(default, rename = "additionalProperties")]
+    pub additional_properties: bool,
 }
 
 impl ToolParameters {
@@ -126,7 +126,7 @@ impl ToolParameters {
             params_type: "object".to_string(),
             properties: props,
             required: required.iter().map(|s| s.to_string()).collect(),
-            additionalProperties: false,
+            additional_properties: false,
         }
     }
 }
@@ -471,11 +471,3 @@ impl ToolRegistry {
 }
 
 pub type SharedToolRegistry = Arc<RwLock<ToolRegistry>>;
-
-pub fn create_tool_registry(_app: Option<tauri::AppHandle>) -> SharedToolRegistry {
-    Arc::new(RwLock::new(ToolRegistry::new()))
-}
-
-pub fn create_read_only_tool_registry(_app: Option<tauri::AppHandle>) -> SharedToolRegistry {
-    Arc::new(RwLock::new(ToolRegistry::new_read_only()))
-}

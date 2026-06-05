@@ -282,35 +282,3 @@ export interface EmbeddingModelInfo {
 }
 
 export type ThemeType = 'cursor-dark' | 'cursor-light' | 'high-contrast-dark' | 'high-contrast-light';
-
-// ============================================================================
-// Search types
-// ============================================================================
-
-export interface SearchResult {
-  chunks: SearchChunk[];
-  total: number;
-}
-
-export interface SearchChunk {
-  chunk: EmbeddingChunk;
-  score: number;
-  citation: Citation;
-}
-
-export interface EmbeddingChunk {
-  chunk_id: string;
-  doc_id: string;
-  range: { block_ids: string[]; start_line: number; end_line: number };
-  text: string;
-  embedding: number[];
-  updated_at: string;
-}
-
-export interface Citation {
-  source_doc: string;
-  source_path: string;
-  range: string;
-  snippet: string;
-  hash: string;
-}

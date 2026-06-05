@@ -3,7 +3,7 @@
 //! Exposes the agent tool-calling functionality to the frontend
 
 use crate::agent::{
-    create_agent_executor, create_tool_registry, create_read_only_tool_registry,
+    create_agent_executor,
     get_agent_system_prompt, get_ask_system_prompt, AgentSession, Message,
     SharedToolRegistry, AgentError, ToolCallMessage, ToolCallFunction,
 };

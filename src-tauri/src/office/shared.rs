@@ -1,7 +1,7 @@
 //! Shared types and utilities for office document handling
 
 use serde::{Deserialize, Serialize};
-use std::io::{Read, Write as IoWrite};
+use std::io::Read;
 use thiserror::Error;
 use zip::ZipArchive;
 
