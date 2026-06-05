@@ -122,7 +122,6 @@ export interface ChatSession {
   currentDiff: CurrentDiff | null;
   activeToolCalls: ActiveToolCall[];
   pendingDiff: CurrentDiff | null;
-  // Note: knowledgeBase, buildProgress, knowledgeToolCall moved to workspace-level (sidebarStore)
 }
 
 interface AIPanelState {
@@ -160,10 +159,6 @@ interface AIPanelState {
   rejectHunk: (sessionId: string, hunkId: string) => void;
   acceptAllHunks: (sessionId: string) => void;
   rejectAllHunks: (sessionId: string) => void;
-
-  // Note: knowledgeBase, buildProgress, knowledgeToolCall moved to workspace-level (sidebarStore)
-  // Only per-message search results remain here:
-  setMessageSearchResults: (sessionId: string, messageId: string, results: SearchResult[]) => void;
 
   getSession: (sessionId: string) => ChatSession | undefined;
   getMessage: (sessionId: string, messageId: string) => ChatMessage | undefined;
@@ -573,7 +568,7 @@ export const useAIPanelStore = create<AIPanelState>()(
             ),
           })),
 
-        setMessageSearchResults: (sessionId, messageId, results) =>
+        setMessageSearchResults: (sessionId: string, messageId: string, results: SearchResult[]) =>
           set((state) => ({
             sessions: state.sessions.map((s) =>
               s.id === sessionId
@@ -614,8 +609,6 @@ export const useAIPanelStore = create<AIPanelState>()(
             ),
           })),
 
-        // Knowledge base state moved to sidebarStore (workspace-level).
-        // Only per-message search results remain in session.
       };
     },
     {
@@ -632,7 +625,6 @@ export const useAIPanelStore = create<AIPanelState>()(
           currentDiff: null,
           activeToolCalls: [],
           pendingDiff: null,
-          // KB state (knowledgeBase, buildProgress, knowledgeToolCall) moved to sidebarStore
         })),
         activeSessionId: state.activeSessionId,
       }),
@@ -651,7 +643,6 @@ export const useAIPanelStore = create<AIPanelState>()(
             currentDiff: null,
             activeToolCalls: s.activeToolCalls ?? [],
             pendingDiff: null,
-            // KB state (knowledgeBase, buildProgress, knowledgeToolCall) moved to sidebarStore
           })),
         };
       },

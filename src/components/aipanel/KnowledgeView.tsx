@@ -1,11 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { Database, RefreshCw, Trash2, FileText, Layers, Clock, AlertTriangle, Settings } from 'lucide-react';
-import { useSettingsStore, type SearchResult, type BuildProgress } from '../../store';
+import { useSettingsStore, type BuildProgress } from '../../store';
 import { useSidebarStore, SETTINGS_TAB_ID } from '../../store';
 import styles from './KnowledgeView.module.css';
 
 interface KnowledgeViewProps {
-  sessionId: string;
   onBuild: () => void;
   onClear: () => void;
 }
@@ -19,12 +18,10 @@ interface AvailableModel {
 }
 
 export const KnowledgeView: React.FC<KnowledgeViewProps> = ({
-  sessionId: _sessionId,
   onBuild,
   onClear,
 }) => {
-  // Workspace-level knowledge base state (shared across all sessions)
-  const { knowledgeBase, buildProgress, searchResults } = useSidebarStore();
+  const { knowledgeBase, buildProgress } = useSidebarStore();
   const { settings } = useSettingsStore();
   const [modelAvailable, setModelAvailable] = useState<{ available: boolean; name: string | null }>({
     available: false,
@@ -151,35 +148,9 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({
         </div>
       </div>
 
-      {searchResults && searchResults.length > 0 && (
-        <div className={styles.results}>
-          {searchResults.map((result) => (
-            <SearchResultCard key={result.chunkId} result={result} />
-          ))}
-        </div>
-      )}
-
       {buildProgress && (
         <BuildProgressView progress={buildProgress} />
       )}
-    </div>
-  );
-};
-
-interface SearchResultCardProps {
-  result: SearchResult;
-}
-
-const SearchResultCard: React.FC<SearchResultCardProps> = ({ result }) => {
-  return (
-    <div className={styles.resultCard}>
-      <div className={styles.resultHeader}>
-        <FileText size={14} />
-        <span className={styles.resultTitle}>{result.documentTitle}</span>
-        <span className={styles.resultScore}>{(result.score * 100).toFixed(1)}%</span>
-      </div>
-      <div className={styles.resultPath}>{result.filePath}</div>
-      <div className={styles.resultContent}>{result.content}</div>
     </div>
   );
 };

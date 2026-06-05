@@ -29,8 +29,6 @@ export function useChatComposer({
   const truncateMessagesAfter = useAIPanelStore((state) => state.truncateMessagesAfter);
   const clearToolCalls = useAIPanelStore((state) => state.clearToolCalls);
 
-  const setSearchResults = useSidebarStore((state) => state.setSearchResults);
-
   const [input, setInput] = useState('');
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editingContent, setEditingContent] = useState('');
@@ -83,7 +81,6 @@ export function useChatComposer({
       const conversationHistory = buildConversationHistory(messages);
 
       if (mode === 'knowledge') {
-        setSearchResults(undefined);
         invoke('ai_chat_stream', {
           sessionId,
           messageId: assistantMessageId,
@@ -129,7 +126,7 @@ export function useChatComposer({
       updateMessage(sessionId, assistantMessageId, `抱歉，发生了错误：${err}`);
       setIsStreaming(sessionId, false);
     }
-  }, [activeSession, input, isStreaming, editingMessageId, updateMessage, addMessage, clearEditingState, setIsStreaming, clearToolCalls, messages, mode, setSearchResults]);
+  }, [activeSession, input, isStreaming, editingMessageId, updateMessage, addMessage, clearEditingState, setIsStreaming, clearToolCalls, messages, mode]);
 
   const handleSend = useCallback(async () => {
     await sendMessage();

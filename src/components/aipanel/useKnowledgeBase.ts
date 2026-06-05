@@ -27,7 +27,6 @@ export function useKnowledgeBase({ activeSessionId }: UseKnowledgeBaseArgs): Use
   const setKnowledgeBase = useSidebarStore((state) => state.setKnowledgeBase);
   const setBuildProgress = useSidebarStore((state) => state.setBuildProgress);
   const setKnowledgeToolCall = useSidebarStore((state) => state.setKnowledgeToolCall);
-  const setSearchResults = useSidebarStore((state) => state.setSearchResults);
 
   const handleKnowledgeBuild = useCallback(async () => {
     if (!activeSessionId || !workspacePath) return;
@@ -120,13 +119,12 @@ export function useKnowledgeBase({ activeSessionId }: UseKnowledgeBaseArgs): Use
     try {
       await invoke('knowledge_clear', { workspacePath });
       setKnowledgeBase(undefined);
-      setSearchResults(undefined);
       setBuildProgress(undefined);
       setKnowledgeToolCall(undefined);
     } catch (err) {
       console.error('Failed to clear knowledge base:', err);
     }
-  }, [activeSessionId, workspacePath, setKnowledgeBase, setSearchResults, setBuildProgress, setKnowledgeToolCall]);
+  }, [activeSessionId, workspacePath, setKnowledgeBase, setBuildProgress, setKnowledgeToolCall]);
 
   return {
     workspacePath,

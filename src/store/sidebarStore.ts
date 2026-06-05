@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { FileEntry } from '../types';
-import type { SearchResult, ActiveToolCall, KnowledgeBase, BuildProgress } from './aiPanelStore';
+import type { ActiveToolCall, KnowledgeBase, BuildProgress } from './aiPanelStore';
 
 export interface OpenTab {
   id: string;
@@ -18,11 +18,9 @@ interface PersistedSidebarState {
   selectedFile: string | null;
   openTabDirtyMap: Record<string, boolean>;
   expandedDirs: string[];
-  // Workspace-level knowledge base state (shared across all sessions)
   knowledgeBase?: KnowledgeBase;
   buildProgress?: BuildProgress;
   knowledgeToolCall?: ActiveToolCall;
-  searchResults?: SearchResult[];
 }
 
 function normalizeWorkspaceFilePath(path: string, workspacePath: string | null): string {
@@ -58,13 +56,10 @@ interface SidebarState {
   activeTabId: string | null;
   openTabDirtyMap: Record<string, boolean>;
 
-  // Workspace-level knowledge base state (shared across all sessions)
   knowledgeBase?: KnowledgeBase;
   buildProgress?: BuildProgress;
   knowledgeToolCall?: ActiveToolCall;
-  searchResults?: SearchResult[];
 
-  // Set to true once Zustand persist has rehydrated from localStorage.
   hasRestoredFromPersist: boolean;
 
   setWorkspacePath: (path: string) => void;
@@ -81,11 +76,9 @@ interface SidebarState {
   removeFileEntry: (path: string) => void;
   removeDescendants: (parentPath: string) => void;
 
-  // Knowledge base setters (workspace-level)
   setKnowledgeBase: (kb: KnowledgeBase | undefined) => void;
   setBuildProgress: (progress: BuildProgress | undefined) => void;
   setKnowledgeToolCall: (toolCall: ActiveToolCall | undefined) => void;
-  setSearchResults: (results: SearchResult[] | undefined) => void;
 }
 
 export const useSidebarStore = create<SidebarState>()(
@@ -100,11 +93,9 @@ export const useSidebarStore = create<SidebarState>()(
       activeTabId: null,
       openTabDirtyMap: {},
 
-      // Workspace-level knowledge base state
       knowledgeBase: undefined,
       buildProgress: undefined,
       knowledgeToolCall: undefined,
-      searchResults: undefined,
 
       setWorkspacePath: (path) => set({ workspacePath: path }),
       setFiles: (files) => set((state) => ({
@@ -211,11 +202,9 @@ export const useSidebarStore = create<SidebarState>()(
         files: state.files.filter((f) => !f.path.startsWith(parentPath + '/')),
       })),
 
-      // Knowledge base setters (workspace-level)
       setKnowledgeBase: (kb) => set({ knowledgeBase: kb }),
       setBuildProgress: (progress) => set({ buildProgress: progress }),
       setKnowledgeToolCall: (toolCall) => set({ knowledgeToolCall: toolCall }),
-      setSearchResults: (results) => set({ searchResults: results }),
     }),
     {
       name: 'inkuo-sidebar',
@@ -226,11 +215,9 @@ export const useSidebarStore = create<SidebarState>()(
         selectedFile: state.selectedFile,
         openTabDirtyMap: state.openTabDirtyMap,
         expandedDirs: Array.from(state.expandedDirs),
-        // Persist workspace-level knowledge base state
         knowledgeBase: state.knowledgeBase,
         buildProgress: state.buildProgress,
         knowledgeToolCall: state.knowledgeToolCall,
-        searchResults: state.searchResults,
       }),
       merge: (persisted, current) => {
         const persistedState = persisted as PersistedSidebarState | undefined;

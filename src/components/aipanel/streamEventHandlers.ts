@@ -45,7 +45,6 @@ export async function handleStreamDone({
   setTimeout(() => clearToolCalls(session_id), TOOL_CALL_CLEAR_DELAY_MS);
 
   if (normalizedSearchResults) {
-    useSidebarStore.getState().setSearchResults(normalizedSearchResults);
     useAIPanelStore.getState().setMessageSearchResults(session_id, message_id, normalizedSearchResults);
   }
 
@@ -154,7 +153,6 @@ export function handleStreamError({
   delete streamingContentRef.current[message_id];
   useAIPanelStore.getState().setErrorMessage(session_id, message_id, error ?? '发生错误');
   if (currentMode === 'knowledge') {
-    useSidebarStore.getState().setSearchResults(undefined);
     useAIPanelStore.getState().setMessageSearchResults(session_id, message_id, []);
   }
 }
