@@ -2,7 +2,8 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { DiffHunk, Document } from '../types';
 
-const STORAGE_VERSION = 2;
+const EDITOR_STORAGE_VERSION = 2;
+const EDITOR_STORAGE_VERSION_KEY = 'inkuo-editor-version';
 
 interface DocumentState {
   document: Document | null;
@@ -370,9 +371,9 @@ export const useEditorStore = create<EditorState>()(
       onRehydrateStorage: () => (state) => {
         if (state) {
           // Migrate old format or clear corrupted data
-          const version = localStorage.getItem('inkuo-editor-version');
-          if (version !== String(STORAGE_VERSION)) {
-            localStorage.setItem('inkuo-editor-version', String(STORAGE_VERSION));
+          const version = localStorage.getItem(EDITOR_STORAGE_VERSION_KEY);
+          if (version !== String(EDITOR_STORAGE_VERSION)) {
+            localStorage.setItem(EDITOR_STORAGE_VERSION_KEY, String(EDITOR_STORAGE_VERSION));
             // Clear old document contents to force reload from disk
             state.documentContents = {};
           }

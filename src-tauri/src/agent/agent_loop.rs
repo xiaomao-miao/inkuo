@@ -31,7 +31,7 @@ fn clear_cancellation(session_id: &str) {
     STREAM_CANCELLED.lock().remove(session_id);
 }
 
-/// Maximum number of iterations to prevent infinite loops
+/// Default iteration cap for tool-calling agent loops.
 const DEFAULT_MAX_ITERATIONS: usize = 50;
 
 /// Agent execution error

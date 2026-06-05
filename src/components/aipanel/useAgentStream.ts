@@ -35,14 +35,18 @@ export function useAgentStream({ mode }: UseAgentStreamArgs) {
     resetToolCallStreaming,
   } = useToolCallStreaming();
 
+  const flushAllPendingRef = useRef<() => void>(() => {});
+
   useEffect(() => {
     modeRef.current = mode;
   }, [mode]);
 
-  const flushAllPending = () => {
-    flushTextDeltas();
-    flushToolArgs();
-  };
+  useEffect(() => {
+    flushAllPendingRef.current = () => {
+      flushTextDeltas();
+      flushToolArgs();
+    };
+  }, [flushTextDeltas, flushToolArgs]);
 
   useEffect(() => {
     const setupListener = async () => {
@@ -60,7 +64,7 @@ export function useAgentStream({ mode }: UseAgentStreamArgs) {
             handleStreamError({
               payload,
               currentMode: modeRef.current,
-              flushAllPending,
+              flushAllPending: () => flushAllPendingRef.current(),
               streamingContentRef,
             });
             return;
@@ -91,7 +95,7 @@ export function useAgentStream({ mode }: UseAgentStreamArgs) {
               currentMode: modeRef.current,
               clearToolCalls,
               setMessageDiff,
-              flushAllPending,
+              flushAllPending: () => flushAllPendingRef.current(),
               streamingContentRef,
             });
           }
@@ -109,5 +113,5 @@ export function useAgentStream({ mode }: UseAgentStreamArgs) {
       resetTextStreaming();
       resetToolCallStreaming();
     };
-  }, [appendTextDelta, clearToolCalls, flushAllPending, handleToolCallArgsDelta, handleToolCallStart, resetTextStreaming, resetToolCallStreaming, setMessageDiff]);
+  }, [appendTextDelta, clearToolCalls, handleToolCallArgsDelta, handleToolCallStart, resetTextStreaming, resetToolCallStreaming, setMessageDiff]);
 }

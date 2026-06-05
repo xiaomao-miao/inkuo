@@ -263,23 +263,25 @@ async fn get_completion(
         match adapter.chat("completion".to_string(), prompt.to_string(), String::new()).await {
             Ok(result) => return Ok(result),
             Err(AIError::ModelError(msg)) if msg.contains("503") || msg.contains("Service Unavailable") => {
+                last_error = msg.clone();
+
                 if attempt < max_retries {
                     tracing::warn!("Service unavailable, retrying in {}ms (attempt {}/{})",
                         500 * (attempt + 1), attempt + 1, max_retries);
                     tokio::time::sleep(tokio::time::Duration::from_millis(500 * (attempt + 1) as u64)).await;
-                    last_error = msg;
-                } else {
-                    return Err(AIError::ModelError(format!(
-                        "Service unavailable after {} retries. Last error: {}",
-                        max_retries, msg
-                    )));
+                    continue;
                 }
+
+                break;
             }
             Err(e) => return Err(e),
         }
     }
 
-    Err(AIError::ModelError(last_error))
+    Err(AIError::ModelError(format!(
+        "Service unavailable after {} retries. Last error: {}",
+        max_retries, last_error
+    )))
 }
 
 /// Load a prompt file from the prompts directory

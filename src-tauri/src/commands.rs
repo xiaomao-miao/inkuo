@@ -10,6 +10,10 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 
+const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+const DEFAULT_DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com";
+const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434";
+
 use crate::backup::{create_backup_path, get_backup_dir, request_backup_cleanup};
 use crate::office;
 use crate::{ai, diff, document, file_watcher, rag};
@@ -21,6 +25,15 @@ pub struct AppState {
     pub ai_config: Arc<tokio::sync::RwLock<ai::AIConfig>>,
 }
 
+fn default_base_url(provider: &str) -> &'static str {
+    match provider {
+        "openai" => DEFAULT_OPENAI_BASE_URL,
+        "deepseek" => DEFAULT_DEEPSEEK_BASE_URL,
+        "ollama" => DEFAULT_OLLAMA_BASE_URL,
+        _ => DEFAULT_DEEPSEEK_BASE_URL,
+    }
+}
+
 fn build_ai_provider(settings: &Settings) -> ai::AIProvider {
     match settings.ai_provider.as_str() {
         "openai" => ai::AIProvider::OpenAI {
@@ -28,28 +41,75 @@ fn build_ai_provider(settings: &Settings) -> ai::AIProvider {
             base_url: settings
                 .ai_base_url
                 .clone()
-                .unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
+                .unwrap_or_else(|| default_base_url("openai").to_string()),
         },
         "deepseek" => ai::AIProvider::OpenAI {
             api_key: settings.ai_api_key.clone().unwrap_or_default(),
             base_url: settings
                 .ai_base_url
                 .clone()
-                .unwrap_or_else(|| "https://api.deepseek.com".to_string()),
+                .unwrap_or_else(|| default_base_url("deepseek").to_string()),
         },
         "ollama" => ai::AIProvider::Ollama {
             base_url: settings
                 .ai_base_url
                 .clone()
-                .unwrap_or_else(|| "http://localhost:11434".to_string()),
+                .unwrap_or_else(|| default_base_url("ollama").to_string()),
+        },
+        "official" => ai::AIProvider::Official {
+            api_key: settings.ai_api_key.clone().unwrap_or_default(),
         },
         _ => ai::AIProvider::OpenAI {
             api_key: settings.ai_api_key.clone().unwrap_or_default(),
             base_url: settings
                 .ai_base_url
                 .clone()
-                .unwrap_or_else(|| "https://api.deepseek.com".to_string()),
+                .unwrap_or_else(|| default_base_url("deepseek").to_string()),
         },
+    }
+}
+
+fn active_api_config<'a>(settings: &'a Settings) -> Option<&'a ApiConfig> {
+    let active_id = settings.active_api_config_id.as_ref()?;
+    settings.api_configs.iter().find(|config| config.id == *active_id)
+}
+
+fn build_provider_from_api_config(config: &ApiConfig) -> ai::AIProvider {
+    match config.provider.as_str() {
+        "openai" | "deepseek" => ai::AIProvider::OpenAI {
+            api_key: config.api_key.clone().unwrap_or_default(),
+            base_url: config
+                .base_url
+                .clone(),
+        },
+        "ollama" => ai::AIProvider::Ollama {
+            base_url: config.base_url.clone(),
+        },
+        "official" => ai::AIProvider::Official {
+            api_key: config.api_key.clone().unwrap_or_default(),
+        },
+        _ => ai::AIProvider::OpenAI {
+            api_key: config.api_key.clone().unwrap_or_default(),
+            base_url: config.base_url.clone(),
+        },
+    }
+}
+
+fn build_ai_config(settings: &Settings) -> ai::AIConfig {
+    if let Some(config) = active_api_config(settings) {
+        return ai::AIConfig {
+            provider: build_provider_from_api_config(config),
+            model: config.model.clone(),
+            temperature: config.temperature,
+            max_tokens: config.max_tokens,
+        };
+    }
+
+    ai::AIConfig {
+        provider: build_ai_provider(settings),
+        model: settings.ai_model.clone(),
+        temperature: settings.ai_temperature,
+        max_tokens: settings.ai_max_tokens,
     }
 }
 
@@ -57,12 +117,7 @@ impl Default for AppState {
     fn default() -> Self {
         let settings = read_settings_from_disk().unwrap_or_else(|_| Settings::default());
 
-        let ai_config = ai::AIConfig {
-            provider: build_ai_provider(&settings),
-            model: settings.ai_model.clone(),
-            temperature: settings.ai_temperature,
-            max_tokens: settings.ai_max_tokens,
-        };
+        let ai_config = build_ai_config(&settings);
 
         Self {
             rag_index: Arc::new(tokio::sync::RwLock::new(rag::RAGIndex::new())),
@@ -511,70 +566,7 @@ pub async fn save_settings(settings: Settings, state: State<'_, AppState>) -> Re
     std::fs::write(&path, content)
         .map_err(|e| format!("Failed to write settings: {}", e))?;
 
-    let (ai_provider, model, temperature, max_tokens) = if let Some(ref active_id) = settings.active_api_config_id {
-        settings.api_configs
-            .iter()
-            .find(|c| c.id == *active_id)
-            .map(|c| {
-                let provider = match c.provider.as_str() {
-                    "openai" | "deepseek" => ai::AIProvider::OpenAI {
-                        api_key: c.api_key.clone().unwrap_or_default(),
-                        base_url: c.base_url.clone(),
-                    },
-                    "ollama" => ai::AIProvider::Ollama {
-                        base_url: c.base_url.clone(),
-                    },
-                    "official" => ai::AIProvider::Official {
-                        api_key: c.api_key.clone().unwrap_or_default(),
-                    },
-                    _ => ai::AIProvider::OpenAI {
-                        api_key: c.api_key.clone().unwrap_or_default(),
-                        base_url: c.base_url.clone(),
-                    },
-                };
-                (provider, c.model.clone(), c.temperature, c.max_tokens)
-            })
-            .unwrap_or_else(|| {
-                let provider = match settings.ai_provider.as_str() {
-                    "openai" | "deepseek" => ai::AIProvider::OpenAI {
-                        api_key: settings.ai_api_key.clone().unwrap_or_default(),
-                        base_url: settings.ai_base_url.clone().unwrap_or_else(|| "https://api.deepseek.com".to_string()),
-                    },
-                    "ollama" => ai::AIProvider::Ollama {
-                        base_url: settings.ai_base_url.clone().unwrap_or_else(|| "http://localhost:11434".to_string()),
-                    },
-                    _ => ai::AIProvider::OpenAI {
-                        api_key: settings.ai_api_key.clone().unwrap_or_default(),
-                        base_url: settings.ai_base_url.clone().unwrap_or_else(|| "https://api.deepseek.com".to_string()),
-                    },
-                };
-                (provider, settings.ai_model.clone(), settings.ai_temperature, settings.ai_max_tokens)
-            })
-    } else {
-        let provider = match settings.ai_provider.as_str() {
-            "openai" | "deepseek" => ai::AIProvider::OpenAI {
-                api_key: settings.ai_api_key.clone().unwrap_or_default(),
-                base_url: settings.ai_base_url.clone().unwrap_or_else(|| "https://api.deepseek.com".to_string()),
-            },
-            "ollama" => ai::AIProvider::Ollama {
-                base_url: settings.ai_base_url.clone().unwrap_or_else(|| "http://localhost:11434".to_string()),
-            },
-            _ => ai::AIProvider::OpenAI {
-                api_key: settings.ai_api_key.clone().unwrap_or_default(),
-                base_url: settings.ai_base_url.clone().unwrap_or_else(|| "https://api.deepseek.com".to_string()),
-            },
-        };
-        (provider, settings.ai_model.clone(), settings.ai_temperature, settings.ai_max_tokens)
-    };
-
-    let ai_config = ai::AIConfig {
-        provider: ai_provider,
-        model,
-        temperature,
-        max_tokens,
-    };
-
-    *state.ai_config.write().await = ai_config;
+    *state.ai_config.write().await = build_ai_config(&settings);
 
     Ok(())
 }

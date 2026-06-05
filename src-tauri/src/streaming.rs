@@ -40,7 +40,7 @@ pub enum StreamEventType {
 pub use crate::diff::{FileDiffSummary, StreamDiffHunk, StreamDiffChange};
 
 /// Stream payload with tool call support
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StreamPayload {
     /// Session identifier
     pub session_id: String,
@@ -84,7 +84,7 @@ pub struct StreamPayload {
     /// Whether this is the final event
     pub done: bool,
 
-    // === File modification diff fields ===
+    /// Streamed file modification payload fields
     /// File path that was modified
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file_path: Option<String>,
@@ -111,30 +111,6 @@ pub struct StreamPayload {
 pub struct OfficeFileModified {
     pub path: String,
     pub format: String,
-}
-
-impl Default for StreamPayload {
-    fn default() -> Self {
-        Self {
-            session_id: String::new(),
-            message_id: String::new(),
-            event_type: String::new(),
-            content: None,
-            summary: None,
-            tool_call_id: None,
-            tool_name: None,
-            tool_args: None,
-            final_content: None,
-            error: None,
-            search_results: None,
-            done: false,
-            file_path: None,
-            original_content: None,
-            new_content: None,
-            diff_summary: None,
-            office_file_modified: None,
-        }
-    }
 }
 
 impl StreamPayload {

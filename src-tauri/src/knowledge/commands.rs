@@ -311,52 +311,12 @@ pub async fn knowledge_build(
 }
 
 /// Search knowledge base
-#[tauri::command]
-pub async fn knowledge_search(
-    app: AppHandle,
-    workspace_path: String,
-    query: String,
-    top_k: usize,
-) -> Result<Vec<SearchResult>, String> {
-    tracing::info!("Searching knowledge base: {}", query);
-
-    let model_name = get_embedding_model();
-    let model_info = ModelInfo::new(&model_name)
-        .map_err(|e| format!("Unsupported embedding model: {}", e))?;
-
-    let model_path = resolve_model_dir(&app, &model_name)
-        .ok_or_else(|| format!("Model '{}' not found (no model files)", model_name))?;
-
-    let embedder = Embedder::new(&model_name, &model_path)
-        .map_err(|e| format!("Failed to initialize embedder: {}", e))?;
-
-    let vector_store = get_or_create_vector_store(&workspace_path, &model_name).await?;
-
-    tracing::info!(
-        "[KB_SEARCH] Using model {} (dim={})",
-        model_name,
-        model_info.dimension
-    );
-
-    let query_vector = embedder
-        .encode_single(&query)
-        .map_err(|e| format!("Failed to encode query: {}", e))?;
-
-    let results = vector_store
-        .search(&query_vector, top_k)
-        .await
-        .map_err(|e| format!("Search failed: {}", e))?;
-
-    Ok(results)
-}
-
-/// Public search function for use by both Tauri commands and agent tools.
-/// Does NOT go through the Tauri command layer (avoids double-IPC in agent context).
-pub async fn search_knowledge_base(
+async fn search_knowledge_base_inner(
     app: &AppHandle,
     workspace_path: &str,
     query: &str,
     top_k: usize,
+    for_search: bool,
 ) -> Result<Vec<SearchResult>, String> {
     let model_name = get_embedding_model();
     let model_info = ModelInfo::new(&model_name)
@@ -368,21 +328,49 @@ pub async fn search_knowledge_base(
     let embedder = Embedder::new(&model_name, &model_path)
         .map_err(|e| format!("Failed to initialize embedder: {}", e))?;
 
-    let vector_store = get_vector_store_for_search(workspace_path, &model_name).await?;
+    let vector_store = if for_search {
+        get_vector_store_for_search(workspace_path, &model_name).await?
+    } else {
+        get_or_create_vector_store(workspace_path, &model_name).await?
+    };
 
     tracing::debug!(
-        "search_knowledge_base: model={} (dim={})",
+        "knowledge search: model={} (dim={})",
         model_name,
         model_info.dimension
     );
 
-    let query_vector = embedder.encode_single(query)
+    let query_vector = embedder
+        .encode_single(query)
         .map_err(|e| format!("Failed to encode query: {}", e))?;
 
-    let results = vector_store.search(&query_vector, top_k).await
-        .map_err(|e| format!("Search failed: {}", e))?;
+    vector_store
+        .search(&query_vector, top_k)
+        .await
+        .map_err(|e| format!("Search failed: {}", e))
+}
 
-    Ok(results)
+#[tauri::command]
+pub async fn knowledge_search(
+    app: AppHandle,
+    workspace_path: String,
+    query: String,
+    top_k: usize,
+) -> Result<Vec<SearchResult>, String> {
+    tracing::info!("Searching knowledge base: {}", query);
+
+    search_knowledge_base_inner(&app, &workspace_path, &query, top_k, false).await
+}
+
+/// Public search function for use by both Tauri commands and agent tools.
+/// Does NOT go through the Tauri command layer (avoids double-IPC in agent context).
+pub async fn search_knowledge_base(
+    app: &AppHandle,
+    workspace_path: &str,
+    query: &str,
+    top_k: usize,
+) -> Result<Vec<SearchResult>, String> {
+    search_knowledge_base_inner(app, workspace_path, query, top_k, true).await
 }
 
 /// Get knowledge base status
