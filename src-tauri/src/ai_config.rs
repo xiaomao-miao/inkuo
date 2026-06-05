@@ -3,10 +3,19 @@ use crate::commands::{ApiConfig, Settings};
 use reqwest::{Client, RequestBuilder, Response};
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use thiserror::Error;
 
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const DEFAULT_DEEPSEEK_BASE_URL: &str = "https://api.deepseek.com";
 const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434";
+
+#[derive(Debug, Clone, Error)]
+pub enum AIConfigError {
+    #[error("Failed to parse response: {0}")]
+    ParseResponse(String),
+    #[error("Network error: {0}")]
+    Network(String),
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -168,12 +177,12 @@ fn build_test_request(client: &Client, api_key: Option<&str>, url: &str) -> Requ
     request.header("Content-Type", "application/json")
 }
 
-async fn parse_test_response(response: Response) -> Result<AITestResult, String> {
+async fn parse_test_response(response: Response) -> Result<AITestResult, AIConfigError> {
     if response.status().is_success() {
         let response_json: serde_json::Value = response
             .json()
             .await
-            .map_err(|e| format!("Failed to parse response: {}", e))?;
+            .map_err(|e| AIConfigError::ParseResponse(e.to_string()))?;
 
         if let Some(content) = response_json["choices"][0]["message"]["content"].as_str() {
             Ok(AITestResult {
@@ -188,7 +197,17 @@ async fn parse_test_response(response: Response) -> Result<AITestResult, String>
         }
     } else {
         let status = response.status();
-        let error_text = response.text().await.unwrap_or_default();
+        let error_text = match response.text().await {
+            Ok(text) => text,
+            Err(error) => {
+                tracing::warn!(
+                    "Failed to read AI test error response body (status {}): {}",
+                    status,
+                    error
+                );
+                String::new()
+            }
+        };
 
         Ok(AITestResult {
             success: false,
@@ -201,7 +220,7 @@ pub async fn test_ai_connection_impl(
     api_key: Option<&str>,
     base_url: &str,
     model: &str,
-) -> Result<AITestResult, String> {
+) -> Result<AITestResult, AIConfigError> {
     let client = Client::new();
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
 
@@ -217,7 +236,7 @@ pub async fn test_ai_connection_impl(
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("Network error: {}", e))?;
+        .map_err(|e| AIConfigError::Network(e.to_string()))?;
 
     parse_test_response(response).await
 }

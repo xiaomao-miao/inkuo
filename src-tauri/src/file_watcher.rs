@@ -3,11 +3,12 @@
 //! This module uses the `notify` crate to watch for file system changes
 //! and emits events to the frontend when files are created, modified, or deleted.
 
-use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher, Event, EventKind};
+use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
 use std::path::PathBuf;
-use tokio::sync::mpsc;
+use thiserror::Error;
 use tauri::{AppHandle, Emitter};
+use tokio::sync::mpsc;
 
 /// File change event sent to the frontend
 #[derive(Clone, Serialize)]
@@ -22,6 +23,14 @@ pub enum FileChangeEvent {
 }
 
 /// File watcher state shared across the application
+#[derive(Debug, Error)]
+pub enum FileWatcherError {
+    #[error("Failed to create watcher: {0}")]
+    CreateWatcher(String),
+    #[error("Failed to watch directory: {0}")]
+    WatchDirectory(String),
+}
+
 pub struct FileWatcherState {
     /// The currently watched directory path
     watched_path: parking_lot::Mutex<Option<PathBuf>>,
@@ -38,7 +47,7 @@ impl FileWatcherState {
     }
 
     /// Start watching a directory for file changes
-    pub fn watch(&self, path: PathBuf, app_handle: AppHandle) -> Result<(), String> {
+    pub fn watch(&self, path: PathBuf, app_handle: AppHandle) -> Result<(), FileWatcherError> {
         // Stop any existing watcher
         self.stop();
 
@@ -56,15 +65,19 @@ impl FileWatcherState {
         let mut watcher = RecommendedWatcher::new(
             move |res: Result<Event, notify::Error>| {
                 if let Ok(event) = res {
-                    let _ = tx.blocking_send(event);
+                    if let Err(error) = tx.blocking_send(event) {
+                        tracing::warn!("Failed to forward file watcher event: {}", error);
+                    }
                 }
             },
             Config::default(),
-        ).map_err(|e| format!("Failed to create watcher: {}", e))?;
+        )
+        .map_err(|e| FileWatcherError::CreateWatcher(e.to_string()))?;
 
         // Start watching
-        watcher.watch(&watch_path, RecursiveMode::Recursive)
-            .map_err(|e| format!("Failed to watch directory: {}", e))?;
+        watcher
+            .watch(&watch_path, RecursiveMode::Recursive)
+            .map_err(|e| FileWatcherError::WatchDirectory(e.to_string()))?;
 
         // Store the watched path
         *self.watched_path.lock() = Some(watched_path);
@@ -106,7 +119,9 @@ impl FileWatcherState {
             };
 
             if let Some(change_event) = change_event {
-                let _ = app_handle.emit("file-change", change_event);
+                if let Err(error) = app_handle.emit("file-change", change_event) {
+                    tracing::warn!("Failed to emit file-change event: {}", error);
+                }
             }
         }
     }

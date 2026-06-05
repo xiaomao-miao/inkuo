@@ -5,9 +5,27 @@ use crate::{
     knowledge,
     streaming::{KnowledgeSearchResult, StreamPayload},
 };
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use tauri::{AppHandle, Emitter, State};
+use thiserror::Error;
 use urlencoding;
+
+fn emit(app: &AppHandle, payload: StreamPayload) {
+    if let Err(error) = app.emit("ai://stream", payload) {
+        tracing::warn!("Failed to emit ai://stream event: {}", error);
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Error)]
+pub enum StreamCommandError {
+    #[error("Knowledge mode requires a workspace path")]
+    MissingWorkspacePath,
+    #[error("AI request failed: {0}")]
+    AIRequest(String),
+    #[error("Knowledge search failed: {0}")]
+    KnowledgeSearch(String),
+}
 
 fn build_knowledge_context(results: &[knowledge::SearchResult]) -> String {
     if results.is_empty() {
@@ -43,13 +61,11 @@ fn build_knowledge_references(results: &[knowledge::SearchResult]) -> String {
     let references: BTreeSet<String> = results
         .iter()
         .map(|item| {
-            // Fragment encodes line range: #startLine,endLine or just #startLine
             let fragment = match (item.start_line, item.end_line) {
                 (Some(sl), Some(el)) if sl != el => format!("#{},{}", sl, el),
                 (Some(sl), _) => format!("#{}", sl),
                 _ => String::new(),
             };
-            // href = URL-encoded file path; display text = raw path for readability
             let encoded_path = urlencoding::encode(&item.file_path);
             format!(
                 "- [{} — {}]({}{})",
@@ -97,16 +113,10 @@ fn map_search_results(results: &[knowledge::SearchResult]) -> Vec<KnowledgeSearc
         .collect()
 }
 
-fn emit(app: &AppHandle, payload: StreamPayload) {
-    let _ = app.emit("ai://stream", payload);
-}
-
 #[tauri::command]
-pub async fn ai_stream_cancel(session_id: String) -> Result<(), String> {
+pub async fn ai_stream_cancel(session_id: String) -> Result<(), StreamCommandError> {
     tracing::info!("Stream cancel requested for session: {}", session_id);
-    crate::commands::STREAM_CANCELLED
-        .lock()
-        .insert(session_id);
+    crate::commands::STREAM_CANCELLED.lock().insert(session_id);
     Ok(())
 }
 
@@ -121,7 +131,7 @@ pub async fn ai_chat_stream(
     config_input: AIConfigInput,
     state: State<'_, AppState>,
     app: AppHandle,
-) -> Result<(), String> {
+) -> Result<(), StreamCommandError> {
     tracing::info!("ai_chat_stream start - session: {}, mode: {}", session_id, mode);
     let _ = state;
     let config = ai_config::build_input_ai_config(config_input);
@@ -129,10 +139,12 @@ pub async fn ai_chat_stream(
     let original_text = original_text.unwrap_or_default();
 
     let (instruction, original_text, knowledge_results) = if mode == "knowledge" {
-        let workspace_path = workspace_path.unwrap_or_default().trim().to_string();
-        if workspace_path.is_empty() {
-            return Err("Knowledge mode requires a workspace path".to_string());
-        }
+        let workspace_path = workspace_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(str::to_string)
+            .ok_or(StreamCommandError::MissingWorkspacePath)?;
 
         let results = knowledge::commands::knowledge_search(
             app.clone(),
@@ -140,7 +152,8 @@ pub async fn ai_chat_stream(
             instruction.clone(),
             8,
         )
-        .await?;
+        .await
+        .map_err(|error| StreamCommandError::KnowledgeSearch(error.to_string()))?;
 
         let knowledge_instruction = build_knowledge_instruction(&instruction, &results);
         (knowledge_instruction, String::new(), Some(results))
@@ -181,10 +194,14 @@ pub async fn ai_chat_stream(
         })
         .await;
 
-    tracing::info!("ai_chat_stream adapter finished - session: {}, result: {:?}", session_id, result.is_ok());
+    tracing::info!(
+        "ai_chat_stream adapter finished - session: {}, result: {:?}",
+        session_id,
+        result.is_ok()
+    );
 
-    if let Err(e) = &result {
-        tracing::error!("AI chat error: {}", e);
+    if let Err(error) = &result {
+        tracing::error!("AI chat error: {}", error);
         emit(
             &app,
             StreamPayload {
@@ -197,7 +214,7 @@ pub async fn ai_chat_stream(
                 tool_name: None,
                 tool_args: None,
                 final_content: None,
-                error: Some(e.to_string()),
+                error: Some(error.to_string()),
                 search_results: None,
                 done: true,
                 file_path: None,
@@ -207,7 +224,7 @@ pub async fn ai_chat_stream(
                 office_file_modified: None,
             },
         );
-        return Err(format!("AI error: {}", e));
+        return Err(StreamCommandError::AIRequest(error.to_string()));
     }
 
     if crate::commands::STREAM_CANCELLED.lock().remove(&session_id) {
@@ -236,16 +253,17 @@ pub async fn ai_chat_stream(
         return Ok(());
     }
 
-    let final_result = result.unwrap();
+    let final_result = match result {
+        Ok(value) => value,
+        Err(_) => unreachable!("result error already returned above"),
+    };
     let final_content = if mode == "knowledge" {
         append_knowledge_references(&final_result, knowledge_results.as_deref().unwrap_or(&[]))
     } else {
         final_result
     };
     let search_results = if mode == "knowledge" {
-        knowledge_results
-            .as_deref()
-            .map(map_search_results)
+        knowledge_results.as_deref().map(map_search_results)
     } else {
         None
     };
@@ -287,7 +305,7 @@ pub async fn ai_edit_stream(
     context: Vec<ai::ContextItem>,
     state: State<'_, AppState>,
     app: AppHandle,
-) -> Result<(), String> {
+) -> Result<(), StreamCommandError> {
     let config = state.ai_config.read().await.clone();
     let adapter = ai::AIProviderAdapter::new(config);
 
@@ -338,7 +356,7 @@ pub async fn ai_edit_stream(
             );
         })
         .await
-        .map_err(|e| format!("AI error: {}", e))?;
+        .map_err(|error| StreamCommandError::AIRequest(error.to_string()))?;
 
     if crate::commands::STREAM_CANCELLED.lock().remove(&session_id) {
         emit(

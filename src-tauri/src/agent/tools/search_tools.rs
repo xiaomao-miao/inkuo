@@ -70,7 +70,7 @@ impl GlobTool {
             ToolParameters::new(
                 vec!["pattern", "base_dir"],
                 vec![
-                    (" pattern", "string", Some("Glob pattern to match (e.g., '**/*.rs', 'src/**/*.{ts,tsx}')")),
+                    ("pattern", "string", Some("Glob pattern to match (e.g., '**/*.rs', 'src/**/*.{ts,tsx}')")),
                     ("base_dir", "string", Some("Base directory to search from")),
                 ],
             ),

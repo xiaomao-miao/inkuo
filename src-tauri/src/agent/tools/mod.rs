@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -102,7 +102,7 @@ pub struct ToolParameter {
 pub struct ToolParameters {
     #[serde(rename = "type")]
     pub params_type: String,
-    pub properties: HashMap<String, ToolParameter>,
+    pub properties: BTreeMap<String, ToolParameter>,
     #[serde(default)]
     pub required: Vec<String>,
     #[serde(default, rename = "additionalProperties")]
@@ -111,9 +111,15 @@ pub struct ToolParameters {
 
 impl ToolParameters {
     pub fn new(required: Vec<&str>, properties: Vec<(&str, &str, Option<&str>)>) -> Self {
-        let mut props = HashMap::new();
+        let mut props = BTreeMap::new();
         for (name, param_type, description) in properties {
-            props.insert(
+            let trimmed_name = name.trim();
+            assert!(
+                trimmed_name == name,
+                "Tool parameter names must not contain leading or trailing whitespace: {:?}",
+                name
+            );
+            let previous = props.insert(
                 name.to_string(),
                 ToolParameter {
                     param_type: param_type.to_string(),
@@ -121,11 +127,28 @@ impl ToolParameters {
                     default: None,
                 },
             );
+            assert!(previous.is_none(), "Duplicate tool parameter name: {}", name);
         }
+
+        let required: Vec<String> = required.iter().map(|s| s.to_string()).collect();
+        for name in &required {
+            let trimmed_name = name.trim();
+            assert!(
+                trimmed_name == name,
+                "Required tool parameter names must not contain leading or trailing whitespace: {:?}",
+                name
+            );
+            assert!(
+                props.contains_key(name),
+                "Required tool parameter '{}' is missing from properties",
+                name
+            );
+        }
+
         Self {
             params_type: "object".to_string(),
             properties: props,
-            required: required.iter().map(|s| s.to_string()).collect(),
+            required,
             additional_properties: false,
         }
     }

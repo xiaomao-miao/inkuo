@@ -1,11 +1,7 @@
-//! Agent streaming commands for Tauri IPC
-//!
-//! Exposes the agent tool-calling functionality to the frontend
-
 use crate::agent::{
     create_agent_executor,
-    get_agent_system_prompt, get_ask_system_prompt, AgentSession, Message,
-    SharedToolRegistry, AgentError, ToolCallMessage, ToolCallFunction,
+    get_agent_system_prompt, get_ask_system_prompt, AgentError, AgentSession, Message,
+    SharedToolRegistry, ToolCallFunction, ToolCallMessage,
 };
 use crate::agent::tools::ToolRegistry;
 use crate::ai_config::{self, AIConfigInput};
@@ -13,10 +9,23 @@ use crate::streaming::StreamPayload;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
+use thiserror::Error;
 use tokio::sync::RwLock;
 
 fn emit(app: &AppHandle, payload: StreamPayload) {
-    let _ = app.emit("ai://stream", payload);
+    if let Err(error) = app.emit("ai://stream", payload) {
+        tracing::warn!("Failed to emit ai://stream event: {}", error);
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Error)]
+pub enum AgentCommandError {
+    #[error("Invalid frontend tool call arguments for '{tool_name}': {reason}")]
+    InvalidFrontendToolArguments { tool_name: String, reason: String },
+    #[error("Tool result message is missing tool_call_id")]
+    MissingToolCallId,
+    #[error("Failed to serialize tool definitions: {0}")]
+    ToolDefinitionsSerialization(String),
 }
 
 /// Shared tool registries for agent - separate for full and read-only modes
@@ -77,39 +86,57 @@ pub struct FrontendToolCall {
     pub arguments: serde_json::Value,
 }
 
+fn convert_tool_call(tc: &FrontendToolCall) -> Result<ToolCallMessage, AgentCommandError> {
+    let arguments = serde_json::to_string(&tc.arguments).map_err(|error| {
+        AgentCommandError::InvalidFrontendToolArguments {
+            tool_name: tc.name.clone(),
+            reason: error.to_string(),
+        }
+    })?;
+
+    Ok(ToolCallMessage {
+        id: tc.id.clone(),
+        call_type: "function".to_string(),
+        function: ToolCallFunction {
+            name: tc.name.clone(),
+            arguments,
+        },
+    })
+}
+
 /// Convert frontend message to agent message
-fn convert_message(msg: &FrontendMessage) -> Option<Message> {
+fn convert_message(msg: &FrontendMessage) -> Result<Option<Message>, AgentCommandError> {
     match msg.role.as_str() {
-        "system" => Some(Message::System {
+        "system" => Ok(Some(Message::System {
             content: msg.content.clone(),
-        }),
-        "user" => Some(Message::User {
+        })),
+        "user" => Ok(Some(Message::User {
             content: msg.content.clone(),
-        }),
+        })),
         "assistant" => {
-            let tool_calls = msg.tool_calls.as_ref().map(|tcs| {
-                tcs.iter()
-                    .map(|tc| ToolCallMessage {
-                        id: tc.id.clone(),
-                        call_type: "function".to_string(),
-                        function: ToolCallFunction {
-                            name: tc.name.clone(),
-                            arguments: serde_json::to_string(&tc.arguments).unwrap_or_default(),
-                        },
-                    })
-                    .collect()
-            });
-            Some(Message::Assistant {
+            let tool_calls = msg
+                .tool_calls
+                .as_ref()
+                .map(|tcs| tcs.iter().map(convert_tool_call).collect())
+                .transpose()?;
+            Ok(Some(Message::Assistant {
                 content: Some(msg.content.clone()),
                 reasoning_content: None,
                 tool_calls,
-            })
+            }))
         }
-        "tool" => Some(Message::Tool {
-            tool_call_id: msg.tool_call_id.clone().unwrap_or_default(),
-            content: msg.content.clone(),
-        }),
-        _ => None,
+        "tool" => {
+            let tool_call_id = msg
+                .tool_call_id
+                .clone()
+                .filter(|id| !id.trim().is_empty())
+                .ok_or(AgentCommandError::MissingToolCallId)?;
+            Ok(Some(Message::Tool {
+                tool_call_id,
+                content: msg.content.clone(),
+            }))
+        }
+        _ => Ok(None),
     }
 }
 
@@ -123,7 +150,7 @@ pub async fn ai_agent_stream(
     history: Vec<FrontendMessage>,
     config_input: AIConfigInput,
     app: AppHandle,
-) -> Result<(), String> {
+) -> Result<(), AgentCommandError> {
     tracing::info!("ai_agent_stream start - session: {}, history length: {}", session_id, history.len());
 
     // Update workspace path for tool validation
@@ -137,11 +164,11 @@ pub async fn ai_agent_stream(
     let executor = create_agent_executor(ai_config);
 
     // Use different tool registry based on mode
-        let tool_registry = if read_only {
-            get_read_only_tool_registry(&app).await
-        } else {
-            get_full_tool_registry(&app).await
-        };
+    let tool_registry = if read_only {
+        get_read_only_tool_registry(&app).await
+    } else {
+        get_full_tool_registry(&app).await
+    };
     let mut session = AgentSession::new(tool_registry);
 
     // Use different system prompt based on mode
@@ -164,7 +191,7 @@ pub async fn ai_agent_stream(
 
     // Add conversation history (for context memory)
     for msg in &history {
-        if let Some(converted) = convert_message(msg) {
+        if let Some(converted) = convert_message(msg)? {
             session.add_message(converted);
         }
     }
@@ -192,12 +219,17 @@ pub async fn ai_agent_stream(
         // frontend which file changed, so it can refresh the editor immediately.
         if payload.event_type == "tool_result"
             && !payload.error.as_ref().map(|e| !e.is_empty()).unwrap_or(false)
-            && payload.file_path.is_some()
         {
-            let changed_path = payload.file_path.clone().unwrap();
-            let _ = app_clone.emit("file-written", serde_json::json!({
-                "path": changed_path,
-            }));
+            if let Some(changed_path) = payload.file_path.clone() {
+                if let Err(error) = app_clone.emit(
+                    "file-written",
+                    serde_json::json!({
+                        "path": changed_path,
+                    }),
+                ) {
+                    tracing::warn!("Failed to emit file-written event: {}", error);
+                }
+            }
         }
     };
 
@@ -275,21 +307,19 @@ pub async fn ai_agent_stream(
 }
 
 #[tauri::command]
-pub async fn ai_agent_cancel(session_id: String) -> Result<(), String> {
+pub async fn ai_agent_cancel(session_id: String) -> Result<(), AgentCommandError> {
     tracing::info!("ai_agent_cancel - session: {}", session_id);
-    crate::commands::STREAM_CANCELLED
-        .lock()
-        .insert(session_id);
+    crate::commands::STREAM_CANCELLED.lock().insert(session_id);
     Ok(())
 }
 
 #[tauri::command]
-pub async fn get_available_tools(app: AppHandle) -> Result<Vec<serde_json::Value>, String> {
+pub async fn get_available_tools(app: AppHandle) -> Result<Vec<serde_json::Value>, AgentCommandError> {
     let registry = get_full_tool_registry(&app).await;
     let tools = registry.read().await.get_all_definitions();
     let tools_json: Vec<serde_json::Value> = tools
         .iter()
-        .map(|t| serde_json::to_value(t).map_err(|e| e.to_string()))
+        .map(|tool| serde_json::to_value(tool).map_err(|error| AgentCommandError::ToolDefinitionsSerialization(error.to_string())))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(tools_json)
 }

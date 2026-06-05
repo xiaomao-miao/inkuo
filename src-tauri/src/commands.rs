@@ -9,12 +9,53 @@ use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
+use thiserror::Error;
 
 use crate::backup::{create_backup_path, get_backup_dir, request_backup_cleanup};
 use crate::office;
 use crate::{ai, ai_config::{self, AITestResult, AIProviderKind, TestApiConfigRequest}, diff, document, file_watcher};
 
 pub static STREAM_CANCELLED: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
+
+#[derive(Debug, Clone, Serialize, Deserialize, Error)]
+pub enum AppCommandError {
+    #[error("Failed to read document: {0}")]
+    ReadDocument(String),
+    #[error("Failed to parse document: {0}")]
+    ParseDocument(String),
+    #[error("Failed to create backup directory: {0}")]
+    CreateBackupDirectory(String),
+    #[error("Failed to create backup: {0}")]
+    CreateBackup(String),
+    #[error("Failed to write document: {0}")]
+    WriteDocument(String),
+    #[error("Failed to list directory: {0}")]
+    ListDirectory(String),
+    #[error("Failed to watch directory: {0}")]
+    WatchDirectory(String),
+    #[error("AI edit failed: {0}")]
+    AIEdit(String),
+    #[error("AI connection test failed: {0}")]
+    TestAIConnection(String),
+    #[error("Failed to read settings: {0}")]
+    ReadSettings(String),
+    #[error("Failed to parse settings: {0}")]
+    ParseSettings(String),
+    #[error("Failed to create config directory: {0}")]
+    CreateConfigDirectory(String),
+    #[error("Failed to serialize settings: {0}")]
+    SerializeSettings(String),
+    #[error("Failed to write settings: {0}")]
+    WriteSettings(String),
+    #[error("Failed to read office file: {0}")]
+    ReadOfficeFile(String),
+    #[error("Failed to serialize office document: {0}")]
+    SerializeOfficeDocument(String),
+    #[error("Failed to write office file: {0}")]
+    WriteOfficeFile(String),
+    #[error("Invalid config path")]
+    InvalidConfigPath,
+}
 
 pub struct AppState {
     pub ai_config: Arc<tokio::sync::RwLock<ai::AIConfig>>,
@@ -40,11 +81,11 @@ pub struct ReadDocumentResult {
 }
 
 #[tauri::command]
-pub async fn read_document(path: String) -> Result<ReadDocumentResult, String> {
+pub async fn read_document(path: String) -> Result<ReadDocumentResult, AppCommandError> {
     tracing::info!("Reading document: {}", path);
 
     let content = std::fs::read_to_string(&path)
-        .map_err(|e| format!("Failed to read file: {}", e))?;
+        .map_err(|e| AppCommandError::ReadDocument(e.to_string()))?;
 
     let mtime = std::fs::metadata(&path)
         .and_then(|m| m.modified())
@@ -52,29 +93,29 @@ pub async fn read_document(path: String) -> Result<ReadDocumentResult, String> {
         .unwrap_or(0);
 
     let doc = document::Document::from_markdown(&content, &path)
-        .map_err(|e| format!("Failed to parse document: {}", e))?;
+        .map_err(|e| AppCommandError::ParseDocument(e.to_string()))?;
 
     Ok(ReadDocumentResult { document: doc, content, mtime })
 }
 
 #[tauri::command]
-pub async fn write_document(path: String, content: String) -> Result<(), String> {
+pub async fn write_document(path: String, content: String) -> Result<(), AppCommandError> {
     tracing::info!("Writing document: {}", path);
 
     if std::path::Path::new(&path).exists() {
         let backup_dir = get_backup_dir();
         std::fs::create_dir_all(&backup_dir)
-            .map_err(|e| format!("Failed to create backup directory: {}", e))?;
+            .map_err(|e| AppCommandError::CreateBackupDirectory(e.to_string()))?;
 
         let backup_path = create_backup_path(&path);
         std::fs::copy(&path, &backup_path)
-            .map_err(|e| format!("Failed to create backup: {}", e))?;
+            .map_err(|e| AppCommandError::CreateBackup(e.to_string()))?;
 
         request_backup_cleanup();
     }
 
     std::fs::write(&path, &content)
-        .map_err(|e| format!("Failed to write file: {}", e))?;
+        .map_err(|e| AppCommandError::WriteDocument(e.to_string()))?;
 
     Ok(())
 }
@@ -88,26 +129,26 @@ pub struct FileEntry {
 }
 
 #[tauri::command]
-pub async fn list_directory(path: String) -> Result<Vec<FileEntry>, String> {
+pub async fn list_directory(path: String) -> Result<Vec<FileEntry>, AppCommandError> {
     tracing::info!("Listing directory: {}", path);
-    
+
     let entries = std::fs::read_dir(&path)
-        .map_err(|e| format!("Failed to read directory: {}", e))?;
-    
+        .map_err(|e| AppCommandError::ListDirectory(e.to_string()))?;
+
     let mut files: Vec<FileEntry> = entries
         .filter_map(|entry| {
             let entry = entry.ok()?;
             let path = entry.path();
             let name = entry.file_name().to_string_lossy().to_string();
-            
+
             if name.starts_with('.') {
                 return None;
             }
-            
+
             let is_dir = path.is_dir();
             let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
             let is_markdown = matches!(extension, "md" | "markdown" | "txt");
-            
+
             Some(FileEntry {
                 name,
                 path: path.to_string_lossy().to_string(),
@@ -116,7 +157,7 @@ pub async fn list_directory(path: String) -> Result<Vec<FileEntry>, String> {
             })
         })
         .collect();
-    
+
     files.sort_by(|a, b| {
         match (a.is_dir, b.is_dir) {
             (true, false) => std::cmp::Ordering::Less,
@@ -124,7 +165,7 @@ pub async fn list_directory(path: String) -> Result<Vec<FileEntry>, String> {
             _ => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
         }
     });
-    
+
     Ok(files)
 }
 
@@ -133,22 +174,24 @@ pub async fn watch_directory(
     path: String,
     state: State<'_, file_watcher::FileWatcherState>,
     app_handle: AppHandle,
-) -> Result<(), String> {
+) -> Result<(), AppCommandError> {
     tracing::info!("Starting file watcher for: {}", path);
-    state.watch(std::path::PathBuf::from(path), app_handle)
+    state
+        .watch(std::path::PathBuf::from(path), app_handle)
+        .map_err(|error| AppCommandError::WatchDirectory(error.to_string()))
 }
 
 #[tauri::command]
 pub async fn unwatch_directory(
     state: State<'_, file_watcher::FileWatcherState>,
-) -> Result<(), String> {
+) -> Result<(), AppCommandError> {
     tracing::info!("Stopping file watcher");
     state.stop();
     Ok(())
 }
 
 #[tauri::command]
-pub async fn compute_diff(old_text: String, new_text: String) -> Result<diff::DiffResult, String> {
+pub async fn compute_diff(old_text: String, new_text: String) -> Result<diff::DiffResult, AppCommandError> {
     tracing::info!("Computing diff");
     Ok(diff::compute_diff(&old_text, &new_text))
 }
@@ -160,12 +203,12 @@ pub async fn ai_edit(
     scope: String,
     context: Vec<ai::ContextItem>,
     state: State<'_, AppState>,
-) -> Result<ai::AIEditResponse, String> {
+) -> Result<ai::AIEditResponse, AppCommandError> {
     tracing::info!("AI edit request: {}", instruction);
-    
+
     let config = state.ai_config.read().await.clone();
     let adapter = ai::AIProviderAdapter::new(config);
-    
+
     let edit_scope = match scope.as_str() {
         "selection" => ai::EditScope::Selection,
         "paragraph" => ai::EditScope::Paragraph,
@@ -173,17 +216,17 @@ pub async fn ai_edit(
         "document" => ai::EditScope::Document,
         _ => ai::EditScope::Selection,
     };
-    
+
     let request = ai::AIEditRequest {
         instruction,
         original_text,
         scope: edit_scope,
         context,
     };
-    
+
     adapter.edit(request)
         .await
-        .map_err(|e| format!("AI error: {}", e))
+        .map_err(|e| AppCommandError::AIEdit(e.to_string()))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -279,7 +322,7 @@ fn get_settings_path() -> std::path::PathBuf {
         .join("settings.json")
 }
 
-pub fn read_settings_from_disk() -> Result<Settings, String> {
+pub fn read_settings_from_disk() -> Result<Settings, AppCommandError> {
     let path = get_settings_path();
 
     if !path.exists() {
@@ -287,7 +330,7 @@ pub fn read_settings_from_disk() -> Result<Settings, String> {
     }
 
     let content = std::fs::read_to_string(&path)
-        .map_err(|e| format!("Failed to read settings: {}", e))?;
+        .map_err(|e| AppCommandError::ReadSettings(e.to_string()))?;
 
     match serde_json::from_str::<Settings>(&content) {
         Ok(settings) => Ok(settings),
@@ -295,11 +338,11 @@ pub fn read_settings_from_disk() -> Result<Settings, String> {
             tracing::warn!("Failed to parse settings as new format ({}), trying merged format", e);
 
             let value: serde_json::Value = serde_json::from_str(&content)
-                .map_err(|e| format!("Failed to parse settings JSON: {}", e))?;
+                .map_err(|e| AppCommandError::ParseSettings(format!("settings JSON: {}", e)))?;
 
             if let Some(object) = value.as_object() {
                 let mut merged = serde_json::to_value(Settings::default())
-                    .map_err(|e| format!("Failed to serialize default settings: {}", e))?;
+                    .map_err(|e| AppCommandError::SerializeSettings(format!("default settings: {}", e)))?;
 
                 if let Some(merged_object) = merged.as_object_mut() {
                     for (key, value) in object {
@@ -328,7 +371,7 @@ pub fn read_settings_from_disk() -> Result<Settings, String> {
             }
 
             let legacy: LegacySettings = serde_json::from_str(&content)
-                .map_err(|e| format!("Failed to parse legacy settings: {}", e))?;
+                .map_err(|e| AppCommandError::ParseSettings(format!("legacy settings: {}", e)))?;
 
             let default_api_config_id = uuid::Uuid::new_v4().to_string();
             let default_api_config = ApiConfig {
@@ -357,7 +400,6 @@ pub fn read_settings_from_disk() -> Result<Settings, String> {
                 ai_max_tokens: legacy.ai_max_tokens,
                 api_configs: vec![default_api_config],
                 active_api_config_id: Some(default_api_config_id),
-                // Knowledge base defaults for legacy settings
                 embedding_model: "BAAI/bge-small-zh-v1.5".to_string(),
                 embedding_model_path: None,
                 chunk_size: 500,
@@ -368,32 +410,23 @@ pub fn read_settings_from_disk() -> Result<Settings, String> {
 }
 
 #[tauri::command]
-pub async fn get_settings() -> Result<Settings, String> {
-    let path = get_settings_path();
-    
-    if !path.exists() {
-        return Ok(Settings::default());
-    }
-    
-    let content = std::fs::read_to_string(&path)
-        .map_err(|e| format!("Failed to read settings: {}", e))?;
-    
-    serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse settings: {}", e))
+pub async fn get_settings() -> Result<Settings, AppCommandError> {
+    read_settings_from_disk()
 }
 
 #[tauri::command]
-pub async fn save_settings(settings: Settings, state: State<'_, AppState>) -> Result<(), String> {
+pub async fn save_settings(settings: Settings, state: State<'_, AppState>) -> Result<(), AppCommandError> {
     let path = get_settings_path();
+    let config_dir = path.parent().ok_or(AppCommandError::InvalidConfigPath)?;
 
-    std::fs::create_dir_all(path.parent().unwrap())
-        .map_err(|e| format!("Failed to create config directory: {}", e))?;
+    std::fs::create_dir_all(config_dir)
+        .map_err(|e| AppCommandError::CreateConfigDirectory(e.to_string()))?;
 
     let content = serde_json::to_string_pretty(&settings)
-        .map_err(|e| format!("Failed to serialize settings: {}", e))?;
+        .map_err(|e| AppCommandError::SerializeSettings(e.to_string()))?;
 
     std::fs::write(&path, content)
-        .map_err(|e| format!("Failed to write settings: {}", e))?;
+        .map_err(|e| AppCommandError::WriteSettings(e.to_string()))?;
 
     *state.ai_config.write().await = ai_config::build_settings_ai_config(&settings);
 
@@ -405,7 +438,7 @@ pub type TestResult = AITestResult;
 #[tauri::command]
 pub async fn test_api_config(
     request: TestApiConfigRequest,
-) -> Result<TestResult, String> {
+) -> Result<TestResult, AppCommandError> {
     tracing::info!("Testing API config: {} ({})", request.model, request.provider);
     ai_config::test_ai_connection_impl(
         request.api_key.as_deref(),
@@ -413,6 +446,7 @@ pub async fn test_api_config(
         &request.model,
     )
     .await
+    .map_err(|error| AppCommandError::TestAIConnection(error.to_string()))
 }
 
 #[tauri::command]
@@ -420,29 +454,31 @@ pub async fn test_ai_connection(
     api_key: Option<String>,
     base_url: String,
     model: String,
-) -> Result<TestResult, String> {
+) -> Result<TestResult, AppCommandError> {
     tracing::info!("Testing AI connection to: {}", base_url);
-    ai_config::test_ai_connection_impl(api_key.as_deref(), &base_url, &model).await
+    ai_config::test_ai_connection_impl(api_key.as_deref(), &base_url, &model)
+        .await
+        .map_err(|error| AppCommandError::TestAIConnection(error.to_string()))
 }
 
 #[tauri::command]
-pub async fn read_office_file(path: String) -> Result<Vec<u8>, String> {
+pub async fn read_office_file(path: String) -> Result<Vec<u8>, AppCommandError> {
     tracing::info!("Reading office file: {}", path);
-    std::fs::read(&path).map_err(|e| format!("Failed to read file: {}", e))
+    std::fs::read(&path).map_err(|e| AppCommandError::ReadOfficeFile(e.to_string()))
 }
 
 #[tauri::command]
-pub async fn write_office_file(path: String, data: Vec<u8>) -> Result<(), String> {
+pub async fn write_office_file(path: String, data: Vec<u8>) -> Result<(), AppCommandError> {
     tracing::info!("Writing office file: {}", path);
-    std::fs::write(&path, &data).map_err(|e| format!("Failed to write file: {}", e))
+    std::fs::write(&path, &data).map_err(|e| AppCommandError::WriteOfficeFile(e.to_string()))
 }
 
 #[tauri::command]
-pub async fn read_office_text(path: String) -> Result<OfficeFileResult, String> {
+pub async fn read_office_text(path: String) -> Result<OfficeFileResult, AppCommandError> {
     tracing::info!("Reading office file as text: {}", path);
 
     let result = office::read_office_file(std::path::Path::new(&path))
-        .map_err(|e| format!("Failed to read office file: {}", e))?;
+        .map_err(|e| AppCommandError::ReadOfficeFile(e.to_string()))?;
 
     let (file_type, text_content) = result;
 
@@ -450,13 +486,15 @@ pub async fn read_office_text(path: String) -> Result<OfficeFileResult, String> 
         office::OfficeFileType::Word(doc) => Ok(OfficeFileResult {
             file_type: "docx".to_string(),
             text_content,
-            json_content: serde_json::to_string(&doc).unwrap_or_default(),
+            json_content: serde_json::to_string(&doc)
+                .map_err(|e| AppCommandError::SerializeOfficeDocument(e.to_string()))?,
             sheet_names: None,
         }),
         office::OfficeFileType::Excel(workbook) => Ok(OfficeFileResult {
             file_type: "xlsx".to_string(),
             text_content,
-            json_content: serde_json::to_string(&workbook).unwrap_or_default(),
+            json_content: serde_json::to_string(&workbook)
+                .map_err(|e| AppCommandError::SerializeOfficeDocument(e.to_string()))?,
             sheet_names: Some(workbook.sheets.iter().map(|s| s.name.clone()).collect()),
         }),
     }
@@ -475,11 +513,11 @@ pub async fn write_office_text(
     path: String,
     json_content: String,
     format: String,
-) -> Result<(), String> {
+) -> Result<(), AppCommandError> {
     tracing::info!("Writing office file: {} ({})", path, format);
 
     let path_obj = std::path::Path::new(&path);
 
     office::write_office_file(path_obj, &json_content)
-        .map_err(|e| format!("Failed to write office file: {}", e))
+        .map_err(|e| AppCommandError::WriteOfficeFile(e.to_string()))
 }

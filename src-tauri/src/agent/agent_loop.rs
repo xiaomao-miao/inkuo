@@ -259,8 +259,7 @@ impl AgentExecutor {
             let tool_calls = match tool_calls {
                 Some(tc) if !tc.is_empty() => tc,
                 _ => {
-                    // Return the content
-                    return Ok(content.unwrap_or_default());
+                    return Ok(content.unwrap_or_else(String::new));
                 }
             };
 
@@ -272,8 +271,18 @@ impl AgentExecutor {
                     let id = tc.id.clone();
 
                     // Parse arguments JSON
-                    let arguments: Value = serde_json::from_str(&tc.function.arguments)
-                        .unwrap_or(serde_json::json!({}));
+                    let arguments: Value = match serde_json::from_str(&tc.function.arguments) {
+                        Ok(arguments) => arguments,
+                        Err(error) => {
+                            tracing::warn!(
+                                "Failed to parse tool arguments for {} ({}): {}",
+                                name,
+                                id,
+                                error
+                            );
+                            serde_json::json!({})
+                        }
+                    };
 
                     Some(ParsedToolCall {
                         id,
@@ -294,7 +303,18 @@ impl AgentExecutor {
                     summary: None,
                     tool_call_id: Some(parsed.id.clone()),
                     tool_name: Some(parsed.name.clone()),
-                    tool_args: Some(serde_json::to_string(&parsed.arguments).unwrap_or_default()),
+                    tool_args: Some(match serde_json::to_string(&parsed.arguments) {
+                        Ok(arguments) => arguments,
+                        Err(error) => {
+                            tracing::warn!(
+                                "Failed to serialize parsed tool arguments for {} ({}): {}",
+                                parsed.name,
+                                parsed.id,
+                                error
+                            );
+                            "{}".to_string()
+                        }
+                    }),
                     final_content: None,
                     error: None,
                     search_results: None,
@@ -489,7 +509,17 @@ impl AgentExecutor {
 
         if !response.status().is_success() {
             let status = response.status();
-            let body = response.text().await.unwrap_or_default();
+            let body = match response.text().await {
+                Ok(body) => body,
+                Err(error) => {
+                    tracing::warn!(
+                        "Failed to read AI error response body (status {}): {}",
+                        status,
+                        error
+                    );
+                    String::new()
+                }
+            };
             return Err(AgentError::AIError(format!(
                 "HTTP {}: {}",
                 status, body

@@ -1,26 +1,134 @@
 //! Knowledge base Tauri commands
 
+use crate::commands::{get_chunk_size, get_embedding_model};
 use crate::knowledge::{
-    BuildResult, Chunker, ChunkConfig, DocScanner, Embedder, ModelInfo,
-    MetadataStore, SearchResult, UpdateResult, VectorStore,
+    BuildResult, ChunkConfig, Chunker, DocScanner, Embedder, MetadataStore, ModelInfo,
+    SearchResult, UpdateResult, VectorStore,
 };
-use crate::commands::{get_embedding_model, get_chunk_size};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Manager};
+use thiserror::Error;
 
 /// Shared vector store cache accessible from both KB commands and agent tools.
 /// This ensures both code paths use the SAME VectorStore instance, avoiding
 /// WAL lock conflicts (Qdrant Edge WAL only allows single-process access).
-static SHARED_STORES: std::sync::OnceLock<
-    tokio::sync::RwLock<HashMap<String, VectorStore>>
-> = std::sync::OnceLock::new();
+static SHARED_STORES: std::sync::OnceLock<tokio::sync::RwLock<HashMap<String, VectorStore>>> =
+    std::sync::OnceLock::new();
+
+#[derive(Debug, Clone, Serialize, Deserialize, Error)]
+pub enum KnowledgeCommandError {
+    #[error("Workspace does not exist: {0}")]
+    WorkspaceNotFound(String),
+    #[error("Unsupported embedding model: {0}")]
+    UnsupportedEmbeddingModel(String),
+    #[error("Model files not found for '{0}'")]
+    ModelNotFound(String),
+    #[error("Failed to initialize embedder: {0}")]
+    EmbedderInit(String),
+    #[error("Failed to generate embeddings: {0}")]
+    Embedding(String),
+    #[error("Failed to encode query: {0}")]
+    EncodeQuery(String),
+    #[error("Failed to create vector store: {0}")]
+    VectorStoreInit(String),
+    #[error("Failed to store vectors: {0}")]
+    StoreVectors(String),
+    #[error("Knowledge search failed: {0}")]
+    Search(String),
+    #[error("Failed to create metadata store: {0}")]
+    MetadataStoreInit(String),
+    #[error("Failed to load metadata: {0}")]
+    MetadataLoad(String),
+    #[error("Failed to create metadata: {0}")]
+    MetadataCreate(String),
+    #[error("Failed to update metadata: {0}")]
+    MetadataUpdate(String),
+    #[error("Failed to delete metadata: {0}")]
+    MetadataDelete(String),
+    #[error("Failed to scan documents: {0}")]
+    DocumentScan(String),
+    #[error("Failed to get application data directory")]
+    MissingDataDirectory,
+    #[error("Failed to delete storage: {0}")]
+    StorageDelete(String),
+    #[error("Failed to get resource directory: {0}")]
+    ResourceDirectory(String),
+    #[error("Failed to create model directory: {0}")]
+    ModelDirectoryCreate(String),
+    #[error("Failed to serialize model metadata: {0}")]
+    ModelMetadataSerialize(String),
+    #[error("Failed to write model metadata: {0}")]
+    ModelMetadataWrite(String),
+    #[error("Failed to create HTTP client: {0}")]
+    HttpClient(String),
+    #[error("Failed to send request: {0}")]
+    HttpRequest(String),
+    #[error("HTTP error: {0}")]
+    HttpStatus(String),
+    #[error("Failed to read response: {0}")]
+    HttpResponseRead(String),
+    #[error("Failed to write downloaded file: {0}")]
+    DownloadWrite(String),
+}
 
 fn shared_stores() -> &'static tokio::sync::RwLock<HashMap<String, VectorStore>> {
     SHARED_STORES.get_or_init(|| {
         tracing::info!("Initializing shared vector store cache");
         tokio::sync::RwLock::new(HashMap::new())
     })
+}
+
+fn emit_event(app: &AppHandle, event: &str, payload: serde_json::Value) {
+    if let Err(error) = app.emit(event, payload) {
+        tracing::warn!("Failed to emit {} event: {}", event, error);
+    }
+}
+
+fn emit_build_progress(
+    app: &AppHandle,
+    session_id: &str,
+    phase: &str,
+    current: usize,
+    total: usize,
+    message: impl Into<String>,
+) {
+    emit_event(
+        app,
+        "kb://build-progress",
+        serde_json::json!({
+            "session_id": session_id,
+            "phase": phase,
+            "current": current,
+            "total": total,
+            "message": message.into(),
+        }),
+    );
+}
+
+fn emit_model_download_progress(
+    app: &AppHandle,
+    model_name: &str,
+    current: usize,
+    total: usize,
+    filename: &str,
+    status: &str,
+    size: Option<usize>,
+) {
+    let mut payload = serde_json::json!({
+        "model": model_name,
+        "current": current,
+        "total": total,
+        "filename": filename,
+        "status": status,
+    });
+
+    if let Some(size) = size {
+        payload["size"] = serde_json::json!(size);
+    }
+
+    emit_event(app, "model-download-progress", payload);
 }
 
 /// Initialize the shared cache. Called once during app startup.
@@ -34,7 +142,7 @@ pub fn register_shared_stores() {
 pub async fn get_vector_store_for_search(
     workspace_path: &str,
     model_name: &str,
-) -> Result<VectorStore, String> {
+) -> Result<VectorStore, KnowledgeCommandError> {
     get_or_create_vector_store(workspace_path, model_name).await
 }
 
@@ -54,12 +162,11 @@ fn get_workspace_id(workspace_path: &str) -> String {
 async fn get_or_create_vector_store(
     workspace_path: &str,
     model_name: &str,
-) -> Result<VectorStore, String> {
+) -> Result<VectorStore, KnowledgeCommandError> {
     let workspace_id = get_workspace_id(workspace_path);
     let store_key = format!("{}::{}", workspace_id, model_name);
     let collection_name = format!("kb_{}", &workspace_id[..12]);
 
-    // Check shared cache
     {
         let stores = shared_stores().read().await;
         if let Some(store) = stores.get(&store_key) {
@@ -68,7 +175,6 @@ async fn get_or_create_vector_store(
         }
     }
 
-    // Create new
     tracing::info!("Creating new vector store for {}", store_key);
     let store = VectorStore::new(
         &PathBuf::from(workspace_path),
@@ -76,9 +182,8 @@ async fn get_or_create_vector_store(
         model_name,
     )
     .await
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| KnowledgeCommandError::VectorStoreInit(e.to_string()))?;
 
-    // Store in shared cache
     let mut stores = shared_stores().write().await;
     stores.insert(store_key, store.clone());
 
@@ -91,10 +196,11 @@ pub async fn knowledge_build(
     app: AppHandle,
     workspace_path: String,
     session_id: String,
-) -> Result<BuildResult, String> {
+) -> Result<BuildResult, KnowledgeCommandError> {
     tracing::info!(
         "[KB_BUILD] START - workspace={}, session={}",
-        workspace_path, session_id
+        workspace_path,
+        session_id
     );
 
     let workspace = PathBuf::from(&workspace_path);
@@ -102,25 +208,18 @@ pub async fn knowledge_build(
 
     if !workspace.exists() {
         tracing::error!("[KB_BUILD] Workspace does not exist: {:?}", workspace);
-        return Err(format!("Workspace does not exist: {}", workspace.display()));
+        return Err(KnowledgeCommandError::WorkspaceNotFound(
+            workspace.display().to_string(),
+        ));
     }
 
     let workspace_id = get_workspace_id(&workspace_path);
     tracing::info!("[KB_BUILD] Workspace ID: {}", workspace_id);
 
-    // Phase 0: Start scanning
     tracing::info!("[KB_BUILD] [PHASE 0] Emitting scanning progress");
-    let _ = app.emit("kb://build-progress", serde_json::json!({
-        "session_id": session_id,
-        "phase": "scanning",
-        "current": 0,
-        "total": 4,
-        "message": "初始化中...",
-    }));
+    emit_build_progress(&app, &session_id, "scanning", 0, 4, "初始化中...");
 
-    tracing::info!("[KB_BUILD] Initializing DocScanner");
     let scanner = DocScanner::default();
-
     let chunk_size = get_chunk_size();
     tracing::info!("[KB_BUILD] Chunk size from settings: {}", chunk_size);
 
@@ -133,76 +232,54 @@ pub async fn knowledge_build(
 
     let model_name = get_embedding_model();
     ModelInfo::new(&model_name)
-        .map_err(|e| format!("Unsupported embedding model: {}", e))?;
+        .map_err(|e| KnowledgeCommandError::UnsupportedEmbeddingModel(e.to_string()))?;
     tracing::info!("[KB_BUILD] Model name from settings: {}", model_name);
 
-    tracing::info!("[KB_BUILD] Resolving model directory");
     let model_path = resolve_model_dir(&app, &model_name)
-        .ok_or_else(|| {
-            tracing::error!("[KB_BUILD] Model path not found for: {}", model_name);
-            format!("Model '{}' not found (no model files)", model_name)
-        })?;
+        .ok_or_else(|| KnowledgeCommandError::ModelNotFound(model_name.clone()))?;
     tracing::info!("[KB_BUILD] Model path: {:?}", model_path);
 
-    tracing::info!("[KB_BUILD] Creating Embedder");
     let embedder = Embedder::new(&model_name, &model_path)
-        .map_err(|e| {
-            tracing::error!("[KB_BUILD] Embedder init failed: {}", e);
-            format!("Failed to initialize embedder: {}", e)
-        })?;
+        .map_err(|e| KnowledgeCommandError::EmbedderInit(e.to_string()))?;
     tracing::info!("[KB_BUILD] Embedder created successfully");
 
-    // Phase 1: Scan documents
     tracing::info!("[KB_BUILD] [PHASE 1] Starting document scan");
-    let _ = app.emit("kb://build-progress", serde_json::json!({
-        "session_id": session_id,
-        "phase": "scanning",
-        "current": 1,
-        "total": 4,
-        "message": "扫描文档中...",
-    }));
+    emit_build_progress(&app, &session_id, "scanning", 1, 4, "扫描文档中...");
 
-    tracing::info!("[KB_BUILD] Calling scanner.scan()");
     let documents = scanner
         .scan(&workspace)
-        .map_err(|e| {
-            tracing::error!("[KB_BUILD] Scan failed: {}", e);
-            format!("Failed to scan documents: {}", e)
-        })?;
+        .map_err(|e| KnowledgeCommandError::DocumentScan(e.to_string()))?;
     tracing::info!("[KB_BUILD] Scan complete, found {} documents", documents.len());
 
-    // Build file paths map (absolute paths for frontend navigation)
     let mut file_paths: HashMap<String, String> = HashMap::new();
     for doc in &documents {
         let abs_path = workspace.join(&doc.path);
         file_paths.insert(doc.id.clone(), abs_path.to_string_lossy().to_string());
     }
 
-    // Phase 2: Chunk documents
     tracing::info!("[KB_BUILD] [PHASE 2] Starting chunking, {} documents", documents.len());
-    let _ = app.emit("kb://build-progress", serde_json::json!({
-        "session_id": session_id,
-        "phase": "chunking",
-        "current": 1,
-        "total": 4,
-        "message": format!("分块处理中... ({} 文档)", documents.len()),
-    }));
+    emit_build_progress(
+        &app,
+        &session_id,
+        "chunking",
+        1,
+        4,
+        format!("分块处理中... ({} 文档)", documents.len()),
+    );
 
-    tracing::info!("[KB_BUILD] Calling chunker.chunk_documents()");
     let mut chunks = chunker.chunk_documents(&documents);
     tracing::info!("[KB_BUILD] Chunking complete, created {} chunks", chunks.len());
 
-    // Phase 3: Generate embeddings
     tracing::info!("[KB_BUILD] [PHASE 3] Starting embedding, {} chunks", chunks.len());
-    let _ = app.emit("kb://build-progress", serde_json::json!({
-        "session_id": session_id,
-        "phase": "embedding",
-        "current": 2,
-        "total": 4,
-        "message": format!("生成向量中... ({} 块)", chunks.len()),
-    }));
+    emit_build_progress(
+        &app,
+        &session_id,
+        "embedding",
+        2,
+        4,
+        format!("生成向量中... ({} 块)", chunks.len()),
+    );
 
-    tracing::info!("[KB_BUILD] Calling embedder.encode_chunks_batched()");
     let batch_size = 64usize;
     let total_batches = chunks.len().div_ceil(batch_size.max(1));
     embedder
@@ -215,92 +292,57 @@ pub async fn knowledge_build(
                 completed_batches,
                 total_batches
             );
-            let _ = app.emit("kb://build-progress", serde_json::json!({
-                "session_id": session_id,
-                "phase": "embedding",
-                "current": 2,
-                "total": 4,
-                "message": format!("生成向量中... ({}/{} 块, 第 {}/{} 批)", completed, total, completed_batches, total_batches),
-            }));
+            emit_build_progress(
+                &app,
+                &session_id,
+                "embedding",
+                2,
+                4,
+                format!(
+                    "生成向量中... ({}/{} 块, 第 {}/{} 批)",
+                    completed, total, completed_batches, total_batches
+                ),
+            );
         })
-        .map_err(|e| {
-            tracing::error!("[KB_BUILD] Embedding failed: {}", e);
-            format!("Failed to generate embeddings: {}", e)
-        })?;
+        .map_err(|e| KnowledgeCommandError::Embedding(e.to_string()))?;
     tracing::info!("[KB_BUILD] Embedding complete");
 
-    // Phase 4: Store vectors
     tracing::info!("[KB_BUILD] [PHASE 4] Starting vector storage");
-    let _ = app.emit("kb://build-progress", serde_json::json!({
-        "session_id": session_id,
-        "phase": "storing",
-        "current": 3,
-        "total": 4,
-        "message": "存储向量中...",
-    }));
+    emit_build_progress(&app, &session_id, "storing", 3, 4, "存储向量中...");
 
-    tracing::info!("[KB_BUILD] Getting vector store");
-    let vector_store = get_or_create_vector_store(&workspace_path, &model_name).await
-        .map_err(|e| {
-            tracing::error!("[KB_BUILD] get_or_create_vector_store failed: {}", e);
-            e
-        })?;
+    let vector_store = get_or_create_vector_store(&workspace_path, &model_name).await?;
 
-    tracing::info!("[KB_BUILD] Calling upsert_chunks()");
     vector_store
         .upsert_chunks(&chunks, &file_paths)
         .await
-        .map_err(|e| {
-            tracing::error!("[KB_BUILD] upsert_chunks failed: {}", e);
-            format!("Failed to store vectors: {}", e)
-        })?;
+        .map_err(|e| KnowledgeCommandError::StoreVectors(e.to_string()))?;
     tracing::info!("[KB_BUILD] upsert_chunks complete");
 
-    tracing::info!("[KB_BUILD] Updating metadata");
     let mut metadata_store = MetadataStore::new(&workspace)
-        .map_err(|e| {
-            tracing::error!("[KB_BUILD] MetadataStore init failed: {}", e);
-            format!("Failed to create metadata store: {}", e)
-        })?;
+        .map_err(|e| KnowledgeCommandError::MetadataStoreInit(e.to_string()))?;
 
     let collection_name = format!("kb_{}", &workspace_id[..12]);
     if metadata_store.exists() {
         metadata_store
             .load()
-            .map_err(|e| {
-                tracing::error!("[KB_BUILD] Metadata load failed: {}", e);
-                format!("Failed to load metadata: {}", e)
-            })?;
+            .map_err(|e| KnowledgeCommandError::MetadataLoad(e.to_string()))?;
     } else {
         metadata_store
             .create(&workspace, &collection_name)
-            .map_err(|e| {
-                tracing::error!("[KB_BUILD] Metadata create failed: {}", e);
-                format!("Failed to create metadata: {}", e)
-            })?;
+            .map_err(|e| KnowledgeCommandError::MetadataCreate(e.to_string()))?;
     }
 
     metadata_store
         .update(&documents, chunks.len())
-        .map_err(|e| {
-            tracing::error!("[KB_BUILD] Metadata update failed: {}", e);
-            format!("Failed to update metadata: {}", e)
-        })?;
-    tracing::info!("[KB_BUILD] Metadata update complete");
+        .map_err(|e| KnowledgeCommandError::MetadataUpdate(e.to_string()))?;
 
-    // Done
-    tracing::info!("[KB_BUILD] [DONE] Emitting final progress");
-    let _ = app.emit("kb://build-progress", serde_json::json!({
-        "session_id": session_id,
-        "phase": "done",
-        "current": 4,
-        "total": 4,
-        "message": format!("构建完成！{} 文档，{} 块", documents.len(), chunks.len()),
-    }));
-
-    tracing::info!(
-        "[KB_BUILD] COMPLETE - {} docs, {} chunks, workspace_id={}",
-        documents.len(), chunks.len(), workspace_id
+    emit_build_progress(
+        &app,
+        &session_id,
+        "done",
+        4,
+        4,
+        format!("构建完成！{} 文档，{} 块", documents.len(), chunks.len()),
     );
 
     Ok(BuildResult {
@@ -310,23 +352,22 @@ pub async fn knowledge_build(
     })
 }
 
-/// Search knowledge base
 async fn search_knowledge_base_inner(
     app: &AppHandle,
     workspace_path: &str,
     query: &str,
     top_k: usize,
     for_search: bool,
-) -> Result<Vec<SearchResult>, String> {
+) -> Result<Vec<SearchResult>, KnowledgeCommandError> {
     let model_name = get_embedding_model();
     let model_info = ModelInfo::new(&model_name)
-        .map_err(|e| format!("Unsupported embedding model: {}", e))?;
+        .map_err(|e| KnowledgeCommandError::UnsupportedEmbeddingModel(e.to_string()))?;
 
     let model_path = resolve_model_dir(app, &model_name)
-        .ok_or_else(|| format!("Model '{}' not found (no model files)", model_name))?;
+        .ok_or_else(|| KnowledgeCommandError::ModelNotFound(model_name.clone()))?;
 
     let embedder = Embedder::new(&model_name, &model_path)
-        .map_err(|e| format!("Failed to initialize embedder: {}", e))?;
+        .map_err(|e| KnowledgeCommandError::EmbedderInit(e.to_string()))?;
 
     let vector_store = if for_search {
         get_vector_store_for_search(workspace_path, &model_name).await?
@@ -342,12 +383,12 @@ async fn search_knowledge_base_inner(
 
     let query_vector = embedder
         .encode_single(query)
-        .map_err(|e| format!("Failed to encode query: {}", e))?;
+        .map_err(|e| KnowledgeCommandError::EncodeQuery(e.to_string()))?;
 
     vector_store
         .search(&query_vector, top_k)
         .await
-        .map_err(|e| format!("Search failed: {}", e))
+        .map_err(|e| KnowledgeCommandError::Search(e.to_string()))
 }
 
 #[tauri::command]
@@ -356,7 +397,7 @@ pub async fn knowledge_search(
     workspace_path: String,
     query: String,
     top_k: usize,
-) -> Result<Vec<SearchResult>, String> {
+) -> Result<Vec<SearchResult>, KnowledgeCommandError> {
     tracing::info!("Searching knowledge base: {}", query);
 
     search_knowledge_base_inner(&app, &workspace_path, &query, top_k, false).await
@@ -369,16 +410,17 @@ pub async fn search_knowledge_base(
     workspace_path: &str,
     query: &str,
     top_k: usize,
-) -> Result<Vec<SearchResult>, String> {
+) -> Result<Vec<SearchResult>, KnowledgeCommandError> {
     search_knowledge_base_inner(app, workspace_path, query, top_k, true).await
 }
 
-/// Get knowledge base status
 #[tauri::command]
-pub fn knowledge_status(workspace_path: String) -> Result<Option<serde_json::Value>, String> {
+pub fn knowledge_status(
+    workspace_path: String,
+) -> Result<Option<serde_json::Value>, KnowledgeCommandError> {
     let workspace = PathBuf::from(&workspace_path);
     let mut metadata_store = MetadataStore::new(&workspace)
-        .map_err(|e| format!("Failed to create metadata store: {}", e))?;
+        .map_err(|e| KnowledgeCommandError::MetadataStoreInit(e.to_string()))?;
 
     if !metadata_store.exists() {
         return Ok(None);
@@ -386,7 +428,7 @@ pub fn knowledge_status(workspace_path: String) -> Result<Option<serde_json::Val
 
     let metadata = metadata_store
         .load()
-        .map_err(|e| format!("Failed to load metadata: {}", e))?;
+        .map_err(|e| KnowledgeCommandError::MetadataLoad(e.to_string()))?;
 
     Ok(Some(serde_json::json!({
         "workspace_id": metadata.workspace_id,
@@ -398,17 +440,15 @@ pub fn knowledge_status(workspace_path: String) -> Result<Option<serde_json::Val
     })))
 }
 
-/// Incremental update knowledge base
 #[tauri::command]
 pub async fn knowledge_update(
     app: AppHandle,
     workspace_path: String,
     session_id: String,
-) -> Result<UpdateResult, String> {
+) -> Result<UpdateResult, KnowledgeCommandError> {
     tracing::info!("Updating knowledge base for workspace: {}", workspace_path);
 
     let workspace = PathBuf::from(&workspace_path);
-
     let scanner = DocScanner::default();
     let chunk_size = get_chunk_size();
     let chunker = Chunker::new(ChunkConfig {
@@ -420,13 +460,13 @@ pub async fn knowledge_update(
 
     let model_name = get_embedding_model();
     let model_info = ModelInfo::new(&model_name)
-        .map_err(|e| format!("Unsupported embedding model: {}", e))?;
+        .map_err(|e| KnowledgeCommandError::UnsupportedEmbeddingModel(e.to_string()))?;
 
     let model_path = resolve_model_dir(&app, &model_name)
-        .ok_or_else(|| format!("Model '{}' not found (no model files)", model_name))?;
+        .ok_or_else(|| KnowledgeCommandError::ModelNotFound(model_name.clone()))?;
 
     let embedder = Embedder::new(&model_name, &model_path)
-        .map_err(|e| format!("Failed to initialize embedder: {}", e))?;
+        .map_err(|e| KnowledgeCommandError::EmbedderInit(e.to_string()))?;
 
     tracing::info!(
         "[KB_UPDATE] Using model {} (dim={})",
@@ -437,17 +477,17 @@ pub async fn knowledge_update(
     let vector_store = get_or_create_vector_store(&workspace_path, &model_name).await?;
 
     let mut metadata_store = MetadataStore::new(&workspace)
-        .map_err(|e| format!("Failed to create metadata store: {}", e))?;
+        .map_err(|e| KnowledgeCommandError::MetadataStoreInit(e.to_string()))?;
 
     if metadata_store.exists() {
         metadata_store
             .load()
-            .map_err(|e| format!("Failed to load existing metadata: {}", e))?;
+            .map_err(|e| KnowledgeCommandError::MetadataLoad(e.to_string()))?;
     }
 
     let current_docs = scanner
         .scan(&workspace)
-        .map_err(|e| format!("Failed to scan documents: {}", e))?;
+        .map_err(|e| KnowledgeCommandError::DocumentScan(e.to_string()))?;
 
     let (changed_docs, _removed) = metadata_store.find_changed_files(&current_docs);
 
@@ -485,24 +525,28 @@ pub async fn knowledge_update(
                 completed_batches,
                 total_batches
             );
-            let _ = app.emit("kb://build-progress", serde_json::json!({
-                "session_id": session_id,
-                "phase": "embedding",
-                "current": 2,
-                "total": 4,
-                "message": format!("增量生成向量中... ({}/{} 块, 第 {}/{} 批)", completed, total, completed_batches, total_batches),
-            }));
+            emit_build_progress(
+                &app,
+                &session_id,
+                "embedding",
+                2,
+                4,
+                format!(
+                    "增量生成向量中... ({}/{} 块, 第 {}/{} 批)",
+                    completed, total, completed_batches, total_batches
+                ),
+            );
         })
-        .map_err(|e| format!("Failed to generate embeddings: {}", e))?;
+        .map_err(|e| KnowledgeCommandError::Embedding(e.to_string()))?;
 
     vector_store
         .upsert_chunks(&new_chunks, &file_paths)
         .await
-        .map_err(|e| format!("Failed to store vectors: {}", e))?;
+        .map_err(|e| KnowledgeCommandError::StoreVectors(e.to_string()))?;
 
     metadata_store
         .update(&owned_changed_docs, new_chunks.len())
-        .map_err(|e| format!("Failed to update metadata: {}", e))?;
+        .map_err(|e| KnowledgeCommandError::MetadataUpdate(e.to_string()))?;
 
     Ok(UpdateResult {
         added: owned_changed_docs.len(),
@@ -511,29 +555,26 @@ pub async fn knowledge_update(
     })
 }
 
-/// Clear knowledge base for a workspace
 #[tauri::command]
-pub async fn knowledge_clear(
-    workspace_path: String,
-) -> Result<(), String> {
+pub async fn knowledge_clear(workspace_path: String) -> Result<(), KnowledgeCommandError> {
     let workspace = PathBuf::from(&workspace_path);
     let workspace_id = get_workspace_id(&workspace_path);
 
     let metadata_store = MetadataStore::new(&workspace)
-        .map_err(|e| format!("Failed to create metadata store: {}", e))?;
+        .map_err(|e| KnowledgeCommandError::MetadataStoreInit(e.to_string()))?;
 
     if metadata_store.exists() {
         std::fs::remove_file(metadata_store.metadata_path())
-            .map_err(|e| format!("Failed to delete metadata: {}", e))?;
+            .map_err(|e| KnowledgeCommandError::MetadataDelete(e.to_string()))?;
     }
 
     let storage_path = dirs::data_dir()
         .map(|p| p.join("inkuo").join("knowledge").join(&workspace_id))
-        .ok_or("Failed to get data directory")?;
+        .ok_or(KnowledgeCommandError::MissingDataDirectory)?;
 
     if storage_path.exists() {
         std::fs::remove_dir_all(&storage_path)
-            .map_err(|e| format!("Failed to delete storage: {}", e))?;
+            .map_err(|e| KnowledgeCommandError::StorageDelete(e.to_string()))?;
     }
 
     let mut stores = shared_stores().write().await;
@@ -542,7 +583,6 @@ pub async fn knowledge_clear(
     Ok(())
 }
 
-/// Returns the first existing path among candidates, or None.
 fn first_existing_path(paths: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {
     for p in paths {
         if p.exists() {
@@ -552,7 +592,6 @@ fn first_existing_path(paths: impl IntoIterator<Item = PathBuf>) -> Option<PathB
     None
 }
 
-/// Returns the model directory for a given model name.
 fn resolve_model_dir(app: &AppHandle, model_name: &str) -> Option<PathBuf> {
     let dir_name = model_name.replace('/', "-");
 
@@ -570,7 +609,6 @@ fn resolve_model_dir(app: &AppHandle, model_name: &str) -> Option<PathBuf> {
     first_existing_path(candidates)
 }
 
-/// Model availability info
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct EmbeddingModelInfo {
     pub name: String,
@@ -580,30 +618,20 @@ pub struct EmbeddingModelInfo {
     pub size: String,
 }
 
-/// Check available embedding models
 #[tauri::command]
 pub fn check_available_models(app: AppHandle) -> Vec<EmbeddingModelInfo> {
     let mut models = Vec::new();
 
     for (name, dims, size) in [
         ("BAAI/bge-small-zh-v1.5", 512, "~25MB"),
-        (
-            "BAAI/bge-base-zh-v1.5",
-            768,
-            "~390MB",
-        ),
-        (
-            "BAAI/bge-large-zh-v1.5",
-            1024,
-            "~1.3GB",
-        ),
+        ("BAAI/bge-base-zh-v1.5", 768, "~390MB"),
+        ("BAAI/bge-large-zh-v1.5", 1024, "~1.3GB"),
     ] {
         let model_dir = resolve_model_dir(&app, name);
         let exists = match name {
-            "BAAI/bge-small-zh-v1.5" | "BAAI/bge-large-zh-v1.5" => model_dir
-                .as_ref()
-                .map(|p| p.exists())
-                .unwrap_or(false),
+            "BAAI/bge-small-zh-v1.5" | "BAAI/bge-large-zh-v1.5" => {
+                model_dir.as_ref().map(|p| p.exists()).unwrap_or(false)
+            }
             _ => model_dir
                 .as_ref()
                 .map(|p| p.exists() && p.join("tokenizer.json").exists() && p.join("model.onnx").exists())
@@ -621,53 +649,79 @@ pub fn check_available_models(app: AppHandle) -> Vec<EmbeddingModelInfo> {
     models
 }
 
-/// Download model files for a specific model
 #[tauri::command]
 pub async fn download_model_files(
     app: AppHandle,
     model_name: String,
-) -> Result<String, String> {
+) -> Result<String, KnowledgeCommandError> {
     tracing::info!("Downloading model files for: {}", model_name);
 
-    let resource_dir = app.path().resource_dir()
-        .map_err(|e| format!("Failed to get resource directory: {}", e))?;
+    let resource_dir = app
+        .path()
+        .resource_dir()
+        .map_err(|e| KnowledgeCommandError::ResourceDirectory(e.to_string()))?;
 
     let model_dir = resource_dir.join("models").join(model_name.replace('/', "-"));
 
     std::fs::create_dir_all(&model_dir)
-        .map_err(|e| format!("Failed to create model directory: {}", e))?;
+        .map_err(|e| KnowledgeCommandError::ModelDirectoryCreate(e.to_string()))?;
 
     let files = [
-        ("tokenizer.json", format!("https://hf-mirror.com/{}/resolve/main/tokenizer.json", model_name)),
-        ("tokenizer_config.json", format!("https://hf-mirror.com/{}/resolve/main/tokenizer_config.json", model_name)),
-        ("special_tokens_map.json", format!("https://hf-mirror.com/{}/resolve/main/special_tokens_map.json", model_name)),
-        ("vocab.txt", format!("https://hf-mirror.com/{}/resolve/main/vocab.txt", model_name)),
-        ("config.json", format!("https://hf-mirror.com/{}/resolve/main/config.json", model_name)),
+        (
+            "tokenizer.json",
+            format!("https://hf-mirror.com/{}/resolve/main/tokenizer.json", model_name),
+        ),
+        (
+            "tokenizer_config.json",
+            format!(
+                "https://hf-mirror.com/{}/resolve/main/tokenizer_config.json",
+                model_name
+            ),
+        ),
+        (
+            "special_tokens_map.json",
+            format!(
+                "https://hf-mirror.com/{}/resolve/main/special_tokens_map.json",
+                model_name
+            ),
+        ),
+        (
+            "vocab.txt",
+            format!("https://hf-mirror.com/{}/resolve/main/vocab.txt", model_name),
+        ),
+        (
+            "config.json",
+            format!("https://hf-mirror.com/{}/resolve/main/config.json", model_name),
+        ),
     ];
 
     let total = files.len();
     let mut downloaded = 0;
 
-    let _ = app.emit("model-download-progress", serde_json::json!({
-        "model": model_name,
-        "current": 0,
-        "total": total,
-        "filename": "开始下载...",
-        "status": "downloading"
-    }));
+    emit_model_download_progress(
+        &app,
+        &model_name,
+        0,
+        total,
+        "开始下载...",
+        "downloading",
+        None,
+    );
 
     for (filename, url) in files {
         let path = model_dir.join(filename);
         if path.exists() {
             tracing::debug!("File already exists: {:?}", path);
             downloaded += 1;
-            let _ = app.emit("model-download-progress", serde_json::json!({
-                "model": model_name,
-                "current": downloaded,
-                "total": total,
-                "filename": filename,
-                "status": "skipping"
-            }));
+            emit_model_download_progress(
+                &app,
+                &model_name,
+                downloaded,
+                total,
+                filename,
+                "skipping",
+                None,
+            );
             continue;
         }
 
@@ -680,24 +734,24 @@ pub async fn download_model_files(
                 tracing::info!("Downloaded: {}", filename);
                 downloaded += 1;
             }
-            Err(e) => {
-                tracing::warn!("Failed to download {}: {}", filename, e);
+            Err(error) => {
+                tracing::warn!("Failed to download {}: {}", filename, error);
                 let mirror_url = url.replace("huggingface.co", "hf-mirror.com");
-                let mirror_result = download_file_with_progress(&app, &mirror_url, &path, &model_name, downloaded, total);
-                if mirror_result.is_ok() {
-                    tracing::info!("Downloaded {} from mirror", filename);
-                    downloaded += 1;
-                }
+                download_file_with_progress(&app, &mirror_url, &path, &model_name, downloaded, total)?;
+                tracing::info!("Downloaded {} from mirror", filename);
+                downloaded += 1;
             }
         }
 
-        let _ = app.emit("model-download-progress", serde_json::json!({
-            "model": model_name,
-            "current": downloaded,
-            "total": total,
-            "filename": filename,
-            "status": "done"
-        }));
+        emit_model_download_progress(
+            &app,
+            &model_name,
+            downloaded,
+            total,
+            filename,
+            "done",
+            None,
+        );
     }
 
     let model_json_path = model_dir.join("model.json");
@@ -713,16 +767,20 @@ pub async fn download_model_files(
         "pooling": "mean",
         "normalize": true
     });
-    std::fs::write(&model_json_path, serde_json::to_string_pretty(&model_json).unwrap())
-        .map_err(|e| format!("Failed to write model.json: {}", e))?;
+    let model_json_string = serde_json::to_string_pretty(&model_json)
+        .map_err(|e| KnowledgeCommandError::ModelMetadataSerialize(e.to_string()))?;
+    std::fs::write(&model_json_path, model_json_string)
+        .map_err(|e| KnowledgeCommandError::ModelMetadataWrite(e.to_string()))?;
 
-    let _ = app.emit("model-download-progress", serde_json::json!({
-        "model": model_name,
-        "current": total,
-        "total": total,
-        "filename": "完成",
-        "status": "complete"
-    }));
+    emit_model_download_progress(
+        &app,
+        &model_name,
+        total,
+        total,
+        "完成",
+        "complete",
+        None,
+    );
 
     Ok(format!("Downloaded {} files to {:?}", downloaded, model_dir))
 }
@@ -730,42 +788,46 @@ pub async fn download_model_files(
 fn download_file_with_progress(
     app: &AppHandle,
     url: &str,
-    path: &std::path::Path,
+    path: &Path,
     model_name: &str,
     current: usize,
     total: usize,
-) -> Result<(), String> {
+) -> Result<(), KnowledgeCommandError> {
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(300))
         .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+        .map_err(|e| KnowledgeCommandError::HttpClient(e.to_string()))?;
 
-    let response = client.get(url)
+    let response = client
+        .get(url)
         .send()
-        .map_err(|e| format!("Failed to send request: {}", e))?;
+        .map_err(|e| KnowledgeCommandError::HttpRequest(e.to_string()))?;
 
     if !response.status().is_success() {
-        return Err(format!("HTTP error: {}", response.status()));
+        return Err(KnowledgeCommandError::HttpStatus(response.status().to_string()));
     }
 
-    let bytes = response.bytes()
-        .map_err(|e| format!("Failed to read response: {}", e))?;
+    let bytes = response
+        .bytes()
+        .map_err(|e| KnowledgeCommandError::HttpResponseRead(e.to_string()))?;
 
-    let filename = path.file_name()
+    let filename = path
+        .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("unknown");
 
-    let _ = app.emit("model-download-progress", serde_json::json!({
-        "model": model_name,
-        "current": current,
-        "total": total,
-        "filename": filename,
-        "status": "downloading",
-        "size": bytes.len()
-    }));
+    emit_model_download_progress(
+        app,
+        model_name,
+        current,
+        total,
+        filename,
+        "downloading",
+        Some(bytes.len()),
+    );
 
     std::fs::write(path, bytes)
-        .map_err(|e| format!("Failed to write file: {}", e))?;
+        .map_err(|e| KnowledgeCommandError::DownloadWrite(e.to_string()))?;
 
     Ok(())
 }

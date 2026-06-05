@@ -89,7 +89,7 @@ impl DatabaseSearchTool {
             top_k,
         )
         .await
-        .map_err(|e| ToolError::ExecutionError(e))?;
+        .map_err(|e| ToolError::ExecutionError(e.to_string()))?;
 
         if results.is_empty() {
             return Ok(format!(

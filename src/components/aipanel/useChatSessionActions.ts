@@ -22,6 +22,18 @@ interface UseChatSessionActionsArgs {
   clearEditingState: () => void;
 }
 
+function extractErrorMessage(error: unknown): string {
+  if (typeof error === 'string') return error;
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === 'object') {
+    const maybeMessage = Reflect.get(error, 'message');
+    if (typeof maybeMessage === 'string' && maybeMessage.trim()) {
+      return maybeMessage;
+    }
+  }
+  return String(error);
+}
+
 export function useChatSessionActions({
   activeSession,
   mode,
@@ -98,7 +110,9 @@ export function useChatSessionActions({
             max_tokens: activeConfig.maxTokens,
           },
         }).catch((err) => {
-          useAIPanelStore.getState().setErrorMessage(sessionId, assistantMessageId, `抱歉，发生了错误：${err}`);
+          useAIPanelStore
+            .getState()
+            .setErrorMessage(sessionId, assistantMessageId, `抱歉，发生了错误：${extractErrorMessage(err)}`);
           setIsStreaming(sessionId, false);
         });
         return;
@@ -120,11 +134,11 @@ export function useChatSessionActions({
           max_tokens: activeConfig.maxTokens,
         },
       }).catch((err) => {
-        updateMessage(sessionId, assistantMessageId, `抱歉，发生了错误：${err}`);
+        updateMessage(sessionId, assistantMessageId, `抱歉，发生了错误：${extractErrorMessage(err)}`);
         setIsStreaming(sessionId, false);
       });
     } catch (err) {
-      updateMessage(sessionId, assistantMessageId, `抱歉，发生了错误：${err}`);
+      updateMessage(sessionId, assistantMessageId, `抱歉，发生了错误：${extractErrorMessage(err)}`);
       setIsStreaming(sessionId, false);
     }
   }, [activeSession, input, isStreaming, editingMessageId, updateMessage, addMessage, clearEditingState, setInput, setIsStreaming, clearToolCalls, messages, mode]);
