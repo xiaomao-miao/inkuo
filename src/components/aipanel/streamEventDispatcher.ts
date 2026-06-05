@@ -7,7 +7,6 @@ interface StreamEventDispatcherArgs {
   payload: StreamPayload;
   currentMode: ChatMode;
   clearToolCalls: (sessionId: string) => void;
-  setMessageDiff: (sessionId: string, messageId: string, diff: CurrentDiff | null) => void;
   flushAllPending: () => void;
   streamingContentRef: MutableRefObject<Record<string, string>>;
   appendTextDelta: (messageId: string, content: string) => void;
@@ -19,7 +18,6 @@ export async function dispatchStreamEvent({
   payload,
   currentMode,
   clearToolCalls,
-  setMessageDiff,
   flushAllPending,
   streamingContentRef,
   appendTextDelta,

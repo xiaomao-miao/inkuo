@@ -4,15 +4,13 @@ import { buildKnowledgeToolbarModel } from './KnowledgeToolbar';
 import { useKnowledgeBase } from './useKnowledgeBase';
 
 export function useAIPanelController() {
-  const {
-    sessions,
-    activeSessionId,
-    createSession,
-    deleteSession,
-    setActiveSession,
-    clearMessages,
-    setIsOpen,
-  } = useAIPanelStore();
+  const sessions = useAIPanelStore((state) => state.sessions);
+  const activeSessionId = useAIPanelStore((state) => state.activeSessionId);
+  const createSession = useAIPanelStore((state) => state.createSession);
+  const deleteSession = useAIPanelStore((state) => state.deleteSession);
+  const setActiveSession = useAIPanelStore((state) => state.setActiveSession);
+  const clearMessages = useAIPanelStore((state) => state.clearMessages);
+  const setIsOpen = useAIPanelStore((state) => state.setIsOpen);
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === activeSessionId) ?? sessions[0],
