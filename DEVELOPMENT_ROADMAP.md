@@ -121,45 +121,28 @@
 
 ---
 
-### Phase 2：RAG 系统升级（1 天）
+### Phase 2：知识库系统升级（1 天）
 
 #### 2.1 接入真实 Embedding（0.5 天）
 
-**问题**：`generate_pseudo_embedding()` 用的是词频 hash，无法做语义检索。
+**问题**：早期伪 embedding 无法做可靠语义检索。
 
-**方案**：接入 OpenAI `text-embedding-3-small`（1536 维，有免费额度）。
+**方案**：接入真实 embedding 模型，并统一落到 `src-tauri/src/knowledge/*` 这条知识库链路。
 
 **改动**：
 
-```rust
-// src-tauri/src/rag.rs
-async fn generate_embedding(text: &str) -> Vec<f32> {
-    // 调用 OpenAI Embeddings API
-    let client = reqwest::Client::new();
-    let resp = client.post("https://api.openai.com/v1/embeddings")
-        .header("Authorization", format!("Bearer {}", api_key))
-        .json(&json!({
-            "model": "text-embedding-3-small",
-            "input": text
-        }))
-        .send()
-        .await
-        .unwrap();
-    // 解析 response.data[0].embedding
-}
-```
+- 使用真实 embedding 模型替代伪 embedding
+- 统一 chunking / metadata / vector store / search 到 `knowledge/*`
+- 保证 UI 知识库与 Agent `database_search` 共享同一后端
 
-- 将 embedding 维度从 64 改为 1536
-- cosine_similarity 保持不变
+#### 2.2 Agent 知识库检索注入（0.5 天）
 
-#### 2.2 RAG 自动检索注入（0.5 天）
-
-**目标**：Agent 在执行任务时，自动把相关知识库片段注入到 context。
+**目标**：Agent 在执行任务时，优先通过共享知识库检索相关工作区片段。
 
 **实现**：
-- 在 `commands_agent.rs` 的 `ai_agent_stream` 里，发送前做一次 RAG 搜索
-- 把 top-k 结果拼到 system prompt 末尾或 user message 的 context 部分
-- `k=5`，每个 chunk 最多 500 字符
+- 在 agent 工具层暴露 `database_search`
+- 通过共享知识库后端执行 top-k 检索
+- 确保知识模式与 Agent 使用同一份知识库数据
 
 ---
 
@@ -332,7 +315,7 @@ inkuo 是一个本地优先的 AI 文档编辑器。不同于普通的 AI 对话
 | **Day 1-2** | Phase 1.1 | Web 搜索工具（Tavily API） | `web_search` 工具可用 |
 | **Day 2** | Phase 1.2 | Shell 执行工具 | `run_command` 工具可用 |
 | **Day 2-3** | Phase 1.3 | 批次写文件 + Todo 工具 | 4 个新工具可用 |
-| **Day 3-4** | Phase 2 | RAG 升级（真实 Embedding） | 语义搜索生效 |
+| **Day 3-4** | Phase 2 | 知识库升级（真实 Embedding） | 语义搜索生效 |
 | **Day 4-5** | Phase 3 | Paper/Project Mode | 两种工作流可用 |
 | **Day 5-6** | Phase 4.1 | 产品 README | 外部可读的产品文档 |
 | **Day 6-6.5** | Phase 4.2 | Demo 视频 | 3 分钟演示视频 |
@@ -360,7 +343,7 @@ inkuo 是一个本地优先的 AI 文档编辑器。不同于普通的 AI 对话
 
 ```
 [Day 0.5]  ✅ 编译通过，内部可测试
-[Day 5]    ✅ 工具集完整 + RAG 升级 = "可演示的 MVP"
+[Day 5]    ✅ 工具集完整 + 知识库升级 = "可演示的 MVP"
 [Day 7]    ✅ README + Demo 视频 + Pitch Deck = "可融资状态"
 [Week 4]   ✅ 拿到 pre-seed
 [Week 6]   ✅ 官网 + 案例研究 + 公开发布

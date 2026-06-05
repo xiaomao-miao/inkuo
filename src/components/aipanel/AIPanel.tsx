@@ -62,10 +62,10 @@ export const AIPanel: React.FC = () => {
   useAgentStream({ mode });
 
   const knowledgeStatusLabel = knowledgeBase
-    ? `已索引 ${knowledgeBase.documentCount} 文档 / ${knowledgeBase.chunkCount} 分块`
+    ? `已建立知识库：${knowledgeBase.documentCount} 文档 / ${knowledgeBase.chunkCount} 分块`
     : buildProgress
       ? '正在构建知识库…'
-      : '知识库未创建';
+      : '知识库未初始化';
 
   const knowledgeToolbar = useMemo(() => buildKnowledgeToolbarModel({
     enabled: mode === 'knowledge' && !!activeSession,

@@ -43,7 +43,7 @@ export function buildKnowledgeToolbarModel({
         icon: <Database size={14} />,
       }
     : {
-        label: isBuilding ? '正在构建知识库…' : '创建知识库',
+        label: isBuilding ? '正在构建知识库…' : '构建知识库',
         onClick: onBuild,
         disabled: isBuilding,
         icon: <Database size={14} />,

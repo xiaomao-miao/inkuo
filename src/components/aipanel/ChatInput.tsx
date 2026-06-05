@@ -44,7 +44,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             mode === 'agent'
               ? '输入指令... (例如：帮我创建一个 README.md)'
               : mode === 'knowledge'
-              ? '搜索知识库...'
+              ? '搜索工作区知识库...'
               : '输入消息... (Enter 发送，Shift+Enter 换行)'
           }
           value={input}

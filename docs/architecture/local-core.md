@@ -7,7 +7,7 @@
 2. Document Engine
 3. Diff Engine
 4. AI Proxy / Provider Adapters
-5. RAG Index
+5. Knowledge Base
 6. Security（Keyring / 权限）
 7. Session Log（AI 会话历史）
 
@@ -36,7 +36,7 @@
 - 解析：comrak（或等价 AST）
 - 目标：
   - 块级边界识别（段落、标题、列表、表格、代码块）
-  - 为 scope、diff、RAG chunk 提供稳定 range
+  - 为 scope、diff、knowledge chunks 提供稳定 range
 
 ### 3.2 Word（docx）
 - 内部表示：段落/标题/列表/表格 + 样式元数据
@@ -78,10 +78,12 @@
 
 ---
 
-## 6. RAG Index
-- 存储：SQLite + vec
+## 6. Knowledge Base
+- 实现：`src-tauri/src/knowledge/*`
+- 存储：本地 embedding + 向量存储（当前为 Qdrant Edge 嵌入式）
 - chunk：基于块级边界（标题/段落/表格）
-- 增量更新：基于文件 hash 与 block range
+- 增量更新：基于文件 hash 与元数据
+- 对外入口：`knowledge_build` / `knowledge_search` / `knowledge_update` / `knowledge_status` / `knowledge_clear`
 
 ---
 

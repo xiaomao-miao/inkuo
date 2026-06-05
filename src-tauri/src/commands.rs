@@ -16,12 +16,11 @@ const DEFAULT_OLLAMA_BASE_URL: &str = "http://localhost:11434";
 
 use crate::backup::{create_backup_path, get_backup_dir, request_backup_cleanup};
 use crate::office;
-use crate::{ai, diff, document, file_watcher, rag};
+use crate::{ai, diff, document, file_watcher};
 
 pub static STREAM_CANCELLED: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
 pub struct AppState {
-    pub rag_index: Arc<tokio::sync::RwLock<rag::RAGIndex>>,
     pub ai_config: Arc<tokio::sync::RwLock<ai::AIConfig>>,
 }
 
@@ -120,7 +119,6 @@ impl Default for AppState {
         let ai_config = build_ai_config(&settings);
 
         Self {
-            rag_index: Arc::new(tokio::sync::RwLock::new(rag::RAGIndex::new())),
             ai_config: Arc::new(tokio::sync::RwLock::new(ai_config)),
         }
     }
@@ -278,83 +276,6 @@ pub async fn ai_edit(
     adapter.edit(request)
         .await
         .map_err(|e| format!("AI error: {}", e))
-}
-
-#[tauri::command]
-pub async fn search_knowledge_base(
-    query: String,
-    limit: usize,
-    state: State<'_, AppState>,
-) -> Result<rag::SearchResult, String> {
-    tracing::info!("Searching knowledge base: {}", query);
-
-    let index = state.rag_index.read().await;
-    let results = index.search(&query, limit);
-    Ok(results)
-}
-
-#[tauri::command]
-pub async fn index_workspace(
-    path: String,
-    state: State<'_, AppState>,
-) -> Result<usize, String> {
-    tracing::info!("Indexing workspace: {}", path);
-
-    let mut count = 0;
-    let index = Arc::clone(&state.rag_index);
-
-    fn visit_markdown_files(
-        dir: &std::path::Path,
-        on_file: &mut dyn FnMut(&std::path::Path) -> Result<(), String>,
-    ) -> Result<(), String> {
-        if !dir.is_dir() {
-            return Ok(());
-        }
-
-        for entry in std::fs::read_dir(dir).map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
-            let path = entry.path();
-
-            if path.is_dir() {
-                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                if !name.starts_with('.') {
-                    visit_markdown_files(&path, on_file)?;
-                }
-            } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                if matches!(ext, "md" | "markdown") {
-                    on_file(&path)?;
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    visit_markdown_files(std::path::Path::new(&path), &mut |markdown_path| {
-        if std::fs::read_to_string(markdown_path).is_ok() {
-            count += 1;
-            tracing::debug!("Found markdown file: {:?}", markdown_path);
-        }
-        Ok(())
-    })?;
-
-    let index_guard = index.read().await;
-    visit_markdown_files(std::path::Path::new(&path), &mut |markdown_path| {
-        if let Ok(content) = std::fs::read_to_string(markdown_path) {
-            let doc_id = uuid::Uuid::new_v4().to_string();
-            let blocks = vec![];
-            index_guard.index_document(
-                &doc_id,
-                markdown_path.to_str().unwrap_or(""),
-                &content,
-                &blocks,
-            );
-            count += 1;
-        }
-        Ok(())
-    })?;
-
-    Ok(count)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

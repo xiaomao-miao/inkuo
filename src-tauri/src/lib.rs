@@ -4,7 +4,6 @@
 //! - Document parsing and serialization
 //! - Diff engine
 //! - AI provider adapters
-//! - RAG indexing
 //! - File system operations
 //! - Agent tool calling
 
@@ -12,7 +11,6 @@ mod backup;
 mod document;
 mod diff;
 mod ai;
-mod rag;
 mod commands;
 mod commands_stream;
 mod commands_agent;
@@ -27,7 +25,6 @@ pub mod knowledge;
 pub use document::*;
 pub use diff::*;
 pub use ai::*;
-pub use rag::*;
 use tauri::Manager;
 
 use std::panic;
@@ -67,25 +64,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(commands::AppState::default())
         .manage(file_watcher::FileWatcherState::new())
-        .setup(|app| {
-            // Configure RAG index persistence path
-            if let Some(app_data) = app.path().app_data_dir().ok() {
-                let state = app.state::<commands::AppState>();
-                let rag_index = state.rag_index.clone();
-                let app_data_clone = app_data.clone();
-                std::thread::spawn(move || {
-                    let rt = tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                        .expect("Failed to create Tokio runtime for RAG setup");
-                    rt.block_on(async {
-                        let mut index = rag_index.write().await;
-                        index.set_persistence_path(app_data_clone.clone());
-                        tracing::info!("RAG index configured with persistence path: {:?}", app_data_clone);
-                    });
-                });
-            }
-
+        .setup(|_app| {
             // Register shared vector store cache so both KB commands and agent tools
             // use the same cache, avoiding WAL lock conflicts.
             knowledge::commands::register_shared_stores();
@@ -108,10 +87,8 @@ pub fn run() {
             commands_agent::ai_agent_stream,
             commands_agent::ai_agent_cancel,
             commands_agent::get_available_tools,
-            commands::search_knowledge_base,
             commands::get_settings,
             commands::save_settings,
-            commands::index_workspace,
             commands::test_ai_connection,
             commands::test_api_config,
             commands::watch_directory,

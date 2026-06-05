@@ -21,7 +21,7 @@
   - Document Engine (md/docx/xlsx)
   - Diff Engine
   - AI Proxy (providers)
-  - RAG Index (SQLite + vec)
+  - Knowledge Base (chunking + embeddings + vector store)
   - Security (keyring)
       ↕  HTTPS (optional)
 [Cloud Services]
@@ -44,7 +44,7 @@
 - 文档解析与序列化：Markdown AST、docx/xlsx 内部表示与回写。
 - Diff 计算：文本 diff 与映射元数据（hunks、统计、风险评估）。
 - AI Proxy：统一调用、流式处理、协议校验、降级。
-- RAG：索引构建、增量更新、召回、上下文拼装（含来源元数据）。
+- 知识库：分块、embedding、向量存储、增量更新、召回、上下文拼装（含来源元数据）。
 - Keyring：存取密钥，确保前端不拿到明文 key。
 
 ### 3.3 云端（可选）负责

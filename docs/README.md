@@ -24,7 +24,7 @@
 - `ai/protocol.md`：结构化输出协议（summary/content/rules）、降级策略。
 - `ai/agent-changeset.md`：Edit/Agent 的二阶段（Plan→Apply）与 ChangeSet/patch 规范。
 
-## 4. 知识库（RAG）与引用
+## 4. 知识库与引用
 - `rag/at-mentions.md`：`@file/@section/@table/@selection` 引用语法与 UI。
 - `rag/indexing.md`：分段、嵌入、增量更新、向量检索。
 - `rag/citations.md`：引用回溯与输出格式约束。

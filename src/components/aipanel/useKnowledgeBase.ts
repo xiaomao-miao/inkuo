@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { useCallback } from 'react';
+import { useCallback, useEffect } from 'react';
 import {
   useSidebarStore,
   type ActiveToolCall,
@@ -20,6 +20,15 @@ interface UseKnowledgeBaseResult {
   handleKnowledgeClear: () => Promise<void>;
 }
 
+interface KnowledgeStatusPayload {
+  workspace_id: string;
+  workspace_path: string;
+  document_count: number;
+  chunk_count: number;
+  created_at: string;
+  last_updated: string;
+}
+
 export function useKnowledgeBase({ activeSessionId }: UseKnowledgeBaseArgs): UseKnowledgeBaseResult {
   const workspacePath = useSidebarStore((state) => state.workspacePath);
   const knowledgeBase = useSidebarStore((state) => state.knowledgeBase);
@@ -28,6 +37,51 @@ export function useKnowledgeBase({ activeSessionId }: UseKnowledgeBaseArgs): Use
   const setKnowledgeBase = useSidebarStore((state) => state.setKnowledgeBase);
   const setBuildProgress = useSidebarStore((state) => state.setBuildProgress);
   const setKnowledgeToolCall = useSidebarStore((state) => state.setKnowledgeToolCall);
+
+  useEffect(() => {
+    if (!workspacePath) {
+      setKnowledgeBase(undefined);
+      setBuildProgress(undefined);
+      setKnowledgeToolCall(undefined);
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadKnowledgeStatus = async () => {
+      try {
+        const status = await invoke<KnowledgeStatusPayload | null>('knowledge_status', {
+          workspacePath,
+        });
+
+        if (cancelled) {
+          return;
+        }
+
+        if (!status) {
+          setKnowledgeBase(undefined);
+          return;
+        }
+
+        setKnowledgeBase({
+          workspaceId: status.workspace_id,
+          documentCount: status.document_count,
+          chunkCount: status.chunk_count,
+          lastUpdated: new Date(status.last_updated).getTime() || Date.now(),
+        });
+      } catch (err) {
+        if (!cancelled) {
+          console.error('Failed to load knowledge base status:', err);
+        }
+      }
+    };
+
+    loadKnowledgeStatus();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [workspacePath, setKnowledgeBase, setBuildProgress, setKnowledgeToolCall]);
 
   const handleKnowledgeBuild = useCallback(async () => {
     if (!activeSessionId || !workspacePath) return;
