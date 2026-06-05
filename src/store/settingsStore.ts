@@ -40,15 +40,8 @@ const defaultSettings: Settings = {
   accent_color: '#7C5CFF',
   editor_font_size: 14,
   editor_font_family: 'JetBrains Mono, monospace',
-  ai_provider: 'deepseek',
-  ai_model: 'deepseek-chat',
-  ai_api_key: null,
-  ai_base_url: 'https://api.deepseek.com',
-  ai_temperature: 0.7,
-  ai_max_tokens: 4096,
   apiConfigs: [defaultAPIConfig],
   activeApiConfigId: defaultAPIConfig.id,
-  // Knowledge base settings
   embedding_model: 'BAAI/bge-small-zh-v1.5',
   embedding_model_path: null,
   chunk_size: 500,
@@ -146,44 +139,43 @@ export const useSettingsStore = create<SettingsState>()(
       name: 'inkuo-settings',
       partialize: (state) => ({ settings: state.settings }),
       merge: (persistedState, currentState) => {
-        // Cast persisted state to our expected structure with proper validation
         const persisted = persistedState as Partial<SettingsState> | undefined;
         const persistedSettings = persisted?.settings as Partial<Settings> | undefined;
+
+        let apiConfigs: Settings['apiConfigs'] = Array.isArray(persistedSettings?.apiConfigs)
+          ? persistedSettings.apiConfigs as Settings['apiConfigs']
+          : [];
+
+        if (apiConfigs.length === 0) {
+          apiConfigs = currentState.settings.apiConfigs;
+        }
+
+        let activeApiConfigId = persistedSettings?.activeApiConfigId ?? apiConfigs[0]?.id ?? null;
+        if (!apiConfigs.some((config) => config.id === activeApiConfigId)) {
+          activeApiConfigId = apiConfigs[0]?.id ?? null;
+        }
+
+        if (!apiConfigs.some((config) => config.isDefault)) {
+          apiConfigs = apiConfigs.map((config, index) => ({
+            ...config,
+            isDefault: index === 0,
+          }));
+        }
 
         const mergedSettings: Settings = {
           ...currentState.settings,
           ...persistedSettings,
+          apiConfigs,
+          activeApiConfigId,
+          embedding_model: persistedSettings?.embedding_model ?? currentState.settings.embedding_model,
+          embedding_model_path: persistedSettings?.embedding_model_path ?? currentState.settings.embedding_model_path,
+          chunk_size: typeof persistedSettings?.chunk_size === 'number'
+            ? persistedSettings.chunk_size
+            : currentState.settings.chunk_size,
+          chunk_overlap: typeof persistedSettings?.chunk_overlap === 'number'
+            ? persistedSettings.chunk_overlap
+            : currentState.settings.chunk_overlap,
         };
-
-        // Safely extract apiConfigs with type checking
-        const rawConfigs = persistedSettings?.apiConfigs;
-        const apiConfigs: Settings['apiConfigs'] = Array.isArray(rawConfigs)
-          ? rawConfigs as Settings['apiConfigs']
-          : currentState.settings.apiConfigs;
-
-        mergedSettings.apiConfigs = apiConfigs.length > 0 ? apiConfigs : currentState.settings.apiConfigs;
-        mergedSettings.activeApiConfigId = persistedSettings?.activeApiConfigId ?? mergedSettings.apiConfigs[0]?.id ?? null;
-
-        // Merge embedding settings with defaults
-        if (persistedSettings?.embedding_model) {
-          mergedSettings.embedding_model = persistedSettings.embedding_model as Settings['embedding_model'];
-        }
-        if (persistedSettings?.embedding_model_path !== undefined) {
-          mergedSettings.embedding_model_path = persistedSettings.embedding_model_path as Settings['embedding_model_path'];
-        }
-        if (typeof persistedSettings?.chunk_size === 'number') {
-          mergedSettings.chunk_size = persistedSettings.chunk_size;
-        }
-        if (typeof persistedSettings?.chunk_overlap === 'number') {
-          mergedSettings.chunk_overlap = persistedSettings.chunk_overlap;
-        }
-
-        if (!mergedSettings.apiConfigs.some((c) => c.isDefault)) {
-          mergedSettings.apiConfigs = mergedSettings.apiConfigs.map((c, i) => ({
-            ...c,
-            isDefault: i === 0,
-          }));
-        }
 
         return {
           ...currentState,

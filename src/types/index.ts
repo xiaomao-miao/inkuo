@@ -384,17 +384,8 @@ export interface Settings {
   accent_color: string;
   editor_font_size: number;
   editor_font_family: string;
-  // Legacy single API config (for backward compatibility)
-  ai_provider: AIProviderType;
-  ai_model: string;
-  ai_api_key: string | null;
-  ai_base_url: string | null;
-  ai_temperature: number;
-  ai_max_tokens: number | null;
-  // New multi-API config
   apiConfigs: APIConfig[];
   activeApiConfigId: string | null;
-  // Knowledge base settings
   embedding_model: EmbeddingModelType;
   embedding_model_path: string | null;
   chunk_size: number;

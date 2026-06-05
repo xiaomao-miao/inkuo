@@ -249,15 +249,8 @@ pub struct Settings {
     pub accent_color: String,
     pub editor_font_size: u32,
     pub editor_font_family: String,
-    pub ai_provider: AIProviderKind,
-    pub ai_model: String,
-    pub ai_api_key: Option<String>,
-    pub ai_base_url: Option<String>,
-    pub ai_temperature: f32,
-    pub ai_max_tokens: Option<u32>,
     pub api_configs: Vec<ApiConfig>,
     pub active_api_config_id: Option<String>,
-    // Knowledge base settings
     pub embedding_model: String,
     pub embedding_model_path: Option<String>,
     pub chunk_size: usize,
@@ -284,15 +277,8 @@ impl Default for Settings {
             accent_color: "#7C5CFF".to_string(),
             editor_font_size: 14,
             editor_font_family: "JetBrains Mono, monospace".to_string(),
-            ai_provider: AIProviderKind::DeepSeek,
-            ai_model: "deepseek-chat".to_string(),
-            ai_api_key: None,
-            ai_base_url: Some("https://api.deepseek.com".to_string()),
-            ai_temperature: 0.7,
-            ai_max_tokens: Some(4096),
             api_configs: vec![default_api_config.clone()],
             active_api_config_id: Some(default_api_config.id),
-            // Knowledge base defaults
             embedding_model: "BAAI/bge-small-zh-v1.5".to_string(),
             embedding_model_path: None,
             chunk_size: 500,
@@ -335,7 +321,7 @@ pub fn read_settings_from_disk() -> Result<Settings, AppCommandError> {
     match serde_json::from_str::<Settings>(&content) {
         Ok(settings) => Ok(settings),
         Err(e) => {
-            tracing::warn!("Failed to parse settings as new format ({}), trying merged format", e);
+            tracing::warn!("Failed to parse settings ({}), trying merged format", e);
 
             let value: serde_json::Value = serde_json::from_str(&content)
                 .map_err(|e| AppCommandError::ParseSettings(format!("settings JSON: {}", e)))?;
@@ -355,56 +341,10 @@ pub fn read_settings_from_disk() -> Result<Settings, AppCommandError> {
                 }
             }
 
-            tracing::warn!("Falling back to legacy settings parser");
-            #[derive(Debug, Deserialize)]
-            struct LegacySettings {
-                theme: Option<String>,
-                accent_color: Option<String>,
-                editor_font_size: Option<u32>,
-                editor_font_family: Option<String>,
-                ai_provider: Option<AIProviderKind>,
-                ai_model: Option<String>,
-                ai_api_key: Option<String>,
-                ai_base_url: Option<String>,
-                ai_temperature: Option<f32>,
-                ai_max_tokens: Option<u32>,
-            }
-
-            let legacy: LegacySettings = serde_json::from_str(&content)
-                .map_err(|e| AppCommandError::ParseSettings(format!("legacy settings: {}", e)))?;
-
-            let default_api_config_id = uuid::Uuid::new_v4().to_string();
-            let default_api_config = ApiConfig {
-                id: default_api_config_id.clone(),
-                name: legacy.ai_model.clone().unwrap_or_else(|| "Default".to_string()),
-                provider: legacy.ai_provider.unwrap_or(AIProviderKind::OpenAI),
-                base_url: legacy.ai_base_url.clone().unwrap_or_else(|| "https://api.deepseek.com".to_string()),
-                api_key: legacy.ai_api_key.clone(),
-                model: legacy.ai_model.clone().unwrap_or_else(|| "deepseek-chat".to_string()),
-                is_default: true,
-                enabled: true,
-                temperature: legacy.ai_temperature.unwrap_or(0.7),
-                max_tokens: legacy.ai_max_tokens,
-            };
-
-            Ok(Settings {
-                theme: legacy.theme.unwrap_or_else(|| "cursor-dark".to_string()),
-                accent_color: legacy.accent_color.unwrap_or_else(|| "#7C5CFF".to_string()),
-                editor_font_size: legacy.editor_font_size.unwrap_or(14),
-                editor_font_family: legacy.editor_font_family.unwrap_or_else(|| "JetBrains Mono, monospace".to_string()),
-                ai_provider: legacy.ai_provider.unwrap_or(AIProviderKind::DeepSeek),
-                ai_model: legacy.ai_model.unwrap_or_else(|| "deepseek-chat".to_string()),
-                ai_api_key: legacy.ai_api_key,
-                ai_base_url: legacy.ai_base_url,
-                ai_temperature: legacy.ai_temperature.unwrap_or(0.7),
-                ai_max_tokens: legacy.ai_max_tokens,
-                api_configs: vec![default_api_config],
-                active_api_config_id: Some(default_api_config_id),
-                embedding_model: "BAAI/bge-small-zh-v1.5".to_string(),
-                embedding_model_path: None,
-                chunk_size: 500,
-                chunk_overlap: 50,
-            })
+            Err(AppCommandError::ParseSettings(format!(
+                "settings format is invalid and no longer supports legacy single-config fields: {}",
+                e
+            )))
         }
     }
 }
@@ -447,18 +387,6 @@ pub async fn test_api_config(
     )
     .await
     .map_err(|error| AppCommandError::TestAIConnection(error.to_string()))
-}
-
-#[tauri::command]
-pub async fn test_ai_connection(
-    api_key: Option<String>,
-    base_url: String,
-    model: String,
-) -> Result<TestResult, AppCommandError> {
-    tracing::info!("Testing AI connection to: {}", base_url);
-    ai_config::test_ai_connection_impl(api_key.as_deref(), &base_url, &model)
-        .await
-        .map_err(|error| AppCommandError::TestAIConnection(error.to_string()))
 }
 
 #[tauri::command]

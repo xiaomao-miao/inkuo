@@ -120,14 +120,6 @@ pub fn active_api_config<'a>(settings: &'a Settings) -> Option<&'a ApiConfig> {
     settings.api_configs.iter().find(|config| config.id == *active_id)
 }
 
-pub fn build_provider_from_settings(settings: &Settings) -> ai::AIProvider {
-    build_provider(
-        settings.ai_provider,
-        settings.ai_api_key.as_deref(),
-        settings.ai_base_url.as_deref(),
-    )
-}
-
 pub fn build_provider_from_api_config(config: &ApiConfig) -> ai::AIProvider {
     build_provider(
         config.provider,
@@ -137,20 +129,16 @@ pub fn build_provider_from_api_config(config: &ApiConfig) -> ai::AIProvider {
 }
 
 pub fn build_settings_ai_config(settings: &Settings) -> ai::AIConfig {
-    if let Some(config) = active_api_config(settings) {
-        return ai::AIConfig {
-            provider: build_provider_from_api_config(config),
-            model: config.model.clone(),
-            temperature: config.temperature,
-            max_tokens: config.max_tokens,
-        };
-    }
+    let config = active_api_config(settings)
+        .or_else(|| settings.api_configs.iter().find(|config| config.enabled))
+        .or_else(|| settings.api_configs.first())
+        .expect("settings should always contain at least one API config");
 
     ai::AIConfig {
-        provider: build_provider_from_settings(settings),
-        model: settings.ai_model.clone(),
-        temperature: settings.ai_temperature,
-        max_tokens: settings.ai_max_tokens,
+        provider: build_provider_from_api_config(config),
+        model: config.model.clone(),
+        temperature: config.temperature,
+        max_tokens: config.max_tokens,
     }
 }
 

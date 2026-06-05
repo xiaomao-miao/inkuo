@@ -80,7 +80,6 @@ pub fn run() {
             commands_agent::get_available_tools,
             commands::get_settings,
             commands::save_settings,
-            commands::test_ai_connection,
             commands::test_api_config,
             commands::watch_directory,
             commands::unwatch_directory,

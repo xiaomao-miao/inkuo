@@ -3,12 +3,6 @@ export interface BackendSettings {
   accent_color: string;
   editor_font_size: number;
   editor_font_family: string;
-  ai_provider: string;
-  ai_model: string;
-  ai_api_key: string | null;
-  ai_base_url: string | null;
-  ai_temperature: number;
-  ai_max_tokens: number | null;
   api_configs: Array<{
     id: string;
     name: string;
@@ -36,12 +30,6 @@ export function toBackendSettings(settings: Settings): BackendSettings {
     accent_color: settings.accent_color,
     editor_font_size: settings.editor_font_size,
     editor_font_family: settings.editor_font_family,
-    ai_provider: settings.ai_provider,
-    ai_model: settings.ai_model,
-    ai_api_key: settings.ai_api_key,
-    ai_base_url: settings.ai_base_url,
-    ai_temperature: settings.ai_temperature,
-    ai_max_tokens: settings.ai_max_tokens,
     api_configs: settings.apiConfigs.map((c) => ({
       id: c.id,
       name: c.name,
