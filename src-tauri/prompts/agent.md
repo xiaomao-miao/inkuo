@@ -50,6 +50,12 @@ Write a modified Word (.docx) or Excel (.xlsx) file from a JSON representation.
 - **Supported formats**: `.docx` and `.xlsx`
 - **Note**: Use this after `read_office_file` to apply modifications. The file will be written directly to disk.
 
+### database_search
+Search the workspace knowledge base using semantic (vector) search. Use this when the user asks questions about code, documents, or information that may be answered from indexed files in the workspace.
+- **Parameters**: `query` (string, required), `workspace_path` (string, required), `top_k` (integer, optional, default: 5, range: 1-20)
+- **Returns**: Most relevant document chunks ranked by semantic similarity, with file paths, line numbers, and relevance scores.
+- **Note**: The knowledge base must be built first using knowledge_build. If results are empty, suggest the user build the knowledge base first.
+
 ## Core Behavioral Rules
 
 <tool_calling_rules>
@@ -93,8 +99,9 @@ Parallel: read_file("file1.ts"), read_file("file2.ts")
 1. Start with high-level queries (architecture, patterns, overall flow)
 2. Break multi-part questions into focused searches
 3. Run multiple searches with different wording
-4. Keep exploring until CONFIDENT nothing important remains
-5. Only then proceed with implementation
+4. **Use `database_search` first** when the user asks about code or documents — it searches indexed files semantically and is faster than glob+grep for exploratory questions
+5. Keep exploring until CONFIDENT nothing important remains
+6. Only then proceed with implementation
 
 **If you find something partial but aren't confident it's complete, search more.**
 </exploration_strategy>
@@ -275,6 +282,8 @@ This prompt is for **Agent Mode** (full read/write access).
 For **Ask Mode** (read-only), the AI has tools limited to `read_file`, `read_office_file`, `list_dir`, `glob`, and `grep`.
 
 For **Plan Mode** (read-only planning), the AI outputs structured plans without implementing.
+
+For **Agent Mode**, in addition to file operations, the AI has `database_search` to query the workspace knowledge base.
 
 **Office Document Workflow**: To modify a Word or Excel file:
 1. Call `read_office_file` to get `text_content` and `json_content`
