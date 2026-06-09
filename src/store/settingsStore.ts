@@ -1,21 +1,29 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { APIConfig, Settings } from '../types';
+import { saveSettings } from '../utils/saveSettings';
 
 interface SettingsState {
   settings: Settings;
   isSettingsOpen: boolean;
 
   setSettings: (settings: Settings) => void;
+  persistSettings: (settings?: Settings) => Promise<void>;
   updateSetting: <K extends keyof Settings>(key: K, value: Settings[K]) => Settings;
+  updateSettingAndPersist: <K extends keyof Settings>(key: K, value: Settings[K]) => Promise<Settings>;
   setIsSettingsOpen: (open: boolean) => void;
 
   addApiConfig: (config?: Partial<APIConfig>) => Settings;
+  addApiConfigAndPersist: (config?: Partial<APIConfig>) => Promise<Settings>;
   updateApiConfig: (id: string, updates: Partial<APIConfig>) => Settings;
+  updateApiConfigAndPersist: (id: string, updates: Partial<APIConfig>) => Promise<Settings>;
   removeApiConfig: (id: string) => Settings;
+  removeApiConfigAndPersist: (id: string) => Promise<Settings>;
   setActiveApiConfig: (id: string) => Settings;
+  setActiveApiConfigAndPersist: (id: string) => Promise<Settings>;
   getActiveApiConfig: () => APIConfig | null;
   setDefaultApiConfig: (id: string) => Settings;
+  setDefaultApiConfigAndPersist: (id: string) => Promise<Settings>;
 }
 
 function createDefaultAPIConfig(): APIConfig {
@@ -33,7 +41,9 @@ function createDefaultAPIConfig(): APIConfig {
   };
 }
 
-const defaultAPIConfig = createDefaultAPIConfig();
+async function persistSettingsSnapshot(settings: Settings): Promise<void> {
+  await saveSettings(settings);
+}
 
 function ensureValidApiConfigs(apiConfigs: APIConfig[]): APIConfig[] {
   if (apiConfigs.length === 0) {
@@ -53,9 +63,7 @@ function ensureValidApiConfigs(apiConfigs: APIConfig[]): APIConfig[] {
   });
 }
 
-function buildSettingsUpdate(currentSettings: Settings, updater: (settings: Settings) => Settings): Settings {
-  return updater(currentSettings);
-}
+const defaultAPIConfig = createDefaultAPIConfig();
 
 const defaultSettings: Settings = {
   theme: 'cursor-dark',
@@ -79,12 +87,20 @@ export const useSettingsStore = create<SettingsState>()(
       isSettingsOpen: false,
 
       setSettings: (settings) => set({ settings }),
+      persistSettings: async (settings) => {
+        await persistSettingsSnapshot(settings ?? get().settings);
+      },
       updateSetting: (key, value) => {
         const nextSettings = {
           ...get().settings,
           [key]: value,
         };
         set({ settings: nextSettings });
+        return nextSettings;
+      },
+      updateSettingAndPersist: async (key, value) => {
+        const nextSettings = get().updateSetting(key, value);
+        await persistSettingsSnapshot(nextSettings);
         return nextSettings;
       },
       setIsSettingsOpen: (open) => set({ isSettingsOpen: open }),
@@ -110,7 +126,11 @@ export const useSettingsStore = create<SettingsState>()(
         };
 
         set({ settings: nextSettings });
-
+        return nextSettings;
+      },
+      addApiConfigAndPersist: async (config) => {
+        const nextSettings = get().addApiConfig(config);
+        await persistSettingsSnapshot(nextSettings);
         return nextSettings;
       },
 
@@ -118,11 +138,16 @@ export const useSettingsStore = create<SettingsState>()(
         const currentSettings = get().settings;
         const nextSettings = {
           ...currentSettings,
-          apiConfigs: currentSettings.apiConfigs.map((config) =>
-            config.id === id ? { ...config, ...updates } : config
+          apiConfigs: currentSettings.apiConfigs.map((configItem) =>
+            configItem.id === id ? { ...configItem, ...updates } : configItem
           ),
         };
         set({ settings: nextSettings });
+        return nextSettings;
+      },
+      updateApiConfigAndPersist: async (id, updates) => {
+        const nextSettings = get().updateApiConfig(id, updates);
+        await persistSettingsSnapshot(nextSettings);
         return nextSettings;
       },
 
@@ -143,6 +168,11 @@ export const useSettingsStore = create<SettingsState>()(
         set({ settings: nextSettings });
         return nextSettings;
       },
+      removeApiConfigAndPersist: async (id) => {
+        const nextSettings = get().removeApiConfig(id);
+        await persistSettingsSnapshot(nextSettings);
+        return nextSettings;
+      },
 
       setActiveApiConfig: (id) => {
         const currentSettings = get().settings;
@@ -155,11 +185,16 @@ export const useSettingsStore = create<SettingsState>()(
         set({ settings: nextSettings });
         return nextSettings;
       },
+      setActiveApiConfigAndPersist: async (id) => {
+        const nextSettings = get().setActiveApiConfig(id);
+        await persistSettingsSnapshot(nextSettings);
+        return nextSettings;
+      },
 
       getActiveApiConfig: () => {
         const state = get();
         const activeId = state.settings.activeApiConfigId;
-        return state.settings.apiConfigs.find((c) => c.id === activeId) || null;
+        return state.settings.apiConfigs.find((config) => config.id === activeId) || null;
       },
 
       setDefaultApiConfig: (id) => {
@@ -172,6 +207,11 @@ export const useSettingsStore = create<SettingsState>()(
           })),
         };
         set({ settings: nextSettings });
+        return nextSettings;
+      },
+      setDefaultApiConfigAndPersist: async (id) => {
+        const nextSettings = get().setDefaultApiConfig(id);
+        await persistSettingsSnapshot(nextSettings);
         return nextSettings;
       },
     }),

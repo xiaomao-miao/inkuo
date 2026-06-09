@@ -13,14 +13,23 @@ export function useTauriEvent<TPayload>(
 
   useEffect(() => {
     let unlisten: Unlisten | null = null;
+    let disposed = false;
 
-    listen<TPayload>(eventName, (event) => {
+    void listen<TPayload>(eventName, (event) => {
       handler(event.payload);
     })
       .then((fn) => {
+        if (disposed) {
+          fn();
+          return;
+        }
         unlisten = fn;
       })
       .catch((error) => {
+        if (disposed) {
+          return;
+        }
+
         const message = reportError(`tauri-event-${eventName}`, error);
         pushNotification({
           kind: 'error',
@@ -30,6 +39,7 @@ export function useTauriEvent<TPayload>(
       });
 
     return () => {
+      disposed = true;
       if (unlisten) {
         unlisten();
       }

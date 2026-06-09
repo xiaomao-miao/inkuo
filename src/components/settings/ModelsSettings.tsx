@@ -23,7 +23,6 @@ import { useNotificationStore, useSettingsStore } from '../../store';
 import { Select } from './Select';
 import type { APIConfig, AIProviderType } from '../../types';
 import styles from './ModelsSettings.module.css';
-import { saveSettings } from '../../utils/saveSettings';
 import { reportError } from '../../utils/errors';
 
 interface ModelsSettingsProps {
@@ -32,34 +31,17 @@ interface ModelsSettingsProps {
 
 export const ModelsSettings = ({ onClose }: ModelsSettingsProps) => {
   const settings = useSettingsStore((state) => state.settings);
-  const addApiConfig = useSettingsStore((state) => state.addApiConfig);
-  const updateApiConfig = useSettingsStore((state) => state.updateApiConfig);
-  const removeApiConfig = useSettingsStore((state) => state.removeApiConfig);
-  const setActiveApiConfig = useSettingsStore((state) => state.setActiveApiConfig);
-  const setDefaultApiConfig = useSettingsStore((state) => state.setDefaultApiConfig);
+  const addApiConfigAndPersist = useSettingsStore((state) => state.addApiConfigAndPersist);
+  const updateApiConfigAndPersist = useSettingsStore((state) => state.updateApiConfigAndPersist);
+  const removeApiConfigAndPersist = useSettingsStore((state) => state.removeApiConfigAndPersist);
+  const setActiveApiConfigAndPersist = useSettingsStore((state) => state.setActiveApiConfigAndPersist);
+  const setDefaultApiConfigAndPersist = useSettingsStore((state) => state.setDefaultApiConfigAndPersist);
   const pushNotification = useNotificationStore((state) => state.pushNotification);
 
   const [testingId, setTestingId] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, { success: boolean; message: string }>>({});
   const [showApiKey, setShowApiKey] = useState<Record<string, boolean>>({});
   const [expandedId, setExpandedId] = useState<string | null>(null);
-
-  const persistSettings = async (nextSettings = settings) => {
-    try {
-      await saveSettings(nextSettings);
-    } catch (err) {
-      const message = reportError('models-settings-save', err);
-      pushNotification({
-        kind: 'error',
-        title: '保存模型设置失败',
-        message,
-      });
-    }
-  };
-
-  const persistReturnedSettings = (nextSettings: typeof settings) => {
-    persistSettings(nextSettings);
-  };
 
   const handleTestConnection = async (config: APIConfig) => {
     setTestingId(config.id);
@@ -98,8 +80,8 @@ export const ModelsSettings = ({ onClose }: ModelsSettingsProps) => {
     }
   };
 
-  const handleAddConfig = () => {
-    const nextSettings = addApiConfig({
+  const handleAddConfig = async () => {
+    const nextSettings = await addApiConfigAndPersist({
       name: `API ${settings.apiConfigs.length + 1}`,
       provider: 'openai',
       baseUrl: 'https://api.openai.com/v1',
@@ -109,30 +91,25 @@ export const ModelsSettings = ({ onClose }: ModelsSettingsProps) => {
     if (addedConfig) {
       setExpandedId(addedConfig.id);
     }
-    persistReturnedSettings(nextSettings);
   };
 
-  const handleRemoveConfig = (id: string) => {
-    const nextSettings = removeApiConfig(id);
+  const handleRemoveConfig = async (id: string) => {
+    await removeApiConfigAndPersist(id);
     if (expandedId === id) {
       setExpandedId(null);
     }
-    persistReturnedSettings(nextSettings);
   };
 
-  const handleSelectConfig = (id: string) => {
-    const nextSettings = setActiveApiConfig(id);
-    persistReturnedSettings(nextSettings);
+  const handleSelectConfig = async (id: string) => {
+    await setActiveApiConfigAndPersist(id);
   };
 
-  const handleSetDefault = (id: string) => {
-    const nextSettings = setDefaultApiConfig(id);
-    persistReturnedSettings(nextSettings);
+  const handleSetDefault = async (id: string) => {
+    await setDefaultApiConfigAndPersist(id);
   };
 
-  const handleUpdateConfig = (id: string, updates: Partial<APIConfig>) => {
-    const nextSettings = updateApiConfig(id, updates);
-    persistReturnedSettings(nextSettings);
+  const handleUpdateConfig = async (id: string, updates: Partial<APIConfig>) => {
+    await updateApiConfigAndPersist(id, updates);
   };
 
   const toggleShowApiKey = (id: string) => {

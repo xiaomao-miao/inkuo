@@ -8,9 +8,33 @@ import {
   normalizeDocumentState,
   type EditorState,
 } from './editorStore.slices';
+import type { DiffApplicationActions } from './aiPanelStore.types';
 
 const EDITOR_STORAGE_VERSION = 2;
-const EDITOR_STORAGE_VERSION_KEY = 'inkuo-editor-version';
+
+function migrateEditorState(
+  persistedState: unknown,
+  version: number,
+): Pick<EditorState, 'documentContents' | 'isPreviewMode'> {
+  const typedState = (persistedState ?? {}) as Partial<Pick<EditorState, 'documentContents' | 'isPreviewMode'>>;
+
+  if (version !== EDITOR_STORAGE_VERSION) {
+    return {
+      documentContents: {},
+      isPreviewMode: typedState.isPreviewMode ?? {},
+    };
+  }
+
+  return {
+    documentContents: Object.fromEntries(
+      Object.entries(typedState.documentContents ?? {}).map(([path, documentState]) => [
+        path,
+        normalizeDocumentState(documentState),
+      ])
+    ),
+    isPreviewMode: typedState.isPreviewMode ?? {},
+  };
+}
 
 function createEditorState(...args: Parameters<typeof createDocumentSlice>): EditorState {
   return {
@@ -21,30 +45,22 @@ function createEditorState(...args: Parameters<typeof createDocumentSlice>): Edi
   };
 }
 
+export const editorDiffActions: DiffApplicationActions = {
+  applyHunk: (path, hunkId) => {
+    useEditorStore.getState().applyHunk(path, hunkId);
+  },
+  applyAllHunks: (path) => {
+    useEditorStore.getState().applyAllHunks(path);
+  },
+};
+
 export const useEditorStore = create<EditorState>()(
   persist(
     (...args) => createEditorState(...args),
     {
       name: 'inkuo-editor',
-      onRehydrateStorage: () => (state) => {
-        if (state) {
-          const version = localStorage.getItem(EDITOR_STORAGE_VERSION_KEY);
-          if (version !== String(EDITOR_STORAGE_VERSION)) {
-            localStorage.setItem(EDITOR_STORAGE_VERSION_KEY, String(EDITOR_STORAGE_VERSION));
-          }
-
-          state.documentContents = Object.fromEntries(
-            Object.entries(state.documentContents).map(([path, documentState]) => [
-              path,
-              normalizeDocumentState(documentState),
-            ])
-          );
-
-          if (version !== String(EDITOR_STORAGE_VERSION)) {
-            state.documentContents = {};
-          }
-        }
-      },
+      version: EDITOR_STORAGE_VERSION,
+      migrate: migrateEditorState,
       partialize: (state) => ({
         documentContents: state.documentContents,
         isPreviewMode: state.isPreviewMode,

@@ -12,7 +12,6 @@ import {
 import { useNotificationStore, useSettingsStore } from '../../store';
 import type { EmbeddingModelType } from '../../types';
 import styles from './SettingsPanel.module.css';
-import { saveSettings } from '../../utils/saveSettings';
 import { reportError } from '../../utils/errors';
 
 interface AvailableModel {
@@ -77,7 +76,7 @@ const MODEL_TIERS: ModelTier[] = [
 
 export const KnowledgeSettings = () => {
   const settings = useSettingsStore((state) => state.settings);
-  const updateSetting = useSettingsStore((state) => state.updateSetting);
+  const updateSettingAndPersist = useSettingsStore((state) => state.updateSettingAndPersist);
   const pushNotification = useNotificationStore((state) => state.pushNotification);
   const [availableModels, setAvailableModels] = useState<AvailableModel[]>([]);
   const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
@@ -99,12 +98,33 @@ export const KnowledgeSettings = () => {
         });
       }
     };
-    fetchModels();
+    void fetchModels();
   }, [pushNotification]);
 
   // Listen to download progress events
   useEffect(() => {
     let unlisten: (() => void) | undefined;
+    let disposed = false;
+
+    const refreshAvailableModels = async () => {
+      try {
+        const models = await invoke<AvailableModel[]>('check_available_models');
+        if (!disposed) {
+          setAvailableModels(models);
+        }
+      } catch (err) {
+        if (disposed) {
+          return;
+        }
+
+        const message = reportError('knowledge-settings-refresh-models', err);
+        pushNotification({
+          kind: 'error',
+          title: '刷新本地模型状态失败',
+          message,
+        });
+      }
+    };
 
     const setupListener = async () => {
       try {
@@ -113,8 +133,7 @@ export const KnowledgeSettings = () => {
           if (event.payload.status === 'complete') {
             setDownloadingModel(null);
             setDownloadProgress(null);
-            // Refresh available models
-            invoke<AvailableModel[]>('check_available_models').then(setAvailableModels);
+            void refreshAvailableModels();
           }
         });
       } catch (err) {
@@ -127,33 +146,16 @@ export const KnowledgeSettings = () => {
       }
     };
 
-    setupListener();
+    void setupListener();
 
     return () => {
+      disposed = true;
       if (unlisten) unlisten();
     };
   }, [pushNotification]);
 
-  const persistSettings = async (nextSettings = settings) => {
-    try {
-      await saveSettings(nextSettings);
-    } catch (err) {
-      const message = reportError('knowledge-settings-save', err);
-      pushNotification({
-        kind: 'error',
-        title: '保存知识库设置失败',
-        message,
-      });
-    }
-  };
-
-  const handleModelChange = (modelId: string) => {
-    const nextSettings = {
-      ...settings,
-      embedding_model: modelId as EmbeddingModelType,
-    };
-    updateSetting('embedding_model', modelId as EmbeddingModelType);
-    persistSettings(nextSettings);
+  const handleModelChange = async (modelId: string) => {
+    await updateSettingAndPersist('embedding_model', modelId as EmbeddingModelType);
   };
 
   const downloadModel = async (modelName: string) => {
@@ -207,7 +209,7 @@ export const KnowledgeSettings = () => {
                 className={`${styles.tierItem} ${
                   isSelected ? styles.selected : ''
                 } ${isThisDownloading ? styles.downloading : ''}`}
-                onClick={() => !isThisDownloading && handleModelChange(tier.id)}
+                onClick={() => !isThisDownloading && void handleModelChange(tier.id)}
               >
                 <div className={styles.tierLeft}>
                   <div className={styles.tierRadio}>
@@ -258,7 +260,7 @@ export const KnowledgeSettings = () => {
                       className={styles.downloadBtn}
                       onClick={(e) => {
                         e.stopPropagation();
-                        downloadModel(tier.id);
+                        void downloadModel(tier.id);
                       }}
                     >
                       <Download size={12} />
@@ -322,12 +324,7 @@ export const KnowledgeSettings = () => {
               step="50"
               value={settings.chunk_size}
               onChange={(e) => {
-                const chunkSize = parseInt(e.target.value);
-                updateSetting('chunk_size', chunkSize);
-                persistSettings({
-                  ...settings,
-                  chunk_size: chunkSize,
-                });
+                void updateSettingAndPersist('chunk_size', parseInt(e.target.value));
               }}
               className={styles.range}
             />
@@ -348,12 +345,7 @@ export const KnowledgeSettings = () => {
               step="10"
               value={settings.chunk_overlap}
               onChange={(e) => {
-                const chunkOverlap = parseInt(e.target.value);
-                updateSetting('chunk_overlap', chunkOverlap);
-                persistSettings({
-                  ...settings,
-                  chunk_overlap: chunkOverlap,
-                });
+                void updateSettingAndPersist('chunk_overlap', parseInt(e.target.value));
               }}
               className={styles.range}
             />
@@ -378,19 +370,9 @@ export const KnowledgeSettings = () => {
 
         <div className={styles.modelInfo}>
           <div className={styles.modelInfoItem}>
-            <span className={styles.modelInfoLabel}>本地路径:</span>
-            <span>
-              {settings.embedding_model_path || '使用缓存目录'}
-            </span>
+            <span className={styles.modelInfoLabel}>缓存目录:</span>
+            <span>{settings.embedding_model_path ?? '使用默认目录'}</span>
           </div>
-        </div>
-
-        <div className={styles.infoBox}>
-          <Download size={14} />
-          <span>
-            Tokenizer 文件下载到应用目录，ONNX 模型下载到{' '}
-            <code>~/.cache/fastembed/</code>
-          </span>
         </div>
       </div>
     </div>

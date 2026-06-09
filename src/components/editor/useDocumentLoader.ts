@@ -9,6 +9,21 @@ export function useDocumentLoader(
   cachedDocument: { content: string; mtime: number } | null,
   refreshToken = 0,
 ) {
+  // Assumptions this hook depends on:
+  //
+  // 1. mtime is a sufficient change signal.
+  //    The Tauri backend sets mtime to the file's reported modification time.
+  //    If only metadata (e.g. permissions) changes without the content changing,
+  //    the hook will not detect the change. For this app's use pattern this
+  //    is acceptable — user edits are the primary trigger and those always
+  //    update mtime.
+  //
+  // 2. mtime granularity matches the editor's write-time granularity.
+  //    On some filesystems (e.g. FAT32) mtime has 2-second precision.
+  //    Rapid edits within the same 2-second window may not trigger a reload.
+  //    This is a known limitation of relying on mtime; compensating mechanisms
+  //    (e.g. a manual "force refresh" action) can be added later if needed.
+  //
   const setDocumentContent = useEditorStore((state) => state.setDocumentContent);
   const setOpenTabDirty = useSidebarStore((state) => state.setOpenTabDirty);
   const cachedMtime = cachedDocument?.mtime ?? 0;

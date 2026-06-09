@@ -33,8 +33,8 @@ import {
   updateSessions,
   updateToolCalls,
 } from './aiPanelReducers';
-import { useEditorStore } from './editorStore';
-import type { AIPanelState, AIPanelStateCreator } from './aiPanelStore.types';
+import { editorDiffActions } from './editorStore';
+import type { AIPanelState, AIPanelStateCreator, DiffApplicationActions } from './aiPanelStore.types';
 
 function mergePersistedState(
   persistedState: unknown,
@@ -195,7 +195,9 @@ const createToolCallSlice: AIPanelStateCreator<Pick<AIPanelState, 'addToolCall' 
     })),
 });
 
-const createDiffSlice: AIPanelStateCreator<Pick<AIPanelState, 'setCurrentDiff' | 'setMessageDiff' | 'setPendingDiff' | 'setDiffFromToolResult' | 'acceptHunk' | 'rejectHunk' | 'acceptAllHunks' | 'rejectAllHunks'>> = (set) => ({
+const createDiffSlice = (
+  applyDiffActions: DiffApplicationActions,
+): AIPanelStateCreator<Pick<AIPanelState, 'setCurrentDiff' | 'setMessageDiff' | 'setPendingDiff' | 'setDiffFromToolResult' | 'acceptHunk' | 'rejectHunk' | 'acceptAllHunks' | 'rejectAllHunks'>> => (set) => ({
   setCurrentDiff: (sessionId, diff) =>
     set((state) => ({
       sessions: updateSessionState(state.sessions, sessionId, { currentDiff: diff }),
@@ -224,7 +226,7 @@ const createDiffSlice: AIPanelStateCreator<Pick<AIPanelState, 'setCurrentDiff' |
       if (!hunk) return state;
 
       if (diff.filePath) {
-        useEditorStore.getState().applyHunk(diff.filePath, hunkId);
+        applyDiffActions.applyHunk(diff.filePath, hunkId);
       }
 
       const remainingHunks = diff.hunks.filter((h) => h.id !== hunkId);
@@ -248,7 +250,7 @@ const createDiffSlice: AIPanelStateCreator<Pick<AIPanelState, 'setCurrentDiff' |
       const session = state.sessions.find((s) => s.id === sessionId);
       const diff = session?.pendingDiff;
       if (diff?.filePath) {
-        useEditorStore.getState().applyAllHunks(diff.filePath);
+        applyDiffActions.applyAllHunks(diff.filePath);
       }
       return {
         sessions: updateSessions(state.sessions, sessionId, (session) => ({
@@ -273,7 +275,7 @@ export const useAIPanelStore = create<AIPanelState>()(
       ...createSessionSlice(...args),
       ...createMessageSlice(...args),
       ...createToolCallSlice(...args),
-      ...createDiffSlice(...args),
+      ...createDiffSlice(editorDiffActions)(...args),
     }),
     {
       name: 'inkuo-ai-panel',

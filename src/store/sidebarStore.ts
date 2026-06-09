@@ -4,6 +4,24 @@ import type { FileEntry, ActiveToolCall, KnowledgeBase, BuildProgress } from '..
 
 let getExpandedDirsSnapshot: (() => Set<string>) | null = null;
 
+function isSamePathOrDescendant(path: string, targetPath: string): boolean {
+  return path === targetPath || path.startsWith(`${targetPath}/`);
+}
+
+function mergeFileEntries(existingEntries: FileEntry[], incomingEntries: FileEntry[]): FileEntry[] {
+  const mergedEntries = new Map<string, FileEntry>();
+
+  for (const entry of existingEntries) {
+    mergedEntries.set(entry.path, entry);
+  }
+
+  for (const entry of incomingEntries) {
+    mergedEntries.set(entry.path, entry);
+  }
+
+  return Array.from(mergedEntries.values());
+}
+
 export interface OpenTab {
   id: string;
   path: string;
@@ -77,6 +95,7 @@ interface SidebarState {
   setActiveTab: (tabId: string) => void;
   setOpenTabDirty: (path: string, isDirty: boolean) => void;
   addFileEntry: (entry: FileEntry) => void;
+  addFileEntries: (entries: FileEntry[]) => void;
   removeFileEntry: (path: string) => void;
   removeDescendants: (parentPath: string) => void;
   isDirExpanded: (path: string) => boolean;
@@ -183,14 +202,14 @@ export const useSidebarStore = create<SidebarState>()(
         setOpenTabDirty: (path, isDirty) => set((state) => ({
           openTabs: updateOpenTabDirtyState(state.openTabs, path, isDirty),
         })),
-        addFileEntry: (entry) => set((state) => {
-          if (state.files.some((f) => f.path === entry.path)) {
-            return state;
-          }
-          return { files: [...state.files, entry] };
-        }),
+        addFileEntry: (entry) => set((state) => ({
+          files: mergeFileEntries(state.files, [entry]),
+        })),
+        addFileEntries: (entries) => set((state) => ({
+          files: mergeFileEntries(state.files, entries),
+        })),
         removeFileEntry: (path) => set((state) => ({
-          files: state.files.filter((f) => !f.path.startsWith(path)),
+          files: state.files.filter((f) => !isSamePathOrDescendant(f.path, path)),
         })),
         removeDescendants: (parentPath) => set((state) => ({
           files: state.files.filter((f) => !f.path.startsWith(parentPath + '/')),

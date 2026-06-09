@@ -67,6 +67,11 @@ export interface AIPanelDiffSlice {
   rejectAllHunks: (sessionId: string) => void;
 }
 
+export interface DiffApplicationActions {
+  applyHunk: (path: string, hunkId: string) => void;
+  applyAllHunks: (path: string) => void;
+}
+
 export type AIPanelState =
   & AIPanelUiSlice
   & AIPanelSessionSlice

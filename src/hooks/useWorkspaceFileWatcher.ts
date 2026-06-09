@@ -15,29 +15,49 @@ export function useWorkspaceFileWatcher(
   useEffect(() => {
     let unlisten: UnlistenFn | null = null;
     let watchingPath: string | null = null;
+    let disposed = false;
 
     const setupWatcher = async () => {
       if (!workspacePath) return;
 
       try {
         await invoke('watch_directory', { path: workspacePath });
+        if (disposed) {
+          await invoke('unwatch_directory', { path: workspacePath }).catch((error) => {
+            reportError('workspace-file-watcher-cleanup', error);
+          });
+          return;
+        }
+
         watchingPath = workspacePath;
-        unlisten = await listen<FileChangePayload>('file-change', (event) => {
+
+        const unlistenFn = await listen<FileChangePayload>('file-change', (event) => {
           onFileChange(event.payload);
         });
+
+        if (disposed) {
+          unlistenFn();
+          await invoke('unwatch_directory', { path: workspacePath }).catch((error) => {
+            reportError('workspace-file-watcher-cleanup', error);
+          });
+          return;
+        }
+
+        unlisten = unlistenFn;
       } catch (error) {
         reportError('workspace-file-watcher-setup', error);
       }
     };
 
-    setupWatcher();
+    void setupWatcher();
 
     return () => {
+      disposed = true;
       if (unlisten) {
         unlisten();
       }
       if (watchingPath) {
-        invoke('unwatch_directory', { path: watchingPath }).catch((error) => {
+        void invoke('unwatch_directory', { path: watchingPath }).catch((error) => {
           reportError('workspace-file-watcher-cleanup', error);
         });
       }

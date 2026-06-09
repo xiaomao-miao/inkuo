@@ -13,33 +13,18 @@ import {
 import { useSettingsStore, useInlineCompleteStore } from '../../store';
 import { ModelsSettings, KnowledgeSettings } from './index';
 import { Select } from './Select';
-import { saveSettings } from '../../utils/saveSettings';
-import { reportError } from '../../utils/errors';
 import styles from './SettingsPanel.module.css';
 
 type SettingsTab = 'models' | 'knowledge' | 'editor' | 'ai' | 'appearance' | 'about';
 
 export const SettingsPanel = () => {
   const settings = useSettingsStore((state) => state.settings);
-  const updateSetting = useSettingsStore((state) => state.updateSetting);
-  const setActiveApiConfig = useSettingsStore((state) => state.setActiveApiConfig);
+  const updateSettingAndPersist = useSettingsStore((state) => state.updateSettingAndPersist);
+  const setActiveApiConfigAndPersist = useSettingsStore((state) => state.setActiveApiConfigAndPersist);
   const enabled = useInlineCompleteStore((state) => state.enabled);
   const debounceMs = useInlineCompleteStore((state) => state.debounceMs);
   const setEnabled = useInlineCompleteStore((state) => state.setEnabled);
   const [activeTab, setActiveTab] = useState<SettingsTab>('models');
-
-  const persistSettings = async (nextSettings = settings) => {
-    try {
-      await saveSettings(nextSettings);
-    } catch (err) {
-      reportError('settings-save', err);
-    }
-  };
-
-  const updateAndPersistSetting = <K extends keyof typeof settings>(key: K, value: (typeof settings)[K]) => {
-    const nextSettings = updateSetting(key, value);
-    persistSettings(nextSettings);
-  };
 
   const tabs: { id: SettingsTab; label: string; icon: React.ReactNode }[] = [
     { id: 'models', label: '模型', icon: <Cpu size={14} /> },
@@ -74,7 +59,7 @@ export const SettingsPanel = () => {
                     max="24"
                     value={settings.editor_font_size}
                     onChange={(e) => {
-                      updateAndPersistSetting('editor_font_size', parseInt(e.target.value));
+                      void updateSettingAndPersist('editor_font_size', parseInt(e.target.value));
                     }}
                     className={styles.range}
                   />
@@ -93,9 +78,9 @@ export const SettingsPanel = () => {
                     { value: 'Consolas, monospace', label: 'Consolas' },
                     { value: 'Monaco, monospace', label: 'Monaco' },
                   ]}
-                  onChange={(value) => {
-                    updateAndPersistSetting('editor_font_family', value);
-                  }}
+                    onChange={(value) => {
+                      void updateSettingAndPersist('editor_font_family', value);
+                    }}
                   className={styles.select}
                 />
               </div>
@@ -115,7 +100,7 @@ export const SettingsPanel = () => {
                       type="checkbox"
                       checked={settings.editor_word_wrap}
                       onChange={(e) => {
-                        updateAndPersistSetting('editor_word_wrap', e.target.checked);
+                        void updateSettingAndPersist('editor_word_wrap', e.target.checked);
                       }}
                     />
                     <span className={styles.toggleSlider}></span>
@@ -132,7 +117,7 @@ export const SettingsPanel = () => {
                       type="checkbox"
                       checked={settings.editor_line_numbers}
                       onChange={(e) => {
-                        updateAndPersistSetting('editor_line_numbers', e.target.checked);
+                        void updateSettingAndPersist('editor_line_numbers', e.target.checked);
                       }}
                     />
                     <span className={styles.toggleSlider}></span>
@@ -176,8 +161,7 @@ export const SettingsPanel = () => {
                     value={settings.activeApiConfigId || ''}
                     options={modelOptions}
                     onChange={(value) => {
-                      const nextSettings = setActiveApiConfig(value);
-                      persistSettings(nextSettings);
+                      void setActiveApiConfigAndPersist(value);
                     }}
                     className={styles.select}
                   />
@@ -279,7 +263,7 @@ export const SettingsPanel = () => {
                       settings.theme === 'cursor-dark' ? styles.active : ''
                     }`}
                     onClick={() => {
-                      updateAndPersistSetting('theme', 'cursor-dark');
+                      void updateSettingAndPersist('theme', 'cursor-dark');
                     }}
                   >
                     <div className={styles.themePreview} style={{ background: '#1e1e1e' }}>
@@ -292,7 +276,7 @@ export const SettingsPanel = () => {
                       settings.theme === 'cursor-light' ? styles.active : ''
                     }`}
                     onClick={() => {
-                      updateAndPersistSetting('theme', 'cursor-light');
+                      void updateSettingAndPersist('theme', 'cursor-light');
                     }}
                   >
                     <div className={styles.themePreview} style={{ background: '#ffffff' }}>
@@ -310,7 +294,7 @@ export const SettingsPanel = () => {
                     type="color"
                     value={settings.accent_color}
                     onChange={(e) => {
-                      updateAndPersistSetting('accent_color', e.target.value);
+                      void updateSettingAndPersist('accent_color', e.target.value);
                     }}
                     className={styles.colorInput}
                   />

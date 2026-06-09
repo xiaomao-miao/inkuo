@@ -16,10 +16,18 @@ export async function loadWorkspaceDirectory(path: string, options?: {
 
   const expandedDirs = options.expandedDirs ?? new Set<string>();
   const childrenToKeep = options.existingFiles.filter((file) =>
-    [...expandedDirs].some((expanded) => file.path.startsWith(expanded + '/'))
+    [...expandedDirs].some((expanded) => file.path.startsWith(`${expanded}/`))
   );
 
-  return [...childrenToKeep, ...entries];
+  const seen = new Set<string>();
+  const uniqueEntries: FileEntry[] = [];
+  for (const entry of [...childrenToKeep, ...entries]) {
+    if (!seen.has(entry.path)) {
+      seen.add(entry.path);
+      uniqueEntries.push(entry);
+    }
+  }
+  return uniqueEntries;
 }
 
 export async function applyWorkspaceDirectoryLoad(path: string, options?: {

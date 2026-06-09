@@ -46,20 +46,40 @@ export const TitleBar = () => {
 
   // Check initial maximized state
   useEffect(() => {
-    const checkMaximized = async () => {
-      const win = getCurrentWindow();
-      setIsMaximized(await win.isMaximized());
-    };
-    checkMaximized();
-    
-    // Listen for window state changes
     const win = getCurrentWindow();
-    const unlisten = win.onResized(() => {
-      win.isMaximized().then(setIsMaximized);
-    });
-    
+    let disposed = false;
+    let unlistenResize: (() => void) | null = null;
+
+    const syncMaximizedState = async () => {
+      try {
+        const maximized = await win.isMaximized();
+        if (!disposed) {
+          setIsMaximized(maximized);
+        }
+      } catch (err) {
+        reportError('titlebar-sync-maximized-state', err);
+      }
+    };
+
+    const setupListeners = async () => {
+      await syncMaximizedState();
+
+      try {
+        const resizeUnlisten = await win.onResized(() => {
+          void syncMaximizedState();
+        });
+
+        unlistenResize = resizeUnlisten;
+      } catch (err) {
+        reportError('titlebar-window-listeners', err);
+      }
+    };
+
+    void setupListeners();
+
     return () => {
-      unlisten.then(fn => fn());
+      disposed = true;
+      unlistenResize?.();
     };
   }, []);
 
@@ -110,7 +130,11 @@ export const TitleBar = () => {
   const handleMaximize = async () => {
     const win = getCurrentWindow();
     await win.toggleMaximize();
-    setIsMaximized(!isMaximized);
+    try {
+      setIsMaximized(await win.isMaximized());
+    } catch (err) {
+      reportError('titlebar-toggle-maximize', err);
+    }
   };
 
   const handleClose = async () => {
@@ -122,13 +146,13 @@ export const TitleBar = () => {
     {
       label: '文件',
       items: [
-        { label: '新建文件', shortcut: 'Ctrl+N', action: () => setActiveMenu(null) },
+        { label: '新建文件', shortcut: 'Ctrl+N', action: () => setActiveMenu(null), disabled: true },
         { label: '打开文件夹...', shortcut: 'Ctrl+O', action: handleOpenFolder },
         { divider: true, label: '' },
         { label: '保存', shortcut: 'Ctrl+S', action: handleSave, disabled: !isDirty },
-        { label: '另存为...', shortcut: 'Ctrl+Shift+S', action: () => setActiveMenu(null), disabled: !selectedFile },
+        { label: '另存为...', shortcut: 'Ctrl+Shift+S', disabled: true },
         { divider: true, label: '' },
-        { label: '关闭编辑器', shortcut: 'Ctrl+W', action: () => setActiveMenu(null), disabled: !selectedFile },
+        { label: '关闭编辑器', shortcut: 'Ctrl+W', disabled: !selectedFile },
         { divider: true, label: '' },
         { label: '退出', shortcut: 'Alt+F4', action: handleClose },
       ],
@@ -136,44 +160,44 @@ export const TitleBar = () => {
     {
       label: '编辑',
       items: [
-        { label: '撤销', shortcut: 'Ctrl+Z', action: () => setActiveMenu(null) },
-        { label: '重做', shortcut: 'Ctrl+Y', action: () => setActiveMenu(null) },
+        { label: '撤销', shortcut: 'Ctrl+Z', disabled: true },
+        { label: '重做', shortcut: 'Ctrl+Y', disabled: true },
         { divider: true, label: '' },
-        { label: '剪切', shortcut: 'Ctrl+X', action: () => setActiveMenu(null) },
-        { label: '复制', shortcut: 'Ctrl+C', action: () => setActiveMenu(null) },
-        { label: '粘贴', shortcut: 'Ctrl+V', action: () => setActiveMenu(null) },
+        { label: '剪切', shortcut: 'Ctrl+X', disabled: true },
+        { label: '复制', shortcut: 'Ctrl+C', disabled: true },
+        { label: '粘贴', shortcut: 'Ctrl+V', disabled: true },
         { divider: true, label: '' },
-        { label: '全选', shortcut: 'Ctrl+A', action: () => setActiveMenu(null) },
-        { label: '查找', shortcut: 'Ctrl+F', action: () => setActiveMenu(null) },
-        { label: '替换', shortcut: 'Ctrl+H', action: () => setActiveMenu(null) },
+        { label: '全选', shortcut: 'Ctrl+A', disabled: true },
+        { label: '查找', shortcut: 'Ctrl+F', disabled: true },
+        { label: '替换', shortcut: 'Ctrl+H', disabled: true },
       ],
     },
     {
       label: '选择',
       items: [
-        { label: '全选', shortcut: 'Ctrl+A', action: () => setActiveMenu(null) },
-        { label: '展开', shortcut: 'Ctrl+=', action: () => setActiveMenu(null) },
-        { label: '收起', shortcut: 'Ctrl+-', action: () => setActiveMenu(null) },
+        { label: '全选', shortcut: 'Ctrl+A', disabled: true },
+        { label: '展开', shortcut: 'Ctrl+=', disabled: true },
+        { label: '收起', shortcut: 'Ctrl+-', disabled: true },
       ],
     },
     {
       label: '视图',
       items: [
-        { label: '侧边栏', shortcut: 'Ctrl+B', action: () => setActiveMenu(null) },
-        { label: 'AI 面板', shortcut: 'Ctrl+Shift+L', action: () => setActiveMenu(null) },
+        { label: '侧边栏', shortcut: 'Ctrl+B', disabled: true },
+        { label: 'AI 面板', shortcut: 'Ctrl+Shift+L', disabled: true },
         { divider: true, label: '' },
-        { label: '放大字体', shortcut: 'Ctrl++', action: () => setActiveMenu(null) },
-        { label: '缩小字体', shortcut: 'Ctrl+-', action: () => setActiveMenu(null) },
-        { label: '重置字体大小', shortcut: 'Ctrl+0', action: () => setActiveMenu(null) },
+        { label: '放大字体', shortcut: 'Ctrl++', disabled: true },
+        { label: '缩小字体', shortcut: 'Ctrl+-', disabled: true },
+        { label: '重置字体大小', shortcut: 'Ctrl+0', disabled: true },
         { divider: true, label: '' },
-        { label: '全屏', shortcut: 'F11', action: () => setActiveMenu(null) },
+        { label: '全屏', shortcut: 'F11', disabled: true },
       ],
     },
     {
       label: '帮助',
       items: [
-        { label: '关于 inkuo', action: () => setActiveMenu(null) },
-        { label: '快捷键参考', shortcut: 'Ctrl+K Ctrl+R', action: () => setActiveMenu(null) },
+        { label: '关于 inkuo', disabled: true },
+        { label: '快捷键参考', shortcut: 'Ctrl+K Ctrl+R', disabled: true },
       ],
     },
   ];
