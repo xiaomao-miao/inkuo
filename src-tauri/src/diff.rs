@@ -17,6 +17,10 @@ pub struct DiffHunk {
     pub id: String,
     pub old_range: HunkRange,
     pub new_range: HunkRange,
+    /// Character offset in the original text where this hunk starts
+    pub old_offset: usize,
+    /// Character offset in the modified text where this hunk starts
+    pub new_offset: usize,
     pub changes: Vec<DiffChange>,
     pub summary: String,
 }
@@ -81,59 +85,81 @@ pub struct StreamDiffChange {
 
 pub fn compute_diff(old_text: &str, new_text: &str) -> DiffResult {
     let diff = TextDiff::from_lines(old_text, new_text);
-    
+
     let mut hunks = Vec::new();
     let mut current_hunk: Option<DiffHunk> = None;
-    
+
     let mut old_line = 0usize;
     let mut new_line = 0usize;
+    let mut old_char = 0usize;
+    let mut new_char = 0usize;
     let mut added_lines = 0usize;
     let mut deleted_lines = 0usize;
     let mut unchanged_lines = 0usize;
-    
+
     for change in diff.iter_all_changes() {
         let change_type = match change.tag() {
             ChangeTag::Delete => {
                 deleted_lines += 1;
                 old_line += 1;
+                old_char += change.value().len();
                 ChangeType::Delete
             }
             ChangeTag::Insert => {
                 added_lines += 1;
                 new_line += 1;
+                new_char += change.value().len();
                 ChangeType::Insert
             }
             ChangeTag::Equal => {
                 unchanged_lines += 1;
                 old_line += 1;
                 new_line += 1;
+                old_char += change.value().len();
+                new_char += change.value().len();
                 ChangeType::Equal
             }
         };
-        
+
         let diff_change = DiffChange {
             tag: change_type,
-            old_line: if change.tag() != ChangeTag::Insert { Some(old_line) } else { None },
-            new_line: if change.tag() != ChangeTag::Delete { Some(new_line) } else { None },
+            old_line: if change.tag() != ChangeTag::Insert {
+                Some(old_line)
+            } else {
+                None
+            },
+            new_line: if change.tag() != ChangeTag::Delete {
+                Some(new_line)
+            } else {
+                None
+            },
             content: change.value().to_string(),
         };
-        
-        // Start new hunk after context break
+
+        // Start new hunk when we hit a non-equal change and no hunk is active
         if change.tag() != ChangeTag::Equal && current_hunk.is_none() {
             current_hunk = Some(DiffHunk {
                 id: uuid::Uuid::new_v4().to_string(),
-                old_range: HunkRange { start_line: old_line, end_line: old_line },
-                new_range: HunkRange { start_line: new_line, end_line: new_line },
+                old_range: HunkRange {
+                    start_line: old_line,
+                    end_line: old_line,
+                },
+                new_range: HunkRange {
+                    start_line: new_line,
+                    end_line: new_line,
+                },
+                old_offset: old_char,
+                new_offset: new_char,
                 changes: Vec::new(),
                 summary: String::new(),
             });
         }
-        
+
         if let Some(ref mut hunk) = current_hunk {
             hunk.changes.push(diff_change);
             hunk.old_range.end_line = old_line;
             hunk.new_range.end_line = new_line;
-            
+
             // Finalize hunk after some context
             if change.tag() == ChangeTag::Equal && hunk.changes.len() > 6 {
                 hunk.summary = generate_hunk_summary(&hunk.changes);
@@ -142,15 +168,15 @@ pub fn compute_diff(old_text: &str, new_text: &str) -> DiffResult {
             }
         }
     }
-    
+
     // Finalize last hunk
     if let Some(mut hunk) = current_hunk {
         hunk.summary = generate_hunk_summary(&hunk.changes);
         hunks.push(hunk);
     }
-    
+
     let description = generate_diff_description(added_lines, deleted_lines);
-    
+
     DiffResult {
         hunks,
         summary: DiffSummary {

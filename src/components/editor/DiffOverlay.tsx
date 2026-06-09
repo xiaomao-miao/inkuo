@@ -46,11 +46,13 @@ export const DiffOverlay: React.FC<DiffOverlayProps> = ({ hunks }) => {
 
   const handleCopy = (hunk: DiffHunk, e: React.MouseEvent) => {
     e.stopPropagation();
-    const content = hunk.changes
-      .filter(c => c.tag === 'insert')
-      .map(c => c.content)
-      .join('');
-    navigator.clipboard.writeText(content);
+    // Build a unified-diff style representation of the hunk
+    const lines = hunk.changes.map((c) => {
+      const prefix =
+        c.tag === 'delete' ? '-' : c.tag === 'insert' ? '+' : ' ';
+      return `${prefix} ${c.content}`;
+    });
+    navigator.clipboard.writeText(lines.join('\n'));
   };
 
   const handleApplyAll = () => {

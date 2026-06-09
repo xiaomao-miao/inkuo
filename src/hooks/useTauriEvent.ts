@@ -10,15 +10,15 @@ export function useTauriEvent<TPayload>(
   useEffect(() => {
     let unlisten: Unlisten | null = null;
 
-    const setup = async () => {
-      unlisten = await listen<TPayload>(eventName, (event) => {
-        handler(event.payload);
+    listen<TPayload>(eventName, (event) => {
+      handler(event.payload);
+    })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch((error) => {
+        console.error(`Failed to listen for ${eventName}:`, error);
       });
-    };
-
-    setup().catch((error) => {
-      console.error(`Failed to listen for ${eventName}:`, error);
-    });
 
     return () => {
       if (unlisten) {

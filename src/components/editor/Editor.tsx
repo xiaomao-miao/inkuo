@@ -152,11 +152,12 @@ const SettingsState: React.FC = () => (
   </div>
 );
 
-function detectFileType(path: string): 'markdown' | 'word' | 'excel' {
+function detectFileType(path: string): 'markdown' | 'plaintext' | 'word' | 'excel' {
   const ext = path.split('.').pop()?.toLowerCase() || '';
   if (ext === 'docx') return 'word';
   if (ext === 'xlsx' || ext === 'xls') return 'excel';
-  return 'markdown';
+  if (ext === 'md' || ext === 'markdown') return 'markdown';
+  return 'plaintext';
 }
 
 type RenderableOfficeTab = {
@@ -171,9 +172,10 @@ export const Editor: React.FC = () => {
   const isSettingsTab = activeTabId === SETTINGS_TAB_ID;
 
   const activeFileType = selectedFile ? detectFileType(selectedFile) : null;
-  const officeTabs = useMemo<RenderableOfficeTab[]>(() => openTabs.flatMap((tab) => {
+  const officeTabs = useMemo<RenderableOfficeTab[]>(() => openTabs.flatMap((tab: OpenTab) => {
     const fileType = detectFileType(tab.path);
-    return fileType === 'markdown' ? [] : [{ tab, fileType }];
+    if (fileType !== 'word' && fileType !== 'excel') return [];
+    return [{ tab, fileType }];
   }), [openTabs]);
 
   if (isSettingsTab) {
@@ -214,7 +216,7 @@ export const Editor: React.FC = () => {
         );
       })}
 
-      {activeFileType === 'markdown' && (
+      {(activeFileType === 'markdown' || activeFileType === 'plaintext') && (
         <InlineCompleteProvider>
           <EditorContent editorRef={editorRef} />
         </InlineCompleteProvider>

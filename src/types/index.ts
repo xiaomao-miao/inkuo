@@ -50,6 +50,10 @@ export interface DiffHunk {
   old_lines: number;
   new_start: number;
   new_lines: number;
+  /** Character offset in the original text where this hunk starts */
+  old_offset: number;
+  /** Character offset in the modified text where this hunk starts */
+  new_offset: number;
   changes: DiffChange[];
 }
 

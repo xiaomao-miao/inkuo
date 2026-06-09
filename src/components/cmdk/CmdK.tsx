@@ -93,8 +93,11 @@ export const CmdK: React.FC = () => {
         newText: response.content,
       });
 
-      // Set diff hunks
-      setDiffHunks(selectedFile, diffResult.hunks);
+      // Set diff hunks with context about where the diff applies in the full document
+      const originalOffset = selection && selection.from !== selection.to
+        ? selection.from
+        : currentContent.indexOf(targetText);
+      setDiffHunks(selectedFile, diffResult.hunks, targetText, originalOffset >= 0 ? originalOffset : 0);
       
       // Close modal
       close();

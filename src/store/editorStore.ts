@@ -12,6 +12,10 @@ interface DocumentState {
   isDirty: boolean;
   selection: { from: number; to: number } | null;
   diffHunks: DiffHunk[];
+  /** The original text fragment that was sent to AI for modification */
+  diffOriginalText: string;
+  /** Character offset in the full content where diffOriginalText starts */
+  diffOriginalOffset: number;
   activeHunkIndex: number;
   isDiffMode: boolean;
   docxBuffer: number[] | null;
@@ -25,7 +29,7 @@ interface EditorState {
   setDocumentContent: (path: string, doc: Document, content: string, mtime?: number) => void;
   setContent: (path: string, content: string) => void;
   setSelection: (path: string, selection: { from: number; to: number } | null) => void;
-  setDiffHunks: (path: string, hunks: DiffHunk[]) => void;
+  setDiffHunks: (path: string, hunks: DiffHunk[], originalText: string, originalOffset: number) => void;
   setActiveHunkIndex: (path: string, index: number) => void;
   setIsDiffMode: (path: string, isDiff: boolean) => void;
   applyHunk: (path: string, hunkId: string) => void;
@@ -49,6 +53,66 @@ interface EditorState {
 // Helper Functions
 // ============================================================================
 
+/** Apply a single hunk's changes to the original text fragment.
+ *  Returns (newText, replacementText) where replacementText is the full
+ *  text that should replace the old hunk region. */
+function applyHunkToText(
+  originalText: string,
+  hunk: DiffHunk,
+): string {
+  // The hunk's new text is reconstructed from its changes.
+  // The old region starts at hunk.old_offset in originalText.
+  // The new region starts at hunk.new_offset in the AI response.
+  const oldContent = hunk.changes
+    .filter((c) => c.tag !== 'insert')
+    .map((c) => c.content)
+    .join('');
+  const newContent = hunk.changes
+    .filter((c) => c.tag !== 'delete')
+    .map((c) => c.content)
+    .join('');
+
+  // Find exact old region by matching content
+  const oldIdx = originalText.indexOf(oldContent, hunk.old_offset);
+  if (oldIdx === -1 || oldIdx !== hunk.old_offset) {
+    // Fallback: replace at the recorded offset
+    return (
+      originalText.slice(0, hunk.old_offset) +
+      newContent +
+      originalText.slice(hunk.old_offset + oldContent.length)
+    );
+  }
+  return (
+    originalText.slice(0, hunk.old_offset) +
+    newContent +
+    originalText.slice(hunk.old_offset + oldContent.length)
+  );
+}
+
+/** Apply all remaining hunks to the original text fragment.
+ *  Hunks are sorted by offset descending so earlier positions aren't shifted. */
+function applyAllHunksToText(originalText: string, hunks: DiffHunk[]): string {
+  const sorted = [...hunks].sort((a, b) => b.old_offset - a.old_offset);
+  let text = originalText;
+  for (const hunk of sorted) {
+    text = applyHunkToText(text, { ...hunk, old_offset: hunk.old_offset });
+  }
+  return text;
+}
+
+/** Apply a single hunk's new text to the document at the correct position. */
+function applySingleHunk(
+  content: string,
+  originalText: string,
+  diffOffset: number,
+  hunk: DiffHunk,
+): string {
+  // Apply to the local copy of the original text, then splice into content
+  const localText = applyHunkToText(originalText, hunk);
+  const endOffset = diffOffset + originalText.length;
+  return content.slice(0, diffOffset) + localText + content.slice(endOffset);
+}
+
 /** Create a default document state for a new document */
 function createDefaultDocumentState(overrides?: Partial<DocumentState>): DocumentState {
   return {
@@ -58,6 +122,8 @@ function createDefaultDocumentState(overrides?: Partial<DocumentState>): Documen
     isDirty: false,
     selection: null,
     diffHunks: [],
+    diffOriginalText: '',
+    diffOriginalOffset: 0,
     activeHunkIndex: 0,
     isDiffMode: false,
     docxBuffer: null,
@@ -114,8 +180,13 @@ export const useEditorStore = create<EditorState>()(
         updateDocument(state, path, { selection })
       ),
 
-      setDiffHunks: (path, hunks) => set((state) =>
-        updateDocument(state, path, { diffHunks: hunks, isDiffMode: hunks.length > 0 })
+      setDiffHunks: (path, hunks, originalText, originalOffset) => set((state) =>
+        updateDocument(state, path, {
+          diffHunks: hunks,
+          diffOriginalText: originalText,
+          diffOriginalOffset: originalOffset,
+          isDiffMode: hunks.length > 0,
+        })
       ),
 
       setActiveHunkIndex: (path, index) => set((state) =>
@@ -129,13 +200,28 @@ export const useEditorStore = create<EditorState>()(
       applyHunk: (path, hunkId) => set((state) => {
         const current = state.documentContents[path];
         if (!current) return state;
+        const hunk = current.diffHunks.find(h => h.id === hunkId);
+        if (!hunk) return state;
+
+        // Apply the hunk to content
+        const newContent = applySingleHunk(
+          current.content,
+          current.diffOriginalText,
+          current.diffOriginalOffset,
+          hunk,
+        );
+
+        // Remove the applied hunk from the list
         const newHunks = current.diffHunks.filter(h => h.id !== hunkId);
         return {
           documentContents: {
             ...state.documentContents,
             [path]: {
               ...current,
+              content: newContent,
               diffHunks: newHunks,
+              diffOriginalText: current.diffOriginalText,
+              diffOriginalOffset: current.diffOriginalOffset,
               isDiffMode: newHunks.length > 0,
               isDirty: true,
             },
@@ -159,16 +245,54 @@ export const useEditorStore = create<EditorState>()(
         };
       }),
 
-      applyAllHunks: (path) => set((state) =>
-        updateDocument(state, path, { diffHunks: [], isDiffMode: false, isDirty: true })
-      ),
+      applyAllHunks: (path) => set((state) => {
+        const current = state.documentContents[path];
+        if (!current || current.diffHunks.length === 0) return state;
+
+        // Apply all hunks to the original text, then splice into content
+        const newOriginalText = applyAllHunksToText(
+          current.diffOriginalText,
+          current.diffHunks,
+        );
+        const endOffset = current.diffOriginalOffset + current.diffOriginalText.length;
+        const newContent =
+          current.content.slice(0, current.diffOriginalOffset) +
+          newOriginalText +
+          current.content.slice(endOffset);
+
+        return {
+          documentContents: {
+            ...state.documentContents,
+            [path]: {
+              ...current,
+              content: newContent,
+              diffHunks: [],
+              diffOriginalText: '',
+              diffOriginalOffset: 0,
+              isDiffMode: false,
+              isDirty: true,
+            },
+          },
+        };
+      }),
 
       rejectAllHunks: (path) => set((state) =>
-        updateDocument(state, path, { diffHunks: [], isDiffMode: false })
+        updateDocument(state, path, {
+          diffHunks: [],
+          diffOriginalText: '',
+          diffOriginalOffset: 0,
+          isDiffMode: false,
+        })
       ),
 
       clearDiff: (path) => set((state) =>
-        updateDocument(state, path, { diffHunks: [], isDiffMode: false, activeHunkIndex: 0 })
+        updateDocument(state, path, {
+          diffHunks: [],
+          diffOriginalText: '',
+          diffOriginalOffset: 0,
+          isDiffMode: false,
+          activeHunkIndex: 0,
+        })
       ),
 
       markSaved: (path) => set((state) =>

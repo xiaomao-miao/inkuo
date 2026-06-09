@@ -8,7 +8,7 @@ use serde::Serialize;
 use std::path::PathBuf;
 use thiserror::Error;
 use tauri::{AppHandle, Emitter};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 /// File change event sent to the frontend
 #[derive(Clone, Serialize)]
@@ -31,11 +31,18 @@ pub enum FileWatcherError {
     WatchDirectory(String),
 }
 
+/// Handle to an active watcher task, used to signal shutdown
+type WatcherAbortHandle = oneshot::Sender<()>;
+
 pub struct FileWatcherState {
     /// The currently watched directory path
     watched_path: parking_lot::Mutex<Option<PathBuf>>,
     /// The Tauri app handle for emitting events
     app_handle: parking_lot::Mutex<Option<AppHandle>>,
+    /// The active watcher instance (must drop to truly stop watching)
+    watcher: parking_lot::Mutex<Option<RecommendedWatcher>>,
+    /// Abort handle for the event-handling task
+    abort_handle: parking_lot::Mutex<Option<WatcherAbortHandle>>,
 }
 
 impl FileWatcherState {
@@ -43,12 +50,14 @@ impl FileWatcherState {
         Self {
             watched_path: parking_lot::Mutex::new(None),
             app_handle: parking_lot::Mutex::new(None),
+            watcher: parking_lot::Mutex::new(None),
+            abort_handle: parking_lot::Mutex::new(None),
         }
     }
 
     /// Start watching a directory for file changes
     pub fn watch(&self, path: PathBuf, app_handle: AppHandle) -> Result<(), FileWatcherError> {
-        // Stop any existing watcher
+        // Stop any existing watcher first (drops old watcher + aborts old task)
         self.stop();
 
         // Store the app handle for emitting events
@@ -60,6 +69,9 @@ impl FileWatcherState {
 
         // Create a channel for receiving events
         let (tx, mut rx) = mpsc::channel::<Event>(100);
+
+        // Create the abort channel
+        let (abort_tx, abort_rx) = oneshot::channel::<()>();
 
         // Create the watcher
         let mut watcher = RecommendedWatcher::new(
@@ -82,20 +94,42 @@ impl FileWatcherState {
         // Store the watched path
         *self.watched_path.lock() = Some(watched_path);
 
+        // Store the watcher so it lives for the duration of the struct
+        *self.watcher.lock() = Some(watcher);
+
         // Spawn a task to handle events
         let app_handle_clone = app_handle.clone();
         tauri::async_runtime::spawn(async move {
-            while let Some(event) = rx.recv().await {
-                Self::handle_event(&app_handle_clone, event);
+            tokio::select! {
+                _ = abort_rx => {
+                    tracing::info!("File watcher task收到了中止信号，退出");
+                }
+                _ = async {
+                    while let Some(event) = rx.recv().await {
+                        Self::handle_event(&app_handle_clone, event);
+                    }
+                } => {}
             }
         });
+
+        // Store the abort handle
+        *self.abort_handle.lock() = Some(abort_tx);
 
         tracing::info!("Started watching directory: {:?}", path);
         Ok(())
     }
 
-    /// Stop watching the current directory
+    /// Stop watching the current directory and release all resources
     pub fn stop(&self) {
+        // Abort the event-handling task first
+        if let Some(abort) = self.abort_handle.lock().take() {
+            let _ = abort.send(());
+        }
+
+        // Drop the watcher to release the file system handle
+        self.watcher.lock().take();
+
+        // Clear the path
         if let Some(path) = self.watched_path.lock().take() {
             tracing::info!("Stopped watching directory: {:?}", path);
         }

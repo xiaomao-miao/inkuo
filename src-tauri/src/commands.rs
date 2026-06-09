@@ -114,7 +114,20 @@ pub async fn write_document(path: String, content: String) -> Result<(), AppComm
         request_backup_cleanup();
     }
 
-    std::fs::write(&path, &content)
+    // Use atomic write: write to a temp file, then rename (POSIX guarantees atomicity)
+    let path_obj = std::path::Path::new(&path);
+    let temp_path = path_obj.with_extension(
+        path_obj
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| format!("{}.tmp", e))
+            .unwrap_or_else(|| "tmp".to_string()),
+    );
+
+    std::fs::write(&temp_path, &content)
+        .map_err(|e| AppCommandError::WriteDocument(e.to_string()))?;
+
+    std::fs::rename(&temp_path, &path)
         .map_err(|e| AppCommandError::WriteDocument(e.to_string()))?;
 
     Ok(())
