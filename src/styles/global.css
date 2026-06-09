@@ -155,41 +155,41 @@ pre {
 }
 
 /* CodeMirror global overrides */
-.editorContainer :global(.cm-editor) {
+.editorContainer .cm-editor {
   background-color: var(--bg-primary);
   height: 100%;
 }
 
-.editorContainer :global(.cm-editor .cm-scroller) {
+.editorContainer .cm-editor .cm-scroller {
   font-family: var(--font-mono);
   background-color: var(--bg-primary);
 }
 
-.editorContainer :global(.cm-editor .cm-content) {
+.editorContainer .cm-editor .cm-content {
   background-color: var(--bg-primary);
 }
 
-.editorContainer :global(.cm-editor .cm-gutters) {
+.editorContainer .cm-editor .cm-gutters {
   background-color: var(--bg-secondary);
   border-right: 1px solid var(--border-color);
   color: var(--fg-muted);
 }
 
-.editorContainer :global(.cm-editor .cm-lineNumbers .cm-gutterElement) {
+.editorContainer .cm-editor .cm-lineNumbers .cm-gutterElement {
   color: var(--fg-muted);
   padding: 0 16px 0 8px;
 }
 
 /* Cursor / Caret styling */
-.editorContainer :global(.cm-editor .cm-cursor) {
+.editorContainer .cm-editor .cm-cursor {
   border-left-color: var(--accent-primary);
   border-left-width: 2px;
 }
 
-.editorContainer :global(.cm-editor .cm-selectionBackground) {
+.editorContainer .cm-editor .cm-selectionBackground {
   background-color: var(--selection-bg);
 }
 
-.editorContainer :global(.cm-editor.cm-focused .cm-selectionBackground) {
+.editorContainer .cm-editor.cm-focused .cm-selectionBackground {
   background-color: var(--selection-bg);
 }

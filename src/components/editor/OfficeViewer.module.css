@@ -347,6 +347,13 @@
   display: none;
 }
 
+.docxContainer :global(nav[role="menubar"]),
+.docxContainer :global([role="menubar"]),
+.docxContainer :global([aria-label="Main menu"]),
+.docxContainer :global([aria-label="Menu bar"]) {
+  display: none;
+}
+
 .excelContainer {
   flex: 1;
   overflow: hidden;

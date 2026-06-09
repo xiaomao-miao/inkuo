@@ -10,9 +10,6 @@ import { createWordInlineCompletePlugin } from '../inline-complete/wordInlineCom
 import type { EditorView } from 'prosemirror-view';
 import styles from './OfficeViewer.module.css';
 import '@eigenpal/docx-editor-react/styles.css';
-import { TIMING } from '../../constants/timing';
-
-const OFFICE_MENU_BUTTONS_TO_HIDE = ['File', 'Format', 'Insert', 'Help'] as const;
 
 export interface Paragraph {
   text: string;
@@ -208,32 +205,6 @@ export const WordEditor: React.FC<WordEditorProps> = ({
     }
   }, [isActive, isDirty, filePath, setOpenTabDirty]);
 
-  // Hide third-party menu items that are not part of the app's editing surface.
-  useEffect(() => {
-    if (!documentBuffer) return;
-
-    const hideMenuButtons = () => {
-      if (!containerRef.current || !document.contains(containerRef.current)) return;
-      const buttons = containerRef.current.querySelectorAll('button');
-      buttons.forEach((button) => {
-        const text = button.textContent?.trim() || '';
-        if (OFFICE_MENU_BUTTONS_TO_HIDE.includes(text as typeof OFFICE_MENU_BUTTONS_TO_HIDE[number])) {
-          (button as HTMLButtonElement).style.display = 'none';
-        }
-      });
-    };
-
-    const timer = setTimeout(hideMenuButtons, TIMING.OFFICE_MENU_HIDE_DELAY_MS);
-    const observer = new MutationObserver(hideMenuButtons);
-    if (containerRef.current) {
-      observer.observe(containerRef.current, { childList: true, subtree: true });
-    }
-    return () => {
-      clearTimeout(timer);
-      observer.disconnect();
-    };
-  }, [documentBuffer]);
-
   // ── Save ────────────────────────────────────────────────────────────────
   const handleSave = useCallback(async () => {
     if (!isDirty) return;
@@ -302,7 +273,7 @@ export const WordEditor: React.FC<WordEditorProps> = ({
         formatIcon={<FileText size={16} />}
         editLabel="可编辑"
       />
-      <div ref={containerRef} className={styles.docxContainer} data-ghost-container="true">
+      <div ref={containerRef} className={styles.docxContainer} data-office-editor-root="word">
         <DocxEditor
           ref={editorRef}
           documentBuffer={documentBuffer}

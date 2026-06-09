@@ -197,7 +197,7 @@ export const useEditorStore = create<EditorState>()(
         return {
           documentContents: {
             ...state.documentContents,
-            [path]: { ...current, docxBuffer: buffer, isDirty: true },
+            [path]: { ...current, docxBuffer: buffer },
           },
         };
       }),
@@ -215,7 +215,7 @@ export const useEditorStore = create<EditorState>()(
         return {
           documentContents: {
             ...state.documentContents,
-            [path]: { ...current, excelData: data, isDirty: true },
+            [path]: { ...current, excelData: data },
           },
         };
       }),

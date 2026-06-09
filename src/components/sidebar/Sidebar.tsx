@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import {
   FolderOpen,
@@ -69,28 +69,32 @@ export const Sidebar: React.FC = () => {
     }
   }, [setIsLoading]);
 
+  const workspaceRootPath = useMemo(() => workspacePath ?? null, [workspacePath]);
+
   useEffect(() => {
-    if (workspacePath) {
-      loadDirectory(workspacePath);
+    if (workspaceRootPath) {
+      loadDirectory(workspaceRootPath);
     }
-  }, [workspacePath]);
+  }, [workspaceRootPath, loadDirectory]);
 
   // --- Incremental file update handlers ---
 
   const handleFileCreated = useCallback(async (changedPath: string) => {
+    if (!workspaceRootPath) return;
+
     try {
       const entries = await invoke<FileEntry[]>('list_directory', {
-        path: workspacePath,
+        path: workspaceRootPath,
       });
       const entry = entries.find(e => e.path === changedPath);
       if (!entry) return;
 
       const parentPath = entry.path.substring(
-        workspacePath!.length + 1
+        workspaceRootPath.length + 1
       ).split('/').slice(0, -1).join('/');
       const parentDir = parentPath
-        ? `${workspacePath}/${parentPath}`
-        : workspacePath!;
+        ? `${workspaceRootPath}/${parentPath}`
+        : workspaceRootPath;
 
       const needsChildRefresh = isDirExpanded(parentDir);
 
@@ -110,7 +114,7 @@ export const Sidebar: React.FC = () => {
     } catch (err) {
       console.error('[FileWatcher] Failed to handle file creation:', err);
     }
-  }, [workspacePath, addFileEntry, setFiles]);
+  }, [workspaceRootPath, addFileEntry, isDirExpanded, setFiles]);
 
   const handleFileDeleted = useCallback((deletedPath: string) => {
     removeFileEntry(deletedPath);
@@ -122,17 +126,17 @@ export const Sidebar: React.FC = () => {
 
   // Falls back to a full tree refresh when incremental updates are insufficient.
   const debouncedFullRefresh = useDebouncedCallback(() => {
-    if (workspacePath) {
-      loadDirectory(workspacePath, false);
+    if (workspaceRootPath) {
+      loadDirectory(workspaceRootPath, false);
     }
   }, 500);
 
   const handleFileChange = useCallback((event: { type: string; data: { path: string } }) => {
+    if (!workspaceRootPath) return;
+
     const { type, data } = event;
     const changedPath = data?.path;
-    if (!changedPath) return;
-
-    if (!changedPath.startsWith(workspacePath!)) return;
+    if (!changedPath || !changedPath.startsWith(workspaceRootPath)) return;
 
     switch (type) {
       case 'Created':
@@ -148,9 +152,9 @@ export const Sidebar: React.FC = () => {
         debouncedFullRefresh();
         break;
     }
-  }, [workspacePath, handleFileCreated, handleFileDeleted, handleFileModified, debouncedFullRefresh]);
+  }, [workspaceRootPath, handleFileCreated, handleFileDeleted, handleFileModified, debouncedFullRefresh]);
 
-  useWorkspaceFileWatcher(workspacePath, handleFileChange);
+  useWorkspaceFileWatcher(workspaceRootPath, handleFileChange);
 
   const openWorkspace = async () => {
     try {
