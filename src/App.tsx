@@ -8,7 +8,7 @@ import './styles/design-tokens.css';
 import './styles/global.css';
 
 function App() {
-  const { settings } = useSettingsStore();
+  const settings = useSettingsStore((state) => state.settings);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', settings.theme);

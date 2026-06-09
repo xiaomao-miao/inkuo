@@ -20,9 +20,6 @@ interface PersistedSidebarState {
   activeTabId: string | null;
   selectedFile: string | null;
   expandedDirs: string[];
-  knowledgeBase?: KnowledgeBase;
-  buildProgress?: BuildProgress;
-  knowledgeToolCall?: ActiveToolCall;
 }
 
 function normalizeWorkspaceFilePath(path: string, workspacePath: string | null): string {
@@ -213,9 +210,6 @@ export const useSidebarStore = create<SidebarState>()(
         activeTabId: state.activeTabId,
         selectedFile: state.selectedFile,
         expandedDirs: Array.from(state.expandedDirs),
-        knowledgeBase: state.knowledgeBase,
-        buildProgress: state.buildProgress,
-        knowledgeToolCall: state.knowledgeToolCall,
       }),
       merge: (persisted, current): SidebarState => {
         const persistedState = persisted as PersistedSidebarState | undefined;

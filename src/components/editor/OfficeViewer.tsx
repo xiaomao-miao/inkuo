@@ -4,7 +4,8 @@ import { DocxEditor, type DocxEditorRef } from '@eigenpal/docx-editor-react';
 import { ExcelGrid } from 'react-excel-lite';
 import { Save, Table2, FileText } from 'lucide-react';
 import { useKeyboardSave } from './useKeyboardSave';
-import { useSidebarStore, useEditorStore, useInlineCompleteStore } from '../../store';
+import { useSidebarStore, useEditorStore, useInlineCompleteStore, useNotificationStore } from '../../store';
+import { reportError } from '../../utils/errors';
 import { scheduleWordInlineCompletion } from '../inline-complete/useWordInlineCompleteTrigger';
 import { createWordInlineCompletePlugin } from '../inline-complete/wordInlineCompletePlugin';
 import type { EditorView } from 'prosemirror-view';
@@ -139,9 +140,10 @@ export const WordEditor: React.FC<WordEditorProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [isDirty, setIsDirty] = useState(false);
 
-  const { setOpenTabDirty } = useSidebarStore();
+  const setOpenTabDirty = useSidebarStore((state) => state.setOpenTabDirty);
   const officeBufferVersion = useEditorStore(s => s.documentContents[filePath]?.office.bufferVersion ?? 0);
-  const { setDocxBuffer } = useEditorStore();
+  const setDocxBuffer = useEditorStore((state) => state.setDocxBuffer);
+  const pushNotification = useNotificationStore((state) => state.pushNotification);
 
   useEffect(() => {
     const doLoad = async () => {
@@ -155,14 +157,15 @@ export const WordEditor: React.FC<WordEditorProps> = ({
         setIsDirty(false);
         setOpenTabDirty(filePath, false);
       } catch (err) {
-        console.error('Failed to load Word document:', err);
-        setError(String(err));
+        const message = reportError('office-word-load', err);
+        setError(message);
+        pushNotification({ kind: 'error', title: '加载 Word 文档失败', message });
       } finally {
         setLoading(false);
       }
     };
     loadFromDiskRef.current = doLoad;
-  }, [filePath, setOpenTabDirty, setDocxBuffer]);
+  }, [filePath, setOpenTabDirty, setDocxBuffer, pushNotification]);
 
   // Re-read from disk when the backing file version changes.
   useEffect(() => {
@@ -211,9 +214,10 @@ export const WordEditor: React.FC<WordEditorProps> = ({
       setIsDirty(false);
       setOpenTabDirty(filePath, false);
     } catch (err) {
-      console.error('Failed to save Word document:', err);
+      const message = reportError('office-word-save', err);
+      pushNotification({ kind: 'error', title: '保存 Word 文档失败', message });
     }
-  }, [filePath, isDirty, setOpenTabDirty, setDocxBuffer]);
+  }, [filePath, isDirty, setOpenTabDirty, setDocxBuffer, pushNotification]);
 
   useKeyboardSave({ onSave: handleSave, enabled: isDirty && isActive });
 
@@ -339,9 +343,10 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
     originalDataJsonRef.current = JSON.stringify(originalData ?? []);
   }, [originalData]);
 
-  const { setOpenTabDirty } = useSidebarStore();
+  const setOpenTabDirty = useSidebarStore((state) => state.setOpenTabDirty);
   const officeBufferVersion = useEditorStore(s => s.documentContents[filePath]?.office.bufferVersion ?? 0);
-  const { setExcelData } = useEditorStore();
+  const setExcelData = useEditorStore((state) => state.setExcelData);
+  const pushNotification = useNotificationStore((state) => state.pushNotification);
   const excelLastVersionRef = useRef(-1);
 
   const loadFromDiskRef = useRef<() => Promise<void>>(() => Promise.resolve());
@@ -370,14 +375,15 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
         setIsDirty(false);
         setOpenTabDirty(filePath, false);
       } catch (err) {
-        console.error('Failed to load Excel document:', err);
-        setError(String(err));
+        const message = reportError('office-excel-load', err);
+        setError(message);
+        pushNotification({ kind: 'error', title: '加载 Excel 文档失败', message });
       } finally {
         setLoading(false);
       }
     };
     loadFromDiskRef.current = doLoad;
-  }, [filePath, setOpenTabDirty, setExcelData]);
+  }, [filePath, setOpenTabDirty, setExcelData, pushNotification]);
 
   // Re-read from disk when the backing file version changes.
   useEffect(() => {
@@ -420,9 +426,10 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
       setIsDirty(false);
       setOpenTabDirty(filePath, false);
     } catch (err) {
-      console.error('Failed to save Excel document:', err);
+      const message = reportError('office-excel-save', err);
+      pushNotification({ kind: 'error', title: '保存 Excel 文档失败', message });
     }
-  }, [filePath, data, isDirty, setOpenTabDirty, setExcelData]);
+  }, [filePath, data, isDirty, setOpenTabDirty, setExcelData, pushNotification]);
 
   useKeyboardSave({ onSave: handleSave, enabled: isDirty && isActive });
 

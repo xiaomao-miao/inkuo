@@ -43,21 +43,13 @@ function mergePersistedState(
   const typedState = persistedState as Partial<{
     isOpen: boolean;
     activeTab: 'chat' | 'edit';
-    sessions: ChatSession[];
     activeSessionId: string;
   }>;
-
-  const sessions = typedState.sessions?.length ? typedState.sessions : currentState.sessions;
-  const activeSessionId =
-    typedState.activeSessionId && sessions.some((session) => session.id === typedState.activeSessionId)
-      ? typedState.activeSessionId
-      : sessions[0]?.id ?? currentState.activeSessionId;
 
   return {
     ...currentState,
     ...typedState,
-    sessions,
-    activeSessionId,
+    activeSessionId: currentState.activeSessionId,
   };
 }
 
@@ -289,8 +281,6 @@ export const useAIPanelStore = create<AIPanelState>()(
       partialize: (state) => ({
         isOpen: state.isOpen,
         activeTab: state.activeTab,
-        sessions: state.sessions,
-        activeSessionId: state.activeSessionId,
       }),
       merge: mergePersistedState,
     }

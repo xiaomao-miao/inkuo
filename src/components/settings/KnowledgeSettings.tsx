@@ -9,10 +9,11 @@ import {
   CheckCircle,
   Loader2,
 } from 'lucide-react';
-import { useSettingsStore } from '../../store';
+import { useNotificationStore, useSettingsStore } from '../../store';
 import type { EmbeddingModelType } from '../../types';
 import styles from './SettingsPanel.module.css';
 import { saveSettings } from '../../utils/saveSettings';
+import { reportError } from '../../utils/errors';
 
 interface AvailableModel {
   name: string;
@@ -75,7 +76,9 @@ const MODEL_TIERS: ModelTier[] = [
 ];
 
 export const KnowledgeSettings = () => {
-  const { settings, updateSetting } = useSettingsStore();
+  const settings = useSettingsStore((state) => state.settings);
+  const updateSetting = useSettingsStore((state) => state.updateSetting);
+  const pushNotification = useNotificationStore((state) => state.pushNotification);
   const [availableModels, setAvailableModels] = useState<AvailableModel[]>([]);
   const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
@@ -88,11 +91,16 @@ export const KnowledgeSettings = () => {
         const models = await invoke<AvailableModel[]>('check_available_models');
         setAvailableModels(models);
       } catch (err) {
-        console.error('Failed to check available models:', err);
+        const message = reportError('knowledge-settings-check-models', err);
+        pushNotification({
+          kind: 'error',
+          title: '读取本地模型状态失败',
+          message,
+        });
       }
     };
     fetchModels();
-  }, []);
+  }, [pushNotification]);
 
   // Listen to download progress events
   useEffect(() => {
@@ -110,7 +118,12 @@ export const KnowledgeSettings = () => {
           }
         });
       } catch (err) {
-        console.error('Failed to setup progress listener:', err);
+        const message = reportError('knowledge-settings-progress-listener', err);
+        pushNotification({
+          kind: 'error',
+          title: '监听模型下载进度失败',
+          message,
+        });
       }
     };
 
@@ -119,13 +132,18 @@ export const KnowledgeSettings = () => {
     return () => {
       if (unlisten) unlisten();
     };
-  }, []);
+  }, [pushNotification]);
 
   const persistSettings = async (nextSettings = settings) => {
     try {
       await saveSettings(nextSettings);
     } catch (err) {
-      console.error('Failed to save settings:', err);
+      const message = reportError('knowledge-settings-save', err);
+      pushNotification({
+        kind: 'error',
+        title: '保存知识库设置失败',
+        message,
+      });
     }
   };
 
@@ -145,8 +163,13 @@ export const KnowledgeSettings = () => {
     try {
       await invoke('download_model_files', { modelName });
     } catch (err) {
-      console.error('Failed to download model:', err);
-      setDownloadError(err instanceof Error ? err.message : String(err));
+      const message = reportError('knowledge-settings-download-model', err);
+      setDownloadError(message);
+      pushNotification({
+        kind: 'error',
+        title: '下载模型失败',
+        message,
+      });
       setDownloadingModel(null);
       setDownloadProgress(null);
     }

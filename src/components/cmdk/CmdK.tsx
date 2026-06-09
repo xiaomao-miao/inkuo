@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { AlertCircle, Sparkles, X, ChevronDown, Loader2 } from 'lucide-react';
 import { useCmdKStore, useEditorStore, useSidebarStore } from '../../store';
 import type { AIEditResponse, DiffResult, EditScope } from '../../types';
+import { reportError } from '../../utils/errors';
 import { getModifierKeyLabel } from '../../utils/platform';
 import styles from './CmdK.module.css';
 
@@ -29,20 +30,19 @@ const SCOPE_TO_REQUEST: Record<(typeof SCOPE_OPTIONS)[number]['value'], EditScop
 
 export const CmdK = () => {
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const {
-    isOpen,
-    scope,
-    instruction,
-    isProcessing,
-    close,
-    setScope,
-    setInstruction,
-    setIsProcessing,
-    reset,
-  } = useCmdKStore();
+  const isOpen = useCmdKStore((state) => state.isOpen);
+  const scope = useCmdKStore((state) => state.scope);
+  const instruction = useCmdKStore((state) => state.instruction);
+  const isProcessing = useCmdKStore((state) => state.isProcessing);
+  const close = useCmdKStore((state) => state.close);
+  const setScope = useCmdKStore((state) => state.setScope);
+  const setInstruction = useCmdKStore((state) => state.setInstruction);
+  const setIsProcessing = useCmdKStore((state) => state.setIsProcessing);
+  const reset = useCmdKStore((state) => state.reset);
   
-  const { selectedFile } = useSidebarStore();
-  const { documentContents, setDiffHunks } = useEditorStore();
+  const selectedFile = useSidebarStore((state) => state.selectedFile);
+  const documentContents = useEditorStore((state) => state.documentContents);
+  const setDiffHunks = useEditorStore((state) => state.setDiffHunks);
   
   const currentDoc = selectedFile ? documentContents[selectedFile] : null;
   const currentMetadata = currentDoc?.metadata;
@@ -182,8 +182,7 @@ export const CmdK = () => {
       close();
       reset();
     } catch (err) {
-      console.error('AI edit failed:', err);
-      setErrorMessage(err instanceof Error ? err.message : String(err));
+      setErrorMessage(reportError('cmdk-ai-edit', err));
     } finally {
       setIsProcessing(false);
     }

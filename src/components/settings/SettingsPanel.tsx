@@ -14,20 +14,25 @@ import { useSettingsStore, useInlineCompleteStore } from '../../store';
 import { ModelsSettings, KnowledgeSettings } from './index';
 import { Select } from './Select';
 import { saveSettings } from '../../utils/saveSettings';
+import { reportError } from '../../utils/errors';
 import styles from './SettingsPanel.module.css';
 
 type SettingsTab = 'models' | 'knowledge' | 'editor' | 'ai' | 'appearance' | 'about';
 
 export const SettingsPanel = () => {
-  const { settings, updateSetting, setActiveApiConfig } = useSettingsStore();
-  const { enabled, debounceMs, setEnabled } = useInlineCompleteStore();
+  const settings = useSettingsStore((state) => state.settings);
+  const updateSetting = useSettingsStore((state) => state.updateSetting);
+  const setActiveApiConfig = useSettingsStore((state) => state.setActiveApiConfig);
+  const enabled = useInlineCompleteStore((state) => state.enabled);
+  const debounceMs = useInlineCompleteStore((state) => state.debounceMs);
+  const setEnabled = useInlineCompleteStore((state) => state.setEnabled);
   const [activeTab, setActiveTab] = useState<SettingsTab>('models');
 
   const persistSettings = async (nextSettings = settings) => {
     try {
       await saveSettings(nextSettings);
     } catch (err) {
-      console.error('Failed to save settings:', err);
+      reportError('settings-save', err);
     }
   };
 

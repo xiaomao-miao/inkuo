@@ -6,6 +6,7 @@ import { ResizableHandle } from '../resizable';
 import { Editor } from '../editor/Editor';
 import { TabBar } from '../editor/TabBar';
 import { AIPanel } from '../aipanel/AIPanel';
+import { NotificationCenter } from './NotificationCenter';
 import { useGlobalKeydown } from '../../hooks/useGlobalKeydown';
 import { useAIPanelStore, useLayoutStore } from '../../store';
 import styles from './Layout.module.css';
@@ -57,6 +58,7 @@ export const Layout = () => {
   return (
     <div className={styles.layout}>
       <TitleBar />
+      <NotificationCenter />
       <div className={styles.body}>
         <ActivityBar
           activeView={activeView}

@@ -3,9 +3,11 @@ import { listen } from '@tauri-apps/api/event';
 import { useCallback, useEffect } from 'react';
 import {
   useSidebarStore,
+  useNotificationStore,
   type ActiveToolCall,
   type BuildProgress,
 } from '../../store';
+import { extractErrorMessage, reportError } from '../../utils/errors';
 
 interface UseKnowledgeBaseArgs {
   activeSessionId?: string;
@@ -37,6 +39,7 @@ export function useKnowledgeBase({ activeSessionId }: UseKnowledgeBaseArgs): Use
   const setKnowledgeBase = useSidebarStore((state) => state.setKnowledgeBase);
   const setBuildProgress = useSidebarStore((state) => state.setBuildProgress);
   const setKnowledgeToolCall = useSidebarStore((state) => state.setKnowledgeToolCall);
+  const pushNotification = useNotificationStore((state) => state.pushNotification);
 
   useEffect(() => {
     if (!workspacePath) {
@@ -71,7 +74,12 @@ export function useKnowledgeBase({ activeSessionId }: UseKnowledgeBaseArgs): Use
         });
       } catch (err) {
         if (!cancelled) {
-          console.error('Failed to load knowledge base status:', err);
+          const message = reportError('knowledge-status-load', err);
+          pushNotification({
+            kind: 'error',
+            title: '读取知识库状态失败',
+            message,
+          });
         }
       }
     };
@@ -81,7 +89,7 @@ export function useKnowledgeBase({ activeSessionId }: UseKnowledgeBaseArgs): Use
     return () => {
       cancelled = true;
     };
-  }, [workspacePath, setKnowledgeBase, setBuildProgress, setKnowledgeToolCall]);
+  }, [workspacePath, setKnowledgeBase, setBuildProgress, setKnowledgeToolCall, pushNotification]);
 
   const handleKnowledgeBuild = useCallback(async () => {
     if (!activeSessionId || !workspacePath) return;
@@ -120,7 +128,12 @@ export function useKnowledgeBase({ activeSessionId }: UseKnowledgeBaseArgs): Use
         }
       });
     } catch (err) {
-      console.error('Failed to listen to build progress:', err);
+      const message = reportError('knowledge-build-listener', err);
+      pushNotification({
+        kind: 'error',
+        title: '监听知识库构建进度失败',
+        message,
+      });
     }
 
     try {
@@ -135,21 +148,18 @@ export function useKnowledgeBase({ activeSessionId }: UseKnowledgeBaseArgs): Use
         chunkCount: result.total_chunks,
         lastUpdated: Date.now(),
       });
-      setKnowledgeToolCall({
-        id: toolCallId,
-        name: 'knowledge_build',
-        arguments: {
-          workspacePath,
-          total_documents: result.total_documents,
-          total_chunks: result.total_chunks,
-        },
-        status: 'success',
-        result: `已构建 ${result.total_documents} 个文档，生成 ${result.total_chunks} 个分块。`,
-        startTime: startedAt,
-        duration: Date.now() - startedAt,
+      pushNotification({
+        kind: 'success',
+        title: '知识库构建完成',
+        message: `已构建 ${result.total_documents} 个文档，生成 ${result.total_chunks} 个分块。`,
       });
     } catch (err) {
-      console.error('Failed to build knowledge base:', err);
+      const message = reportError('knowledge-build', err);
+      pushNotification({
+        kind: 'error',
+        title: '知识库构建失败',
+        message,
+      });
       setKnowledgeToolCall({
         id: toolCallId,
         name: 'knowledge_build',
@@ -157,15 +167,15 @@ export function useKnowledgeBase({ activeSessionId }: UseKnowledgeBaseArgs): Use
           workspacePath,
         },
         status: 'error',
-        error: String(err),
-        result: String(err),
+        error: extractErrorMessage(err),
+        result: extractErrorMessage(err),
         startTime: startedAt,
         duration: Date.now() - startedAt,
       });
     } finally {
       unlistenProgress?.();
     }
-  }, [activeSessionId, workspacePath, setKnowledgeBase, setBuildProgress, setKnowledgeToolCall]);
+  }, [activeSessionId, workspacePath, setKnowledgeBase, setBuildProgress, setKnowledgeToolCall, pushNotification]);
 
   const handleKnowledgeClear = useCallback(async () => {
     if (!activeSessionId || !workspacePath) return;
@@ -176,9 +186,14 @@ export function useKnowledgeBase({ activeSessionId }: UseKnowledgeBaseArgs): Use
       setBuildProgress(undefined);
       setKnowledgeToolCall(undefined);
     } catch (err) {
-      console.error('Failed to clear knowledge base:', err);
+      const message = reportError('knowledge-clear', err);
+      pushNotification({
+        kind: 'error',
+        title: '清空知识库失败',
+        message,
+      });
     }
-  }, [activeSessionId, workspacePath, setKnowledgeBase, setBuildProgress, setKnowledgeToolCall]);
+  }, [activeSessionId, workspacePath, setKnowledgeBase, setBuildProgress, setKnowledgeToolCall, pushNotification]);
 
   return {
     workspacePath: workspacePath ?? undefined,

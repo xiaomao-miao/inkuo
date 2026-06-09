@@ -19,25 +19,25 @@ import {
   ChevronDown,
   ChevronRight
 } from 'lucide-react';
-import { useSettingsStore } from '../../store';
+import { useNotificationStore, useSettingsStore } from '../../store';
 import { Select } from './Select';
 import type { APIConfig, AIProviderType } from '../../types';
 import styles from './ModelsSettings.module.css';
 import { saveSettings } from '../../utils/saveSettings';
+import { reportError } from '../../utils/errors';
 
 interface ModelsSettingsProps {
   onClose?: () => void;
 }
 
 export const ModelsSettings = ({ onClose }: ModelsSettingsProps) => {
-  const {
-    settings,
-    addApiConfig,
-    updateApiConfig,
-    removeApiConfig,
-    setActiveApiConfig,
-    setDefaultApiConfig,
-  } = useSettingsStore();
+  const settings = useSettingsStore((state) => state.settings);
+  const addApiConfig = useSettingsStore((state) => state.addApiConfig);
+  const updateApiConfig = useSettingsStore((state) => state.updateApiConfig);
+  const removeApiConfig = useSettingsStore((state) => state.removeApiConfig);
+  const setActiveApiConfig = useSettingsStore((state) => state.setActiveApiConfig);
+  const setDefaultApiConfig = useSettingsStore((state) => state.setDefaultApiConfig);
+  const pushNotification = useNotificationStore((state) => state.pushNotification);
 
   const [testingId, setTestingId] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, { success: boolean; message: string }>>({});
@@ -48,7 +48,12 @@ export const ModelsSettings = ({ onClose }: ModelsSettingsProps) => {
     try {
       await saveSettings(nextSettings);
     } catch (err) {
-      console.error('Failed to save settings:', err);
+      const message = reportError('models-settings-save', err);
+      pushNotification({
+        kind: 'error',
+        title: '保存模型设置失败',
+        message,
+      });
     }
   };
 
@@ -69,15 +74,25 @@ export const ModelsSettings = ({ onClose }: ModelsSettingsProps) => {
           provider: config.provider,
         },
       });
-      setTestResults((prev) => ({ ...prev, [config.id]: result }));
+      pushNotification({
+        kind: 'success',
+        title: '连接测试成功',
+        message: result.message,
+      });
     } catch (err) {
+      const message = reportError('models-settings-test-connection', err);
       setTestResults((prev) => ({
         ...prev,
         [config.id]: {
           success: false,
-          message: err instanceof Error ? err.message : '连接失败，请检查配置',
+          message,
         },
       }));
+      pushNotification({
+        kind: 'error',
+        title: '连接测试失败',
+        message,
+      });
     } finally {
       setTestingId(null);
     }

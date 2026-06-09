@@ -11,6 +11,7 @@ export { useLayoutStore } from './layoutStore';
 export { useSettingsStore } from './settingsStore';
 export { useCmdKStore } from './cmdKStore';
 export { useInlineCompleteStore } from './inlineCompleteStore';
+export { useNotificationStore } from './notificationStore';
 
 export type {
   ActiveToolCall,

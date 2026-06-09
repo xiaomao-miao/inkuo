@@ -18,6 +18,7 @@ import type { FileEntry } from '../../types';
 import { useDebouncedCallback } from '../../hooks/useDebouncedCallback';
 import { useWorkspaceFileWatcher } from '../../hooks/useWorkspaceFileWatcher';
 import { applyWorkspaceDirectoryLoad, openWorkspaceDirectory } from '../../services/workspace';
+import { reportError } from '../../utils/errors';
 import styles from './Sidebar.module.css';
 
 // Returns matched entries together with their ancestor folders so search results remain navigable.
@@ -38,22 +39,20 @@ function getEntriesWithParents(matchingEntries: FileEntry[], allEntries: FileEnt
 }
 
 export const Sidebar = () => {
-  const {
-    workspacePath,
-    files,
-    expandedDirs,
-    selectedFile,
-    isLoading,
-    openTabs,
-    setWorkspacePath,
-    setFiles,
-    toggleDir,
-    setIsLoading,
-    openWorkspaceFile,
-    addFileEntry,
-    removeFileEntry,
-    isDirExpanded,
-  } = useSidebarStore();
+  const workspacePath = useSidebarStore((state) => state.workspacePath);
+  const files = useSidebarStore((state) => state.files);
+  const expandedDirs = useSidebarStore((state) => state.expandedDirs);
+  const selectedFile = useSidebarStore((state) => state.selectedFile);
+  const isLoading = useSidebarStore((state) => state.isLoading);
+  const openTabs = useSidebarStore((state) => state.openTabs);
+  const setWorkspacePath = useSidebarStore((state) => state.setWorkspacePath);
+  const setFiles = useSidebarStore((state) => state.setFiles);
+  const toggleDir = useSidebarStore((state) => state.toggleDir);
+  const setIsLoading = useSidebarStore((state) => state.setIsLoading);
+  const openWorkspaceFile = useSidebarStore((state) => state.openWorkspaceFile);
+  const addFileEntry = useSidebarStore((state) => state.addFileEntry);
+  const removeFileEntry = useSidebarStore((state) => state.removeFileEntry);
+  const isDirExpanded = useSidebarStore((state) => state.isDirExpanded);
 
   const [searchQuery, setSearchQuery] = useState('');
   const [isCollapsed, setIsCollapsed] = useState(false);
@@ -63,7 +62,7 @@ export const Sidebar = () => {
     try {
       await applyWorkspaceDirectoryLoad(path, { mergeWithExisting });
     } catch (err) {
-      console.error('Failed to load directory:', err);
+      reportError('sidebar-load-directory', err);
     } finally {
       setIsLoading(false);
     }
@@ -112,7 +111,7 @@ export const Sidebar = () => {
         addFileEntry(entry);
       }
     } catch (err) {
-      console.error('[FileWatcher] Failed to handle file creation:', err);
+      reportError('sidebar-handle-file-created', err);
     }
   }, [workspaceRootPath, addFileEntry, isDirExpanded, setFiles]);
 
@@ -165,7 +164,7 @@ export const Sidebar = () => {
         await loadDirectory(selected, false);
       }
     } catch (err) {
-      console.error('Failed to open workspace:', err);
+      reportError('sidebar-open-workspace', err);
     }
   };
 
@@ -181,7 +180,7 @@ export const Sidebar = () => {
           const childEntries = await invoke<FileEntry[]>('list_directory', { path: entry.path });
           setFiles((prevFiles: FileEntry[]) => [...prevFiles, ...childEntries]);
         } catch (err) {
-          console.error('Failed to load directory:', err);
+          reportError('sidebar-load-children', err);
         }
       }
 

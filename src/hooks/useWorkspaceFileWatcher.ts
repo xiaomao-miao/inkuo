@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { reportError } from '../utils/errors';
 
 interface FileChangePayload {
   type: string;
@@ -25,7 +26,7 @@ export function useWorkspaceFileWatcher(
           onFileChange(event.payload);
         });
       } catch (error) {
-        console.error('Failed to set up file watcher:', error);
+        reportError('workspace-file-watcher-setup', error);
       }
     };
 
@@ -36,7 +37,9 @@ export function useWorkspaceFileWatcher(
         unlisten();
       }
       if (watchingPath) {
-        invoke('unwatch_directory', { path: watchingPath }).catch(console.error);
+        invoke('unwatch_directory', { path: watchingPath }).catch((error) => {
+          reportError('workspace-file-watcher-cleanup', error);
+        });
       }
     };
   }, [workspacePath, onFileChange]);

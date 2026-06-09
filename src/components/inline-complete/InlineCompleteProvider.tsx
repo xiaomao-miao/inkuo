@@ -1,6 +1,7 @@
 import React, { useCallback, useRef, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { useInlineCompleteStore } from '../../store';
+import { useInlineCompleteStore, useNotificationStore } from '../../store';
+import { reportError } from '../../utils/errors';
 import type {
   InlineCompletionRequest,
   InlineCompletionResponse,
@@ -21,6 +22,7 @@ export function InlineCompleteProvider({ children }: InlineCompleteProviderProps
   const debounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const requestSeqRef = useRef(0);
   const latestRequestRef = useRef<{ seq: number; filePath?: string; cursorPosition: number } | null>(null);
+  const pushNotification = useNotificationStore((state) => state.pushNotification);
 
   const {
     enabled,
@@ -138,13 +140,14 @@ export function InlineCompleteProvider({ children }: InlineCompleteProviderProps
         if (err instanceof Error && err.name === 'AbortError') {
           return;
         }
-        console.error('[InlineComplete] Error:', err);
-        setError(err instanceof Error ? err.message : String(err));
+        const message = reportError('inline-complete-request', err);
+        setError(message);
+        pushNotification({ kind: 'error', title: 'AI 补全失败', message });
       } finally {
         setLoading(false);
       }
     }, debounceMs);
-  }, [enabled, debounceMs, cancelPendingRequest, setLoading, setError, setCompletion, clearCompletion]);
+  }, [enabled, debounceMs, cancelPendingRequest, setLoading, setError, setCompletion, clearCompletion, pushNotification]);
 
   const acceptCompletion = useCallback((): CompletionItem | null => {
     const completion = useInlineCompleteStore.getState().currentCompletion;

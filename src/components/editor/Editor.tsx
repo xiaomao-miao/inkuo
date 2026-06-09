@@ -24,14 +24,13 @@ const diffDecorationsCompartment = new Compartment();
 const EditorContent: React.FC<{
   editorRef: React.RefObject<ReactCodeMirrorRef | null>;
 }> = ({ editorRef }) => {
-  const {
-    documentContents,
-    setContent,
-    isPreviewMode,
-    togglePreviewMode,
-  } = useEditorStore();
-  const { settings } = useSettingsStore();
-  const { selectedFile, setOpenTabDirty } = useSidebarStore();
+  const documentContents = useEditorStore((state) => state.documentContents);
+  const setContent = useEditorStore((state) => state.setContent);
+  const isPreviewMode = useEditorStore((state) => state.isPreviewMode);
+  const togglePreviewMode = useEditorStore((state) => state.togglePreviewMode);
+  const settings = useSettingsStore((state) => state.settings);
+  const selectedFile = useSidebarStore((state) => state.selectedFile);
+  const setOpenTabDirty = useSidebarStore((state) => state.setOpenTabDirty);
   const [refreshToken, setRefreshToken] = useState(0);
 
   const currentDoc = selectedFile ? documentContents[selectedFile] : null;
@@ -170,8 +169,10 @@ type RenderableOfficeTab = {
 
 export const Editor: React.FC = () => {
   const editorRef = useRef<ReactCodeMirrorRef>(null);
-  const { selectedFile, activeTabId, openTabs } = useSidebarStore();
-  const { documentContents } = useEditorStore();
+  const selectedFile = useSidebarStore((state) => state.selectedFile);
+  const activeTabId = useSidebarStore((state) => state.activeTabId);
+  const openTabs = useSidebarStore((state) => state.openTabs);
+  const documentContents = useEditorStore((state) => state.documentContents);
   const isSettingsTab = activeTabId === SETTINGS_TAB_ID;
 
   const activeFileType = selectedFile ? detectFileType(selectedFile) : null;

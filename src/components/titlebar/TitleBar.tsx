@@ -7,9 +7,10 @@ import {
   Settings
 } from 'lucide-react';
 import { useSidebarStore, useEditorStore } from '../../store';
-import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { applyWorkspaceDirectoryLoad, openWorkspaceDirectory } from '../../services/workspace';
+import { persistDocument } from '../../services/documentSave';
+import { reportError } from '../../utils/errors';
 import { openSettingsTab } from '../../utils/openSettingsTab';
 import styles from './TitleBar.module.css';
 
@@ -31,8 +32,9 @@ export const TitleBar = () => {
   const [isMaximized, setIsMaximized] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   
-  const { selectedFile, setWorkspacePath } = useSidebarStore();
-  const { documentContents, markSaved } = useEditorStore();
+  const selectedFile = useSidebarStore((state) => state.selectedFile);
+  const setWorkspacePath = useSidebarStore((state) => state.setWorkspacePath);
+  const documentContents = useEditorStore((state) => state.documentContents);
 
   const currentDoc = selectedFile ? documentContents[selectedFile] : null;
   const currentMetadata = currentDoc?.metadata;
@@ -74,16 +76,16 @@ export const TitleBar = () => {
   }, []);
 
   const handleSave = async () => {
-    if (!selectedFile || !isDirty) return;
-    try {
-      await invoke('write_document', {
-        path: selectedFile,
-        content: currentMetadata?.content || '',
-      });
-      markSaved(selectedFile);
-    } catch (err) {
-      console.error('Failed to save:', err);
+    const result = await persistDocument({
+      path: selectedFile,
+      content: currentMetadata?.content || '',
+      isDirty,
+    });
+
+    if (!result.ok) {
+      // reserved for future user-facing notification surface
     }
+
     setActiveMenu(null);
   };
 
@@ -95,7 +97,7 @@ export const TitleBar = () => {
         await applyWorkspaceDirectoryLoad(selected, { mergeWithExisting: false });
       }
     } catch (err) {
-      console.error('Failed to open folder:', err);
+      reportError('titlebar-open-folder', err);
     }
     setActiveMenu(null);
   };

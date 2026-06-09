@@ -1,8 +1,9 @@
 import { invoke } from '@tauri-apps/api/core';
 import { useEffect, useState } from 'react';
 import { Database, RefreshCw, Trash2, FileText, Layers, Clock, AlertTriangle, Settings } from 'lucide-react';
-import { useSettingsStore, type BuildProgress } from '../../store';
+import { useNotificationStore, useSettingsStore, type BuildProgress } from '../../store';
 import { useSidebarStore } from '../../store';
+import { reportError } from '../../utils/errors';
 import { openSettingsTab } from '../../utils/openSettingsTab';
 import styles from './KnowledgeView.module.css';
 
@@ -23,8 +24,10 @@ export const KnowledgeView = ({
   onBuild,
   onClear,
 }: KnowledgeViewProps) => {
-  const { knowledgeBase, buildProgress } = useSidebarStore();
-  const { settings } = useSettingsStore();
+  const knowledgeBase = useSidebarStore((state) => state.knowledgeBase);
+  const buildProgress = useSidebarStore((state) => state.buildProgress);
+  const settings = useSettingsStore((state) => state.settings);
+  const pushNotification = useNotificationStore((state) => state.pushNotification);
   const [modelAvailable, setModelAvailable] = useState<{ available: boolean; name: string | null }>({
     available: false,
     name: null,
@@ -44,12 +47,17 @@ export const KnowledgeView = ({
           setModelAvailable({ available: defaultModel?.available ?? false, name: defaultModel?.name ?? null });
         }
       } catch (err) {
-        console.error('Failed to check model availability:', err);
+        const message = reportError('knowledge-view-check-model', err);
+        pushNotification({
+          kind: 'error',
+          title: '检查向量模型状态失败',
+          message,
+        });
       }
     };
 
     checkModel();
-  }, [settings.embedding_model]);
+  }, [settings.embedding_model, pushNotification]);
 
   const openSettings = () => {
     openSettingsTab();

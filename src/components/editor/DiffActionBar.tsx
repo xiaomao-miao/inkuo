@@ -1,10 +1,14 @@
 import { Check, X } from 'lucide-react';
-import { useEditorStore, useSidebarStore } from '../../store';
+import { useEditorStore, useNotificationStore, useSidebarStore } from '../../store';
+import { reportError } from '../../utils/errors';
 import styles from './DiffActionBar.module.css';
 
 export const DiffActionBar = () => {
-  const { selectedFile } = useSidebarStore();
-  const { documentContents, applyAllHunks, rejectAllHunks } = useEditorStore();
+  const selectedFile = useSidebarStore((state) => state.selectedFile);
+  const documentContents = useEditorStore((state) => state.documentContents);
+  const applyAllHunks = useEditorStore((state) => state.applyAllHunks);
+  const rejectAllHunks = useEditorStore((state) => state.rejectAllHunks);
+  const pushNotification = useNotificationStore((state) => state.pushNotification);
 
   if (!selectedFile) return null;
 
@@ -18,7 +22,8 @@ export const DiffActionBar = () => {
     try {
       applyAllHunks(selectedFile);
     } catch (e) {
-      console.error('accept all failed', e);
+      const message = reportError('diff-accept-all', e);
+      pushNotification({ kind: 'error', title: '应用全部修改失败', message });
     }
   };
 
@@ -26,7 +31,8 @@ export const DiffActionBar = () => {
     try {
       rejectAllHunks(selectedFile);
     } catch (e) {
-      console.error('reject all failed', e);
+      const message = reportError('diff-reject-all', e);
+      pushNotification({ kind: 'error', title: '拒绝全部修改失败', message });
     }
   };
 

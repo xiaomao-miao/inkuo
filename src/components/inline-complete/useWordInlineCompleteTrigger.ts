@@ -1,7 +1,8 @@
 import { invoke } from '@tauri-apps/api/core';
 import type { EditorView } from 'prosemirror-view';
 import type { InlineCompletionRequest, InlineCompletionResponse, InlineStyle } from '../../types/inline-complete';
-import { useInlineCompleteStore } from '../../store';
+import { useInlineCompleteStore, useNotificationStore } from '../../store';
+import { reportError } from '../../utils/errors';
 import { showWordInlineCompletion } from './wordInlineCompletePlugin';
 import { TIMING, PROSEMIRROR_SNIPPET_BOUNDS } from '../../constants/timing';
 
@@ -178,9 +179,14 @@ export function scheduleWordInlineCompletion(view: EditorView, filePath: string)
         showWordInlineCompletion(view, text);
       }
     } catch (err) {
-      console.error('[WordInlineCompletion] Completion request failed:', err);
+      const message = reportError('word-inline-complete-request', err);
       const current = useInlineCompleteStore.getState();
-      current.setError(err instanceof Error ? err.message : String(err));
+      current.setError(message);
+      useNotificationStore.getState().pushNotification({
+        kind: 'error',
+        title: 'Word AI 补全失败',
+        message,
+      });
     } finally {
       if (mySeq === ctx.requestSeq) {
         useInlineCompleteStore.getState().setLoading(false);
