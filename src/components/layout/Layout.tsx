@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect } from 'react';
 import { TitleBar } from '../titlebar/TitleBar';
 import { ActivityBar } from '../activitybar/ActivityBar';
 import { Sidebar } from '../sidebar/Sidebar';
@@ -6,9 +6,8 @@ import { ResizableHandle } from '../resizable';
 import { Editor } from '../editor/Editor';
 import { TabBar } from '../editor/TabBar';
 import { AIPanel } from '../aipanel/AIPanel';
-import { NotificationCenter } from './NotificationCenter';
 import { useGlobalKeydown } from '../../hooks/useGlobalKeydown';
-import { useAIPanelStore, useLayoutStore } from '../../store';
+import { useAIPanelStore, useLayoutStore, useNotificationStore } from '../../store';
 import styles from './Layout.module.css';
 
 const DISABLED_VIEW_LABELS = {
@@ -19,6 +18,7 @@ const DISABLED_VIEW_LABELS = {
 
 export const Layout = () => {
   const { isOpen: isAIPanelOpen, togglePanel } = useAIPanelStore();
+  const clearNotifications = useNotificationStore((state) => state.clearNotifications);
   const {
     activeView,
     isSidebarVisible,
@@ -55,10 +55,13 @@ export const Layout = () => {
 
   useGlobalKeydown(handleGlobalKeyDown);
 
+  useEffect(() => {
+    clearNotifications();
+  }, [clearNotifications]);
+
   return (
     <div className={styles.layout}>
       <TitleBar />
-      <NotificationCenter />
       <div className={styles.body}>
         <ActivityBar
           activeView={activeView}
