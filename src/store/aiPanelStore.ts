@@ -14,7 +14,6 @@ import type {
   SearchResult,
 } from '../types';
 import {
-  applyHunkChanges,
   addMessageOutputItem,
   clearSessionConversation,
   createNewSession,
@@ -264,15 +263,7 @@ const createDiffSlice: AIPanelStateCreator<Pick<AIPanelState, 'setCurrentDiff' |
       const hunk = diff.hunks.find((h) => h.id === hunkId);
       if (!hunk) return state;
 
-      let newContent = diff.originalText;
-      for (const h of diff.hunks) {
-        if (h.id === hunkId) {
-          newContent = applyHunkChanges(newContent, h.changes);
-        }
-      }
-
       if (diff.filePath) {
-        useEditorStore.getState().setContent(diff.filePath, newContent);
         useEditorStore.getState().applyHunk(diff.filePath, hunkId);
       }
 
@@ -296,8 +287,7 @@ const createDiffSlice: AIPanelStateCreator<Pick<AIPanelState, 'setCurrentDiff' |
     set((state) => {
       const session = state.sessions.find((s) => s.id === sessionId);
       const diff = session?.pendingDiff;
-      if (diff?.filePath && diff.newText) {
-        useEditorStore.getState().setContent(diff.filePath, diff.newText);
+      if (diff?.filePath) {
         useEditorStore.getState().applyAllHunks(diff.filePath);
       }
       return {

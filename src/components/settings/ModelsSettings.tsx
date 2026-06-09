@@ -52,6 +52,10 @@ export const ModelsSettings = ({ onClose }: ModelsSettingsProps) => {
     }
   };
 
+  const persistReturnedSettings = (nextSettings: typeof settings) => {
+    persistSettings(nextSettings);
+  };
+
   const handleTestConnection = async (config: APIConfig) => {
     setTestingId(config.id);
     setTestResults((prev) => ({ ...prev, [config.id]: { success: false, message: '' } }));
@@ -80,37 +84,40 @@ export const ModelsSettings = ({ onClose }: ModelsSettingsProps) => {
   };
 
   const handleAddConfig = () => {
-    const id = addApiConfig({
+    const nextSettings = addApiConfig({
       name: `API ${settings.apiConfigs.length + 1}`,
       provider: 'openai',
       baseUrl: 'https://api.openai.com/v1',
       model: 'gpt-4o-mini',
     });
-    setExpandedId(id);
-    persistSettings();
+    const addedConfig = nextSettings.apiConfigs[nextSettings.apiConfigs.length - 1];
+    if (addedConfig) {
+      setExpandedId(addedConfig.id);
+    }
+    persistReturnedSettings(nextSettings);
   };
 
   const handleRemoveConfig = (id: string) => {
-    if (settings.apiConfigs.length <= 1) {
-      return;
+    const nextSettings = removeApiConfig(id);
+    if (expandedId === id) {
+      setExpandedId(null);
     }
-    removeApiConfig(id);
-    persistSettings();
+    persistReturnedSettings(nextSettings);
   };
 
   const handleSelectConfig = (id: string) => {
-    setActiveApiConfig(id);
-    persistSettings();
+    const nextSettings = setActiveApiConfig(id);
+    persistReturnedSettings(nextSettings);
   };
 
   const handleSetDefault = (id: string) => {
-    setDefaultApiConfig(id);
-    persistSettings();
+    const nextSettings = setDefaultApiConfig(id);
+    persistReturnedSettings(nextSettings);
   };
 
   const handleUpdateConfig = (id: string, updates: Partial<APIConfig>) => {
-    updateApiConfig(id, updates);
-    persistSettings();
+    const nextSettings = updateApiConfig(id, updates);
+    persistReturnedSettings(nextSettings);
   };
 
   const toggleShowApiKey = (id: string) => {

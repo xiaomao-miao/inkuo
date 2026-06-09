@@ -1,7 +1,7 @@
 // Hook for handling Tab key press to trigger inline completion
 
 import { useCallback, useEffect, useRef } from 'react';
-import { useInlineComplete } from './InlineCompleteProvider';
+import { useInlineComplete } from './useInlineComplete';
 import { detectLanguage } from '../../types/inline-complete';
 
 interface UseInlineCompleteOptions {

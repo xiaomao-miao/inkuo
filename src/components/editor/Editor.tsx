@@ -3,7 +3,7 @@ import { type ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import CodeMirror from '@uiw/react-codemirror';
 import { Compartment } from '@codemirror/state';
 import { Sparkles } from 'lucide-react';
-import { useEditorStore, useSidebarStore, SETTINGS_TAB_ID, type OpenTab } from '../../store';
+import { useEditorStore, useSidebarStore, useSettingsStore, SETTINGS_TAB_ID, type OpenTab } from '../../store';
 import { DiffOverlay } from './DiffOverlay';
 import { SettingsPanel } from '../settings/SettingsPanel';
 import { WordEditor, ExcelEditor } from './OfficeViewer';
@@ -30,6 +30,7 @@ const EditorContent: React.FC<{
     isPreviewMode,
     togglePreviewMode,
   } = useEditorStore();
+  const { settings } = useSettingsStore();
   const { selectedFile, setOpenTabDirty } = useSidebarStore();
   const [refreshToken, setRefreshToken] = useState(0);
 
@@ -79,7 +80,7 @@ const EditorContent: React.FC<{
     inlineCompletionKeyHandler,
     inlineAutoTrigger,
     autoTriggerStateRef,
-  }), [diffDecorationsField, inlineCompletionKeyHandler, inlineAutoTrigger, autoTriggerStateRef]);
+  }), [diffDecorationsField, inlineCompletionKeyHandler, inlineAutoTrigger, autoTriggerStateRef, settings.editor_line_numbers]);
 
   return (
     <div className={styles.editorContainer} data-inline-complete-styles={inlineCompleteStyles}>
@@ -102,7 +103,7 @@ const EditorContent: React.FC<{
               extensions={editorExtensions}
               className={styles.codeMirror}
               basicSetup={{
-                lineNumbers: true,
+                lineNumbers: settings.editor_line_numbers,
                 highlightActiveLineGutter: false,
                 highlightSpecialChars: true,
                 history: false,

@@ -10,6 +10,8 @@ export function useDocumentLoader(
 ) {
   const { setDocumentContent } = useEditorStore();
   const { setOpenTabDirty } = useSidebarStore();
+  const cachedContent = cachedDocument?.content ?? null;
+  const cachedMtime = cachedDocument?.mtime ?? 0;
 
   useEffect(() => {
     let cancelled = false;
@@ -22,7 +24,7 @@ export function useDocumentLoader(
           path: selectedFile,
         });
 
-        const needsReload = !cachedDocument || cachedDocument.content === '' || cachedDocument.mtime === 0 || result.mtime !== cachedDocument.mtime;
+        const needsReload = !cachedDocument || cachedContent === '' || cachedMtime === 0 || result.mtime !== cachedMtime;
 
         if (!cancelled && needsReload) {
           setDocumentContent(selectedFile, result.document, result.content, result.mtime);
@@ -38,5 +40,5 @@ export function useDocumentLoader(
     return () => {
       cancelled = true;
     };
-  }, [selectedFile, cachedDocument, refreshToken, setDocumentContent, setOpenTabDirty]);
+  }, [selectedFile, cachedContent, cachedMtime, refreshToken, setDocumentContent, setOpenTabDirty]);
 }

@@ -19,7 +19,7 @@ import styles from './SettingsPanel.module.css';
 type SettingsTab = 'models' | 'knowledge' | 'editor' | 'ai' | 'appearance' | 'about';
 
 export const SettingsPanel = () => {
-  const { settings, updateSetting } = useSettingsStore();
+  const { settings, updateSetting, setActiveApiConfig } = useSettingsStore();
   const { enabled, debounceMs, setEnabled } = useInlineCompleteStore();
   const [activeTab, setActiveTab] = useState<SettingsTab>('models');
 
@@ -29,6 +29,11 @@ export const SettingsPanel = () => {
     } catch (err) {
       console.error('Failed to save settings:', err);
     }
+  };
+
+  const updateAndPersistSetting = <K extends keyof typeof settings>(key: K, value: (typeof settings)[K]) => {
+    const nextSettings = updateSetting(key, value);
+    persistSettings(nextSettings);
   };
 
   const tabs: { id: SettingsTab; label: string; icon: React.ReactNode }[] = [
@@ -64,8 +69,7 @@ export const SettingsPanel = () => {
                     max="24"
                     value={settings.editor_font_size}
                     onChange={(e) => {
-                      updateSetting('editor_font_size', parseInt(e.target.value));
-                      persistSettings();
+                      updateAndPersistSetting('editor_font_size', parseInt(e.target.value));
                     }}
                     className={styles.range}
                   />
@@ -85,8 +89,7 @@ export const SettingsPanel = () => {
                     { value: 'Monaco, monospace', label: 'Monaco' },
                   ]}
                   onChange={(value) => {
-                    updateSetting('editor_font_family', value);
-                    persistSettings();
+                    updateAndPersistSetting('editor_font_family', value);
                   }}
                   className={styles.select}
                 />
@@ -107,8 +110,7 @@ export const SettingsPanel = () => {
                       type="checkbox"
                       checked={settings.editor_word_wrap}
                       onChange={(e) => {
-                        updateSetting('editor_word_wrap', e.target.checked);
-                        persistSettings();
+                        updateAndPersistSetting('editor_word_wrap', e.target.checked);
                       }}
                     />
                     <span className={styles.toggleSlider}></span>
@@ -125,8 +127,7 @@ export const SettingsPanel = () => {
                       type="checkbox"
                       checked={settings.editor_line_numbers}
                       onChange={(e) => {
-                        updateSetting('editor_line_numbers', e.target.checked);
-                        persistSettings();
+                        updateAndPersistSetting('editor_line_numbers', e.target.checked);
                       }}
                     />
                     <span className={styles.toggleSlider}></span>
@@ -170,8 +171,8 @@ export const SettingsPanel = () => {
                     value={settings.activeApiConfigId || ''}
                     options={modelOptions}
                     onChange={(value) => {
-                      useSettingsStore.getState().setActiveApiConfig(value);
-                      persistSettings();
+                      const nextSettings = setActiveApiConfig(value);
+                      persistSettings(nextSettings);
                     }}
                     className={styles.select}
                   />
@@ -273,8 +274,7 @@ export const SettingsPanel = () => {
                       settings.theme === 'cursor-dark' ? styles.active : ''
                     }`}
                     onClick={() => {
-                      updateSetting('theme', 'cursor-dark');
-                      persistSettings();
+                      updateAndPersistSetting('theme', 'cursor-dark');
                     }}
                   >
                     <div className={styles.themePreview} style={{ background: '#1e1e1e' }}>
@@ -287,8 +287,7 @@ export const SettingsPanel = () => {
                       settings.theme === 'cursor-light' ? styles.active : ''
                     }`}
                     onClick={() => {
-                      updateSetting('theme', 'cursor-light');
-                      persistSettings();
+                      updateAndPersistSetting('theme', 'cursor-light');
                     }}
                   >
                     <div className={styles.themePreview} style={{ background: '#ffffff' }}>
@@ -306,8 +305,7 @@ export const SettingsPanel = () => {
                     type="color"
                     value={settings.accent_color}
                     onChange={(e) => {
-                      updateSetting('accent_color', e.target.value);
-                      persistSettings();
+                      updateAndPersistSetting('accent_color', e.target.value);
                     }}
                     className={styles.colorInput}
                   />

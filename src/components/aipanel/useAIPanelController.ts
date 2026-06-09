@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { useAIPanelStore, type ChatMode } from '../../store';
-import { buildKnowledgeToolbarModel } from './KnowledgeToolbar';
+import { buildKnowledgeToolbarModel } from './knowledgeToolbarModel';
 import { useKnowledgeBase } from './useKnowledgeBase';
 
 export function useAIPanelController() {

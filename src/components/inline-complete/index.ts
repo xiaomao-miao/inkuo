@@ -1,6 +1,7 @@
 // Inline Complete Module - Public API
 
-export { InlineCompleteProvider, useInlineComplete } from './InlineCompleteProvider';
+export { InlineCompleteProvider } from './InlineCompleteProvider';
+export { useInlineComplete } from './useInlineComplete';
 export { InlineCompleteStatus } from './GhostTextOverlay';
 export { inlineCompletionDecoration } from './InlineCompletionDecoration';
 export {

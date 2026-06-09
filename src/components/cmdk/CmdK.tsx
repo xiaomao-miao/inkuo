@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Sparkles, X, ChevronDown, Loader2 } from 'lucide-react';
 import { useCmdKStore, useEditorStore, useSidebarStore } from '../../store';
-import type { AIEditResponse, DiffResult } from '../../types';
+import type { AIEditResponse, DiffResult, EditScope } from '../../types';
 import { getModifierKeyLabel } from '../../utils/platform';
 import styles from './CmdK.module.css';
 
@@ -19,6 +19,13 @@ const TEMPLATES = [
   { label: '润色语法', instruction: '修正语法错误，优化句式' },
   { label: '添加小标题', instruction: '为每个段落添加简洁的小标题' },
 ];
+
+const SCOPE_TO_REQUEST: Record<(typeof SCOPE_OPTIONS)[number]['value'], EditScope> = {
+  selection: 'Selection',
+  paragraph: 'Paragraph',
+  section: 'Section',
+  document: 'Document',
+};
 
 export const CmdK = () => {
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -63,18 +70,82 @@ export const CmdK = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, close]);
 
-  // Get selected or paragraph text
-  const getTargetText = (): string => {
-    if (selection && selection.from !== selection.to) {
-      return currentContent.slice(selection.from, selection.to);
-    }
-    // Fallback: get first paragraph or first 500 chars
-    const lines = currentContent.split('\n\n');
-    return lines[0]?.slice(0, 500) || currentContent.slice(0, 500);
-  };
+  // Get target text based on selected scope
+  const getTargetText = useMemo(() => {
+    return (targetScope: (typeof SCOPE_OPTIONS)[number]['value']): string => {
+      if (!currentContent) return '';
+
+      if (targetScope === 'selection') {
+        if (selection && selection.from !== selection.to) {
+          return currentContent.slice(selection.from, selection.to);
+        }
+        return currentContent.slice(0, 500);
+      }
+
+      if (targetScope === 'document') {
+        return currentContent;
+      }
+
+      const lines = currentContent.split('\n');
+      const lineStarts: number[] = [];
+      let offset = 0;
+
+      for (const line of lines) {
+        lineStarts.push(offset);
+        offset += line.length + 1;
+      }
+
+      const clampOffset = selection?.from ?? 0;
+      const resolvedLineIndex = lineStarts.findIndex((start, index) => {
+        const nextStart = index + 1 < lineStarts.length ? lineStarts[index + 1] : currentContent.length + 1;
+        return clampOffset >= start && clampOffset < nextStart;
+      });
+      const currentLineIndex = resolvedLineIndex >= 0 ? resolvedLineIndex : 0;
+
+      const getLineOffset = (lineIndex: number) => lineStarts[Math.max(0, Math.min(lineIndex, lineStarts.length - 1))] ?? 0;
+
+      if (targetScope === 'paragraph') {
+        let startLine = currentLineIndex;
+        let endLine = currentLineIndex;
+
+        while (startLine > 0 && lines[startLine - 1]?.trim() !== '') {
+          startLine -= 1;
+        }
+        while (endLine < lines.length - 1 && lines[endLine + 1]?.trim() !== '') {
+          endLine += 1;
+        }
+
+        const startOffset = getLineOffset(startLine);
+        const endOffset = endLine + 1 < lineStarts.length ? getLineOffset(endLine + 1) - 1 : currentContent.length;
+        return currentContent.slice(startOffset, endOffset).trim();
+      }
+
+      let sectionStartLine = 0;
+      for (let index = currentLineIndex; index >= 0; index -= 1) {
+        if (/^#{1,6}\s/.test(lines[index] ?? '')) {
+          sectionStartLine = index;
+          break;
+        }
+      }
+
+      let sectionEndLine = lines.length;
+      for (let index = currentLineIndex + 1; index < lines.length; index += 1) {
+        if (/^#{1,6}\s/.test(lines[index] ?? '')) {
+          sectionEndLine = index;
+          break;
+        }
+      }
+
+      const sectionStartOffset = getLineOffset(sectionStartLine);
+      const sectionEndOffset = sectionEndLine < lineStarts.length ? getLineOffset(sectionEndLine) - 1 : currentContent.length;
+      return currentContent.slice(sectionStartOffset, sectionEndOffset).trim();
+    };
+  }, [currentContent, selection]);
+
+  const targetText = useMemo(() => getTargetText(scope), [currentContent, getTargetText, scope]);
 
   const handleSubmit = async () => {
-    if (!instruction.trim() || isProcessing || !selectedFile) return;
+    if (!instruction.trim() || isProcessing || !selectedFile || !targetText.trim()) return;
 
     setIsProcessing(true);
     
@@ -82,7 +153,7 @@ export const CmdK = () => {
       const response = await invoke<AIEditResponse>('ai_edit', {
         instruction: instruction.trim(),
         originalText: targetText,
-        scope: scope,
+        scope: SCOPE_TO_REQUEST[scope],
         context: [],
       });
 
@@ -119,7 +190,6 @@ export const CmdK = () => {
   if (!isOpen) return null;
 
   const selectedScope = SCOPE_OPTIONS.find(s => s.value === scope);
-  const targetText = getTargetText();
 
   return (
     <div className={styles.overlay} onClick={close}>

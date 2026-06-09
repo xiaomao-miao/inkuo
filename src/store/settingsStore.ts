@@ -7,15 +7,15 @@ interface SettingsState {
   isSettingsOpen: boolean;
 
   setSettings: (settings: Settings) => void;
-  updateSetting: <K extends keyof Settings>(key: K, value: Settings[K]) => void;
+  updateSetting: <K extends keyof Settings>(key: K, value: Settings[K]) => Settings;
   setIsSettingsOpen: (open: boolean) => void;
 
-  addApiConfig: (config?: Partial<APIConfig>) => string;
-  updateApiConfig: (id: string, updates: Partial<APIConfig>) => void;
-  removeApiConfig: (id: string) => void;
-  setActiveApiConfig: (id: string) => void;
+  addApiConfig: (config?: Partial<APIConfig>) => Settings;
+  updateApiConfig: (id: string, updates: Partial<APIConfig>) => Settings;
+  removeApiConfig: (id: string) => Settings;
+  setActiveApiConfig: (id: string) => Settings;
   getActiveApiConfig: () => APIConfig | null;
-  setDefaultApiConfig: (id: string) => void;
+  setDefaultApiConfig: (id: string) => Settings;
 }
 
 function createDefaultAPIConfig(): APIConfig {
@@ -34,6 +34,28 @@ function createDefaultAPIConfig(): APIConfig {
 }
 
 const defaultAPIConfig = createDefaultAPIConfig();
+
+function ensureValidApiConfigs(apiConfigs: APIConfig[]): APIConfig[] {
+  if (apiConfigs.length === 0) {
+    return [createDefaultAPIConfig()];
+  }
+
+  let hasDefault = false;
+  return apiConfigs.map((config, index) => {
+    const shouldBeDefault = !hasDefault && (config.isDefault || index === 0);
+    if (shouldBeDefault) {
+      hasDefault = true;
+    }
+    return {
+      ...config,
+      isDefault: shouldBeDefault,
+    };
+  });
+}
+
+function buildSettingsUpdate(currentSettings: Settings, updater: (settings: Settings) => Settings): Settings {
+  return updater(currentSettings);
+}
 
 const defaultSettings: Settings = {
   theme: 'cursor-dark',
@@ -57,9 +79,14 @@ export const useSettingsStore = create<SettingsState>()(
       isSettingsOpen: false,
 
       setSettings: (settings) => set({ settings }),
-      updateSetting: (key, value) => set((state) => ({
-        settings: { ...state.settings, [key]: value },
-      })),
+      updateSetting: (key, value) => {
+        const nextSettings = buildSettingsUpdate(get().settings, (currentSettings) => ({
+          ...currentSettings,
+          [key]: value,
+        }));
+        set({ settings: nextSettings });
+        return nextSettings;
+      },
       setIsSettingsOpen: (open) => set({ isSettingsOpen: open }),
 
       addApiConfig: (config) => {
@@ -76,50 +103,56 @@ export const useSettingsStore = create<SettingsState>()(
           maxTokens: config?.maxTokens ?? 4096,
         };
 
-        set((state) => ({
-          settings: {
-            ...state.settings,
-            apiConfigs: [...state.settings.apiConfigs, newConfig],
-          },
+        const nextSettings = buildSettingsUpdate(get().settings, (currentSettings) => ({
+          ...currentSettings,
+          apiConfigs: ensureValidApiConfigs([...currentSettings.apiConfigs, newConfig]),
         }));
 
-        return newConfig.id;
+        set({ settings: nextSettings });
+
+        return nextSettings;
       },
 
-      updateApiConfig: (id, updates) => set((state) => ({
-        settings: {
-          ...state.settings,
-          apiConfigs: state.settings.apiConfigs.map((config) =>
+      updateApiConfig: (id, updates) => {
+        const nextSettings = buildSettingsUpdate(get().settings, (currentSettings) => ({
+          ...currentSettings,
+          apiConfigs: currentSettings.apiConfigs.map((config) =>
             config.id === id ? { ...config, ...updates } : config
           ),
-        },
-      })),
+        }));
+        set({ settings: nextSettings });
+        return nextSettings;
+      },
 
-      removeApiConfig: (id) => set((state) => {
-        const remaining = state.settings.apiConfigs.filter((c) => c.id !== id);
-        const newActiveId = state.settings.activeApiConfigId === id
-          ? (remaining.length > 0 ? remaining[0].id : null)
-          : state.settings.activeApiConfigId;
+      removeApiConfig: (id) => {
+        const nextSettings = buildSettingsUpdate(get().settings, (currentSettings) => {
+          const remaining = currentSettings.apiConfigs.filter((config) => config.id !== id);
+          const apiConfigs = ensureValidApiConfigs(remaining);
+          const activeApiConfigId = apiConfigs.some((config) => config.id === currentSettings.activeApiConfigId)
+            ? currentSettings.activeApiConfigId
+            : apiConfigs[0].id;
 
-        const updatedConfigs = remaining.map((c, i) =>
-          i === 0 && !remaining.some(r => r.isDefault) ? { ...c, isDefault: true } : c
-        );
+          return {
+            ...currentSettings,
+            apiConfigs,
+            activeApiConfigId,
+          };
+        });
 
-        return {
-          settings: {
-            ...state.settings,
-            apiConfigs: remaining.length > 0 ? updatedConfigs : state.settings.apiConfigs,
-            activeApiConfigId: newActiveId,
-          },
-        };
-      }),
+        set({ settings: nextSettings });
+        return nextSettings;
+      },
 
-      setActiveApiConfig: (id) => set((state) => ({
-        settings: {
-          ...state.settings,
-          activeApiConfigId: id,
-        },
-      })),
+      setActiveApiConfig: (id) => {
+        const nextSettings = buildSettingsUpdate(get().settings, (currentSettings) => ({
+          ...currentSettings,
+          activeApiConfigId: currentSettings.apiConfigs.some((config) => config.id === id)
+            ? id
+            : currentSettings.activeApiConfigId,
+        }));
+        set({ settings: nextSettings });
+        return nextSettings;
+      },
 
       getActiveApiConfig: () => {
         const state = get();
@@ -127,15 +160,17 @@ export const useSettingsStore = create<SettingsState>()(
         return state.settings.apiConfigs.find((c) => c.id === activeId) || null;
       },
 
-      setDefaultApiConfig: (id) => set((state) => ({
-        settings: {
-          ...state.settings,
-          apiConfigs: state.settings.apiConfigs.map((config) => ({
+      setDefaultApiConfig: (id) => {
+        const nextSettings = buildSettingsUpdate(get().settings, (currentSettings) => ({
+          ...currentSettings,
+          apiConfigs: currentSettings.apiConfigs.map((config) => ({
             ...config,
             isDefault: config.id === id,
           })),
-        },
-      })),
+        }));
+        set({ settings: nextSettings });
+        return nextSettings;
+      },
     }),
     {
       name: 'inkuo-settings',
