@@ -24,8 +24,17 @@ export interface DocumentDiffState {
 
 export interface DocumentOfficeState {
   docxBuffer: number[] | null;
-  excelData: string[][] | null;
+  excelData: ExcelWorkbook | null;
   bufferVersion: number;
+}
+
+export interface ExcelWorkbook {
+  sheets: Sheet[];
+}
+
+export interface Sheet {
+  name: string;
+  data: string[][];
 }
 
 export interface DocumentState {
@@ -53,7 +62,7 @@ export interface EditorState {
   updateTabDirty: (path: string, isDirty: boolean) => void;
   removeDocumentContent: (path: string) => void;
   setDocxBuffer: (path: string, buffer: number[]) => void;
-  setExcelData: (path: string, data: string[][]) => void;
+  setExcelData: (path: string, workbook: ExcelWorkbook) => void;
   clearDocxBuffer: (path: string) => void;
   clearExcelData: (path: string) => void;
   invalidateOfficeBuffer: (path: string) => void;
@@ -344,15 +353,15 @@ export const createOfficeSlice: EditorStoreCreator<OfficeSlice> = (set) => ({
           : createDefaultDocumentState({ office: { docxBuffer: buffer } })
       )
     ),
-  setExcelData: (path, data) =>
+  setExcelData: (path, workbook) =>
     set((state) =>
       setOrCreateDocumentContent(state, path, (current) =>
         current
           ? {
             ...current,
-            office: { ...current.office, excelData: data },
+            office: { ...current.office, excelData: workbook },
           }
-          : createDefaultDocumentState({ office: { excelData: data } })
+          : createDefaultDocumentState({ office: { excelData: workbook } })
       )
     ),
   clearDocxBuffer: (path) =>

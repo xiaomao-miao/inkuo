@@ -5,6 +5,7 @@ import { ExcelGrid } from 'react-excel-lite';
 import { Save, Table2, FileText } from 'lucide-react';
 import { useKeyboardSave } from './useKeyboardSave';
 import { useSidebarStore, useEditorStore, useInlineCompleteStore, useNotificationStore } from '../../store';
+import type { ExcelWorkbook, Sheet } from '../../store/editorStore';
 import { reportError } from '../../utils/errors';
 import { scheduleWordInlineCompletion } from '../inline-complete/useWordInlineCompleteTrigger';
 import { createWordInlineCompletePlugin } from '../inline-complete/wordInlineCompletePlugin';
@@ -30,18 +31,6 @@ export interface WordDocument {
   title: string;
   paragraphs: Paragraph[];
   tables: Table[];
-}
-
-export interface Sheet {
-  name: string;
-  headers: string[];
-  rows: string[][];
-  max_col: number;
-  max_row: number;
-}
-
-export interface ExcelWorkbook {
-  sheets: Sheet[];
 }
 
 interface OfficeToolbarProps {
@@ -333,34 +322,44 @@ export const WordEditor: React.FC<WordEditorProps> = ({
 interface ExcelEditorProps {
   filePath: string;
   fileName: string;
-  initialData: string[][] | null;
+  initialWorkbook: ExcelWorkbook | null;
   isActive: boolean;
+}
+
+function convertSheetToStrings(jsonData: (string | number | null)[][]): string[][] {
+  return jsonData.map(row =>
+    row.map(cell => {
+      if (cell === null || cell === undefined) return '';
+      if (typeof cell === 'number') return cell.toString();
+      return String(cell);
+    })
+  );
 }
 
 export const ExcelEditor: React.FC<ExcelEditorProps> = ({
   filePath,
   fileName,
-  initialData,
+  initialWorkbook,
   isActive,
 }) => {
   const hasLoadedRef = useRef(false);
 
-  const [data, setData] = useState<string[][] | null>(() => {
-    if (initialData !== null) {
+  const [workbook, setWorkbook] = useState<ExcelWorkbook | null>(() => {
+    if (initialWorkbook !== null) {
       hasLoadedRef.current = true;
-      return initialData;
+      return initialWorkbook;
     }
     return null;
   });
-  const [loading, setLoading] = useState<boolean>(() => initialData === null);
+  const [activeSheetIndex, setActiveSheetIndex] = useState(0);
+  const [loading, setLoading] = useState<boolean>(() => initialWorkbook === null);
   const [error, setError] = useState<string | null>(null);
   const [isDirty, setIsDirty] = useState(false);
-  const [originalData, setOriginalData] = useState<string[][] | null>(() => initialData);
-  const originalDataJsonRef = useRef<string>(JSON.stringify(initialData ?? []));
+  const originalWorkbookJsonRef = useRef<string>(JSON.stringify(initialWorkbook ?? { sheets: [] }));
 
   useEffect(() => {
-    originalDataJsonRef.current = JSON.stringify(originalData ?? []);
-  }, [originalData]);
+    originalWorkbookJsonRef.current = JSON.stringify(workbook ?? { sheets: [] });
+  }, [workbook]);
 
   const setOpenTabDirty = useSidebarStore((state) => state.setOpenTabDirty);
   const officeBufferVersion = useEditorStore(s => s.documentContents[filePath]?.office.bufferVersion ?? 0);
@@ -378,21 +377,24 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
         const fileData = await invoke<number[]>('read_office_file', { path: filePath });
         const buffer = new Uint8Array(fileData);
         const XLSX = await import('xlsx');
-        const workbook = XLSX.read(buffer, { type: 'array' });
-        const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-        const jsonData = XLSX.utils.sheet_to_json(firstSheet, { header: 1 }) as (string | number | null)[][];
-        const stringData = jsonData.map(row =>
-          row.map(cell => {
-            if (cell === null || cell === undefined) return '';
-            if (typeof cell === 'number') return cell.toString();
-            return String(cell);
-          })
-        );
-        setData(stringData);
-        setOriginalData(stringData);
-        setExcelData(filePath, stringData);
+        const xlsxWorkbook = XLSX.read(buffer, { type: 'array' });
+
+        const sheets: Sheet[] = xlsxWorkbook.SheetNames.map(name => {
+          const sheet = xlsxWorkbook.Sheets[name];
+          const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as (string | number | null)[][];
+          return {
+            name,
+            data: convertSheetToStrings(jsonData),
+          };
+        });
+
+        const newWorkbook: ExcelWorkbook = { sheets };
+        setWorkbook(newWorkbook);
+        setOriginalWorkbook(newWorkbook);
+        setExcelData(filePath, newWorkbook);
         setIsDirty(false);
         setOpenTabDirty(filePath, false);
+        setActiveSheetIndex(0);
       } catch (err) {
         const message = reportError('office-excel-load', err);
         setError(message);
@@ -414,15 +416,15 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
       return;
     }
 
-    if (initialData !== null) {
-      setData(initialData);
-      setOriginalData(initialData);
+    if (initialWorkbook !== null) {
+      setWorkbook(initialWorkbook);
+      setOriginalWorkbook(initialWorkbook);
       setLoading(false);
       return;
     }
 
     loadFromDiskRef.current();
-  }, [officeBufferVersion, initialData]);
+  }, [officeBufferVersion, initialWorkbook]);
 
   // ── Sync dirty state to sidebar ─────────────────────────────────────────
   useEffect(() => {
@@ -431,33 +433,48 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
     }
   }, [isActive, isDirty, filePath, setOpenTabDirty]);
 
+  const setOriginalWorkbook = useCallback((wb: ExcelWorkbook) => {
+    originalWorkbookJsonRef.current = JSON.stringify(wb);
+  }, []);
+
+  const handleSheetChange = useCallback((sheetIndex: number, newData: string[][]) => {
+    setWorkbook(prev => {
+      if (!prev) return prev;
+      const updated = {
+        ...prev,
+        sheets: prev.sheets.map((s, i) => i === sheetIndex ? { ...s, data: newData } : s),
+      };
+      const changed = JSON.stringify(updated) !== originalWorkbookJsonRef.current;
+      setIsDirty(changed);
+      setOpenTabDirty(filePath, changed);
+      return updated;
+    });
+  }, [filePath, setOpenTabDirty]);
+
   const handleSave = useCallback(async () => {
-    if (!isDirty || !data) return;
+    if (!isDirty || !workbook) return;
     try {
       const XLSX = await import('xlsx');
-      const worksheet = XLSX.utils.aoa_to_sheet(data);
-      const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, 'Sheet1');
-      const xlsxData = XLSX.write(workbook, { bookType: 'xlsx', type: 'array' });
+      const xlsxWorkbook = XLSX.utils.book_new();
+      for (const sheet of workbook.sheets) {
+        const worksheet = XLSX.utils.aoa_to_sheet(sheet.data);
+        XLSX.utils.book_append_sheet(xlsxWorkbook, worksheet, sheet.name);
+      }
+      const xlsxData = XLSX.write(xlsxWorkbook, { bookType: 'xlsx', type: 'array' });
       await invoke('write_office_file', { path: filePath, data: Array.from(xlsxData) });
-      setOriginalData(data);
-      setExcelData(filePath, data);
+      setOriginalWorkbook(workbook);
+      setExcelData(filePath, workbook);
       setIsDirty(false);
       setOpenTabDirty(filePath, false);
     } catch (err) {
       const message = reportError('office-excel-save', err);
       pushNotification({ kind: 'error', title: '保存 Excel 文档失败', message });
     }
-  }, [filePath, data, isDirty, setOpenTabDirty, setExcelData, pushNotification]);
+  }, [filePath, workbook, isDirty, setOpenTabDirty, setExcelData, pushNotification, setOriginalWorkbook]);
 
   useKeyboardSave({ onSave: handleSave, enabled: isDirty && isActive });
 
-  const handleChange = useCallback((newData: string[][]) => {
-    setData(newData);
-    const changed = JSON.stringify(newData) !== originalDataJsonRef.current;
-    setIsDirty(changed);
-    setOpenTabDirty(filePath, changed);
-  }, [filePath, setOpenTabDirty]);
+  const activeSheet = workbook?.sheets[activeSheetIndex] ?? null;
 
   // ── Render: CSS visibility only ──────────────────────────────────────────
   if (loading) {
@@ -483,7 +500,7 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
     );
   }
 
-  if (data === null) {
+  if (workbook === null || activeSheet === null) {
     return (
       <div className={styles.officeEditor} style={{ display: isActive ? undefined : 'none' }}>
         <OfficeToolbar fileName={fileName} isDirty={false} onSave={handleSave} canSave={false} formatIcon={<Table2 size={16} />} editLabel="无数据" />
@@ -504,10 +521,23 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
         formatIcon={<Table2 size={16} />}
         editLabel="可编辑"
       />
+      {workbook.sheets.length > 0 && (
+        <div className={styles.sheetTabs}>
+          {workbook.sheets.map((sheet, i) => (
+            <button
+              key={sheet.name}
+              className={`${styles.sheetTab} ${i === activeSheetIndex ? styles.active : ''}`}
+              onClick={() => setActiveSheetIndex(i)}
+            >
+              {sheet.name}
+            </button>
+          ))}
+        </div>
+      )}
       <div className={styles.excelContainer}>
         <ExcelGrid
-          data={data}
-          onChange={handleChange}
+          data={activeSheet.data}
+          onChange={(newData) => handleSheetChange(activeSheetIndex, newData)}
         />
       </div>
     </div>

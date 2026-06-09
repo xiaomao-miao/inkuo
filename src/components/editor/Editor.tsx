@@ -191,7 +191,7 @@ const OfficeTabRenderer: React.FC<{
       key={tab.id}
       filePath={tab.path}
       fileName={tab.name}
-      initialData={officeState?.excelData ?? null}
+      initialWorkbook={officeState?.excelData ?? null}
       isActive={isActive}
     />
   );

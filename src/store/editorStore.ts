@@ -9,7 +9,7 @@ import {
 } from './editorStore.slices';
 import type { DiffApplicationActions } from './aiPanelStore.types';
 
-const EDITOR_STORAGE_VERSION = 2;
+const EDITOR_STORAGE_VERSION = 3;
 
 function migrateEditorState(
   persistedState: unknown,
@@ -56,4 +56,4 @@ export const useEditorStore = create<EditorState>()(
   )
 );
 
-export type { DocumentState, EditorState } from './editorStore.slices';
+export type { DocumentState, EditorState, ExcelWorkbook, Sheet } from './editorStore.slices';
