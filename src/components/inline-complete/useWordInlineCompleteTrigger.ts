@@ -3,7 +3,7 @@ import type { EditorView } from 'prosemirror-view';
 import type { InlineCompletionRequest, InlineCompletionResponse, InlineStyle } from '../../types/inline-complete';
 import { useInlineCompleteStore } from '../../store';
 import { showWordInlineCompletion } from './wordInlineCompletePlugin';
-import { TIMING } from '../../constants/timing';
+import { TIMING, PROSEMIRROR_SNIPPET_BOUNDS } from '../../constants/timing';
 
 // Throttle cancel invocations to avoid flooding the backend
 const CANCEL_THROTTLE_MS = TIMING.INLINE_COMPLETION_CANCEL_THROTTLE_MS;
@@ -79,7 +79,9 @@ function cancelWordInlineCompletion() {
   cancelController.lastInvokeTime = now;
   cancelController.pending = true;
   void invoke('ai_inline_complete_cancel')
-    .catch(() => {})
+    .catch((err) => {
+      console.warn('[WordInlineCompletion] Cancel request failed:', err);
+    })
     .finally(() => {
       cancelController.pending = false;
     });
@@ -90,10 +92,8 @@ function cancelWordInlineCompletion() {
 function getSnippet(view: EditorView) {
   const cursor = view.state.selection.head;
   const docLen = view.state.doc.content.size;
-  const maxBefore = 6000;
-  const maxAfter = 1500;
-  const from = Math.max(0, cursor - maxBefore);
-  const to = Math.min(docLen, cursor + maxAfter);
+  const from = Math.max(0, cursor - PROSEMIRROR_SNIPPET_BOUNDS.MAX_BEFORE);
+  const to = Math.min(docLen, cursor + PROSEMIRROR_SNIPPET_BOUNDS.MAX_AFTER);
   const snippetText = view.state.doc.textBetween(from, to);
   const cursorInSnippet = cursor - from;
   return { snippetText, cursorInSnippet, from };
@@ -178,6 +178,7 @@ export function scheduleWordInlineCompletion(view: EditorView, filePath: string)
         showWordInlineCompletion(view, text);
       }
     } catch (err) {
+      console.error('[WordInlineCompletion] Completion request failed:', err);
       const current = useInlineCompleteStore.getState();
       current.setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -208,16 +209,19 @@ export function clearWordTimersForEditor(view: EditorView) {
   }
 }
 
-/** Legacy export for backward compatibility — clears timers for ALL editors. */
-export function clearWordTimers() {
-  // Increment a global sentinel so any in-flight response is ignored.
-  // Individual editor contexts still have their own cancelSeq for correctness.
-  // This is a best-effort approach for the legacy API.
+/** Dismiss all pending inline completions globally.
+ * Cancels any in-flight backend request and clears the loading state.
+ * Note: This does NOT clear per-editor timers — use clearWordTimersForEditor for that.
+ */
+export function dismissAllWordCompletions() {
   if (useInlineCompleteStore.getState().isLoading) {
     useInlineCompleteStore.getState().setLoading(false);
   }
   cancelWordInlineCompletion();
 }
+
+/** @deprecated Use dismissAllWordCompletions instead. Alias for backward compatibility. */
+export const clearWordTimers = dismissAllWordCompletions;
 
 export function markAccepted(view: EditorView) {
   const ctx = editorContexts.get(view);

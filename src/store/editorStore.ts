@@ -45,6 +45,47 @@ interface EditorState {
   togglePreviewMode: (path: string) => void;
 }
 
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+/** Create a default document state for a new document */
+function createDefaultDocumentState(overrides?: Partial<DocumentState>): DocumentState {
+  return {
+    document: null,
+    content: '',
+    mtime: 0,
+    isDirty: false,
+    selection: null,
+    diffHunks: [],
+    activeHunkIndex: 0,
+    isDiffMode: false,
+    docxBuffer: null,
+    excelData: null,
+    officeBufferVersion: 0,
+    ...overrides,
+  };
+}
+
+/** Type for partial document state updates */
+type DocumentStateUpdate = Partial<DocumentState>;
+
+/** Helper to update a single document in the documentContents map */
+function updateDocument(
+  state: { documentContents: Record<string, DocumentState> },
+  path: string,
+  update: DocumentStateUpdate
+): Pick<typeof state, 'documentContents'> | typeof state {
+  const current = state.documentContents[path];
+  if (!current) return state;
+  return {
+    documentContents: {
+      ...state.documentContents,
+      [path]: { ...current, ...update },
+    },
+  };
+}
+
 export const useEditorStore = create<EditorState>()(
   persist(
     (set) => ({
@@ -54,93 +95,36 @@ export const useEditorStore = create<EditorState>()(
       setDocumentContent: (path, doc, content, mtime = 0) => set((state) => ({
         documentContents: {
           ...state.documentContents,
-          [path]: {
+          [path]: createDefaultDocumentState({
             document: doc,
-            content: content,
-            mtime: mtime,
-            isDirty: false,
-            selection: null,
-            diffHunks: [] as DiffHunk[],
-            activeHunkIndex: 0,
-            isDiffMode: false,
+            content,
+            mtime,
             docxBuffer: state.documentContents[path]?.docxBuffer ?? null,
             excelData: state.documentContents[path]?.excelData ?? null,
             officeBufferVersion: state.documentContents[path]?.officeBufferVersion ?? 0,
-          }
-        }
+          }),
+        },
       })),
 
-      setContent: (path, content) => set((state) => {
-        const current = state.documentContents[path];
-        if (!current) return state;
-        return {
-          documentContents: {
-            ...state.documentContents,
-            [path]: {
-              ...current,
-              content: content,
-              isDirty: true,
-            }
-          }
-        };
-      }),
+      setContent: (path, content) => set((state) =>
+        updateDocument(state, path, { content, isDirty: true })
+      ),
 
-      setSelection: (path, selection) => set((state) => {
-        const current = state.documentContents[path];
-        if (!current) return state;
-        return {
-          documentContents: {
-            ...state.documentContents,
-            [path]: {
-              ...current,
-              selection,
-            }
-          }
-        };
-      }),
+      setSelection: (path, selection) => set((state) =>
+        updateDocument(state, path, { selection })
+      ),
 
-      setDiffHunks: (path, hunks) => set((state) => {
-        const current = state.documentContents[path];
-        if (!current) return state;
-        return {
-          documentContents: {
-            ...state.documentContents,
-            [path]: {
-              ...current,
-              diffHunks: hunks,
-              isDiffMode: hunks.length > 0,
-            }
-          }
-        };
-      }),
+      setDiffHunks: (path, hunks) => set((state) =>
+        updateDocument(state, path, { diffHunks: hunks, isDiffMode: hunks.length > 0 })
+      ),
 
-      setActiveHunkIndex: (path, index) => set((state) => {
-        const current = state.documentContents[path];
-        if (!current) return state;
-        return {
-          documentContents: {
-            ...state.documentContents,
-            [path]: {
-              ...current,
-              activeHunkIndex: index,
-            }
-          }
-        };
-      }),
+      setActiveHunkIndex: (path, index) => set((state) =>
+        updateDocument(state, path, { activeHunkIndex: index })
+      ),
 
-      setIsDiffMode: (path, isDiff) => set((state) => {
-        const current = state.documentContents[path];
-        if (!current) return state;
-        return {
-          documentContents: {
-            ...state.documentContents,
-            [path]: {
-              ...current,
-              isDiffMode: isDiff,
-            }
-          }
-        };
-      }),
+      setIsDiffMode: (path, isDiff) => set((state) =>
+        updateDocument(state, path, { isDiffMode: isDiff })
+      ),
 
       applyHunk: (path, hunkId) => set((state) => {
         const current = state.documentContents[path];
@@ -154,8 +138,8 @@ export const useEditorStore = create<EditorState>()(
               diffHunks: newHunks,
               isDiffMode: newHunks.length > 0,
               isDirty: true,
-            }
-          }
+            },
+          },
         };
       }),
 
@@ -170,85 +154,30 @@ export const useEditorStore = create<EditorState>()(
               ...current,
               diffHunks: newHunks,
               isDiffMode: newHunks.length > 0,
-            }
-          }
+            },
+          },
         };
       }),
 
-      applyAllHunks: (path) => set((state) => {
-        const current = state.documentContents[path];
-        if (!current) return state;
-        return {
-          documentContents: {
-            ...state.documentContents,
-            [path]: {
-              ...current,
-              diffHunks: [] as DiffHunk[],
-              isDiffMode: false,
-              isDirty: true,
-            }
-          }
-        };
-      }),
+      applyAllHunks: (path) => set((state) =>
+        updateDocument(state, path, { diffHunks: [], isDiffMode: false, isDirty: true })
+      ),
 
-      rejectAllHunks: (path) => set((state) => {
-        const current = state.documentContents[path];
-        if (!current) return state;
-        return {
-          documentContents: {
-            ...state.documentContents,
-            [path]: {
-              ...current,
-              diffHunks: [] as DiffHunk[],
-              isDiffMode: false,
-            }
-          }
-        };
-      }),
+      rejectAllHunks: (path) => set((state) =>
+        updateDocument(state, path, { diffHunks: [], isDiffMode: false })
+      ),
 
-      clearDiff: (path) => set((state) => {
-        const current = state.documentContents[path];
-        if (!current) return state;
-        return {
-          documentContents: {
-            ...state.documentContents,
-            [path]: {
-              ...current,
-              diffHunks: [] as DiffHunk[],
-              isDiffMode: false,
-              activeHunkIndex: 0,
-            }
-          }
-        };
-      }),
+      clearDiff: (path) => set((state) =>
+        updateDocument(state, path, { diffHunks: [], isDiffMode: false, activeHunkIndex: 0 })
+      ),
 
-      markSaved: (path) => set((state) => {
-        const current = state.documentContents[path];
-        if (!current) return state;
-        return {
-          documentContents: {
-            ...state.documentContents,
-            [path]: {
-              ...current,
-              isDirty: false,
-            }
-          }
-        };
-      }),
+      markSaved: (path) => set((state) =>
+        updateDocument(state, path, { isDirty: false })
+      ),
 
-      updateTabDirty: (path, isDirty) => set((state) => {
-        const current = state.documentContents[path];
-        if (!current) return state;
-        return {
-          documentContents: {
-            ...state.documentContents,
-            [path]: {
-              ...current,
-              isDirty,
-            }
-          }
-        };
-      }),
+      updateTabDirty: (path, isDirty) => set((state) =>
+        updateDocument(state, path, { isDirty })
+      ),
 
       removeDocumentContent: (path) => set((state) => {
         const { [path]: _, ...rest } = state.documentContents;
@@ -261,27 +190,15 @@ export const useEditorStore = create<EditorState>()(
           return {
             documentContents: {
               ...state.documentContents,
-              [path]: {
-                document: null,
-                content: '',
-                mtime: 0,
-                isDirty: false,
-                selection: null,
-                diffHunks: [],
-                activeHunkIndex: 0,
-                isDiffMode: false,
-                docxBuffer: buffer,
-                excelData: null,
-                officeBufferVersion: 0,
-              },
-            }
+              [path]: createDefaultDocumentState({ docxBuffer: buffer }),
+            },
           };
         }
         return {
           documentContents: {
             ...state.documentContents,
             [path]: { ...current, docxBuffer: buffer, isDirty: true },
-          }
+          },
         };
       }),
 
@@ -291,51 +208,25 @@ export const useEditorStore = create<EditorState>()(
           return {
             documentContents: {
               ...state.documentContents,
-              [path]: {
-                document: null,
-                content: '',
-                mtime: 0,
-                isDirty: false,
-                selection: null,
-                diffHunks: [],
-                activeHunkIndex: 0,
-                isDiffMode: false,
-                docxBuffer: null,
-                excelData: data,
-                officeBufferVersion: 0,
-              },
-            }
+              [path]: createDefaultDocumentState({ excelData: data }),
+            },
           };
         }
         return {
           documentContents: {
             ...state.documentContents,
             [path]: { ...current, excelData: data, isDirty: true },
-          }
+          },
         };
       }),
 
-      clearDocxBuffer: (path) => set((state) => {
-        const current = state.documentContents[path];
-        if (!current) return state;
-        return {
-          documentContents: {
-            ...state.documentContents,
-            [path]: { ...current, docxBuffer: null, isDirty: false },
-          }
-        };
-      }),
+      clearDocxBuffer: (path) => set((state) =>
+        updateDocument(state, path, { docxBuffer: null, isDirty: false })
+      ),
 
-      clearExcelData: (path) => set((state) => {
-        const current = state.documentContents[path];
-        if (!current) return state;
-        return {
-          documentContents: {
-            ...state.documentContents,
-            [path]: { ...current, excelData: null, isDirty: false },
-          }
-        };
-      }),
+      clearExcelData: (path) => set((state) =>
+        updateDocument(state, path, { excelData: null, isDirty: false })
+      ),
 
       invalidateOfficeBuffer: (path) => set((state) => {
         const current = state.documentContents[path];
@@ -347,7 +238,7 @@ export const useEditorStore = create<EditorState>()(
               ...current,
               officeBufferVersion: (current.officeBufferVersion ?? 0) + 1,
             },
-          }
+          },
         };
       }),
 

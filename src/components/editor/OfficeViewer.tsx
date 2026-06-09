@@ -13,6 +13,12 @@ import '@eigenpal/docx-editor-react/styles.css';
 import { TIMING } from '../../constants/timing';
 
 // ============================================================================
+// Constants
+// ============================================================================
+
+const OFFICE_MENU_BUTTONS_TO_HIDE = ['File', 'Format', 'Insert', 'Help'] as const;
+
+// ============================================================================
 // Type Definitions
 // ============================================================================
 
@@ -156,6 +162,9 @@ export const WordEditor: React.FC<WordEditorProps> = ({
     pmViewRef.current = view;
   }, []);
 
+  // Refs for effects that need stable callbacks
+  const loadFromDiskRef = useRef<() => Promise<void>>(() => Promise.resolve());
+
   // ── Persistent state: initialized once from the store cache ──────────────
   // Using lazy initialization: only loads from disk on first render,
   // subsequent renders reuse the in-memory state.
@@ -174,24 +183,26 @@ export const WordEditor: React.FC<WordEditorProps> = ({
   const officeBufferVersion = useEditorStore(s => s.documentContents[filePath]?.officeBufferVersion ?? 0);
   const { setDocxBuffer } = useEditorStore();
 
-  // ── Re-read from disk when AI agent modified the file ─────────────────────
-
-  const loadFromDisk = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const data = await invoke<number[]>('read_office_file', { path: filePath });
-      const buffer = new Uint8Array(data);
-      setDocumentBuffer(buffer);
-      setDocxBuffer(filePath, data);
-      setIsDirty(false);
-      setOpenTabDirty(filePath, false);
-    } catch (err) {
-      console.error('Failed to load Word document:', err);
-      setError(String(err));
-    } finally {
-      setLoading(false);
-    }
+  // Keep loadFromDiskRef.current in sync
+  useEffect(() => {
+    const doLoad = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const data = await invoke<number[]>('read_office_file', { path: filePath });
+        const buffer = new Uint8Array(data);
+        setDocumentBuffer(buffer);
+        setDocxBuffer(filePath, data);
+        setIsDirty(false);
+        setOpenTabDirty(filePath, false);
+      } catch (err) {
+        console.error('Failed to load Word document:', err);
+        setError(String(err));
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadFromDiskRef.current = doLoad;
   }, [filePath, setOpenTabDirty, setDocxBuffer]);
 
   // ── Load on mount and re-load when AI agent modifies the file.
@@ -206,7 +217,7 @@ export const WordEditor: React.FC<WordEditorProps> = ({
     // When officeBufferVersion > 0, the AI agent has written a new file.
     // Always read from disk to get the latest content, ignoring the stale cache.
     if (officeBufferVersion > 0) {
-      loadFromDisk();
+      loadFromDiskRef.current();
       return;
     }
 
@@ -219,10 +230,8 @@ export const WordEditor: React.FC<WordEditorProps> = ({
     }
 
     // No cached buffer — must read from disk
-    loadFromDisk();
-    // Note: Uses ref-based version tracking (wordLastVersionRef) to avoid duplicate loads.
-    // Deps exclude loadFromDisk and setDocumentBuffer intentionally.
-  }, [officeBufferVersion, initialBuffer]); // eslint-disable-line react-hooks/exhaustive-deps
+    loadFromDiskRef.current();
+  }, [officeBufferVersion, initialBuffer]);
 
   // ── When the store cache becomes available (e.g., restored after reload) ─
   // This fires when the prop changes from null → non-null (after localStorage restore).
@@ -234,16 +243,14 @@ export const WordEditor: React.FC<WordEditorProps> = ({
       setDocumentBuffer(initialBuffer);
       setLoading(false);
     }
-    // Note: Uses loading state to detect when cache becomes available.
-  }, [initialBuffer, loading]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [initialBuffer, loading]);
 
   // ── Sync dirty state to sidebar on mount (handles restored dirty state) ───
   useEffect(() => {
     if (isActive && isDirty) {
       setOpenTabDirty(filePath, true);
     }
-    // Note: Only syncs on mount/isDirty changes, not on every setOpenTabDirty reference change.
-  }, [isActive, isDirty]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isActive, isDirty, filePath, setOpenTabDirty]);
 
   // ── Hide DocxEditor's top menu buttons ─────────────────────────────────
   useEffect(() => {
@@ -254,7 +261,7 @@ export const WordEditor: React.FC<WordEditorProps> = ({
       const buttons = containerRef.current.querySelectorAll('button');
       buttons.forEach((button) => {
         const text = button.textContent?.trim() || '';
-        if (['File', 'Format', 'Insert', 'Help'].includes(text)) {
+        if (OFFICE_MENU_BUTTONS_TO_HIDE.includes(text as typeof OFFICE_MENU_BUTTONS_TO_HIDE[number])) {
           (button as HTMLButtonElement).style.display = 'none';
         }
       });
@@ -428,35 +435,41 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
   const { setExcelData } = useEditorStore();
   const excelLastVersionRef = useRef(-1);
 
+  // Ref for stable loadFromDisk callback
+  const loadFromDiskRef = useRef<() => Promise<void>>(() => Promise.resolve());
+
   // ── Re-read from disk when AI agent modified the file ─────────────────────
-  const loadFromDisk = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const fileData = await invoke<number[]>('read_office_file', { path: filePath });
-      const buffer = new Uint8Array(fileData);
-      const XLSX = await import('xlsx');
-      const workbook = XLSX.read(buffer, { type: 'array' });
-      const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-      const jsonData = XLSX.utils.sheet_to_json(firstSheet, { header: 1 }) as (string | number | null)[][];
-      const stringData = jsonData.map(row =>
-        row.map(cell => {
-          if (cell === null || cell === undefined) return '';
-          if (typeof cell === 'number') return cell.toString();
-          return String(cell);
-        })
-      );
-      setData(stringData);
-      setOriginalData(stringData);
-      setExcelData(filePath, stringData);
-      setIsDirty(false);
-      setOpenTabDirty(filePath, false);
-    } catch (err) {
-      console.error('Failed to load Excel document:', err);
-      setError(String(err));
-    } finally {
-      setLoading(false);
-    }
+  useEffect(() => {
+    const doLoad = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const fileData = await invoke<number[]>('read_office_file', { path: filePath });
+        const buffer = new Uint8Array(fileData);
+        const XLSX = await import('xlsx');
+        const workbook = XLSX.read(buffer, { type: 'array' });
+        const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+        const jsonData = XLSX.utils.sheet_to_json(firstSheet, { header: 1 }) as (string | number | null)[][];
+        const stringData = jsonData.map(row =>
+          row.map(cell => {
+            if (cell === null || cell === undefined) return '';
+            if (typeof cell === 'number') return cell.toString();
+            return String(cell);
+          })
+        );
+        setData(stringData);
+        setOriginalData(stringData);
+        setExcelData(filePath, stringData);
+        setIsDirty(false);
+        setOpenTabDirty(filePath, false);
+      } catch (err) {
+        console.error('Failed to load Excel document:', err);
+        setError(String(err));
+      } finally {
+        setLoading(false);
+      }
+    };
+    loadFromDiskRef.current = doLoad;
   }, [filePath, setOpenTabDirty, setExcelData]);
 
   // ── Load on mount and re-load when AI agent modifies the file.
@@ -468,7 +481,7 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
     // When officeBufferVersion > 0, the AI agent has written a new file.
     // Always read from disk to get the latest content, ignoring the stale cache.
     if (officeBufferVersion > 0) {
-      loadFromDisk();
+      loadFromDiskRef.current();
       return;
     }
 
@@ -480,17 +493,15 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
       return;
     }
 
-    loadFromDisk();
-    // Note: Uses ref-based version tracking (excelLastVersionRef) to avoid duplicate loads.
-  }, [officeBufferVersion]); // eslint-disable-line react-hooks/exhaustive-deps
+    loadFromDiskRef.current();
+  }, [officeBufferVersion, initialData]);
 
   // ── Sync dirty state to sidebar ─────────────────────────────────────────
   useEffect(() => {
     if (isActive && isDirty) {
       setOpenTabDirty(filePath, true);
     }
-    // Note: Only syncs when active or dirty state changes.
-  }, [isActive, isDirty]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isActive, isDirty, filePath, setOpenTabDirty]);
 
   const handleSave = useCallback(async () => {
     if (!isDirty || !data) return;

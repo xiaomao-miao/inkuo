@@ -23,3 +23,23 @@ export const TIMING = {
   /** Long-press threshold for context menu (ms) */
   CONTEXT_MENU_LONG_PRESS_MS: 500,
 } as const;
+
+// ============================================================================
+// Document snippet bounds for inline completion
+// ============================================================================
+
+/** Snippet bounds for CodeMirror (Markdown) editor */
+export const CODEMIRROR_SNIPPET_BOUNDS = {
+  /** Max characters to include before cursor */
+  MAX_BEFORE: 8000,
+  /** Max characters to include after cursor */
+  MAX_AFTER: 2000,
+} as const;
+
+/** Snippet bounds for ProseMirror (Docx) editor */
+export const PROSEMIRROR_SNIPPET_BOUNDS = {
+  /** Max characters to include before cursor */
+  MAX_BEFORE: 6000,
+  /** Max characters to include after cursor */
+  MAX_AFTER: 1500,
+} as const;

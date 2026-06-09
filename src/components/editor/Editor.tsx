@@ -24,7 +24,7 @@ import {
   InlineCompleteStatus,
   inlineCompletionDecoration,
 } from '../inline-complete';
-import { TIMING } from '../../constants/timing';
+import { TIMING, CODEMIRROR_SNIPPET_BOUNDS } from '../../constants/timing';
 import { detectLanguage } from '../../types/inline-complete';
 import styles from './Editor.module.css';
 import inlineCompleteStyles from '../inline-complete/InlineComplete.module.css';
@@ -121,8 +121,6 @@ const EditorContent: React.FC<{
     destroyed: false,
   });
 
-  const autoTriggerStateRefForKeymap = autoTriggerStateRef;
-
   // Cleanup on unmount — cancel any pending timer and mark destroyed
   useEffect(() => {
     const ref = autoTriggerStateRef.current;
@@ -187,10 +185,8 @@ const EditorContent: React.FC<{
 
       // Smart snippet: capture a window around cursor, bounded by max chars.
       // This avoids `doc.toString()` on large documents, which can freeze input.
-      const maxBefore = 8000;
-      const maxAfter = 2000;
-      const from = Math.max(0, cursor - maxBefore);
-      const to = Math.min(docLen, cursor + maxAfter);
+      const from = Math.max(0, cursor - CODEMIRROR_SNIPPET_BOUNDS.MAX_BEFORE);
+      const to = Math.min(docLen, cursor + CODEMIRROR_SNIPPET_BOUNDS.MAX_AFTER);
 
       const snippetText = view.state.doc.sliceString(from, to);
       const cursorInSnippet = cursor - from;
@@ -395,6 +391,10 @@ const EditorContent: React.FC<{
     }
   }, [selectedFile, setSelection]);
 
+  // Stable ref for togglePreviewMode to avoid effect re-runs
+  const togglePreviewModeRef = useRef(togglePreviewMode);
+  togglePreviewModeRef.current = togglePreviewMode;
+
   // Keyboard shortcuts for Save (Cmd/Ctrl+S) and Preview toggle (Cmd/Ctrl+Shift+P)
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
@@ -405,14 +405,14 @@ const EditorContent: React.FC<{
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'p') {
         e.preventDefault();
         if (selectedFile) {
-          togglePreviewMode(selectedFile);
+          togglePreviewModeRef.current(selectedFile);
         }
       }
     };
 
     window.addEventListener('keydown', handleGlobalKeyDown);
     return () => window.removeEventListener('keydown', handleGlobalKeyDown);
-  }, [handleSave, selectedFile, togglePreviewMode]);
+  }, [handleSave, selectedFile]);
 
   const inPreviewMode = selectedFile ? !!isPreviewMode[selectedFile] : false;
 
@@ -452,7 +452,7 @@ const EditorContent: React.FC<{
                     const text = currentCompletion.text;
 
                     // Mark accept time to avoid immediate re-trigger
-                    autoTriggerStateRefForKeymap.current.lastAcceptAt = Date.now();
+                    autoTriggerStateRef.current.lastAcceptAt = Date.now();
 
                     clearCompletion();
                     view.dispatch({
