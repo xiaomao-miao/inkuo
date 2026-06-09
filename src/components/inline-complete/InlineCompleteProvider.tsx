@@ -9,10 +9,6 @@ import type {
 } from '../../types/inline-complete';
 import { InlineCompleteContext, type InlineCompleteContextValue } from './inlineCompleteContext';
 
-const debugInlineComplete = import.meta.env.DEV
-  ? (...args: unknown[]) => console.debug('[InlineComplete]', ...args)
-  : undefined;
-
 interface InlineCompleteProviderProps {
   children: React.ReactNode;
 }
@@ -74,18 +70,11 @@ export function InlineCompleteProvider({ children }: InlineCompleteProviderProps
 
     const hasCurrentCompletion = !!useInlineCompleteStore.getState().currentCompletion;
 
-    debugInlineComplete?.('triggerCompletion called', {
-      enabled,
-      hasCurrentCompletion,
-    });
-
     if (!enabled) {
-      debugInlineComplete?.('Not triggered: not enabled');
       return;
     }
 
     if (hasCurrentCompletion) {
-      debugInlineComplete?.('Clearing existing completion for new request');
       clearCompletion();
     }
 
@@ -103,37 +92,30 @@ export function InlineCompleteProvider({ children }: InlineCompleteProviderProps
           cursor_position: params.cursorPosition,
           language: params.language,
           file_path: params.filePath,
+          snippet: params.snippet,
         };
 
-        debugInlineComplete?.('Sending request to backend');
         const response = await invoke<InlineCompletionResponse>(
           'ai_inline_complete',
           { request }
         );
 
-        debugInlineComplete?.('Received response', response);
-
         const latest = latestRequestRef.current;
         if (!latest || latest.seq !== seq) {
-          debugInlineComplete?.('Stale response ignored: seq mismatch');
           return;
         }
         if (latest.filePath !== params.filePath || latest.cursorPosition !== params.cursorPosition) {
-          debugInlineComplete?.('Stale response ignored: context changed');
           return;
         }
 
         const currentState = useInlineCompleteStore.getState();
         if (currentState.currentCompletion) {
-          debugInlineComplete?.('Stale response ignored: another completion already set');
           return;
         }
 
         if (response.completions.length > 0) {
-          debugInlineComplete?.('Setting completion');
           setCompletion(response.completions[0], params.cursorPosition);
         } else {
-          debugInlineComplete?.('No completions returned');
           clearCompletion();
         }
       } catch (err) {

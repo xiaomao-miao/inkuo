@@ -11,9 +11,19 @@ export function inlineCompletionDecoration() {
   return ViewPlugin.fromClass(
     class {
       decorations;
+      unsubscribe: (() => void) | null;
 
       constructor(view: EditorView) {
         this.decorations = this.buildDecorations(view);
+        this.unsubscribe = useInlineCompleteStore.subscribe((state, prevState) => {
+          if (
+            state.enabled !== prevState.enabled ||
+            state.currentCompletion?.text !== prevState.currentCompletion?.text ||
+            state.triggerPosition !== prevState.triggerPosition
+          ) {
+            view.dispatch({ effects: [] });
+          }
+        });
       }
 
       update(update: ViewUpdate) {
@@ -21,10 +31,16 @@ export function inlineCompletionDecoration() {
           update.docChanged ||
           update.selectionSet ||
           update.viewportChanged ||
-          update.focusChanged
+          update.focusChanged ||
+          update.transactions.length > 0
         ) {
           this.decorations = this.buildDecorations(update.view);
         }
+      }
+
+      destroy() {
+        this.unsubscribe?.();
+        this.unsubscribe = null;
       }
 
       buildDecorations(view: EditorView) {

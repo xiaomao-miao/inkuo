@@ -67,6 +67,7 @@ export function useEditorInlineCompletion(editorRef: React.RefObject<{ view?: Ed
     debounceMs: 700,
   });
   const triggerCompletionRef = useRef(triggerCompletion);
+  const selectedFileRef = useRef<string | null>(selectedFile);
   const lastSelectedFileRef = useRef<string | null>(null);
   const autoTriggerStateRef = useRef<InlineAutoTriggerState>({
     timer: null,
@@ -76,6 +77,7 @@ export function useEditorInlineCompletion(editorRef: React.RefObject<{ view?: Ed
 
   triggerCompletionRef.current = triggerCompletion;
   inlineCompleteSnapshotRef.current = useInlineCompleteStore.getState();
+  selectedFileRef.current = selectedFile;
 
   useEffect(() => {
     if (selectedFile !== lastSelectedFileRef.current) {
@@ -86,6 +88,8 @@ export function useEditorInlineCompletion(editorRef: React.RefObject<{ view?: Ed
 
   useEffect(() => {
     const ref = autoTriggerStateRef.current;
+    ref.destroyed = false;
+
     return () => {
       ref.destroyed = true;
       if (ref.timer !== null) {
@@ -116,7 +120,9 @@ export function useEditorInlineCompletion(editorRef: React.RefObject<{ view?: Ed
     if (!view.hasFocus) return;
 
     const now = Date.now();
-    if (now - autoTriggerStateRef.current.lastAcceptAt < TIMING.COMPLETION_RETRIGGER_DELAY_MS) return;
+    if (now - autoTriggerStateRef.current.lastAcceptAt < TIMING.COMPLETION_RETRIGGER_DELAY_MS) {
+      return;
+    }
 
     const isUserInput = update.transactions.some(
       (transaction) =>
@@ -127,30 +133,43 @@ export function useEditorInlineCompletion(editorRef: React.RefObject<{ view?: Ed
     if (!isUserInput) return;
 
     const snapshot = inlineCompleteSnapshotRef.current;
+
     if (snapshot.currentCompletion) {
       clearCompletion();
     }
 
     const selection = view.state.selection.main;
-    if (!selection.empty) return;
-    if (!snapshot.enabled || snapshot.isLoading) return;
+    if (!selection.empty) {
+      return;
+    }
+    if (!snapshot.enabled || snapshot.isLoading) {
+      return;
+    }
 
     if (autoTriggerStateRef.current.timer) {
       clearTimeout(autoTriggerStateRef.current.timer);
     }
 
-    const filePath = selectedFile;
     autoTriggerStateRef.current.timer = setTimeout(() => {
       autoTriggerStateRef.current.timer = null;
-      if (autoTriggerStateRef.current.destroyed) return;
-      if (!view.hasFocus) return;
+      if (autoTriggerStateRef.current.destroyed) {
+        return;
+      }
+      if (!view.hasFocus) {
+        return;
+      }
 
       const latestSelection = view.state.selection.main;
-      if (!latestSelection.empty) return;
+      if (!latestSelection.empty) {
+        return;
+      }
 
       const latestSnapshot = inlineCompleteSnapshotRef.current;
-      if (!latestSnapshot.enabled || latestSnapshot.isLoading || latestSnapshot.currentCompletion) return;
+      if (!latestSnapshot.enabled || latestSnapshot.isLoading || latestSnapshot.currentCompletion) {
+        return;
+      }
 
+      const filePath = selectedFileRef.current;
       const docLength = view.state.doc.length;
       const cursor = latestSelection.head;
       const from = Math.max(0, cursor - CODEMIRROR_SNIPPET_BOUNDS.MAX_BEFORE);
@@ -166,7 +185,7 @@ export function useEditorInlineCompletion(editorRef: React.RefObject<{ view?: Ed
         snippet: { text: snippetText, start_offset: from },
       });
     }, snapshot.debounceMs);
-  }), [selectedFile, clearCompletion]);
+  }), [clearCompletion]);
 
   return {
     autoTriggerStateRef,
