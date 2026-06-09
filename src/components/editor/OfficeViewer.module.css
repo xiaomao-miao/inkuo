@@ -337,6 +337,8 @@
 .docxContainer {
   flex: 1;
   overflow: hidden;
+  position: relative;
+  scrollbar-gutter: stable;
 }
 
 .docxContainer :global([class*="brand"]),
@@ -347,11 +349,25 @@
   display: none;
 }
 
+/* Hide menu bar (File, Format, Insert, Help, etc.) */
 .docxContainer :global(nav[role="menubar"]),
 .docxContainer :global([role="menubar"]),
 .docxContainer :global([aria-label="Main menu"]),
-.docxContainer :global([aria-label="Menu bar"]) {
-  display: none;
+.docxContainer :global([aria-label="Menu bar"]),
+.docxContainer :global([class*="menu-bar"]),
+.docxContainer :global([class*="menuBar"]),
+.docxContainer :global([class*="ribbon"]),
+.docxContainer :global([class*="nav-bar"]),
+.docxContainer :global([class*="navBar"]),
+.docxContainer :global(div[class*="menu"][class*="bar"]),
+.docxContainer :global(ul[class*="menu"][class*="bar"]),
+.docxContainer :global([class*="ep-menu"]),
+.docxContainer :global([class*="editor-menu"]) {
+  display: none !important;
+  visibility: hidden !important;
+  height: 0 !important;
+  overflow: hidden !important;
+  position: absolute !important;
 }
 
 .excelContainer {
