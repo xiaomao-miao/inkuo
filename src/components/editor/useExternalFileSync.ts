@@ -1,23 +1,15 @@
-import { useEffect } from 'react';
-import { listen } from '@tauri-apps/api/event';
+import { useCallback } from 'react';
+import { useTauriEvent } from '../../hooks/useTauriEvent';
 
 export function useExternalFileSync(selectedFile: string | null, forceRefreshRef: React.MutableRefObject<Record<string, number>>) {
-  useEffect(() => {
-    let unlisten: (() => void) | null = null;
+  const handleFileWritten = useCallback((payload: { path: string }) => {
+    if (!selectedFile) return;
 
-    const setup = async () => {
-      unlisten = await listen<{ path: string }>('file-written', (event) => {
-        if (!selectedFile) return;
-        const changedPath = event.payload.path || '';
-        if (changedPath === selectedFile) {
-          forceRefreshRef.current[selectedFile] = (forceRefreshRef.current[selectedFile] || 0) + 1;
-        }
-      });
-    };
-
-    setup();
-    return () => {
-      if (unlisten) unlisten();
-    };
+    const changedPath = payload.path || '';
+    if (changedPath === selectedFile) {
+      forceRefreshRef.current[selectedFile] = (forceRefreshRef.current[selectedFile] || 0) + 1;
+    }
   }, [selectedFile, forceRefreshRef]);
+
+  useTauriEvent('file-written', handleFileWritten);
 }

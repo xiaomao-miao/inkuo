@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { EditorView } from '@codemirror/view';
 import { useInlineComplete, inlineCompletionDecoration } from '../inline-complete';
+import { useGlobalPointerDown } from '../../hooks/useGlobalPointerDown';
 import { useInlineCompleteStore, useSidebarStore } from '../../store';
 import { TIMING, CODEMIRROR_SNIPPET_BOUNDS } from '../../constants/timing';
 import { detectLanguage } from '../../types/inline-complete';
@@ -11,13 +12,22 @@ export interface InlineAutoTriggerState {
   destroyed: boolean;
 }
 
-export function createInlineCompletionKeyHandler() {
+interface InlineCompletionStoreSnapshot {
+  currentCompletion: ReturnType<typeof useInlineCompleteStore.getState>['currentCompletion'];
+  enabled: boolean;
+  isLoading: boolean;
+  debounceMs: number;
+}
+
+export function createInlineCompletionKeyHandler(
+  getSnapshot: () => InlineCompletionStoreSnapshot,
+  clearCompletion: () => void,
+) {
   return EditorView.domEventHandlers({
     keydown(event, view) {
       if (!view) return false;
 
-      const storeState = useInlineCompleteStore.getState();
-      const { currentCompletion, clearCompletion } = storeState;
+      const { currentCompletion } = getSnapshot();
 
       if (event.key === 'Tab' && currentCompletion) {
         event.preventDefault();
@@ -48,6 +58,14 @@ export function createInlineCompletionKeyHandler() {
 
 export function useEditorInlineCompletion(editorRef: React.RefObject<{ view?: EditorView | null } | null>) {
   const { triggerCompletion } = useInlineComplete();
+  const clearCompletion = useInlineCompleteStore((state) => state.clearCompletion);
+  const selectedFile = useSidebarStore((state) => state.selectedFile);
+  const inlineCompleteSnapshotRef = useRef<InlineCompletionStoreSnapshot>({
+    currentCompletion: null,
+    enabled: true,
+    isLoading: false,
+    debounceMs: 700,
+  });
   const triggerCompletionRef = useRef(triggerCompletion);
   const lastSelectedFileRef = useRef<string | null>(null);
   const autoTriggerStateRef = useRef<InlineAutoTriggerState>({
@@ -57,15 +75,14 @@ export function useEditorInlineCompletion(editorRef: React.RefObject<{ view?: Ed
   });
 
   triggerCompletionRef.current = triggerCompletion;
-
-  const selectedFile = useSidebarStore((state) => state.selectedFile);
+  inlineCompleteSnapshotRef.current = useInlineCompleteStore.getState();
 
   useEffect(() => {
     if (selectedFile !== lastSelectedFileRef.current) {
       lastSelectedFileRef.current = selectedFile;
-      useInlineCompleteStore.getState().clearCompletion();
+      clearCompletion();
     }
-  }, [selectedFile]);
+  }, [selectedFile, clearCompletion]);
 
   useEffect(() => {
     const ref = autoTriggerStateRef.current;
@@ -78,22 +95,20 @@ export function useEditorInlineCompletion(editorRef: React.RefObject<{ view?: Ed
     };
   }, []);
 
-  useEffect(() => {
-    const onPointerDown = (event: PointerEvent) => {
-      const view = editorRef.current?.view;
-      if (!view) return;
-      if (!view.dom.contains(event.target as Node)) {
-        useInlineCompleteStore.getState().clearCompletion();
-        if (autoTriggerStateRef.current.timer) {
-          clearTimeout(autoTriggerStateRef.current.timer);
-          autoTriggerStateRef.current.timer = null;
-        }
-      }
-    };
+  const handlePointerDown = useCallback((event: PointerEvent) => {
+    const view = editorRef.current?.view;
+    if (!view) return;
 
-    window.addEventListener('pointerdown', onPointerDown, true);
-    return () => window.removeEventListener('pointerdown', onPointerDown, true);
-  }, [editorRef]);
+    if (!view.dom.contains(event.target as Node)) {
+      clearCompletion();
+      if (autoTriggerStateRef.current.timer) {
+        clearTimeout(autoTriggerStateRef.current.timer);
+        autoTriggerStateRef.current.timer = null;
+      }
+    }
+  }, [editorRef, clearCompletion]);
+
+  useGlobalPointerDown(handlePointerDown, true);
 
   const inlineAutoTrigger = useMemo(() => EditorView.updateListener.of((update) => {
     const view = update.view;
@@ -111,20 +126,20 @@ export function useEditorInlineCompletion(editorRef: React.RefObject<{ view?: Ed
     );
     if (!isUserInput) return;
 
-    const storeState = useInlineCompleteStore.getState();
-    if (storeState.currentCompletion) {
-      useInlineCompleteStore.getState().clearCompletion();
+    const snapshot = inlineCompleteSnapshotRef.current;
+    if (snapshot.currentCompletion) {
+      clearCompletion();
     }
 
     const selection = view.state.selection.main;
     if (!selection.empty) return;
-    if (!storeState.enabled || storeState.isLoading) return;
+    if (!snapshot.enabled || snapshot.isLoading) return;
 
     if (autoTriggerStateRef.current.timer) {
       clearTimeout(autoTriggerStateRef.current.timer);
     }
 
-    const filePath = useSidebarStore.getState().selectedFile;
+    const filePath = selectedFile;
     autoTriggerStateRef.current.timer = setTimeout(() => {
       autoTriggerStateRef.current.timer = null;
       if (autoTriggerStateRef.current.destroyed) return;
@@ -133,8 +148,8 @@ export function useEditorInlineCompletion(editorRef: React.RefObject<{ view?: Ed
       const latestSelection = view.state.selection.main;
       if (!latestSelection.empty) return;
 
-      const latestStore = useInlineCompleteStore.getState();
-      if (!latestStore.enabled || latestStore.isLoading || latestStore.currentCompletion) return;
+      const latestSnapshot = inlineCompleteSnapshotRef.current;
+      if (!latestSnapshot.enabled || latestSnapshot.isLoading || latestSnapshot.currentCompletion) return;
 
       const docLength = view.state.doc.length;
       const cursor = latestSelection.head;
@@ -150,13 +165,16 @@ export function useEditorInlineCompletion(editorRef: React.RefObject<{ view?: Ed
         filePath: filePath || undefined,
         snippet: { text: snippetText, start_offset: from },
       });
-    }, storeState.debounceMs);
-  }), []);
+    }, snapshot.debounceMs);
+  }), [selectedFile, clearCompletion]);
 
   return {
     autoTriggerStateRef,
     inlineAutoTrigger,
-    inlineCompletionKeyHandler: useMemo(() => createInlineCompletionKeyHandler(), []),
+    inlineCompletionKeyHandler: useMemo(
+      () => createInlineCompletionKeyHandler(() => inlineCompleteSnapshotRef.current, clearCompletion),
+      [clearCompletion],
+    ),
     inlineCompletionDecoration,
   };
 }

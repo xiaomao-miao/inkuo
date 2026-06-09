@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import {
   FolderOpen,
   ChevronRight,
@@ -17,6 +16,7 @@ import {
 import { useSidebarStore } from '../../store';
 import type { FileEntry } from '../../types';
 import { useDebouncedCallback } from '../../hooks/useDebouncedCallback';
+import { useWorkspaceFileWatcher } from '../../hooks/useWorkspaceFileWatcher';
 import { applyWorkspaceDirectoryLoad, openWorkspaceDirectory } from '../../services/workspace';
 import styles from './Sidebar.module.css';
 
@@ -55,10 +55,22 @@ export const Sidebar: React.FC = () => {
     openWorkspaceFile,
     addFileEntry,
     removeFileEntry,
+    isDirExpanded,
   } = useSidebarStore();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [isCollapsed, setIsCollapsed] = useState(false);
+
+  const loadDirectory = useCallback(async (path: string, mergeWithExisting: boolean = true) => {
+    setIsLoading(true);
+    try {
+      await applyWorkspaceDirectoryLoad(path, { mergeWithExisting });
+    } catch (err) {
+      console.error('Failed to load directory:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [setIsLoading]);
 
   // Load files when workspacePath is set (including on app startup)
   useEffect(() => {
@@ -84,9 +96,7 @@ export const Sidebar: React.FC = () => {
         ? `${workspacePath}/${parentPath}`
         : workspacePath!;
 
-      // Read expandedDirs fresh from the store to avoid stale closures
-      const currentExpandedDirs = useSidebarStore.getState().expandedDirs;
-      const needsChildRefresh = currentExpandedDirs.has(parentDir);
+      const needsChildRefresh = isDirExpanded(parentDir);
 
       if (needsChildRefresh) {
         // Re-fetch the parent's children to get accurate order + new entry
@@ -126,9 +136,8 @@ export const Sidebar: React.FC = () => {
   // Debounced top-level refresh – used as a safety net when incremental
   // logic cannot handle a situation (e.g. bulk rename outside the workspace).
   const debouncedFullRefresh = useDebouncedCallback(() => {
-    const wp = useSidebarStore.getState().workspacePath;
-    if (wp) {
-      loadDirectory(wp, false);
+    if (workspacePath) {
+      loadDirectory(workspacePath, false);
     }
   }, 500);
 
@@ -157,34 +166,7 @@ export const Sidebar: React.FC = () => {
     }
   }, [workspacePath, handleFileCreated, handleFileDeleted, handleFileModified, debouncedFullRefresh]);
 
-  // Set up file watcher when workspacePath changes
-  useEffect(() => {
-    let unlisten: UnlistenFn | null = null;
-
-    const setupWatcher = async () => {
-      if (!workspacePath) return;
-
-      try {
-        await invoke('watch_directory', { path: workspacePath });
-
-        unlisten = await listen<{ type: string; data: { path: string } }>(
-          'file-change',
-          (ev) => handleFileChange(ev.payload)
-        );
-      } catch (err) {
-        console.error('Failed to set up file watcher:', err);
-      }
-    };
-
-    setupWatcher();
-
-    return () => {
-      if (unlisten) {
-        unlisten();
-      }
-      invoke('unwatch_directory').catch(console.error);
-    };
-  }, [workspacePath, handleFileChange]);
+  useWorkspaceFileWatcher(workspacePath, handleFileChange);
 
   const openWorkspace = async () => {
     try {
@@ -199,23 +181,10 @@ export const Sidebar: React.FC = () => {
     }
   };
 
-  const loadDirectory = useCallback(async (path: string, mergeWithExisting: boolean = true) => {
-    setIsLoading(true);
-    try {
-      await applyWorkspaceDirectoryLoad(path, { mergeWithExisting });
-    } catch (err) {
-      console.error('Failed to load directory:', err);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [setIsLoading]);
-
   // 展开文件夹时添加子项，折叠时移除子项
   const handleFileClick = async (entry: FileEntry) => {
-    const currentExpandedDirs = useSidebarStore.getState().expandedDirs;
-
     if (entry.is_dir) {
-      const wasExpanded = currentExpandedDirs.has(entry.path);
+      const wasExpanded = isDirExpanded(entry.path);
 
       if (wasExpanded) {
         // 折叠：移除该目录的所有子项

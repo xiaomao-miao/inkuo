@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { type ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import CodeMirror from '@uiw/react-codemirror';
+import { Compartment } from '@codemirror/state';
 import { Sparkles } from 'lucide-react';
-import { useEditorStore, useSidebarStore, SETTINGS_TAB_ID } from '../../store';
+import { useEditorStore, useSidebarStore, SETTINGS_TAB_ID, type OpenTab } from '../../store';
 import { DiffOverlay } from './DiffOverlay';
 import { SettingsPanel } from '../settings/SettingsPanel';
 import { WordEditor, ExcelEditor } from './OfficeViewer';
@@ -17,6 +18,8 @@ import { useEditorInlineCompletion } from './useEditorInlineCompletion';
 import { useEditorKeyboardShortcuts, useEditorSelectionSync } from './useEditorInteraction';
 import styles from './Editor.module.css';
 import inlineCompleteStyles from '../inline-complete/InlineComplete.module.css';
+
+const diffDecorationsCompartment = new Compartment();
 
 const EditorContent: React.FC<{
   editorRef: React.RefObject<ReactCodeMirrorRef | null>;
@@ -37,10 +40,13 @@ const EditorContent: React.FC<{
   const isDiffMode = currentDoc?.isDiffMode || false;
   const selection = currentDoc?.selection || null;
 
-  const forceRefreshRef = useDocumentLoader(selectedFile);
+  const forceRefreshRef = useDocumentLoader(selectedFile, currentDoc ? {
+    content: currentDoc.content,
+    mtime: currentDoc.mtime,
+  } : null);
   useExternalFileSync(selectedFile, forceRefreshRef);
   const handleSave = useDocumentSave(selectedFile, currentContent, isDirty);
-  const handleUpdate = useEditorSelectionSync(selectedFile, currentContent, editorRef);
+  const handleUpdate = useEditorSelectionSync(selectedFile, currentContent, selection, editorRef);
   const toggleCurrentPreviewMode = useEditorKeyboardShortcuts(selectedFile, handleSave, togglePreviewMode);
   const {
     autoTriggerStateRef,
@@ -62,11 +68,10 @@ const EditorContent: React.FC<{
     }
   }, [selectedFile, setContent]);
 
-  // Sync isDirty state to sidebar store whenever it changes
   const inPreviewMode = selectedFile ? !!isPreviewMode[selectedFile] : false;
 
   const editorExtensions = useMemo(() => createEditorExtensions({
-    diffDecorationsField,
+    diffDecorationsField: diffDecorationsCompartment.of(diffDecorationsField),
     inlineCompletionKeyHandler,
     inlineAutoTrigger,
     autoTriggerStateRef,
@@ -181,7 +186,7 @@ export const Editor: React.FC = () => {
     <>
       {/* Always render WordEditor — keep mounted for tab-switch persistence.
           Each editor instance is keyed by tab path. */}
-      {openTabs.map(tab => {
+      {openTabs.map((tab: OpenTab) => {
         const tabFileType = detectFileType(tab.path);
         if (tabFileType !== 'word') return null;
         const tabCached = documentContents[tab.path]?.docxBuffer ?? null;
@@ -197,7 +202,7 @@ export const Editor: React.FC = () => {
       })}
 
       {/* Always render ExcelEditor */}
-      {openTabs.map(tab => {
+      {openTabs.map((tab: OpenTab) => {
         const tabFileType = detectFileType(tab.path);
         if (tabFileType !== 'excel') return null;
         const tabCached = documentContents[tab.path]?.excelData ?? null;

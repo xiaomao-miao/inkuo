@@ -76,6 +76,7 @@ interface SidebarState {
   addFileEntry: (entry: FileEntry) => void;
   removeFileEntry: (path: string) => void;
   removeDescendants: (parentPath: string) => void;
+  isDirExpanded: (path: string) => boolean;
 
   setKnowledgeBase: (kb: KnowledgeBase | undefined) => void;
   setBuildProgress: (progress: BuildProgress | undefined) => void;
@@ -203,6 +204,9 @@ export const useSidebarStore = create<SidebarState>()(
       removeDescendants: (parentPath) => set((state) => ({
         files: state.files.filter((f) => !f.path.startsWith(parentPath + '/')),
       })),
+      isDirExpanded: (path) => {
+        return useSidebarStore.getState().expandedDirs.has(path);
+      },
 
       setKnowledgeBase: (kb) => set({ knowledgeBase: kb }),
       setBuildProgress: (progress) => set({ buildProgress: progress }),

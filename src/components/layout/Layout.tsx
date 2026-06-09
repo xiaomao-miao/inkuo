@@ -1,59 +1,52 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useCallback } from 'react';
 import { TitleBar } from '../titlebar/TitleBar';
-import { ActivityBar, type ViewType } from '../activitybar/ActivityBar';
+import { ActivityBar } from '../activitybar/ActivityBar';
 import { Sidebar } from '../sidebar/Sidebar';
 import { ResizableHandle } from '../resizable';
 import { Editor } from '../editor/Editor';
 import { TabBar } from '../editor/TabBar';
 import { AIPanel } from '../aipanel/AIPanel';
-import { useAIPanelStore } from '../../store';
+import { useGlobalKeydown } from '../../hooks/useGlobalKeydown';
+import { useAIPanelStore, useLayoutStore } from '../../store';
 import styles from './Layout.module.css';
 
 export const Layout: React.FC = () => {
   const { isOpen: isAIPanelOpen, togglePanel } = useAIPanelStore();
-  const [activeView, setActiveView] = useState<ViewType>('files');
-  const [isSidebarVisible, setIsSidebarVisible] = useState(true);
-  
-  // Sidebar width state
-  const [sidebarWidth, setSidebarWidth] = useState(260);
-  
-  // AIPanel width state
-  const [aipanelWidth, setAipanelWidth] = useState(380);
+  const {
+    activeView,
+    isSidebarVisible,
+    sidebarWidth,
+    aipanelWidth,
+    setActiveView,
+    toggleSidebar,
+    resizeSidebar,
+    resizeAIPanel,
+  } = useLayoutStore();
 
-  const handleToggleSidebar = () => {
-    setIsSidebarVisible(!isSidebarVisible);
-  };
+  const handleToggleSidebar = useCallback(() => {
+    toggleSidebar();
+  }, [toggleSidebar]);
 
-  const handleViewChange = (view: ViewType) => {
+  const handleViewChange = useCallback((view: Parameters<typeof setActiveView>[0]) => {
     setActiveView(view);
-    if (!isSidebarVisible) {
-      setIsSidebarVisible(true);
-    }
-  };
+  }, [setActiveView]);
 
-  // Handle sidebar resize
   const handleSidebarResize = useCallback((delta: number) => {
-    setSidebarWidth(prev => Math.max(180, Math.min(400, prev + delta)));
-  }, []);
+    resizeSidebar(delta);
+  }, [resizeSidebar]);
 
-  // Handle AIPanel resize
   const handleAIPanelResize = useCallback((delta: number) => {
-    setAipanelWidth(prev => Math.max(300, Math.min(600, prev - delta)));
-  }, []);
+    resizeAIPanel(delta);
+  }, [resizeAIPanel]);
 
-  // Global keyboard shortcuts
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Ctrl+Shift+L: Toggle AI Panel (like Cursor)
-      if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'l') {
-        e.preventDefault();
-        togglePanel();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+  const handleGlobalKeyDown = useCallback((event: KeyboardEvent) => {
+    if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'l') {
+      event.preventDefault();
+      togglePanel();
+    }
   }, [togglePanel]);
+
+  useGlobalKeydown(handleGlobalKeyDown);
 
   return (
     <div className={styles.layout}>
