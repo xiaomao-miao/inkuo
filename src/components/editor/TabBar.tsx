@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { FileText, File, X, Circle, Settings } from 'lucide-react';
 import { useSidebarStore } from '../../store';
 import type { OpenTab } from '../../store';
@@ -7,6 +7,13 @@ import styles from './TabBar.module.css';
 export const TabBar = () => {
   const { openTabs, activeTabId, setActiveTab, closeTab } = useSidebarStore();
   const [confirmClosePath, setConfirmClosePath] = useState<string | null>(null);
+  const tabBarRef = useRef<HTMLDivElement>(null);
+
+  const handleWheel = (e: React.WheelEvent) => {
+    if (tabBarRef.current) {
+      tabBarRef.current.scrollLeft += e.deltaY * 0.5;
+    }
+  };
 
   const handleTabClick = (tab: OpenTab) => {
     setActiveTab(tab.id);
@@ -57,7 +64,7 @@ export const TabBar = () => {
 
   return (
     <>
-      <div className={styles.tabBar}>
+      <div className={styles.tabBar} ref={tabBarRef} onWheel={handleWheel}>
         <div className={styles.tabList}>
           {openTabs.map(tab => {
             const isActive = tab.id === activeTabId;
