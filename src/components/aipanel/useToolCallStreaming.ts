@@ -3,6 +3,7 @@ import { useCallback, useRef } from 'react';
 import { useAIPanelStore } from '../../store';
 import type { StreamPayload } from './streamTypes';
 import type { PendingToolArgEntry } from './toolCallStreamActions';
+import { TIMING } from '../../constants/timing';
 import {
   applyPendingToolArgs,
   applyToolCallStartToState,
@@ -46,7 +47,7 @@ export function useToolCallStreaming() {
 
   const scheduleToolArgsFlush = useCallback(() => {
     if (flushToolArgsTimeoutRef.current !== null) return;
-    flushToolArgsTimeoutRef.current = setTimeout(flushToolArgs, 16);
+    flushToolArgsTimeoutRef.current = setTimeout(flushToolArgs, TIMING.STREAM_FLUSH_INTERVAL_MS);
   }, [flushToolArgs]);
 
   const handleToolCallStart = useCallback((payload: StreamPayload) => {

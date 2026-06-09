@@ -3,19 +3,13 @@ use crate::{
     ai_config::{self, AIConfigInput},
     commands::AppState,
     knowledge,
-    streaming::{KnowledgeSearchResult, StreamPayload},
+    streaming::{emit, KnowledgeSearchResult, StreamPayload},
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, State};
 use thiserror::Error;
 use urlencoding;
-
-fn emit(app: &AppHandle, payload: StreamPayload) {
-    if let Err(error) = app.emit("ai://stream", payload) {
-        tracing::warn!("Failed to emit ai://stream event: {}", error);
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Error)]
 pub enum StreamCommandError {

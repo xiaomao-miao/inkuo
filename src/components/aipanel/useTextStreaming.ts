@@ -1,6 +1,7 @@
 import { useCallback, useRef } from 'react';
 import { useAIPanelStore } from '../../store';
 import { applyStreamingTextDeltas } from './textStreamActions';
+import { TIMING } from '../../constants/timing';
 
 function normalizeStreamChunk(chunk: string): string {
   return chunk.replace(/\r\n?/g, '\n');
@@ -64,7 +65,7 @@ export function useTextStreaming() {
 
   const scheduleTextFlush = useCallback(() => {
     if (flushTimeoutRef.current !== null) return;
-    flushTimeoutRef.current = setTimeout(flushTextDeltas, 16);
+    flushTimeoutRef.current = setTimeout(flushTextDeltas, TIMING.STREAM_FLUSH_INTERVAL_MS);
   }, [flushTextDeltas]);
 
   const appendTextDelta = useCallback((messageId: string, content: string) => {

@@ -15,6 +15,7 @@ interface UseAgentStreamArgs {
 
 export function useAgentStream({ mode }: UseAgentStreamArgs) {
   const clearToolCalls = useAIPanelStore((state) => state.clearToolCalls);
+  const setMessageDiff = useAIPanelStore((state) => state.setMessageDiff);
 
   const unlistenRef = useRef<(() => void) | null>(null);
   const isSettingUpRef = useRef(false);
@@ -63,6 +64,7 @@ export function useAgentStream({ mode }: UseAgentStreamArgs) {
             appendTextDelta,
             handleToolCallStart,
             handleToolCallArgsDelta,
+            setMessageDiff,
           });
         });
       } finally {

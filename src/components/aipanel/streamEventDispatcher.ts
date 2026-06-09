@@ -1,7 +1,7 @@
-import type { MutableRefObject } from 'react';
-import type { ChatMode, CurrentDiff } from '../../store';
-import type { StreamPayload } from './streamTypes';
 import { handleStreamDone, handleStreamError, handleToolResult } from './streamEventHandlers';
+import type { MutableRefObject } from 'react';
+import type { ChatMode } from '../../store';
+import type { StreamPayload } from './streamTypes';
 
 interface StreamEventDispatcherArgs {
   payload: StreamPayload;
@@ -12,6 +12,7 @@ interface StreamEventDispatcherArgs {
   appendTextDelta: (messageId: string, content: string) => void;
   handleToolCallStart: (payload: StreamPayload) => void;
   handleToolCallArgsDelta: (payload: StreamPayload) => void;
+  setMessageDiff: (sessionId: string, messageId: string, diff: import('../../types').CurrentDiff | null) => void;
 }
 
 export async function dispatchStreamEvent({
@@ -23,6 +24,7 @@ export async function dispatchStreamEvent({
   appendTextDelta,
   handleToolCallStart,
   handleToolCallArgsDelta,
+  setMessageDiff,
 }: StreamEventDispatcherArgs) {
   const { session_id, message_id, event_type, content, done } = payload;
 

@@ -35,8 +35,6 @@ interface EditorState {
   clearDiff: (path: string) => void;
   markSaved: (path: string) => void;
   updateTabDirty: (path: string, isDirty: boolean) => void;
-  getSelection: () => string | null;
-  applyDiff: (diff: { originalText: string; newText: string }) => void;
   removeDocumentContent: (path: string) => void;
   setDocxBuffer: (path: string, buffer: number[]) => void;
   setExcelData: (path: string, data: string[][]) => void;
@@ -251,12 +249,6 @@ export const useEditorStore = create<EditorState>()(
           }
         };
       }),
-
-      getSelection: () => null,
-
-      applyDiff: (diff) => {
-        console.log('Applying diff:', diff);
-      },
 
       removeDocumentContent: (path) => set((state) => {
         const { [path]: _, ...rest } = state.documentContents;

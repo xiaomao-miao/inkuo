@@ -3,9 +3,10 @@ import type { EditorView } from 'prosemirror-view';
 import type { InlineCompletionRequest, InlineCompletionResponse, InlineStyle } from '../../types/inline-complete';
 import { useInlineCompleteStore } from '../../store';
 import { showWordInlineCompletion } from './wordInlineCompletePlugin';
+import { TIMING } from '../../constants/timing';
 
 // Throttle cancel invocations to avoid flooding the backend
-const CANCEL_THROTTLE_MS = 120;
+const CANCEL_THROTTLE_MS = TIMING.INLINE_COMPLETION_CANCEL_THROTTLE_MS;
 
 function clampStyles(styles: InlineStyle[] | undefined, textLen: number): InlineStyle[] {
   if (!styles || styles.length === 0) return [];
@@ -61,17 +62,27 @@ function getOrCreateContext(view: EditorView): EditorContext {
 
 // ─── Global throttle for backend cancel RPC ────────────────────────────────────
 
-let lastCancelInvokeTime = 0;
+interface CancelController {
+  lastInvokeTime: number;
+  pending: boolean;
+}
+
+const cancelController: CancelController = {
+  lastInvokeTime: 0,
+  pending: false,
+};
 
 function cancelWordInlineCompletion() {
   const now = Date.now();
-  if (now - lastCancelInvokeTime < CANCEL_THROTTLE_MS) return;
-  lastCancelInvokeTime = now;
-  try {
-    void invoke('ai_inline_complete_cancel');
-  } catch {
-    // ignore
-  }
+  if (now - cancelController.lastInvokeTime < CANCEL_THROTTLE_MS) return;
+  if (cancelController.pending) return;
+  cancelController.lastInvokeTime = now;
+  cancelController.pending = true;
+  void invoke('ai_inline_complete_cancel')
+    .catch(() => {})
+    .finally(() => {
+      cancelController.pending = false;
+    });
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -110,7 +121,7 @@ export function scheduleWordInlineCompletion(view: EditorView, filePath: string)
   if (!store.enabled || store.isLoading || store.currentCompletion) return;
   if (!view.hasFocus()) return;
   if (!view.state.selection.empty) return;
-  if (Date.now() - ctx.lastAcceptTime < 300) return;
+  if (Date.now() - ctx.lastAcceptTime < TIMING.COMPLETION_RETRIGGER_DELAY_MS) return;
   if (isComposing(view)) return;
 
   // Tell the backend to cancel any in-flight request.

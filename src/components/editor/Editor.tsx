@@ -1,6 +1,6 @@
-import React, { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { Decoration, type DecorationSet } from '@codemirror/view';
-import CodeMirror, { ReactCodeMirrorRef } from '@uiw/react-codemirror';
+import CodeMirror, { type ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
 import { EditorView, keymap, lineNumbers, drawSelection, rectangularSelection, type ViewUpdate } from '@codemirror/view';
@@ -11,8 +11,7 @@ import { highlightSelectionMatches } from '@codemirror/search';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { Sparkles } from 'lucide-react';
-import { useEditorStore, useSidebarStore, useInlineCompleteStore } from '../../store';
-import { SETTINGS_TAB_ID } from '../../store';
+import { useEditorStore, useSidebarStore, useInlineCompleteStore, SETTINGS_TAB_ID } from '../../store';
 import type { Document } from '../../types';
 import { DiffOverlay } from './DiffOverlay';
 import { DiffActionBar } from './DiffActionBar';
@@ -25,6 +24,7 @@ import {
   InlineCompleteStatus,
   inlineCompletionDecoration,
 } from '../inline-complete';
+import { TIMING } from '../../constants/timing';
 import { detectLanguage } from '../../types/inline-complete';
 import styles from './Editor.module.css';
 import inlineCompleteStyles from '../inline-complete/InlineComplete.module.css';
@@ -114,12 +114,26 @@ const EditorContent: React.FC<{
   const autoTriggerStateRef = useRef<{
     timer: ReturnType<typeof setTimeout> | null;
     lastAcceptAt: number;
+    destroyed: boolean;
   }>({
     timer: null,
     lastAcceptAt: 0,
+    destroyed: false,
   });
 
   const autoTriggerStateRefForKeymap = autoTriggerStateRef;
+
+  // Cleanup on unmount — cancel any pending timer and mark destroyed
+  useEffect(() => {
+    const ref = autoTriggerStateRef.current;
+    return () => {
+      ref.destroyed = true;
+      if (ref.timer !== null) {
+        clearTimeout(ref.timer);
+        ref.timer = null;
+      }
+    };
+  }, []);
 
   const inlineAutoTrigger = EditorView.updateListener.of((update) => {
     const view = update.view;
@@ -128,7 +142,7 @@ const EditorContent: React.FC<{
 
     // After accepting a completion, don't immediately trigger again.
     const now = Date.now();
-    if (now - autoTriggerStateRef.current.lastAcceptAt < 300) return;
+    if (now - autoTriggerStateRef.current.lastAcceptAt < TIMING.COMPLETION_RETRIGGER_DELAY_MS) return;
 
     // Only consider real user input/delete events.
     const isUserInput = update.transactions.some(
@@ -159,6 +173,8 @@ const EditorContent: React.FC<{
 
     const filePath = useSidebarStore.getState().selectedFile;
     autoTriggerStateRef.current.timer = setTimeout(() => {
+      autoTriggerStateRef.current.timer = null;
+      if (autoTriggerStateRef.current.destroyed) return;
       if (!view.hasFocus) return;
       const latestSel = view.state.selection.main;
       if (!latestSel.empty) return;

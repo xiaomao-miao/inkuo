@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KnowledgeSearchResult {
@@ -235,5 +236,12 @@ impl StreamPayload {
             diff_summary: None,
             office_file_modified: None,
         }
+    }
+}
+
+/// Emit a stream payload to the frontend. Logs a warning on failure.
+pub fn emit(app: &AppHandle, payload: StreamPayload) {
+    if let Err(error) = app.emit("ai://stream", payload) {
+        tracing::warn!("Failed to emit ai://stream event: {}", error);
     }
 }

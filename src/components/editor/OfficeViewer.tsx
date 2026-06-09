@@ -10,6 +10,7 @@ import { createWordInlineCompletePlugin } from '../inline-complete/wordInlineCom
 import type { EditorView } from 'prosemirror-view';
 import styles from './OfficeViewer.module.css';
 import '@eigenpal/docx-editor-react/styles.css';
+import { TIMING } from '../../constants/timing';
 
 // ============================================================================
 // Type Definitions
@@ -249,7 +250,7 @@ export const WordEditor: React.FC<WordEditorProps> = ({
     if (!documentBuffer) return;
 
     const hideMenuButtons = () => {
-      if (!containerRef.current) return;
+      if (!containerRef.current || !document.contains(containerRef.current)) return;
       const buttons = containerRef.current.querySelectorAll('button');
       buttons.forEach((button) => {
         const text = button.textContent?.trim() || '';
@@ -259,7 +260,7 @@ export const WordEditor: React.FC<WordEditorProps> = ({
       });
     };
 
-    const timer = setTimeout(hideMenuButtons, 1000);
+    const timer = setTimeout(hideMenuButtons, TIMING.OFFICE_MENU_HIDE_DELAY_MS);
     const observer = new MutationObserver(hideMenuButtons);
     if (containerRef.current) {
       observer.observe(containerRef.current, { childList: true, subtree: true });
@@ -414,6 +415,13 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [isDirty, setIsDirty] = useState(false);
   const [originalData, setOriginalData] = useState<string[][] | null>(() => initialData);
+  // Cache the serialized form of originalData to avoid re-stringifying on every change.
+  const originalDataJsonRef = useRef<string>(JSON.stringify(initialData ?? []));
+
+  // Re-serialize when originalData changes (mount, load, save)
+  useEffect(() => {
+    originalDataJsonRef.current = JSON.stringify(originalData ?? []);
+  }, [originalData]);
 
   const { setOpenTabDirty } = useSidebarStore();
   const officeBufferVersion = useEditorStore(s => s.documentContents[filePath]?.officeBufferVersion ?? 0);
@@ -506,10 +514,10 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
 
   const handleChange = useCallback((newData: string[][]) => {
     setData(newData);
-    const changed = JSON.stringify(newData) !== JSON.stringify(originalData ?? []);
+    const changed = JSON.stringify(newData) !== originalDataJsonRef.current;
     setIsDirty(changed);
     setOpenTabDirty(filePath, changed);
-  }, [originalData, filePath, setOpenTabDirty]);
+  }, [filePath, setOpenTabDirty]);
 
   // ── Render: CSS visibility only ──────────────────────────────────────────
   if (loading) {
@@ -566,151 +574,3 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
   );
 };
 
-// ============================================================================
-// Legacy Viewers
-// ============================================================================
-
-interface WordViewerProps {
-  document: WordDocument;
-  fileName: string;
-}
-
-export const WordViewer: React.FC<WordViewerProps> = ({ document, fileName }) => {
-  return (
-    <div className={styles.officeViewer}>
-      <div className={styles.documentHeader}>
-        <div className={styles.docTypeIcon}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-            <polyline points="14 2 14 8 20 8" />
-            <line x1="16" y1="13" x2="8" y2="13" />
-            <line x1="16" y1="17" x2="8" y2="17" />
-            <polyline points="10 9 9 9 8 9" />
-          </svg>
-        </div>
-        <div className={styles.headerInfo}>
-          <h1 className={styles.title}>{document.title || fileName}</h1>
-          <span className={styles.meta}>Word 文档 · {document.paragraphs.length} 段</span>
-        </div>
-      </div>
-
-      <div className={styles.documentContent}>
-        {document.paragraphs.map((para, idx) => (
-          <p
-            key={idx}
-            className={`${styles.paragraph} ${
-              para.is_heading ? styles[`heading${para.level}`] : ''
-            }`}
-            style={{
-              fontWeight: para.is_bold ? 'bold' : undefined,
-              fontStyle: para.is_italic ? 'italic' : undefined,
-            }}
-          >
-            {para.text}
-          </p>
-        ))}
-
-        {document.tables.map((table, idx) => (
-          <div key={`table-${idx}`} className={styles.tableContainer}>
-            <table className={styles.table}>
-              {table.headers.length > 0 && (
-                <thead>
-                  <tr>
-                    {table.headers.map((header, hIdx) => (
-                      <th key={hIdx}>{header}</th>
-                    ))}
-                  </tr>
-                </thead>
-              )}
-              <tbody>
-                {table.rows.map((row, rIdx) => (
-                  <tr key={rIdx}>
-                    {row.map((cell, cIdx) => (
-                      <td key={cIdx}>{cell}</td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-};
-
-interface ExcelViewerProps {
-  workbook: ExcelWorkbook;
-  fileName: string;
-}
-
-export const ExcelViewer: React.FC<ExcelViewerProps> = ({ workbook, fileName }) => {
-  const [activeSheet, setActiveSheet] = React.useState(0);
-  const currentSheet = workbook.sheets[activeSheet];
-
-  return (
-    <div className={styles.officeViewer}>
-      <div className={styles.documentHeader}>
-        <div className={styles.docTypeIcon} data-type="excel">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-            <polyline points="14 2 14 8 20 8" />
-            <path d="M8 13h2" />
-            <path d="M8 17h2" />
-            <path d="M14 13h2" />
-            <path d="M14 17h2" />
-          </svg>
-        </div>
-        <div className={styles.headerInfo}>
-          <h1 className={styles.title}>{fileName}</h1>
-          <span className={styles.meta}>Excel 工作簿 · {workbook.sheets.length} 个工作表</span>
-        </div>
-      </div>
-
-      {workbook.sheets.length > 1 && (
-        <div className={styles.sheetTabs}>
-          {workbook.sheets.map((sheet, idx) => (
-            <button
-              key={idx}
-              className={`${styles.sheetTab} ${idx === activeSheet ? styles.active : ''}`}
-              onClick={() => setActiveSheet(idx)}
-            >
-              {sheet.name}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {currentSheet && (
-        <div className={styles.tableContainer}>
-          <table className={styles.table}>
-            {currentSheet.headers.length > 0 && (
-              <thead>
-                <tr>
-                  {currentSheet.headers.map((header, hIdx) => (
-                    <th key={hIdx}>{header}</th>
-                  ))}
-                </tr>
-              </thead>
-            )}
-            <tbody>
-              {currentSheet.rows.map((row, rIdx) => (
-                <tr key={rIdx}>
-                  {row.map((cell, cIdx) => (
-                    <td key={cIdx}>{cell}</td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {currentSheet && (
-        <div className={styles.sheetInfo}>
-          {currentSheet.max_row} 行 × {currentSheet.max_col} 列
-        </div>
-      )}
-    </div>
-  );
-};

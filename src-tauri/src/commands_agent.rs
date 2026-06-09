@@ -5,18 +5,12 @@ use crate::agent::{
 };
 use crate::agent::tools::ToolRegistry;
 use crate::ai_config::{self, AIConfigInput};
-use crate::streaming::StreamPayload;
+use crate::streaming::{emit, StreamPayload};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use thiserror::Error;
 use tokio::sync::RwLock;
-
-fn emit(app: &AppHandle, payload: StreamPayload) {
-    if let Err(error) = app.emit("ai://stream", payload) {
-        tracing::warn!("Failed to emit ai://stream event: {}", error);
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Error)]
 pub enum AgentCommandError {
