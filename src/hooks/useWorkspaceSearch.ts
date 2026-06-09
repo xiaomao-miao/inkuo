@@ -1,50 +1,92 @@
-import { useMemo, useState } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import type { FileEntry } from '../types';
+import { searchFiles } from '../services/workspace';
 
-function getEntriesWithParents(matchingEntries: FileEntry[], allEntries: FileEntry[]): FileEntry[] {
-  const resultSet = new Set<string>();
-
-  for (const entry of matchingEntries) {
-    resultSet.add(entry.path);
-
-    const parts = entry.path.split('/');
-    for (let index = 1; index < parts.length; index += 1) {
-      resultSet.add(parts.slice(0, index).join('/'));
-    }
-  }
-
-  return allEntries.filter((entry) => resultSet.has(entry.path));
+interface UseWorkspaceSearchResult {
+  searchQuery: string;
+  setSearchQuery: (query: string) => void;
+  searchResults: FileEntry[];
+  isSearching: boolean;
+  clearSearch: () => void;
 }
 
-function sortEntries(entries: FileEntry[]): FileEntry[] {
-  return [...entries].sort((left, right) => {
-    if (left.is_dir && !right.is_dir) return -1;
-    if (!left.is_dir && right.is_dir) return 1;
-    return left.name.localeCompare(right.name);
-  });
-}
+export function useWorkspaceSearch(workspacePath: string | null): UseWorkspaceSearchResult {
+  const [searchQuery, setSearchQueryState] = useState('');
+  const [searchResults, setSearchResults] = useState<FileEntry[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
 
-export function useWorkspaceSearch(files: FileEntry[], workspacePath: string | null) {
-  const [searchQuery, setSearchQuery] = useState('');
+  const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
-  const filteredFiles = useMemo(() => {
-    const rootEntries = files.filter((entry) => {
-      if (!workspacePath) return true;
-      const relativePath = entry.path.replace(`${workspacePath}/`, '');
-      return !relativePath.includes('/');
-    });
+  const clearSearch = useCallback(() => {
+    setSearchQueryState('');
+    setSearchResults([]);
+    setIsSearching(false);
+  }, []);
 
-    if (!searchQuery) {
-      return sortEntries(rootEntries);
-    }
+  const setSearchQuery = useCallback(
+    (query: string) => {
+      setSearchQueryState(query);
 
-    const matchingEntries = files.filter((entry) => entry.name.toLowerCase().includes(searchQuery.toLowerCase()));
-    return sortEntries(getEntriesWithParents(matchingEntries, files));
-  }, [files, searchQuery, workspacePath]);
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+
+      if (searchTimeoutRef.current) {
+        clearTimeout(searchTimeoutRef.current);
+      }
+
+      if (!query.trim()) {
+        setSearchResults([]);
+        setIsSearching(false);
+        return;
+      }
+
+      if (!workspacePath) {
+        return;
+      }
+
+      setIsSearching(true);
+
+      searchTimeoutRef.current = setTimeout(async () => {
+        const controller = new AbortController();
+        abortControllerRef.current = controller;
+
+        try {
+          const results = await searchFiles(workspacePath, query.trim());
+          if (!controller.signal.aborted) {
+            setSearchResults(results);
+          }
+        } catch {
+          if (!controller.signal.aborted) {
+            setSearchResults([]);
+          }
+        } finally {
+          if (!controller.signal.aborted) {
+            setIsSearching(false);
+          }
+        }
+      }, 200);
+    },
+    [workspacePath],
+  );
+
+  useEffect(() => {
+    return () => {
+      if (searchTimeoutRef.current) {
+        clearTimeout(searchTimeoutRef.current);
+      }
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
+  }, []);
 
   return {
     searchQuery,
     setSearchQuery,
-    filteredFiles,
+    searchResults,
+    isSearching,
+    clearSearch,
   };
 }

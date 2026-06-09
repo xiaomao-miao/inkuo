@@ -402,3 +402,105 @@
   color: var(--fg-muted);
   font-style: italic;
 }
+
+/* Search clear button */
+.searchClear {
+  position: absolute;
+  right: calc(var(--space-sm) + var(--space-xs));
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  color: var(--fg-muted);
+  transition: background-color var(--transition-fast), color var(--transition-fast);
+}
+
+.searchClear:hover {
+  background-color: var(--bg-hover);
+  color: var(--fg-primary);
+}
+
+/* Search results */
+.searchResults {
+  padding: var(--space-xs) 0;
+}
+
+.searchResultsHeader {
+  padding: 4px 12px;
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.searchResultItem {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 4px var(--space-sm);
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+  color: var(--fg-primary);
+  background: transparent;
+  border: none;
+  text-align: left;
+  transition: background-color 80ms ease;
+  min-height: 26px;
+}
+
+.searchResultItem:hover {
+  background-color: var(--bg-hover);
+}
+
+.searchResultItem:active {
+  background-color: var(--bg-active);
+}
+
+.searchResultName {
+  flex-shrink: 0;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.searchResultPath {
+  flex: 1;
+  margin-left: var(--space-sm);
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
+
+/* Loading children indicator */
+.loadingChildren {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: 4px 12px 4px 36px;
+  font-size: var(--font-size-sm);
+  color: var(--fg-muted);
+}
+
+/* Spinning animation */
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Search icon active state */
+.searchIconActive {
+  color: var(--accent-primary) !important;
+}
+

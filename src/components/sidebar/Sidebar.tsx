@@ -1,32 +1,107 @@
-import { FolderOpen, RefreshCw, PanelLeftClose, PanelLeft, Search } from 'lucide-react';
-import { useEffect } from 'react';
+import {
+  FolderOpen,
+  RefreshCw,
+  PanelLeftClose,
+  PanelLeft,
+  Search,
+  X,
+  File,
+  FileText,
+  Folder,
+  FolderOpen as FolderOpenIcon,
+} from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { useWorkspaceSearch } from '../../hooks/useWorkspaceSearch';
 import { useWorkspaceTree } from '../../hooks/useWorkspaceTree';
 import { FileTree } from './FileTree';
+import type { FileEntry } from '../../types';
 import styles from './Sidebar.module.css';
+
+interface SearchResultItemProps {
+  entry: FileEntry;
+  workspaceRoot: string;
+  onClick: (entry: FileEntry) => void;
+}
+
+const SearchResultItem = ({ entry, workspaceRoot, onClick }: SearchResultItemProps) => {
+  const relativePath = entry.path.slice(workspaceRoot.length + 1);
+  const depth = relativePath.split('/').length - 1;
+
+  const handleClick = () => {
+    onClick(entry);
+  };
+
+  return (
+    <button
+      className={styles.searchResultItem}
+      onClick={handleClick}
+      style={{ paddingLeft: `${12 + depth * 12}px` }}
+    >
+      <span className={styles.chevronPlaceholder} />
+      <span
+        className={styles.icon}
+        data-type={entry.is_dir ? 'folder' : entry.is_markdown ? 'markdown' : 'file'}
+      >
+        {entry.is_dir ? (
+          entry.is_dir ? <Folder size={14} /> : <FolderOpenIcon size={14} />
+        ) : entry.is_markdown ? (
+          <FileText size={14} />
+        ) : (
+          <File size={14} />
+        )}
+      </span>
+      <span className={styles.searchResultName}>{entry.name}</span>
+      <span className={styles.searchResultPath}>{relativePath.split('/').slice(0, -1).join('/')}</span>
+    </button>
+  );
+};
 
 export const Sidebar = () => {
   const {
     workspacePath,
-    files,
     expandedDirs,
     selectedFile,
     isLoading,
+    loadingDirs,
     openTabs,
     isCollapsed,
     setIsCollapsed,
     openWorkspace,
     refreshWorkspace,
     handleFileClick,
+    getChildren,
   } = useWorkspaceTree();
 
-  const { searchQuery, setSearchQuery, filteredFiles } = useWorkspaceSearch(files, workspacePath);
+  const { searchQuery, setSearchQuery, searchResults, isSearching, clearSearch } =
+    useWorkspaceSearch(workspacePath);
+
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const [isSearchFocused, setIsSearchFocused] = useState(false);
 
   useEffect(() => {
     if (workspacePath) {
       void refreshWorkspace();
     }
   }, [refreshWorkspace, workspacePath]);
+
+  const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Escape') {
+      clearSearch();
+      searchInputRef.current?.blur();
+    } else if (e.key === 'Enter' && searchResults.length > 0) {
+      handleFileClick(searchResults[0]);
+      clearSearch();
+    }
+  };
+
+  const handleSearchResultClick = async (entry: FileEntry) => {
+    if (entry.is_dir) {
+      handleFileClick(entry);
+    } else {
+      handleFileClick(entry);
+    }
+    clearSearch();
+  };
 
   if (isCollapsed) {
     return (
@@ -48,6 +123,8 @@ export const Sidebar = () => {
       </div>
     );
   }
+
+  const showSearchResults = searchQuery.trim().length > 0;
 
   return (
     <aside className={styles.sidebar}>
@@ -82,29 +159,67 @@ export const Sidebar = () => {
       {workspacePath && (
         <>
           <div className={styles.searchBox}>
-            <Search size={14} className={styles.searchIcon} />
+            <Search
+              size={14}
+              className={`${styles.searchIcon} ${isSearchFocused ? styles.searchIconActive : ''}`}
+            />
             <input
+              ref={searchInputRef}
               type="text"
               placeholder="搜索文件..."
               value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={handleSearchKeyDown}
+              onFocus={() => setIsSearchFocused(true)}
+              onBlur={() => setIsSearchFocused(false)}
               className={styles.searchInput}
             />
+            {searchQuery && (
+              <button
+                className={styles.searchClear}
+                onClick={clearSearch}
+                title="清除搜索"
+              >
+                <X size={12} />
+              </button>
+            )}
           </div>
 
           <div className={styles.fileTree}>
             {isLoading ? (
               <div className={styles.loading}>加载中...</div>
-            ) : (
-              <div role="tree" aria-label="文件树">
-                <FileTree
-                  entries={filteredFiles}
-                  expandedDirs={expandedDirs}
-                  selectedFile={selectedFile}
-                  openTabs={openTabs}
-                  onFileClick={handleFileClick}
-                />
+            ) : showSearchResults ? (
+              <div className={styles.searchResults}>
+                {isSearching ? (
+                  <div className={styles.loading}>搜索中...</div>
+                ) : searchResults.length === 0 ? (
+                  <div className={styles.emptyFolder}>未找到匹配文件</div>
+                ) : (
+                  <>
+                    <div className={styles.searchResultsHeader}>
+                      找到 {searchResults.length} 个结果
+                    </div>
+                    {searchResults.map((entry) => (
+                      <SearchResultItem
+                        key={entry.path}
+                        entry={entry}
+                        workspaceRoot={workspacePath}
+                        onClick={handleSearchResultClick}
+                      />
+                    ))}
+                  </>
+                )}
               </div>
+            ) : (
+              <FileTree
+                workspaceRoot={workspacePath}
+                getChildren={getChildren}
+                expandedDirs={expandedDirs}
+                loadingDirs={loadingDirs}
+                selectedFile={selectedFile}
+                openTabs={openTabs}
+                onFileClick={handleFileClick}
+              />
             )}
           </div>
         </>

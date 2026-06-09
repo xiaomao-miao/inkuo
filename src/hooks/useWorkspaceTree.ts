@@ -1,10 +1,12 @@
-import { useCallback, useMemo, useState } from 'react';
-import { invoke } from '@tauri-apps/api/core';
+import { useCallback, useMemo, useState, useRef } from 'react';
 import { useSidebarStore } from '../store';
 import type { FileEntry } from '../types';
-import { useDebouncedCallback } from './useDebouncedCallback';
 import { useWorkspaceFileWatcher } from './useWorkspaceFileWatcher';
-import { applyWorkspaceDirectoryLoad, openWorkspaceDirectory } from '../services/workspace';
+import { useDebouncedCallback } from './useDebouncedCallback';
+import {
+  loadDirectoryChildren,
+  openWorkspaceDirectory,
+} from '../services/workspace';
 import { reportError } from '../utils/errors';
 
 interface FileChangeEvent {
@@ -14,166 +16,251 @@ interface FileChangeEvent {
 
 interface UseWorkspaceTreeResult {
   workspacePath: string | null;
-  files: FileEntry[];
   expandedDirs: Set<string>;
   selectedFile: string | null;
   isLoading: boolean;
+  loadingDirs: Set<string>;
   openTabs: ReturnType<typeof useSidebarStore.getState>['openTabs'];
   isCollapsed: boolean;
   setIsCollapsed: React.Dispatch<React.SetStateAction<boolean>>;
   openWorkspace: () => Promise<void>;
   refreshWorkspace: () => Promise<void>;
   handleFileClick: (entry: FileEntry) => Promise<void>;
+  getChildren: (dirPath: string) => FileEntry[];
+  isDirLoading: (path: string) => boolean;
+  triggerFileRefresh: (parentPath: string) => Promise<void>;
 }
 
 export function useWorkspaceTree(): UseWorkspaceTreeResult {
   const workspacePath = useSidebarStore((state) => state.workspacePath);
-  const files = useSidebarStore((state) => state.files);
   const expandedDirs = useSidebarStore((state) => state.expandedDirs);
   const selectedFile = useSidebarStore((state) => state.selectedFile);
   const isLoading = useSidebarStore((state) => state.isLoading);
+  const loadingDirs = useSidebarStore((state) => state.loadingDirs);
   const openTabs = useSidebarStore((state) => state.openTabs);
   const setWorkspacePath = useSidebarStore((state) => state.setWorkspacePath);
-  const setFiles = useSidebarStore((state) => state.setFiles);
   const toggleDir = useSidebarStore((state) => state.toggleDir);
   const setIsLoading = useSidebarStore((state) => state.setIsLoading);
+  const setDirLoading = useSidebarStore((state) => state.setDirLoading);
   const openWorkspaceFile = useSidebarStore((state) => state.openWorkspaceFile);
-  const addFileEntry = useSidebarStore((state) => state.addFileEntry);
-  const removeFileEntry = useSidebarStore((state) => state.removeFileEntry);
-  const removeDescendants = useSidebarStore((state) => state.removeDescendants);
+  const getCachedChildren = useSidebarStore((state) => state.getCachedChildren);
+  const setCachedChildren = useSidebarStore((state) => state.setCachedChildren);
+  const hasCachedChildren = useSidebarStore((state) => state.hasCachedChildren);
+  const invalidateCache = useSidebarStore((state) => state.invalidateCache);
+  const clearCache = useSidebarStore((state) => state.clearCache);
   const isDirExpanded = useSidebarStore((state) => state.isDirExpanded);
 
   const [isCollapsed, setIsCollapsed] = useState(false);
 
-  const workspaceRootPath = useMemo(() => workspacePath ?? null, [workspacePath]);
+  const workspaceRootPath = useMemo(
+    () => workspacePath ?? null,
+    [workspacePath],
+  );
 
-  const loadDirectory = useCallback(async (path: string, mergeWithExisting = true) => {
+  const refreshLockRef = useRef<Set<string>>(new Set());
+
+  /**
+   * Refresh a specific directory's cache and reload if expanded.
+   */
+  const triggerFileRefresh = useCallback(
+    async (parentPath: string) => {
+      invalidateCache(parentPath);
+
+      if (isDirExpanded(parentPath)) {
+        await loadDirectoryChildren(parentPath).then(
+          (children) => setCachedChildren(parentPath, children),
+          () => reportError('workspace-tree-refresh-children', 'Failed to refresh'),
+        );
+      }
+    },
+    [invalidateCache, isDirExpanded, setCachedChildren],
+  );
+
+  /**
+   * Debounced file refresh to batch multiple rapid changes.
+   */
+  const debouncedRefresh = useDebouncedCallback(
+    async (parentPath: string) => {
+      if (refreshLockRef.current.has(parentPath)) return;
+
+      refreshLockRef.current.add(parentPath);
+      try {
+        await triggerFileRefresh(parentPath);
+      } finally {
+        setTimeout(() => {
+          refreshLockRef.current.delete(parentPath);
+        }, 500);
+      }
+    },
+    300,
+  );
+
+  /**
+   * Load children for a directory (lazy loading).
+   * Uses cache if available, otherwise fetches from backend.
+   */
+  const loadChildren = useCallback(
+    async (dirPath: string) => {
+      if (hasCachedChildren(dirPath)) {
+        return getCachedChildren(dirPath);
+      }
+
+      setDirLoading(dirPath, true);
+      try {
+        const children = await loadDirectoryChildren(dirPath);
+        setCachedChildren(dirPath, children);
+        return children;
+      } catch (err) {
+        reportError('workspace-tree-load-children', err);
+        return [];
+      } finally {
+        setDirLoading(dirPath, false);
+      }
+    },
+    [getCachedChildren, hasCachedChildren, setCachedChildren, setDirLoading],
+  );
+
+  /**
+   * Get children for a directory (synchronous, from cache).
+   */
+  const getChildren = useCallback(
+    (dirPath: string): FileEntry[] => {
+      return getCachedChildren(dirPath);
+    },
+    [getCachedChildren],
+  );
+
+  /**
+   * Check if a directory is currently loading.
+   */
+  const isDirLoading = useCallback(
+    (path: string): boolean => {
+      return loadingDirs.has(path);
+    },
+    [loadingDirs],
+  );
+
+  /**
+   * Refresh the entire workspace by clearing cache and reloading root.
+   */
+  const refreshWorkspace = useCallback(async () => {
+    if (!workspaceRootPath) return;
+
     setIsLoading(true);
     try {
-      await applyWorkspaceDirectoryLoad(path, { mergeWithExisting });
+      clearCache();
+      await loadChildren(workspaceRootPath);
     } catch (err) {
-      reportError('workspace-tree-load-directory', err);
+      reportError('workspace-tree-refresh', err);
     } finally {
       setIsLoading(false);
     }
-  }, [setIsLoading]);
+  }, [workspaceRootPath, loadChildren, clearCache, setIsLoading]);
 
-  const refreshWorkspace = useCallback(async () => {
-    if (!workspaceRootPath) return;
-    await loadDirectory(workspaceRootPath);
-  }, [loadDirectory, workspaceRootPath]);
+  /**
+   * Handle file system changes from the watcher.
+   */
+  const handleFileChange = useCallback(
+    (event: FileChangeEvent) => {
+      if (!workspaceRootPath) return;
 
-  const handleFileCreated = useCallback(async (changedPath: string) => {
-    if (!workspaceRootPath) return;
+      const changedPath = event.data?.path;
+      if (!changedPath || !changedPath.startsWith(workspaceRootPath)) return;
 
-    try {
-      const entries = await invoke<FileEntry[]>('list_directory', {
-        path: workspaceRootPath,
-      });
-      const entry = entries.find((candidate) => candidate.path === changedPath);
-      if (!entry) return;
-
-      const parentPath = entry.path.substring(workspaceRootPath.length + 1).split('/').slice(0, -1).join('/');
-      const parentDir = parentPath ? `${workspaceRootPath}/${parentPath}` : workspaceRootPath;
-
-      if (isDirExpanded(parentDir)) {
-        const refreshedChildren = await invoke<FileEntry[]>('list_directory', { path: parentDir });
-        setFiles((prev) => {
-          const cleaned = prev.filter((file) => !file.path.startsWith(`${parentDir}/`) || file.path === parentDir);
-          return [...cleaned, ...refreshedChildren];
-        });
-        return;
+      switch (event.type) {
+        case 'Created':
+        case 'Deleted':
+        case 'Modified': {
+          const parentPath = getParentPath(changedPath, workspaceRootPath);
+          if (parentPath) {
+            debouncedRefresh(parentPath);
+          }
+          break;
+        }
+        default:
+          break;
       }
-
-      addFileEntry(entry);
-    } catch (err) {
-      reportError('workspace-tree-handle-file-created', err);
-    }
-  }, [addFileEntry, isDirExpanded, setFiles, workspaceRootPath]);
-
-  const handleFileDeleted = useCallback((deletedPath: string) => {
-    removeFileEntry(deletedPath);
-  }, [removeFileEntry]);
-
-  const handleFileModified = useCallback(() => {
-    setFiles((prev) => [...prev]);
-  }, [setFiles]);
-
-  const debouncedFullRefresh = useDebouncedCallback(() => {
-    if (workspaceRootPath) {
-      loadDirectory(workspaceRootPath, false);
-    }
-  }, 500);
-
-  const handleFileChange = useCallback((event: FileChangeEvent) => {
-    if (!workspaceRootPath) return;
-
-    const changedPath = event.data?.path;
-    if (!changedPath || !changedPath.startsWith(workspaceRootPath)) return;
-
-    switch (event.type) {
-      case 'Created':
-        void handleFileCreated(changedPath);
-        break;
-      case 'Deleted':
-        handleFileDeleted(changedPath);
-        break;
-      case 'Modified':
-        handleFileModified();
-        break;
-      default:
-        debouncedFullRefresh();
-        break;
-    }
-  }, [debouncedFullRefresh, handleFileCreated, handleFileDeleted, handleFileModified, workspaceRootPath]);
+    },
+    [workspaceRootPath, debouncedRefresh],
+  );
 
   useWorkspaceFileWatcher(workspaceRootPath, handleFileChange);
 
+  /**
+   * Open a workspace directory.
+   */
   const openWorkspace = useCallback(async () => {
     try {
       const selected = await openWorkspaceDirectory();
       if (!selected) return;
 
       setWorkspacePath(selected);
-      await loadDirectory(selected, false);
+      clearCache();
+      await loadChildren(selected);
     } catch (err) {
       reportError('workspace-tree-open-workspace', err);
     }
-  }, [loadDirectory, setWorkspacePath]);
+  }, [loadChildren, clearCache, setWorkspacePath]);
 
-  const handleFileClick = useCallback(async (entry: FileEntry) => {
-    if (entry.is_dir) {
-      const wasExpanded = isDirExpanded(entry.path);
+  /**
+   * Handle file/folder click.
+   */
+  const handleFileClick = useCallback(
+    async (entry: FileEntry) => {
+      if (entry.is_dir) {
+        const wasExpanded = isDirExpanded(entry.path);
 
-      if (wasExpanded) {
-        removeDescendants(entry.path);
-      } else {
-        try {
-          const childEntries = await invoke<FileEntry[]>('list_directory', { path: entry.path });
-          setFiles((prevFiles) => [...prevFiles, ...childEntries]);
-        } catch (err) {
-          reportError('workspace-tree-load-children', err);
+        if (wasExpanded) {
+          toggleDir(entry.path);
+        } else {
+          toggleDir(entry.path);
+          if (!hasCachedChildren(entry.path)) {
+            await loadChildren(entry.path);
+          }
         }
+        return;
       }
 
-      toggleDir(entry.path);
-      return;
-    }
-
-    openWorkspaceFile(entry.path, { name: entry.name });
-  }, [isDirExpanded, openWorkspaceFile, removeDescendants, setFiles, toggleDir]);
+      openWorkspaceFile(entry.path, { name: entry.name });
+    },
+    [
+      isDirExpanded,
+      toggleDir,
+      loadChildren,
+      hasCachedChildren,
+      openWorkspaceFile,
+    ],
+  );
 
   return {
     workspacePath,
-    files,
     expandedDirs,
     selectedFile,
     isLoading,
+    loadingDirs,
     openTabs,
     isCollapsed,
     setIsCollapsed,
     openWorkspace,
     refreshWorkspace,
     handleFileClick,
+    getChildren,
+    isDirLoading,
+    triggerFileRefresh,
   };
+}
+
+/**
+ * Extract parent directory path from a file path.
+ */
+function getParentPath(filePath: string, workspaceRoot: string): string | null {
+  const relativePath = filePath.slice(workspaceRoot.length);
+  const segments = relativePath.split('/').filter(Boolean);
+
+  if (segments.length <= 1) {
+    return workspaceRoot;
+  }
+
+  const parentSegments = segments.slice(0, -1);
+  return `${workspaceRoot}/${parentSegments.join('/')}`;
 }

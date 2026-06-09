@@ -183,6 +183,89 @@ pub async fn list_directory(path: String) -> Result<Vec<FileEntry>, AppCommandEr
 }
 
 #[tauri::command]
+pub async fn search_directory(
+    path: String,
+    query: String,
+) -> Result<Vec<FileEntry>, AppCommandError> {
+    tracing::info!("Searching directory: {} for '{}'", path, query);
+
+    if query.is_empty() {
+        return Ok(vec![]);
+    }
+
+    let query_lower = query.to_lowercase();
+    let mut results: Vec<FileEntry> = Vec::new();
+
+    fn walk_dir(
+        dir: &std::path::Path,
+        query: &str,
+        results: &mut Vec<FileEntry>,
+        max_results: usize,
+    ) {
+        if results.len() >= max_results {
+            return;
+        }
+
+        let entries = match std::fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+
+        for entry in entries.filter_map(|e| e.ok()) {
+            if results.len() >= max_results {
+                break;
+            }
+
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+
+            if name.starts_with('.') {
+                continue;
+            }
+
+            let is_dir = path.is_dir();
+
+            if name.to_lowercase().contains(query) {
+                let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                let is_markdown = matches!(extension, "md" | "markdown" | "txt");
+
+                results.push(FileEntry {
+                    name,
+                    path: path.to_string_lossy().to_string(),
+                    is_dir,
+                    is_markdown,
+                });
+            }
+
+            if is_dir {
+                walk_dir(&path, query, results, max_results);
+            }
+        }
+    }
+
+    walk_dir(std::path::Path::new(&path), &query_lower, &mut results, 100);
+
+    // Sort results: directories first, then by relevance (shorter paths first)
+    results.sort_by(|a, b| {
+        match (a.is_dir, b.is_dir) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => {
+                let a_depth = a.path.matches('/').count();
+                let b_depth = b.path.matches('/').count();
+                if a_depth != b_depth {
+                    a_depth.cmp(&b_depth)
+                } else {
+                    a.name.to_lowercase().cmp(&b.name.to_lowercase())
+                }
+            }
+        }
+    });
+
+    Ok(results)
+}
+
+#[tauri::command]
 pub async fn watch_directory(
     path: String,
     state: State<'_, file_watcher::FileWatcherState>,

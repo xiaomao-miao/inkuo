@@ -31,14 +31,20 @@ export function openKnowledgeReference(result: Pick<SearchResult, 'filePath' | '
 
   const resolvedPath = (() => {
     const sidebarState = useSidebarStore.getState();
-    const directMatch = sidebarState.files.find((file) => !file.is_dir && file.path === result.filePath);
-    if (directMatch) return directMatch.path;
+    const cache = sidebarState.directoryCache;
+
+    for (const children of cache.values()) {
+      const directMatch = children.find((file) => !file.is_dir && file.path === result.filePath);
+      if (directMatch) return directMatch.path;
+    }
 
     const workspacePath = sidebarState.workspacePath;
     if (workspacePath && result.filePath.startsWith(workspacePath)) {
       const relativePath = result.filePath.slice(workspacePath.length).replace(/^\//, '');
-      const relativeMatch = sidebarState.files.find((file) => !file.is_dir && file.path === relativePath);
-      if (relativeMatch) return relativeMatch.path;
+      for (const children of cache.values()) {
+        const relativeMatch = children.find((file) => !file.is_dir && file.path === relativePath);
+        if (relativeMatch) return relativeMatch.path;
+      }
       return relativePath;
     }
 

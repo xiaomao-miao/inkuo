@@ -70,6 +70,7 @@ pub fn run() {
             commands::read_document,
             commands::write_document,
             commands::list_directory,
+            commands::search_directory,
             commands::compute_diff,
             commands::ai_edit,
             commands_stream::ai_chat_stream,
