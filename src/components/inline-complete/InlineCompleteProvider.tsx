@@ -97,10 +97,11 @@ export function InlineCompleteProvider({ children }: InlineCompleteProviderProps
     requestSeqRef.current = seq;
     latestRequestRef.current = { seq, filePath: params.filePath, cursorPosition: params.cursorPosition };
 
+    const hasCurrentCompletion = !!useInlineCompleteStore.getState().currentCompletion;
+
     debugInlineComplete?.('triggerCompletion called', {
       enabled,
-      isLoading,
-      hasCurrentCompletion: !!currentCompletion,
+      hasCurrentCompletion,
     });
 
     if (!enabled) {
@@ -108,7 +109,7 @@ export function InlineCompleteProvider({ children }: InlineCompleteProviderProps
       return;
     }
 
-    if (currentCompletion) {
+    if (hasCurrentCompletion) {
       debugInlineComplete?.('Clearing existing completion for new request');
       clearCompletion();
     }
@@ -170,7 +171,7 @@ export function InlineCompleteProvider({ children }: InlineCompleteProviderProps
         setLoading(false);
       }
     }, debounceMs);
-  }, [enabled, debounceMs, cancelPendingRequest, setLoading, setError, setCompletion, clearCompletion, isLoading, currentCompletion, error]);
+  }, [enabled, debounceMs, cancelPendingRequest, setLoading, setError, setCompletion, clearCompletion]);
 
   const acceptCompletion = useCallback((): CompletionItem | null => {
     const completion = useInlineCompleteStore.getState().currentCompletion;

@@ -13,12 +13,14 @@ export function useWorkspaceFileWatcher(
 ) {
   useEffect(() => {
     let unlisten: UnlistenFn | null = null;
+    let watchingPath: string | null = null;
 
     const setupWatcher = async () => {
       if (!workspacePath) return;
 
       try {
         await invoke('watch_directory', { path: workspacePath });
+        watchingPath = workspacePath;
         unlisten = await listen<FileChangePayload>('file-change', (event) => {
           onFileChange(event.payload);
         });
@@ -33,7 +35,9 @@ export function useWorkspaceFileWatcher(
       if (unlisten) {
         unlisten();
       }
-      invoke('unwatch_directory').catch(console.error);
+      if (watchingPath) {
+        invoke('unwatch_directory', { path: watchingPath }).catch(console.error);
+      }
     };
   }, [workspacePath, onFileChange]);
 }

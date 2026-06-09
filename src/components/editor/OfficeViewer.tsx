@@ -122,12 +122,6 @@ export const WordEditor: React.FC<WordEditorProps> = ({
   const isLoading = useInlineCompleteStore((s) => s.isLoading);
   const inlineError = useInlineCompleteStore((s) => s.error);
 
-  useEffect(() => {
-    if (import.meta.env.DEV) {
-      console.log('[WordEditor] mounted, filePath:', filePath, 'isActive:', isActive);
-    }
-  }, []);
-
   const handleEditorViewReady = useCallback((view: EditorView) => {
     pmViewRef.current = view;
   }, []);

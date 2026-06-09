@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { type ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import CodeMirror from '@uiw/react-codemirror';
 import { Compartment } from '@codemirror/state';
@@ -31,6 +31,7 @@ const EditorContent: React.FC<{
     togglePreviewMode,
   } = useEditorStore();
   const { selectedFile, setOpenTabDirty } = useSidebarStore();
+  const [refreshToken, setRefreshToken] = useState(0);
 
   const currentDoc = selectedFile ? documentContents[selectedFile] : null;
   const currentContent = currentDoc?.content || '';
@@ -39,11 +40,15 @@ const EditorContent: React.FC<{
   const isDiffMode = currentDoc?.isDiffMode || false;
   const selection = currentDoc?.selection || null;
 
-  const forceRefreshRef = useDocumentLoader(selectedFile, currentDoc ? {
+  const requestDocumentRefresh = useCallback(() => {
+    setRefreshToken((current) => current + 1);
+  }, []);
+
+  useDocumentLoader(selectedFile, currentDoc ? {
     content: currentDoc.content,
     mtime: currentDoc.mtime,
-  } : null);
-  useExternalFileSync(selectedFile, forceRefreshRef);
+  } : null, refreshToken);
+  useExternalFileSync(selectedFile, requestDocumentRefresh);
   const handleSave = useDocumentSave(selectedFile, currentContent, isDirty);
   const handleUpdate = useEditorSelectionSync(selectedFile, currentContent, selection, editorRef);
   const toggleCurrentPreviewMode = useEditorKeyboardShortcuts(selectedFile, handleSave, togglePreviewMode);
@@ -154,6 +159,11 @@ function detectFileType(path: string): 'markdown' | 'word' | 'excel' {
   return 'markdown';
 }
 
+type RenderableOfficeTab = {
+  tab: OpenTab;
+  fileType: 'word' | 'excel';
+};
+
 export const Editor: React.FC = () => {
   const editorRef = useRef<ReactCodeMirrorRef>(null);
   const { selectedFile, activeTabId, openTabs } = useSidebarStore();
@@ -161,6 +171,10 @@ export const Editor: React.FC = () => {
   const isSettingsTab = activeTabId === SETTINGS_TAB_ID;
 
   const activeFileType = selectedFile ? detectFileType(selectedFile) : null;
+  const officeTabs = useMemo<RenderableOfficeTab[]>(() => openTabs.flatMap((tab) => {
+    const fileType = detectFileType(tab.path);
+    return fileType === 'markdown' ? [] : [{ tab, fileType }];
+  }), [openTabs]);
 
   if (isSettingsTab) {
     return <SettingsState />;
@@ -172,24 +186,22 @@ export const Editor: React.FC = () => {
 
   return (
     <>
-      {openTabs.map((tab: OpenTab) => {
-        const tabFileType = detectFileType(tab.path);
-        if (tabFileType !== 'word') return null;
-        const tabCached = documentContents[tab.path]?.docxBuffer ?? null;
-        return (
-          <WordEditor
-            key={tab.id}
-            filePath={tab.path}
-            fileName={tab.name}
-            initialBuffer={tabCached ? new Uint8Array(tabCached) : null}
-            isActive={tab.path === selectedFile && activeFileType === 'word'}
-          />
-        );
-      })}
+      {officeTabs.map(({ tab, fileType }) => {
+        const isActive = tab.path === selectedFile && activeFileType === fileType;
 
-      {openTabs.map((tab: OpenTab) => {
-        const tabFileType = detectFileType(tab.path);
-        if (tabFileType !== 'excel') return null;
+        if (fileType === 'word') {
+          const tabCached = documentContents[tab.path]?.docxBuffer ?? null;
+          return (
+            <WordEditor
+              key={tab.id}
+              filePath={tab.path}
+              fileName={tab.name}
+              initialBuffer={tabCached ? new Uint8Array(tabCached) : null}
+              isActive={isActive}
+            />
+          );
+        }
+
         const tabCached = documentContents[tab.path]?.excelData ?? null;
         return (
           <ExcelEditor
@@ -197,7 +209,7 @@ export const Editor: React.FC = () => {
             filePath={tab.path}
             fileName={tab.name}
             initialData={tabCached}
-            isActive={tab.path === selectedFile && activeFileType === 'excel'}
+            isActive={isActive}
           />
         );
       })}

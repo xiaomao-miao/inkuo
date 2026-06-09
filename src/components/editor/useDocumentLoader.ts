@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import type { Document } from '../../types';
 import { useEditorStore, useSidebarStore } from '../../store';
@@ -6,11 +6,10 @@ import { useEditorStore, useSidebarStore } from '../../store';
 export function useDocumentLoader(
   selectedFile: string | null,
   cachedDocument: { content: string; mtime: number } | null,
+  refreshToken = 0,
 ) {
   const { setDocumentContent } = useEditorStore();
   const { setOpenTabDirty } = useSidebarStore();
-  const forceRefreshRef = useRef<Record<string, number>>({});
-  const forceRefreshCount = forceRefreshRef.current[selectedFile || ''] ?? 0;
 
   useEffect(() => {
     let cancelled = false;
@@ -39,7 +38,5 @@ export function useDocumentLoader(
     return () => {
       cancelled = true;
     };
-  }, [selectedFile, cachedDocument, setDocumentContent, setOpenTabDirty, forceRefreshCount]);
-
-  return forceRefreshRef;
+  }, [selectedFile, cachedDocument, refreshToken, setDocumentContent, setOpenTabDirty]);
 }
