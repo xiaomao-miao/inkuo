@@ -1,4 +1,10 @@
-import React, { useState, useRef, useEffect, useId } from 'react';
+import React, {
+  useState,
+  useRef,
+  useEffect,
+  useId,
+  useMemo,
+} from 'react';
 import { ChevronDown, Check } from 'lucide-react';
 import styles from './Select.module.css';
 
@@ -23,16 +29,34 @@ export const Select = ({
   const [isOpen, setIsOpen] = useState(false);
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
   const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const listboxRef = useRef<HTMLDivElement>(null);
   const listboxId = useId();
+  const optionIds = useMemo(
+    () => options.map((option) => `${listboxId}-${option.value}`),
+    [listboxId, options],
+  );
 
-  const selectedOption = options.find(opt => opt.value === value);
+  const selectedOption = options.find((opt) => opt.value === value);
   const selectedIndex = options.findIndex((opt) => opt.value === value);
+  const hasOptions = options.length > 0;
+  const activeOptionId = highlightedIndex >= 0 ? optionIds[highlightedIndex] : undefined;
 
   useEffect(() => {
     if (isOpen) {
-      setHighlightedIndex(selectedIndex >= 0 ? selectedIndex : 0);
+      setHighlightedIndex(hasOptions ? (selectedIndex >= 0 ? selectedIndex : 0) : -1);
+      return;
     }
-  }, [isOpen, selectedIndex]);
+
+    setHighlightedIndex(-1);
+    triggerRef.current?.focus();
+  }, [hasOptions, isOpen, selectedIndex]);
+
+  useEffect(() => {
+    if (isOpen) {
+      listboxRef.current?.focus();
+    }
+  }, [isOpen]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -50,10 +74,28 @@ export const Select = ({
     setIsOpen(false);
   };
 
+  const openDropdown = () => {
+    if (!hasOptions) {
+      return;
+    }
+
+    setIsOpen(true);
+  };
+
   const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!hasOptions) {
+      if (event.key === 'Enter' || event.key === ' ' || event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+      }
+      if (event.key === 'Escape') {
+        setIsOpen(false);
+      }
+      return;
+    }
+
     if (!isOpen && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) {
       event.preventDefault();
-      setIsOpen(true);
+      openDropdown();
       return;
     }
 
@@ -65,7 +107,7 @@ export const Select = ({
     if (!isOpen) {
       if (event.key === 'Enter' || event.key === ' ') {
         event.preventDefault();
-        setIsOpen(true);
+        openDropdown();
       }
       return;
     }
@@ -95,29 +137,39 @@ export const Select = ({
       onKeyDown={handleKeyDown}
     >
       <button
+        ref={triggerRef}
         type="button"
         className={styles.trigger}
-        onClick={() => setIsOpen(!isOpen)}
+        onClick={() => (isOpen ? setIsOpen(false) : openDropdown())}
         aria-haspopup="listbox"
         aria-expanded={isOpen}
         aria-controls={listboxId}
+        aria-activedescendant={isOpen ? activeOptionId : undefined}
       >
         <span className={styles.value}>{selectedOption?.label || '请选择'}</span>
         <ChevronDown size={14} className={`${styles.chevron} ${isOpen ? styles.open : ''}`} />
       </button>
 
       {isOpen && (
-        <div className={styles.dropdown} role="listbox" id={listboxId}>
+        <div
+          ref={listboxRef}
+          className={styles.dropdown}
+          role="listbox"
+          id={listboxId}
+          tabIndex={-1}
+          aria-activedescendant={activeOptionId}
+        >
           {options.map((option, index) => (
             <button
               key={option.value}
+              id={optionIds[index]}
               type="button"
               role="option"
               aria-selected={option.value === value}
               className={`${styles.option} ${option.value === value ? styles.selected : ''}`}
               onClick={() => handleSelect(option.value)}
               onMouseEnter={() => setHighlightedIndex(index)}
-              tabIndex={highlightedIndex === index ? 0 : -1}
+              tabIndex={-1}
             >
               <span>{option.label}</span>
               {option.value === value && <Check size={14} />}

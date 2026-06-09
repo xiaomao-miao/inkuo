@@ -58,13 +58,12 @@ export const Layout = () => {
     <div className={styles.layout}>
       <TitleBar />
       <div className={styles.body}>
-        <ActivityBar 
+        <ActivityBar
           activeView={activeView}
           onViewChange={handleViewChange}
           onToggleSidebar={handleToggleSidebar}
         />
-        
-        {/* Left Sidebar — always mounted so state persists across view switches */}
+
         {isSidebarVisible && (
           <>
             <div className={styles.sidebar} style={{ width: sidebarWidth }}>
@@ -80,14 +79,12 @@ export const Layout = () => {
             <ResizableHandle direction="horizontal" onResize={handleSidebarResize} />
           </>
         )}
-        
-        {/* Main Editor Area */}
+
         <main className={styles.main}>
           <TabBar />
           <Editor />
         </main>
-        
-        {/* Right Sidebar (AI Panel) */}
+
         {isAIPanelOpen && (
           <>
             <ResizableHandle direction="horizontal" onResize={handleAIPanelResize} />

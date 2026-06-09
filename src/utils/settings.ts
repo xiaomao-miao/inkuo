@@ -1,3 +1,5 @@
+import type { Settings } from '../types';
+
 export interface BackendSettings {
   theme: string;
   accent_color: string;
@@ -23,8 +25,6 @@ export interface BackendSettings {
   chunk_size: number;
   chunk_overlap: number;
 }
-
-import type { Settings } from '../types';
 
 export function toBackendSettings(settings: Settings): BackendSettings {
   return {

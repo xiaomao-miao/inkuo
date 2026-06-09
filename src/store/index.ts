@@ -1,15 +1,17 @@
-// Re-export all stores for convenience
 export { useEditorStore } from './editorStore';
-export { useSidebarStore, SETTINGS_TAB_ID, type OpenTab,
-         type KnowledgeBase as SidebarKnowledgeBase,
-         type BuildProgress as SidebarBuildProgress } from './sidebarStore';
+export {
+  useSidebarStore,
+  SETTINGS_TAB_ID,
+  type OpenTab,
+  type KnowledgeBase as SidebarKnowledgeBase,
+  type BuildProgress as SidebarBuildProgress,
+} from './sidebarStore';
 export { useAIPanelStore } from './aiPanelStore';
 export { useLayoutStore } from './layoutStore';
 export { useSettingsStore } from './settingsStore';
 export { useCmdKStore } from './cmdKStore';
 export { useInlineCompleteStore } from './inlineCompleteStore';
 
-// Re-export shared types used across stores
 export type {
   ActiveToolCall,
   BuildProgress,
