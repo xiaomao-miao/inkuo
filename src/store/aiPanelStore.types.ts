@@ -60,6 +60,7 @@ export interface AIPanelDiffSlice {
   setCurrentDiff: (sessionId: string, diff: CurrentDiff | null) => void;
   setMessageDiff: (sessionId: string, messageId: string, diff: CurrentDiff | null) => void;
   setPendingDiff: (sessionId: string, diff: CurrentDiff | null) => void;
+  setDiffFromToolResult: (sessionId: string, diff: CurrentDiff | null) => void;
   acceptHunk: (sessionId: string, hunkId: string) => void;
   rejectHunk: (sessionId: string, hunkId: string) => void;
   acceptAllHunks: (sessionId: string) => void;

@@ -3,8 +3,10 @@ import type {
   ChatMessage,
   ChatSession,
   CurrentDiff,
+  DiffChange,
   OutputItem,
 } from '../types';
+import { useEditorStore, useSidebarStore } from '../index';
 
 export type OutputItemMatchKey = { toolCallId: string } | { contentContains: string };
 
@@ -82,6 +84,34 @@ export function trimSessionMessagesAfter(session: ChatSession, messageId: string
   };
 }
 
+export function applyHunkChanges(originalText: string, changes: DiffChange[]): string {
+  let result = '';
+  let i = 0;
+
+  while (i < changes.length) {
+    const change = changes[i];
+
+    if (change.tag === 'equal') {
+      result += change.content;
+      i++;
+    } else if (change.tag === 'delete') {
+      // Skip deleted content, but if next change is insert, merge them
+      if (i + 1 < changes.length && changes[i + 1].tag === 'insert') {
+        result += changes[i + 1].content;
+        i += 2;
+      } else {
+        i++;
+      }
+    } else if (change.tag === 'insert') {
+      // Solo insert (no preceding delete)
+      result += change.content;
+      i++;
+    }
+  }
+
+  return result;
+}
+
 export function updatePendingDiffHunks(
   session: ChatSession,
   hunkId: string,
@@ -95,6 +125,16 @@ export function updatePendingDiffHunks(
         ? { ...session.pendingDiff, hunks: remainingHunks }
         : null,
   };
+}
+
+export function applyAcceptedHunkToText(
+  originalText: string,
+  hunkId: string,
+  hunks: CurrentDiff['hunks'],
+): string {
+  const hunk = hunks.find((h) => h.id === hunkId);
+  if (!hunk) return originalText;
+  return applyHunkChanges(originalText, hunk.changes);
 }
 
 export function patchMessageOutputItems(

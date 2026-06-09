@@ -294,6 +294,7 @@ export interface CurrentDiff {
   newText: string;
   hunks: DiffHunk[];
   summary: string;
+  filePath?: string;
 }
 
 export interface ActiveToolCall {
@@ -384,6 +385,8 @@ export interface Settings {
   accent_color: string;
   editor_font_size: number;
   editor_font_family: string;
+  editor_word_wrap: boolean;
+  editor_line_numbers: boolean;
   apiConfigs: APIConfig[];
   activeApiConfigId: string | null;
   embedding_model: EmbeddingModelType;

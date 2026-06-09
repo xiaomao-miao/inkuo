@@ -40,6 +40,8 @@ const defaultSettings: Settings = {
   accent_color: '#7C5CFF',
   editor_font_size: 14,
   editor_font_family: 'JetBrains Mono, monospace',
+  editor_word_wrap: true,
+  editor_line_numbers: true,
   apiConfigs: [defaultAPIConfig],
   activeApiConfigId: defaultAPIConfig.id,
   embedding_model: 'BAAI/bge-small-zh-v1.5',
@@ -175,6 +177,12 @@ export const useSettingsStore = create<SettingsState>()(
           chunk_overlap: typeof persistedSettings?.chunk_overlap === 'number'
             ? persistedSettings.chunk_overlap
             : currentState.settings.chunk_overlap,
+          editor_word_wrap: typeof persistedSettings?.editor_word_wrap === 'boolean'
+            ? persistedSettings.editor_word_wrap
+            : currentState.settings.editor_word_wrap,
+          editor_line_numbers: typeof persistedSettings?.editor_line_numbers === 'boolean'
+            ? persistedSettings.editor_line_numbers
+            : currentState.settings.editor_line_numbers,
         };
 
         return {

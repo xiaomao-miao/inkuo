@@ -249,6 +249,8 @@ pub struct Settings {
     pub accent_color: String,
     pub editor_font_size: u32,
     pub editor_font_family: String,
+    pub editor_word_wrap: bool,
+    pub editor_line_numbers: bool,
     pub api_configs: Vec<ApiConfig>,
     pub active_api_config_id: Option<String>,
     pub embedding_model: String,
@@ -277,6 +279,8 @@ impl Default for Settings {
             accent_color: "#7C5CFF".to_string(),
             editor_font_size: 14,
             editor_font_family: "JetBrains Mono, monospace".to_string(),
+            editor_word_wrap: true,
+            editor_line_numbers: true,
             api_configs: vec![default_api_config.clone()],
             active_api_config_id: Some(default_api_config.id),
             embedding_model: "BAAI/bge-small-zh-v1.5".to_string(),
@@ -287,16 +291,40 @@ impl Default for Settings {
     }
 }
 
+/// Cached settings to avoid repeated disk reads.
+/// Updated whenever save_settings is called.
+static SETTINGS_CACHE: Lazy<Mutex<Option<Settings>>> = Lazy::new(|| Mutex::new(None));
+
+/// Get cached settings, reading from disk only when cache is empty.
+pub fn get_settings_cached() -> Result<Settings, AppCommandError> {
+    {
+        let guard = SETTINGS_CACHE.lock();
+        if let Some(ref settings) = *guard {
+            return Ok(settings.clone());
+        }
+    }
+    let settings = read_settings_from_disk()?;
+    let mut guard = SETTINGS_CACHE.lock();
+    *guard = Some(settings.clone());
+    Ok(settings)
+}
+
+/// Update the settings cache when settings are saved.
+pub fn update_settings_cache(settings: Settings) {
+    let mut guard = SETTINGS_CACHE.lock();
+    *guard = Some(settings);
+}
+
 /// Get embedding model name from settings
 pub fn get_embedding_model() -> String {
-    read_settings_from_disk()
+    get_settings_cached()
         .map(|s| s.embedding_model)
         .unwrap_or_else(|_| "BAAI/bge-small-zh-v1.5".to_string())
 }
 
 /// Get chunk size from settings
 pub fn get_chunk_size() -> usize {
-    read_settings_from_disk()
+    get_settings_cached()
         .map(|s| s.chunk_size)
         .unwrap_or(500)
 }

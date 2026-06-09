@@ -325,10 +325,18 @@ export const Sidebar: React.FC = () => {
 
       // Get children for this directory
       const children = files.filter(f => f.path.startsWith(entry.path + '/'));
-      
+
       return (
-        <div key={entry.path} className={styles.treeItem}>
-          <div
+        <div
+          key={entry.path}
+          role="treeitem"
+          aria-expanded={entry.is_dir ? isExpanded : undefined}
+          aria-selected={isSelected}
+          aria-level={depth + 1}
+          className={styles.treeItem}
+        >
+          <button
+            type="button"
             className={`${styles.fileItem} ${isSelected ? styles.selected : ''}`}
             onClick={() => handleFileClick(entry)}
             data-depth={Math.min(depth, 4)}
@@ -360,9 +368,9 @@ export const Sidebar: React.FC = () => {
                 ●
               </span>
             )}
-          </div>
+          </button>
           {entry.is_dir && isExpanded && (
-            <div className={styles.children}>
+            <div role="group" className={styles.children}>
               {children.length > 0 ? (
                 renderFileTree(children, depth + 1)
               ) : (
@@ -443,7 +451,9 @@ export const Sidebar: React.FC = () => {
             {isLoading ? (
               <div className={styles.loading}>加载中...</div>
             ) : (
-              renderFileTree(files)
+              <div role="tree" aria-label="文件树">
+                {renderFileTree(files)}
+              </div>
             )}
           </div>
         </>

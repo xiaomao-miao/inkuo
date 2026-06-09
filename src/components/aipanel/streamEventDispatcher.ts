@@ -12,7 +12,7 @@ interface StreamEventDispatcherArgs {
   appendTextDelta: (messageId: string, content: string) => void;
   handleToolCallStart: (payload: StreamPayload) => void;
   handleToolCallArgsDelta: (payload: StreamPayload) => void;
-  setMessageDiff: (sessionId: string, messageId: string, diff: import('../../types').CurrentDiff | null) => void;
+  setPendingDiff: (sessionId: string, diff: import('../../types').CurrentDiff | null) => void;
 }
 
 export async function dispatchStreamEvent({
@@ -24,7 +24,7 @@ export async function dispatchStreamEvent({
   appendTextDelta,
   handleToolCallStart,
   handleToolCallArgsDelta,
-  setMessageDiff,
+  setPendingDiff,
 }: StreamEventDispatcherArgs) {
   const { session_id, message_id, event_type, content, done } = payload;
 
@@ -64,7 +64,7 @@ export async function dispatchStreamEvent({
       payload,
       currentMode,
       clearToolCalls,
-      setMessageDiff,
+      setPendingDiff,
       flushAllPending,
       streamingContentRef,
     });

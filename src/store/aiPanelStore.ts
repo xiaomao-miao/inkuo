@@ -14,6 +14,7 @@ import type {
   SearchResult,
 } from '../types';
 import {
+  applyHunkChanges,
   addMessageOutputItem,
   clearSessionConversation,
   createNewSession,
@@ -26,6 +27,7 @@ import {
   updateSessions,
   updateToolCalls,
 } from './aiPanelReducers';
+import { useEditorStore } from './editorStore';
 import type { AIPanelState, AIPanelStateCreator } from './aiPanelStore.types';
 
 function mergePersistedState(
@@ -225,7 +227,7 @@ const createToolCallSlice: AIPanelStateCreator<Pick<AIPanelState, 'addToolCall' 
     })),
 });
 
-const createDiffSlice: AIPanelStateCreator<Pick<AIPanelState, 'setCurrentDiff' | 'setMessageDiff' | 'setPendingDiff' | 'acceptHunk' | 'rejectHunk' | 'acceptAllHunks' | 'rejectAllHunks'>> = (set) => ({
+const createDiffSlice: AIPanelStateCreator<Pick<AIPanelState, 'setCurrentDiff' | 'setMessageDiff' | 'setPendingDiff' | 'setDiffFromToolResult' | 'acceptHunk' | 'rejectHunk' | 'acceptAllHunks' | 'rejectAllHunks'>> = (set) => ({
   setCurrentDiff: (sessionId, diff) =>
     set((state) => ({
       sessions: updateSessions(state.sessions, sessionId, (session) => ({
@@ -246,12 +248,44 @@ const createDiffSlice: AIPanelStateCreator<Pick<AIPanelState, 'setCurrentDiff' |
         pendingDiff: diff,
       })),
     })),
-  acceptHunk: (sessionId, hunkId) =>
+  setDiffFromToolResult: (sessionId, diff) =>
     set((state) => ({
-      sessions: updateSessions(state.sessions, sessionId, (session) =>
-        updatePendingDiffHunks(session, hunkId)
-      ),
+      sessions: updateSessions(state.sessions, sessionId, (session) => ({
+        ...session,
+        pendingDiff: diff,
+      })),
     })),
+  acceptHunk: (sessionId, hunkId) =>
+    set((state) => {
+      const session = state.sessions.find((s) => s.id === sessionId);
+      const diff = session?.pendingDiff;
+      if (!diff) return state;
+
+      const hunk = diff.hunks.find((h) => h.id === hunkId);
+      if (!hunk) return state;
+
+      let newContent = diff.originalText;
+      for (const h of diff.hunks) {
+        if (h.id === hunkId) {
+          newContent = applyHunkChanges(newContent, h.changes);
+        }
+      }
+
+      if (diff.filePath) {
+        useEditorStore.getState().setContent(diff.filePath, newContent);
+        useEditorStore.getState().applyHunk(diff.filePath, hunkId);
+      }
+
+      const remainingHunks = diff.hunks.filter((h) => h.id !== hunkId);
+      return {
+        sessions: updateSessions(state.sessions, sessionId, (session) => ({
+          ...session,
+          pendingDiff: remainingHunks.length > 0
+            ? { ...session.pendingDiff!, hunks: remainingHunks }
+            : null,
+        })),
+      };
+    }),
   rejectHunk: (sessionId, hunkId) =>
     set((state) => ({
       sessions: updateSessions(state.sessions, sessionId, (session) =>
@@ -259,12 +293,20 @@ const createDiffSlice: AIPanelStateCreator<Pick<AIPanelState, 'setCurrentDiff' |
       ),
     })),
   acceptAllHunks: (sessionId) =>
-    set((state) => ({
-      sessions: updateSessions(state.sessions, sessionId, (session) => ({
-        ...session,
-        pendingDiff: null,
-      })),
-    })),
+    set((state) => {
+      const session = state.sessions.find((s) => s.id === sessionId);
+      const diff = session?.pendingDiff;
+      if (diff?.filePath && diff.newText) {
+        useEditorStore.getState().setContent(diff.filePath, diff.newText);
+        useEditorStore.getState().applyAllHunks(diff.filePath);
+      }
+      return {
+        sessions: updateSessions(state.sessions, sessionId, (session) => ({
+          ...session,
+          pendingDiff: null,
+        })),
+      };
+    }),
   rejectAllHunks: (sessionId) =>
     set((state) => ({
       sessions: updateSessions(state.sessions, sessionId, (session) => ({

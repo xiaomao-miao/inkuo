@@ -19,11 +19,23 @@ export const InlineDiffPreview: React.FC<InlineDiffPreviewProps> = ({
 }) => {
   const hasAutoAccepted = useRef(false);
 
+  const { originalText: storedOriginal, newText: storedNew, filePath: storedFilePath } = useRef({
+    originalText,
+    newText,
+    filePath: '',
+  });
+
+  useEffect(() => {
+    storedOriginal.current = originalText;
+    storedNew.current = newText;
+    storedFilePath.current = useSidebarStore.getState().selectedFile || '';
+  }, [originalText, newText]);
+
   // Auto-accept when streaming completes
   useEffect(() => {
     if (isStreaming || hasAutoAccepted.current) return;
 
-    const filePath = useSidebarStore.getState().selectedFile;
+    const filePath = storedFilePath.current;
     if (!filePath) return;
 
     hasAutoAccepted.current = true;
@@ -33,20 +45,22 @@ export const InlineDiffPreview: React.FC<InlineDiffPreviewProps> = ({
     if (!currentDoc) return;
 
     const fullContent = currentDoc.content;
+    const origText = storedOriginal.current;
+    const newTxt = storedNew.current;
 
     // Find and replace the original selection in the full file content
     let replacedContent: string;
-    const idx = fullContent.indexOf(originalText);
+    const idx = fullContent.indexOf(origText);
     if (idx !== -1) {
       // Found exact match - replace in place
-      replacedContent = fullContent.slice(0, idx) + newText + fullContent.slice(idx + originalText.length);
+      replacedContent = fullContent.slice(0, idx) + newTxt + fullContent.slice(idx + origText.length);
     } else {
       // Fallback: try to match the first line of the selection
-      const firstLine = originalText.split('\n')[0];
+      const firstLine = origText.split('\n')[0];
       const fallbackIdx = fullContent.indexOf(firstLine);
       if (fallbackIdx !== -1) {
-        const endIdx = fallbackIdx + originalText.length;
-        replacedContent = fullContent.slice(0, fallbackIdx) + newText + fullContent.slice(endIdx);
+        const endIdx = fallbackIdx + origText.length;
+        replacedContent = fullContent.slice(0, fallbackIdx) + newTxt + fullContent.slice(endIdx);
       } else {
         // Cannot locate the original text - do not replace
         replacedContent = fullContent;
@@ -55,12 +69,12 @@ export const InlineDiffPreview: React.FC<InlineDiffPreviewProps> = ({
 
     // Apply replaced content to editor
     useEditorStore.getState().setContent(filePath, replacedContent);
-    // AI 直接改内容后，不应该立刻触发 inline complete
+    // AI directly changed content; should not immediately trigger inline complete
     useInlineCompleteStore.getState().clearCompletion();
 
     // Clear the diff from the session
     useAIPanelStore.getState().acceptAllHunks(sessionId);
-  }, [isStreaming, newText, sessionId]);
+  }, [isStreaming, sessionId]);
 
   return (
     <div className={`${styles.container} ${isStreaming ? styles.streaming : ''}`}>

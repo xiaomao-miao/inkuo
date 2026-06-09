@@ -15,7 +15,7 @@ interface UseAgentStreamArgs {
 
 export function useAgentStream({ mode }: UseAgentStreamArgs) {
   const clearToolCalls = useAIPanelStore((state) => state.clearToolCalls);
-  const setMessageDiff = useAIPanelStore((state) => state.setMessageDiff);
+  const setPendingDiff = useAIPanelStore((state) => state.setPendingDiff);
 
   const unlistenRef = useRef<(() => void) | null>(null);
   const isSettingUpRef = useRef(false);
@@ -64,7 +64,7 @@ export function useAgentStream({ mode }: UseAgentStreamArgs) {
             appendTextDelta,
             handleToolCallStart,
             handleToolCallArgsDelta,
-            setMessageDiff,
+            setPendingDiff,
           });
         });
       } finally {
@@ -80,5 +80,5 @@ export function useAgentStream({ mode }: UseAgentStreamArgs) {
       resetTextStreaming();
       resetToolCallStreaming();
     };
-  }, [appendTextDelta, clearToolCalls, handleToolCallArgsDelta, handleToolCallStart, resetTextStreaming, resetToolCallStreaming]);
+  }, [appendTextDelta, clearToolCalls, handleToolCallArgsDelta, handleToolCallStart, resetTextStreaming, resetToolCallStreaming, setPendingDiff]);
 }

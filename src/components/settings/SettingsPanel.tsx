@@ -108,15 +108,15 @@ export const SettingsPanel: React.FC = () => {
                   <label className={styles.toggle}>
                     <input
                       type="checkbox"
-                      defaultChecked={true}
+                      checked={settings.editor_word_wrap}
                       onChange={(e) => {
-                        // TODO: Implement word wrap setting
-                        console.log('Word wrap:', e.target.checked);
+                        updateSetting('editor_word_wrap', e.target.checked);
+                        saveSettings();
                       }}
                     />
                     <span className={styles.toggleSlider}></span>
                   </label>
-                  <span className={styles.toggleLabel}>启用</span>
+                  <span className={styles.toggleLabel}>{settings.editor_word_wrap ? '启用' : '禁用'}</span>
                 </div>
               </div>
 
@@ -126,15 +126,15 @@ export const SettingsPanel: React.FC = () => {
                   <label className={styles.toggle}>
                     <input
                       type="checkbox"
-                      defaultChecked={true}
+                      checked={settings.editor_line_numbers}
                       onChange={(e) => {
-                        // TODO: Implement line numbers setting
-                        console.log('Line numbers:', e.target.checked);
+                        updateSetting('editor_line_numbers', e.target.checked);
+                        saveSettings();
                       }}
                     />
                     <span className={styles.toggleSlider}></span>
                   </label>
-                  <span className={styles.toggleLabel}>启用</span>
+                  <span className={styles.toggleLabel}>{settings.editor_line_numbers ? '启用' : '禁用'}</span>
                 </div>
               </div>
             </div>

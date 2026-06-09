@@ -3,6 +3,8 @@ export interface BackendSettings {
   accent_color: string;
   editor_font_size: number;
   editor_font_family: string;
+  editor_word_wrap: boolean;
+  editor_line_numbers: boolean;
   api_configs: Array<{
     id: string;
     name: string;
@@ -30,6 +32,8 @@ export function toBackendSettings(settings: Settings): BackendSettings {
     accent_color: settings.accent_color,
     editor_font_size: settings.editor_font_size,
     editor_font_family: settings.editor_font_family,
+    editor_word_wrap: settings.editor_word_wrap,
+    editor_line_numbers: settings.editor_line_numbers,
     api_configs: settings.apiConfigs.map((c) => ({
       id: c.id,
       name: c.name,

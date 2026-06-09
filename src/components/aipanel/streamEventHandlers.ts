@@ -17,7 +17,7 @@ interface HandleStreamDoneArgs {
   clearToolCalls: (sessionId: string) => void;
   flushAllPending: () => void;
   streamingContentRef: MutableRefObject<Record<string, string>>;
-  setMessageDiff: (sessionId: string, messageId: string, diff: CurrentDiff | null) => void;
+  setPendingDiff: (sessionId: string, diff: CurrentDiff | null) => void;
 }
 
 interface HandleStreamErrorArgs {
@@ -33,9 +33,9 @@ export async function handleStreamDone({
   clearToolCalls,
   flushAllPending,
   streamingContentRef,
-  setMessageDiff,
+  setPendingDiff,
 }: HandleStreamDoneArgs) {
-  const { session_id, message_id, final_content, summary, search_results } = payload;
+  const { session_id, message_id, final_content, summary, search_results, original_content, new_content, file_path } = payload;
   const normalizedSearchResults = normalizeSearchResults(search_results);
 
   flushAllPending();
@@ -59,17 +59,18 @@ export async function handleStreamDone({
     useAIPanelStore.getState().updateSession(session_id, (session) => ({ ...session, isStreaming: false }));
   }
 
-  if (effectiveContent && currentMode === 'agent') {
+  if (currentMode === 'agent' && original_content && new_content) {
     try {
       const diff = await invoke<{ hunks?: CurrentDiff['hunks'] }>('compute_diff', {
-        oldText: effectiveContent,
-        newText: effectiveContent,
+        oldText: original_content,
+        newText: new_content,
       });
-      setMessageDiff(session_id, message_id, {
-        originalText: effectiveContent,
-        newText: effectiveContent,
+      setPendingDiff(session_id, {
+        originalText: original_content,
+        newText: new_content,
         hunks: diff?.hunks ?? [],
         summary: summary ?? 'AI 已修改内容',
+        filePath: file_path,
       });
     } catch {
       // ignore diff failure
