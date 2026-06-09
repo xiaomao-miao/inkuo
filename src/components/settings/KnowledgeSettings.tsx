@@ -79,6 +79,7 @@ export const KnowledgeSettings = () => {
   const [availableModels, setAvailableModels] = useState<AvailableModel[]>([]);
   const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
   const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
   // Fetch available models from backend
   useEffect(() => {
@@ -139,12 +140,13 @@ export const KnowledgeSettings = () => {
 
   const downloadModel = async (modelName: string) => {
     setDownloadingModel(modelName);
+    setDownloadError(null);
     setDownloadProgress({ model: modelName, current: 0, total: 5, filename: '准备下载...', status: 'downloading' });
     try {
       await invoke('download_model_files', { modelName });
     } catch (err) {
       console.error('Failed to download model:', err);
-      alert(`下载失败: ${err}`);
+      setDownloadError(err instanceof Error ? err.message : String(err));
       setDownloadingModel(null);
       setDownloadProgress(null);
     }
@@ -245,6 +247,12 @@ export const KnowledgeSettings = () => {
             );
           })}
         </div>
+
+        {downloadError && (
+          <div className={`${styles.testResult} ${styles.error}`} role="alert">
+            下载失败：{downloadError}
+          </div>
+        )}
 
         {currentTier && (
           <div className={styles.modelInfo}>

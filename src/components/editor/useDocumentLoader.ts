@@ -40,5 +40,5 @@ export function useDocumentLoader(
     return () => {
       cancelled = true;
     };
-  }, [selectedFile, cachedContent, cachedMtime, refreshToken, setDocumentContent, setOpenTabDirty]);
+  }, [selectedFile, cachedDocument, cachedContent, cachedMtime, refreshToken, setDocumentContent, setOpenTabDirty]);
 }

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { Sparkles, X, ChevronDown, Loader2 } from 'lucide-react';
+import { AlertCircle, Sparkles, X, ChevronDown, Loader2 } from 'lucide-react';
 import { useCmdKStore, useEditorStore, useSidebarStore } from '../../store';
 import type { AIEditResponse, DiffResult, EditScope } from '../../types';
 import { getModifierKeyLabel } from '../../utils/platform';
@@ -49,6 +49,7 @@ export const CmdK = () => {
   const selection = currentDoc?.selection || null;
   
   const [showScopeDropdown, setShowScopeDropdown] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const modifierKey = getModifierKeyLabel();
 
   // Focus input when opened
@@ -69,6 +70,12 @@ export const CmdK = () => {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, close]);
+
+  useEffect(() => {
+    if (!isOpen && errorMessage) {
+      setErrorMessage(null);
+    }
+  }, [isOpen, errorMessage]);
 
   // Get target text based on selected scope
   const getTargetText = useMemo(() => {
@@ -142,12 +149,13 @@ export const CmdK = () => {
     };
   }, [currentContent, selection]);
 
-  const targetText = useMemo(() => getTargetText(scope), [currentContent, getTargetText, scope]);
+  const targetText = useMemo(() => getTargetText(scope), [getTargetText, scope]);
 
   const handleSubmit = async () => {
     if (!instruction.trim() || isProcessing || !selectedFile || !targetText.trim()) return;
 
     setIsProcessing(true);
+    setErrorMessage(null);
     
     try {
       const response = await invoke<AIEditResponse>('ai_edit', {
@@ -174,7 +182,7 @@ export const CmdK = () => {
       reset();
     } catch (err) {
       console.error('AI edit failed:', err);
-      alert(`AI 编辑失败: ${err}`);
+      setErrorMessage(err instanceof Error ? err.message : String(err));
     } finally {
       setIsProcessing(false);
     }
@@ -257,6 +265,13 @@ export const CmdK = () => {
             rows={3}
           />
         </div>
+
+        {errorMessage && (
+          <div className={styles.errorMessage} role="alert">
+            <AlertCircle size={14} />
+            <span>AI 编辑失败：{errorMessage}</span>
+          </div>
+        )}
         
         <div className={styles.preview}>
           <span className={styles.previewLabel}>将应用于:</span>

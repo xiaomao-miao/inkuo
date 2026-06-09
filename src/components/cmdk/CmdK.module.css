@@ -218,6 +218,19 @@
   text-overflow: ellipsis;
 }
 
+.errorMessage {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  margin: 0 var(--space-lg) var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid color-mix(in srgb, var(--error) 35%, transparent);
+  border-radius: var(--radius-sm);
+  background-color: color-mix(in srgb, var(--error) 10%, transparent);
+  color: var(--error);
+  font-size: var(--font-size-sm);
+}
+
 .footer {
   display: flex;
   align-items: center;

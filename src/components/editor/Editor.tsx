@@ -80,7 +80,7 @@ const EditorContent: React.FC<{
     inlineCompletionKeyHandler,
     inlineAutoTrigger,
     autoTriggerStateRef,
-  }), [diffDecorationsField, inlineCompletionKeyHandler, inlineAutoTrigger, autoTriggerStateRef, settings.editor_line_numbers]);
+  }), [diffDecorationsField, inlineCompletionKeyHandler, inlineAutoTrigger, autoTriggerStateRef]);
 
   return (
     <div className={styles.editorContainer} data-inline-complete-styles={inlineCompleteStyles}>
