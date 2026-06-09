@@ -29,6 +29,7 @@ export function InlineCompleteStatus() {
           <span className={styles.loadingDot} />
           <span className={styles.loadingDot} />
           <span className={styles.loadingDot} />
+          <span className={styles.loadingText}>正在补全</span>
         </span>
       )}
       {!isLoading && currentCompletion && (

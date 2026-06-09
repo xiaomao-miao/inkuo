@@ -160,6 +160,20 @@ impl AIProviderAdapter {
         })
     }
 
+    /// Build chat request body with thinking disabled (for inline completion)
+    fn build_chat_body_no_thinking(&self, system_prompt: &str, user_prompt: &str) -> serde_json::Value {
+        serde_json::json!({
+            "model": self.config.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            "temperature": self.config.temperature,
+            "max_tokens": self.config.max_tokens,
+            "thinking": {"type": "disabled"},
+        })
+    }
+
     fn build_ollama_body(&self, system_prompt: &str, user_prompt: &str) -> serde_json::Value {
         serde_json::json!({
             "model": self.config.model,
@@ -350,6 +364,59 @@ Context text:
                     .await
             }
         }
+    }
+
+    /// Direct chat call with thinking disabled - optimized for inline completion
+    pub async fn completion(&self, system_prompt: &str, user_prompt: &str) -> Result<String, AIError> {
+        match &self.config.provider {
+            AIProvider::OpenAI { api_key, base_url } => {
+                self.call_openai_compatible_chat_no_thinking(api_key, base_url, system_prompt, user_prompt)
+                    .await
+            }
+            AIProvider::Ollama { base_url } => self.call_ollama_chat(base_url, system_prompt, user_prompt).await,
+            AIProvider::Official { api_key } => {
+                let base_url = "https://api.inkuo.com/v1";
+                self.call_openai_compatible_chat_no_thinking(api_key, base_url, system_prompt, user_prompt)
+                    .await
+            }
+        }
+    }
+
+    async fn call_openai_compatible_chat_no_thinking(
+        &self,
+        api_key: &str,
+        base_url: &str,
+        system_prompt: &str,
+        user_prompt: &str,
+    ) -> Result<String, AIError> {
+        let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+        let body = self.build_chat_body_no_thinking(system_prompt, user_prompt);
+
+        let response = HTTP_CLIENT
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| AIError::NetworkError(e.to_string()))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_body = response.text().await.unwrap_or_default();
+            return Err(Self::handle_http_error(status, &error_body));
+        }
+
+        let response_json: serde_json::Value = response
+            .json()
+            .await
+            .map_err(|e| AIError::InvalidResponse(e.to_string()))?;
+
+        let content = response_json["choices"][0]["message"]["content"]
+            .as_str()
+            .ok_or_else(|| AIError::InvalidResponse("Missing content in response".to_string()))?;
+
+        Ok(content.to_string())
     }
     
     pub async fn edit(&self, request: AIEditRequest) -> Result<AIEditResponse, AIError> {

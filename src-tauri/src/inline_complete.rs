@@ -244,7 +244,7 @@ fn generate_completion_id() -> String {
     Uuid::new_v4().to_string()[..8].to_string()
 }
 
-/// Call AI model for completion with retry logic
+/// Call AI model for completion with retry logic (thinking disabled for speed)
 async fn get_completion(
     config: &AIConfig,
     prompt: &str,
@@ -255,12 +255,15 @@ async fn get_completion(
     let mut config = config.clone();
     config.temperature = 0.3;
 
+    // Inline completion prompt - minimal system instructions
+    let system_prompt = "You are a text completion assistant. Only output the completion text, nothing else.";
+
     // Retry logic for transient errors
     let max_retries = 2;
     let mut last_error = String::new();
 
     for attempt in 0..=max_retries {
-        match adapter.chat("completion".to_string(), prompt.to_string(), String::new()).await {
+        match adapter.completion(system_prompt, prompt).await {
             Ok(result) => return Ok(result),
             Err(AIError::ModelError(msg)) if msg.contains("503") || msg.contains("Service Unavailable") => {
                 last_error = msg.clone();

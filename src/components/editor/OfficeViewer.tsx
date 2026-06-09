@@ -290,6 +290,7 @@ export const WordEditor: React.FC<WordEditorProps> = ({
               <span className={styles.loadingDot} />
               <span className={styles.loadingDot} />
               <span className={styles.loadingDot} />
+              <span className={styles.inlineLoadingText}>正在补全</span>
             </span>
           )}
           {!isLoading && currentCompletion && (

@@ -435,7 +435,13 @@
 .inlineLoading {
   display: flex;
   align-items: center;
-  gap: 3px;
+  gap: 6px;
+}
+
+.inlineLoadingText {
+  color: var(--fg-muted);
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 .loadingDot {
