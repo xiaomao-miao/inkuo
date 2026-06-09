@@ -6,8 +6,8 @@
 use crate::knowledge::config::{Chunk, SearchResult};
 use crate::knowledge::embedder::ModelInfo;
 use qdrant_edge::{
-    Condition, CountRequest, CreateIndex, EdgeShard,
-    FieldCondition, FieldIndexOperations, Filter, Match, MatchValue,
+    Condition, CountRequest, CreateIndex, Distance, EdgeConfigBuilder, EdgeShard,
+    EdgeVectorParamsBuilder, FieldCondition, FieldIndexOperations, Filter, Match, MatchValue,
     NamedQuery, Payload, PayloadSchemaType, PointInsertOperations, PointOperations,
     PointId, PointStruct, QueryEnum, QueryRequest, ScoringQuery,
     ScoredPoint, UpdateOperation, ValueVariants, WithPayloadInterface, WithVector, Vectors,
@@ -60,6 +60,8 @@ impl VectorStore {
             .map(|p| p.join(&workspace_id).join(&vector_name))
             .unwrap_or_else(|| PathBuf::from(format!("/tmp/inkuo_knowledge_{}", &workspace_id[..8])).join(&vector_name));
 
+        let dir_existed = storage_path.exists();
+
         std::fs::create_dir_all(&storage_path)
             .map_err(|e| VectorStoreError::Init(format!("Failed to create storage directory: {}", e)))?;
 
@@ -76,20 +78,39 @@ impl VectorStore {
                 s
             }
             Err(load_err) => {
-                // Directory exists but load failed.
-                // We do NOT wipe data here — the KB was built successfully and should load.
-                // If load fails, surface the error so the user can investigate.
-                tracing::error!(
-                    "EdgeShard::load failed at {:?}: {:?}. \
-                    If the knowledge base was built successfully, this may indicate a version mismatch. \
-                    Try rebuilding the knowledge base.",
-                    storage_path, load_err
-                );
-                return Err(VectorStoreError::Init(format!(
-                    "Failed to load existing vector store: {:?}. \
-                    The knowledge base may need to be rebuilt.",
-                    load_err
-                )));
+                if dir_existed {
+                    tracing::warn!(
+                        "EdgeShard::load failed at {:?}: {:?}. \
+                        Directory appears to be a stale/incomplete build. Cleaning up and retrying.",
+                        storage_path, load_err
+                    );
+                    std::fs::remove_dir_all(&storage_path).ok();
+                    std::fs::create_dir_all(&storage_path)
+                        .map_err(|e| VectorStoreError::Init(format!("Failed to recreate storage directory: {}", e)))?;
+                    EdgeShard::load(&storage_path, None)
+                        .map_err(|fresh_err| VectorStoreError::Init(format!(
+                            "Failed to load fresh vector store after cleanup: {:?}. \
+                            The knowledge base directory may need manual removal.",
+                            fresh_err
+                        )))?
+                } else {
+                    tracing::warn!(
+                        "EdgeShard::load failed at {:?}: {:?}. \
+                        Creating new shard with explicit config (no prior edge_config.json found).",
+                        storage_path, load_err
+                    );
+                    let config = EdgeConfigBuilder::new()
+                        .vector(
+                            vector_name.as_str(),
+                            EdgeVectorParamsBuilder::new(vector_dimension, Distance::Cosine).build(),
+                        )
+                        .build();
+                    EdgeShard::new(&storage_path, config)
+                        .map_err(|new_err| VectorStoreError::Init(format!(
+                            "Failed to create new vector store: {:?}",
+                            new_err
+                        )))?
+                }
             }
         };
 
