@@ -31,6 +31,29 @@ interface UseWorkspaceTreeResult {
   triggerFileRefresh: (parentPath: string) => Promise<void>;
 }
 
+async function restoreExpandedDirectories(
+  workspaceRootPath: string,
+  expandedDirPaths: string[],
+  loadChildren: (dirPath: string) => Promise<FileEntry[]>,
+): Promise<void> {
+  const normalizedExpandedPaths = expandedDirPaths
+    .filter((path) => path !== workspaceRootPath)
+    .sort((left, right) => left.length - right.length);
+
+  for (const dirPath of normalizedExpandedPaths) {
+    const relativePath = dirPath.slice(workspaceRootPath.length).replace(/^\//, '');
+    if (!relativePath) continue;
+
+    const segments = relativePath.split('/').filter(Boolean);
+    let currentPath = workspaceRootPath;
+
+    for (const segment of segments) {
+      currentPath = `${currentPath}/${segment}`;
+      await loadChildren(currentPath);
+    }
+  }
+}
+
 export function useWorkspaceTree(): UseWorkspaceTreeResult {
   const workspacePath = useSidebarStore((state) => state.workspacePath);
   const expandedDirs = useSidebarStore((state) => state.expandedDirs);
@@ -150,12 +173,17 @@ export function useWorkspaceTree(): UseWorkspaceTreeResult {
     try {
       clearCache();
       await loadChildren(workspaceRootPath);
+      await restoreExpandedDirectories(
+        workspaceRootPath,
+        Array.from(expandedDirs),
+        loadChildren,
+      );
     } catch (err) {
       reportError('workspace-tree-refresh', err);
     } finally {
       setIsLoading(false);
     }
-  }, [workspaceRootPath, loadChildren, clearCache, setIsLoading]);
+  }, [workspaceRootPath, loadChildren, clearCache, expandedDirs, setIsLoading]);
 
   /**
    * Handle file system changes from the watcher.
