@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Brain,
   FileText,
@@ -11,8 +11,8 @@ import {
 } from 'lucide-react';
 import { useSettingsStore } from '../../store';
 import type { EmbeddingModelType } from '../../types';
-import { toBackendSettings } from '../../utils/settings';
 import styles from './SettingsPanel.module.css';
+import { saveSettings } from '../../utils/saveSettings';
 
 interface AvailableModel {
   name: string;
@@ -74,7 +74,7 @@ const MODEL_TIERS: ModelTier[] = [
   },
 ];
 
-export const KnowledgeSettings: React.FC = () => {
+export const KnowledgeSettings = () => {
   const { settings, updateSetting } = useSettingsStore();
   const [availableModels, setAvailableModels] = useState<AvailableModel[]>([]);
   const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
@@ -120,9 +120,9 @@ export const KnowledgeSettings: React.FC = () => {
     };
   }, []);
 
-  const saveSettings = async (nextSettings = settings) => {
+  const persistSettings = async (nextSettings = settings) => {
     try {
-      await invoke('save_settings', { settings: toBackendSettings(nextSettings) });
+      await saveSettings(nextSettings);
     } catch (err) {
       console.error('Failed to save settings:', err);
     }
@@ -134,7 +134,7 @@ export const KnowledgeSettings: React.FC = () => {
       embedding_model: modelId as EmbeddingModelType,
     };
     updateSetting('embedding_model', modelId as EmbeddingModelType);
-    saveSettings(nextSettings);
+    persistSettings(nextSettings);
   };
 
   const downloadModel = async (modelName: string) => {
@@ -291,8 +291,12 @@ export const KnowledgeSettings: React.FC = () => {
               step="50"
               value={settings.chunk_size}
               onChange={(e) => {
-                updateSetting('chunk_size', parseInt(e.target.value));
-                saveSettings();
+                const chunkSize = parseInt(e.target.value);
+                updateSetting('chunk_size', chunkSize);
+                persistSettings({
+                  ...settings,
+                  chunk_size: chunkSize,
+                });
               }}
               className={styles.range}
             />
@@ -313,8 +317,12 @@ export const KnowledgeSettings: React.FC = () => {
               step="10"
               value={settings.chunk_overlap}
               onChange={(e) => {
-                updateSetting('chunk_overlap', parseInt(e.target.value));
-                saveSettings();
+                const chunkOverlap = parseInt(e.target.value);
+                updateSetting('chunk_overlap', chunkOverlap);
+                persistSettings({
+                  ...settings,
+                  chunk_overlap: chunkOverlap,
+                });
               }}
               className={styles.range}
             />

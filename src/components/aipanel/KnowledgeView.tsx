@@ -1,8 +1,9 @@
 import { invoke } from '@tauri-apps/api/core';
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Database, RefreshCw, Trash2, FileText, Layers, Clock, AlertTriangle, Settings } from 'lucide-react';
 import { useSettingsStore, type BuildProgress } from '../../store';
-import { useSidebarStore, SETTINGS_TAB_ID } from '../../store';
+import { useSidebarStore } from '../../store';
+import { openSettingsTab } from '../../utils/openSettingsTab';
 import styles from './KnowledgeView.module.css';
 
 interface KnowledgeViewProps {
@@ -18,17 +19,16 @@ interface AvailableModel {
   size: string;
 }
 
-export const KnowledgeView: React.FC<KnowledgeViewProps> = ({
+export const KnowledgeView = ({
   onBuild,
   onClear,
-}) => {
+}: KnowledgeViewProps) => {
   const { knowledgeBase, buildProgress } = useSidebarStore();
   const { settings } = useSettingsStore();
   const [modelAvailable, setModelAvailable] = useState<{ available: boolean; name: string | null }>({
     available: false,
     name: null,
   });
-  const { openTab } = useSidebarStore();
 
   const isBuilding = !!buildProgress && !knowledgeBase;
 
@@ -52,13 +52,7 @@ export const KnowledgeView: React.FC<KnowledgeViewProps> = ({
   }, [settings.embedding_model]);
 
   const openSettings = () => {
-    openTab({
-      id: SETTINGS_TAB_ID,
-      path: SETTINGS_TAB_ID,
-      name: '设置',
-      isDirty: false,
-      isSettings: true,
-    });
+    openSettingsTab();
   };
 
   // Show model setup prompt if no model is available
@@ -159,7 +153,7 @@ interface BuildProgressViewProps {
   progress: BuildProgress;
 }
 
-const BuildProgressView: React.FC<BuildProgressViewProps> = ({ progress }) => {
+const BuildProgressView = ({ progress }: BuildProgressViewProps) => {
   const phaseLabels: Record<string, string> = {
     scanning: '扫描文件',
     chunking: '分块处理',

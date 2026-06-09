@@ -80,5 +80,5 @@ export function useAgentStream({ mode }: UseAgentStreamArgs) {
       resetTextStreaming();
       resetToolCallStreaming();
     };
-  }, [appendTextDelta, clearToolCalls, handleToolCallArgsDelta, handleToolCallStart, resetTextStreaming, resetToolCallStreaming, setPendingDiff]);
+  }, [appendTextDelta, clearToolCalls, handleToolCallArgsDelta, handleToolCallStart, resetTextStreaming, resetToolCallStreaming, setPendingDiff, streamingContentRef]);
 }

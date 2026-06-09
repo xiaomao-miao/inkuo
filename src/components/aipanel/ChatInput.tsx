@@ -1,8 +1,8 @@
-import React from 'react';
 import {
   Send, Trash2, StopCircle, Terminal, Loader2, Database,
 } from 'lucide-react';
 import type { ChatMode } from '../../store';
+import { getModifierKeyLabel } from '../../utils/platform';
 import styles from './AIPanelInput.module.css';
 
 const MODE_LABELS: Record<ChatMode, string> = {
@@ -31,10 +31,11 @@ interface ChatInputProps {
   onCycleMode: () => void;
 }
 
-export const ChatInput: React.FC<ChatInputProps> = ({
+export const ChatInput = ({
   input, setInput, mode, isStreaming, hasMessages,
   onSend, onStop, onClear, onCycleMode,
-}) => {
+}: ChatInputProps) => {
+  const modifierKey = getModifierKeyLabel();
   return (
     <div className={styles.inputArea}>
       <div className={styles.inputBubble}>
@@ -45,7 +46,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               ? '输入指令... (例如：帮我创建一个 README.md)'
               : mode === 'knowledge'
               ? '搜索工作区知识库...'
-              : '输入消息... (Enter 发送，Shift+Enter 换行)'
+              : `输入消息... (Enter 发送，Shift+Enter 换行，${modifierKey}+Enter 快速发送)`
           }
           value={input}
           onChange={e => setInput(e.target.value)}

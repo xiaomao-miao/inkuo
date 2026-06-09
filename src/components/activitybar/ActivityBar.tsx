@@ -1,8 +1,8 @@
 import React from 'react';
-import { 
-  Files, 
-  Search, 
-  GitBranch, 
+import {
+  Files,
+  Search,
+  GitBranch,
   BookOpen,
   PanelLeft
 } from 'lucide-react';
@@ -10,17 +10,19 @@ import styles from './ActivityBar.module.css';
 
 export type ViewType = 'files' | 'search' | 'git' | 'extensions';
 
+const EXTENSIONS_BADGE_COUNT = 0;
+
 interface ActivityBarProps {
   activeView: ViewType;
   onViewChange: (view: ViewType) => void;
   onToggleSidebar: () => void;
 }
 
-export const ActivityBar: React.FC<ActivityBarProps> = ({
+export const ActivityBar = ({
   activeView,
   onViewChange,
   onToggleSidebar,
-}) => {
+}: ActivityBarProps) => {
   const views: { id: ViewType; icon: React.ReactNode; label: string }[] = [
     { id: 'files', icon: <Files size={22} />, label: '资源管理器' },
     { id: 'search', icon: <Search size={22} />, label: '搜索' },
@@ -39,8 +41,8 @@ export const ActivityBar: React.FC<ActivityBarProps> = ({
             title={view.label}
           >
             {view.icon}
-            {view.id === 'extensions' && (
-              <span className={styles.badge}>5</span>
+            {view.id === 'extensions' && EXTENSIONS_BADGE_COUNT > 0 && (
+              <span className={styles.badge}>{EXTENSIONS_BADGE_COUNT}</span>
             )}
           </button>
         ))}

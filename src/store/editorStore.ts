@@ -304,7 +304,8 @@ export const useEditorStore = create<EditorState>()(
       ),
 
       removeDocumentContent: (path) => set((state) => {
-        const { [path]: _, ...rest } = state.documentContents;
+        const { [path]: removedDocument, ...rest } = state.documentContents;
+        void removedDocument;
         return { documentContents: rest };
       }),
 

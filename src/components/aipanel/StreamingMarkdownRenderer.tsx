@@ -32,47 +32,60 @@ function looksLikeMarkdown(text: string): boolean {
   return false;
 }
 
-function findValidMarkdownPrefix(text: string): string {
-  if (!text.includes('```') && !text.includes('\n#')) {
-    return text;
+function findSafeMarkdownBoundary(text: string): number {
+  let fenceCount = 0;
+  let inlineCodeOpen = false;
+  let boundary = text.length;
+
+  for (let index = 0; index < text.length; index += 1) {
+    if (text.startsWith('```', index)) {
+      fenceCount += 1;
+      index += 2;
+      continue;
+    }
+
+    if (text[index] === '`') {
+      inlineCodeOpen = !inlineCodeOpen;
+      boundary = index;
+    }
   }
 
-  const codeBlockPattern = /```[\w]*\n[\s\S]*?$/;
-  const match = text.match(codeBlockPattern);
-  if (match) {
-    const codeBlockStart = match[0].indexOf('\n') + 1;
-    if (codeBlockStart > 0 && codeBlockStart < match[0].length) {
-      return text.slice(0, match.index! + codeBlockStart);
-    }
+  if (fenceCount % 2 !== 0) {
+    return text.lastIndexOf('```');
+  }
+
+  if (inlineCodeOpen) {
+    return boundary;
   }
 
   const lines = text.split('\n');
-  let validUpTo = text.length;
+  let consumedLength = text.length;
 
-  for (let i = lines.length - 1; i >= 0; i--) {
-    const line = lines[i];
-    if (line.trim() === '') continue;
-
-    if (line.startsWith('#')) {
-      const hashCount = line.match(/^#+/)?.[0].length || 0;
-      if (line.slice(hashCount).trim() === '') {
-        validUpTo = text.indexOf(line);
-        continue;
-      }
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index];
+    if (!line.trim()) {
+      consumedLength -= line.length + 1;
+      continue;
     }
 
-    if (line.match(/^```/)) {
-      const prevLine = i > 0 ? lines[i - 1] : '';
-      if (!prevLine.match(/```.*$/)) {
-        validUpTo = text.indexOf(line);
-        continue;
-      }
+    if (/^#{1,6}\s*$/.test(line) || /^>\s*$/.test(line) || /^[-*+]\s*$/.test(line) || /^\d+\.\s*$/.test(line)) {
+      consumedLength -= line.length + 1;
+      continue;
     }
 
     break;
   }
 
-  return text.slice(0, validUpTo);
+  return Math.max(0, consumedLength);
+}
+
+function findValidMarkdownPrefix(text: string): string {
+  if (!text.includes('`') && !text.includes('\n#') && !text.includes('\n-') && !text.includes('\n>')) {
+    return text;
+  }
+
+  const boundary = findSafeMarkdownBoundary(text);
+  return text.slice(0, boundary);
 }
 
 export const StreamingMarkdownRenderer: React.FC<StreamingMarkdownRendererProps> = ({
@@ -101,7 +114,7 @@ export const StreamingMarkdownRenderer: React.FC<StreamingMarkdownRendererProps>
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight]}
         components={{
-          code({ node, className: codeClassName, children, ...props }) {
+          code({ className: codeClassName, children, ...props }) {
             const match = /language-(\w+)/.exec(codeClassName || '');
             const isInline = !match && !codeClassName;
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import {
   FolderOpen,
@@ -13,7 +13,7 @@ import {
   PanelLeftClose,
   PanelLeft
 } from 'lucide-react';
-import { useSidebarStore } from '../../store';
+import { useSidebarStore, type OpenTab } from '../../store';
 import type { FileEntry } from '../../types';
 import { useDebouncedCallback } from '../../hooks/useDebouncedCallback';
 import { useWorkspaceFileWatcher } from '../../hooks/useWorkspaceFileWatcher';
@@ -37,7 +37,7 @@ function getEntriesWithParents(matchingEntries: FileEntry[], allEntries: FileEnt
   return allEntries.filter(e => resultSet.has(e.path));
 }
 
-export const Sidebar: React.FC = () => {
+export const Sidebar = () => {
   const {
     workspacePath,
     files,
@@ -102,9 +102,9 @@ export const Sidebar: React.FC = () => {
         const refreshedChildren = await invoke<FileEntry[]>('list_directory', {
           path: parentDir,
         });
-        setFiles(prev => {
+        setFiles((prev: FileEntry[]) => {
           const cleaned = prev.filter(
-            f => !f.path.startsWith(parentDir + '/') || f.path === parentDir
+            (f: FileEntry) => !f.path.startsWith(parentDir + '/') || f.path === parentDir
           );
           return [...cleaned, ...refreshedChildren];
         });
@@ -120,8 +120,8 @@ export const Sidebar: React.FC = () => {
     removeFileEntry(deletedPath);
   }, [removeFileEntry]);
 
-  const handleFileModified = useCallback((_modifiedPath: string) => {
-    setFiles(prev => [...prev]);
+  const handleFileModified = useCallback(() => {
+    setFiles((prev: FileEntry[]) => [...prev]);
   }, [setFiles]);
 
   // Falls back to a full tree refresh when incremental updates are insufficient.
@@ -146,7 +146,7 @@ export const Sidebar: React.FC = () => {
         handleFileDeleted(changedPath);
         break;
       case 'Modified':
-        handleFileModified(changedPath);
+        handleFileModified();
         break;
       default:
         debouncedFullRefresh();
@@ -175,11 +175,11 @@ export const Sidebar: React.FC = () => {
 
       if (wasExpanded) {
         const folderPath = entry.path + '/';
-        setFiles(prevFiles => prevFiles.filter(f => !f.path.startsWith(folderPath)));
+        setFiles((prevFiles: FileEntry[]) => prevFiles.filter((f: FileEntry) => !f.path.startsWith(folderPath)));
       } else {
         try {
           const childEntries = await invoke<FileEntry[]>('list_directory', { path: entry.path });
-          setFiles(prevFiles => [...prevFiles, ...childEntries]);
+          setFiles((prevFiles: FileEntry[]) => [...prevFiles, ...childEntries]);
         } catch (err) {
           console.error('Failed to load directory:', err);
         }
@@ -215,7 +215,13 @@ export const Sidebar: React.FC = () => {
     return sortedEntries.map(entry => {
       const isExpanded = expandedDirs.has(entry.path);
       const isSelected = selectedFile === entry.path;
-      const isOpen = openTabs.some(t => t.path === entry.path);
+      const isOpen = openTabs.some((tab: OpenTab) => tab.path === entry.path);
+      const children = entry.is_dir
+        ? entries.filter((candidate) => {
+            const relativePath = candidate.path.slice(entry.path.length + 1);
+            return relativePath.length > 0 && !relativePath.includes('/');
+          })
+        : [];
 
       return (
         <div

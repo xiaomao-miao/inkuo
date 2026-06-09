@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core';
-import React, { useState } from 'react';
+import { useState } from 'react';
 import {
   Key,
   Globe,
@@ -23,13 +23,13 @@ import { useSettingsStore } from '../../store';
 import { Select } from './Select';
 import type { APIConfig, AIProviderType } from '../../types';
 import styles from './ModelsSettings.module.css';
-import { toBackendSettings } from '../../utils/settings';
+import { saveSettings } from '../../utils/saveSettings';
 
 interface ModelsSettingsProps {
   onClose?: () => void;
 }
 
-export const ModelsSettings: React.FC<ModelsSettingsProps> = ({ onClose }) => {
+export const ModelsSettings = ({ onClose }: ModelsSettingsProps) => {
   const {
     settings,
     addApiConfig,
@@ -44,11 +44,9 @@ export const ModelsSettings: React.FC<ModelsSettingsProps> = ({ onClose }) => {
   const [showApiKey, setShowApiKey] = useState<Record<string, boolean>>({});
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  const saveSettings = async () => {
+  const persistSettings = async (nextSettings = settings) => {
     try {
-      const backendSettings = toBackendSettings(settings);
-
-      await invoke('save_settings', { settings: backendSettings });
+      await saveSettings(nextSettings);
     } catch (err) {
       console.error('Failed to save settings:', err);
     }
@@ -89,7 +87,7 @@ export const ModelsSettings: React.FC<ModelsSettingsProps> = ({ onClose }) => {
       model: 'gpt-4o-mini',
     });
     setExpandedId(id);
-    saveSettings();
+    persistSettings();
   };
 
   const handleRemoveConfig = (id: string) => {
@@ -97,22 +95,22 @@ export const ModelsSettings: React.FC<ModelsSettingsProps> = ({ onClose }) => {
       return;
     }
     removeApiConfig(id);
-    saveSettings();
+    persistSettings();
   };
 
   const handleSelectConfig = (id: string) => {
     setActiveApiConfig(id);
-    saveSettings();
+    persistSettings();
   };
 
   const handleSetDefault = (id: string) => {
     setDefaultApiConfig(id);
-    saveSettings();
+    persistSettings();
   };
 
   const handleUpdateConfig = (id: string, updates: Partial<APIConfig>) => {
     updateApiConfig(id, updates);
-    saveSettings();
+    persistSettings();
   };
 
   const toggleShowApiKey = (id: string) => {

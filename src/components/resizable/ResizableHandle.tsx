@@ -6,45 +6,57 @@ interface ResizableHandleProps {
   onResize: (delta: number) => void;
 }
 
-export const ResizableHandle: React.FC<ResizableHandleProps> = ({
+export const ResizableHandle = ({
   direction,
   onResize,
-}) => {
-  const isDragging = useRef(false);
+}: ResizableHandleProps) => {
+  const activePointerId = useRef<number | null>(null);
   const startPos = useRef(0);
 
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    isDragging.current = true;
-    startPos.current = direction === 'horizontal' ? e.clientX : e.clientY;
+  const stopDragging = useCallback((target?: HTMLElement | null) => {
+    if (target && activePointerId.current !== null) {
+      target.releasePointerCapture(activePointerId.current);
+    }
+    activePointerId.current = null;
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+  }, []);
 
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!isDragging.current) return;
-      
-      const currentPos = direction === 'horizontal' ? e.clientX : e.clientY;
-      const delta = currentPos - startPos.current;
-      startPos.current = currentPos;
-      onResize(delta);
-    };
+  const handlePointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (activePointerId.current !== event.pointerId) return;
 
-    const handleMouseUp = () => {
-      isDragging.current = false;
-      document.removeEventListener('mousemove', handleMouseMove);
-      document.removeEventListener('mouseup', handleMouseUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-    };
+    const currentPos = direction === 'horizontal' ? event.clientX : event.clientY;
+    const delta = currentPos - startPos.current;
+    startPos.current = currentPos;
+    onResize(delta);
+  }, [direction, onResize]);
 
-    document.addEventListener('mousemove', handleMouseMove);
-    document.addEventListener('mouseup', handleMouseUp);
+  const handlePointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    activePointerId.current = event.pointerId;
+    startPos.current = direction === 'horizontal' ? event.clientX : event.clientY;
+    event.currentTarget.setPointerCapture(event.pointerId);
     document.body.style.cursor = direction === 'horizontal' ? 'ew-resize' : 'ns-resize';
     document.body.style.userSelect = 'none';
-  }, [direction, onResize]);
+  }, [direction]);
+
+  const handlePointerUp = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (activePointerId.current !== event.pointerId) return;
+    stopDragging(event.currentTarget);
+  }, [stopDragging]);
+
+  const handlePointerCancel = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (activePointerId.current !== event.pointerId) return;
+    stopDragging(event.currentTarget);
+  }, [stopDragging]);
 
   return (
     <div
       className={`${styles.handle} ${direction === 'horizontal' ? styles.horizontal : styles.vertical}`}
-      onMouseDown={handleMouseDown}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerCancel}
     >
       <div className={styles.line} />
     </div>

@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import { useAIPanelStore } from '../../store';
 import { useSidebarStore } from '../../store';
 import { useEditorStore, useInlineCompleteStore } from '../../store';
@@ -11,31 +11,32 @@ interface InlineDiffPreviewProps {
   isStreaming?: boolean;
 }
 
-export const InlineDiffPreview: React.FC<InlineDiffPreviewProps> = ({
+export const InlineDiffPreview = ({
   originalText,
   newText,
   sessionId,
   isStreaming = false,
-}) => {
+}: InlineDiffPreviewProps) => {
   const hasAutoAccepted = useRef(false);
-
-  const { originalText: storedOriginal, newText: storedNew, filePath: storedFilePath } = useRef({
+  const storedDiffRef = useRef({
     originalText,
     newText,
     filePath: '',
   });
 
   useEffect(() => {
-    storedOriginal.current = originalText;
-    storedNew.current = newText;
-    storedFilePath.current = useSidebarStore.getState().selectedFile || '';
+    storedDiffRef.current = {
+      originalText,
+      newText,
+      filePath: useSidebarStore.getState().selectedFile || '',
+    };
   }, [originalText, newText]);
 
   // Auto-accept when streaming completes
   useEffect(() => {
     if (isStreaming || hasAutoAccepted.current) return;
 
-    const filePath = storedFilePath.current;
+    const filePath = storedDiffRef.current.filePath;
     if (!filePath) return;
 
     hasAutoAccepted.current = true;
@@ -45,8 +46,8 @@ export const InlineDiffPreview: React.FC<InlineDiffPreviewProps> = ({
     if (!currentDoc) return;
 
     const fullContent = currentDoc.content;
-    const origText = storedOriginal.current;
-    const newTxt = storedNew.current;
+    const origText = storedDiffRef.current.originalText;
+    const newTxt = storedDiffRef.current.newText;
 
     // Find and replace the original selection in the full file content
     let replacedContent: string;

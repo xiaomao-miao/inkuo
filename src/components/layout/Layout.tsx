@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react';
+import { useCallback } from 'react';
 import { TitleBar } from '../titlebar/TitleBar';
 import { ActivityBar } from '../activitybar/ActivityBar';
 import { Sidebar } from '../sidebar/Sidebar';
@@ -10,7 +10,13 @@ import { useGlobalKeydown } from '../../hooks/useGlobalKeydown';
 import { useAIPanelStore, useLayoutStore } from '../../store';
 import styles from './Layout.module.css';
 
-export const Layout: React.FC = () => {
+const DISABLED_VIEW_LABELS = {
+  search: '搜索',
+  git: '源代码管理',
+  extensions: '扩展',
+} as const;
+
+export const Layout = () => {
   const { isOpen: isAIPanelOpen, togglePanel } = useAIPanelStore();
   const {
     activeView,
@@ -65,13 +71,9 @@ export const Layout: React.FC = () => {
               {activeView === 'files' ? (
                 <Sidebar />
               ) : (
-                <div className={styles.placeholder}>
-                  <p>
-                    {activeView === 'search' && '搜索'}
-                    {activeView === 'git' && '源代码管理'}
-                    {activeView === 'extensions' && '扩展'}
-                  </p>
-                  <span>功能开发中...</span>
+                <div className={styles.placeholder} aria-live="polite">
+                  <p>{DISABLED_VIEW_LABELS[activeView]}</p>
+                  <span>该视图暂未开放，当前以禁用状态展示。</span>
                 </div>
               )}
             </div>

@@ -9,7 +9,7 @@ import './styles/global.css';
 
 function App() {
   const { settings } = useSettingsStore();
-  const { openTabs, activeTabId, setActiveTab } = useSidebarStore();
+  const { hasRestoredFromPersist } = useSidebarStore();
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', settings.theme);
@@ -21,11 +21,10 @@ function App() {
 
   const initTabRestored = useRef(false);
   useEffect(() => {
-    if (!initTabRestored.current && openTabs.length > 0 && activeTabId) {
+    if (hasRestoredFromPersist) {
       initTabRestored.current = true;
-      setActiveTab(activeTabId);
     }
-  }, [openTabs, activeTabId, setActiveTab]);
+  }, [hasRestoredFromPersist]);
 
   return (
     <>

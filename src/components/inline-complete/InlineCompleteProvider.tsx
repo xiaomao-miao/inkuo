@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useCallback, useRef, useEffect } from 'react';
+import React, { useCallback, useRef, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useInlineCompleteStore } from '../../store';
 import type {
@@ -6,38 +6,11 @@ import type {
   InlineCompletionResponse,
   CompletionItem,
 } from '../../types/inline-complete';
+import { InlineCompleteContext, type InlineCompleteContextValue } from './inlineCompleteContext';
 
 const debugInlineComplete = import.meta.env.DEV
   ? (...args: unknown[]) => console.debug('[InlineComplete]', ...args)
   : undefined;
-
-interface InlineCompleteContextValue {
-  isEnabled: boolean;
-  currentCompletion: CompletionItem | null;
-  isLoading: boolean;
-  error: string | null;
-
-  triggerCompletion: (params: {
-    document: string;
-    cursorPosition: number;
-    language: string;
-    filePath?: string;
-    snippet?: { text: string; start_offset: number };
-  }) => Promise<void>;
-  acceptCompletion: () => CompletionItem | null;
-  dismissCompletion: () => void;
-  setEnabled: (enabled: boolean) => void;
-}
-
-const InlineCompleteContext = createContext<InlineCompleteContextValue | null>(null);
-
-export function useInlineComplete(): InlineCompleteContextValue {
-  const context = useContext(InlineCompleteContext);
-  if (!context) {
-    throw new Error('useInlineComplete must be used within InlineCompleteProvider');
-  }
-  return context;
-}
 
 interface InlineCompleteProviderProps {
   children: React.ReactNode;

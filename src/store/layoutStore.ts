@@ -23,6 +23,8 @@ const AIPANEL_MIN_WIDTH = 300;
 const AIPANEL_MAX_WIDTH = 600;
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+const applyResizeDelta = (width: number, delta: number, min: number, max: number) =>
+  clamp(width + delta, min, max);
 
 export const useLayoutStore = create<LayoutState>()(
   persist(
@@ -37,11 +39,11 @@ export const useLayoutStore = create<LayoutState>()(
       showSidebar: () => set({ isSidebarVisible: true }),
       setSidebarWidth: (width) => set({ sidebarWidth: clamp(width, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH) }),
       resizeSidebar: (delta) => set((state) => ({
-        sidebarWidth: clamp(state.sidebarWidth + delta, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH),
+        sidebarWidth: applyResizeDelta(state.sidebarWidth, delta, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH),
       })),
       setAIPanelWidth: (width) => set({ aipanelWidth: clamp(width, AIPANEL_MIN_WIDTH, AIPANEL_MAX_WIDTH) }),
       resizeAIPanel: (delta) => set((state) => ({
-        aipanelWidth: clamp(state.aipanelWidth - delta, AIPANEL_MIN_WIDTH, AIPANEL_MAX_WIDTH),
+        aipanelWidth: applyResizeDelta(state.aipanelWidth, -delta, AIPANEL_MIN_WIDTH, AIPANEL_MAX_WIDTH),
       })),
     }),
     {

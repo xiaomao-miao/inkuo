@@ -1,10 +1,10 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { FileText, File, X, Circle, Settings } from 'lucide-react';
 import { useSidebarStore } from '../../store';
 import type { OpenTab } from '../../store';
 import styles from './TabBar.module.css';
 
-export const TabBar: React.FC = () => {
+export const TabBar = () => {
   const { openTabs, activeTabId, setActiveTab, closeTab, openTabDirtyMap } = useSidebarStore();
   const [confirmClosePath, setConfirmClosePath] = useState<string | null>(null);
 
@@ -14,7 +14,7 @@ export const TabBar: React.FC = () => {
 
   const handleCloseTab = (e: React.MouseEvent, tabId: string) => {
     e.stopPropagation();
-    const tab = openTabs.find(t => t.id === tabId);
+    const tab = openTabs.find((item) => item.id === tabId);
     if (!tab || tab.isSettings) {
       closeTab(tabId);
       return;
@@ -29,7 +29,7 @@ export const TabBar: React.FC = () => {
 
   const handleConfirmClose = () => {
     if (confirmClosePath) {
-      const tab = openTabs.find(t => t.path === confirmClosePath);
+      const tab = openTabs.find((item) => item.path === confirmClosePath);
       if (tab) {
         closeTab(tab.id);
       }
@@ -53,7 +53,7 @@ export const TabBar: React.FC = () => {
     return isMarkdown ? <FileText size={14} /> : <File size={14} />;
   };
 
-  const confirmTab = confirmClosePath ? openTabs.find(t => t.path === confirmClosePath) : null;
+  const confirmTab = confirmClosePath ? openTabs.find((item) => item.path === confirmClosePath) : null;
 
   return (
     <>

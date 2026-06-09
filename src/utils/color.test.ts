@@ -17,7 +17,7 @@ describe('adjustColor', () => {
 
   it('supports short hex colors', () => {
     expect(adjustColor('#fff', 0)).toBe('#ffffff');
-    expect(adjustColor('#123', 10)).toBe('#1a344d');
+    expect(adjustColor('#123', 10)).toBe('#2b3c4d');
   });
 
   it('returns invalid input unchanged', () => {

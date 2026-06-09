@@ -1,9 +1,8 @@
-import React from 'react';
 import { Check, X } from 'lucide-react';
 import { useEditorStore, useSidebarStore } from '../../store';
 import styles from './DiffActionBar.module.css';
 
-export const DiffActionBar: React.FC = () => {
+export const DiffActionBar = () => {
   const { selectedFile } = useSidebarStore();
   const { documentContents, applyAllHunks, rejectAllHunks } = useEditorStore();
 
@@ -14,17 +13,17 @@ export const DiffActionBar: React.FC = () => {
 
   if (!doc?.isDiffMode || hunks.length === 0) return null;
 
-  const handleAcceptAll = async () => {
+  const handleAcceptAll = () => {
     try {
-      await applyAllHunks(selectedFile);
+      applyAllHunks(selectedFile);
     } catch (e) {
       console.error('accept all failed', e);
     }
   };
 
-  const handleRejectAll = async () => {
+  const handleRejectAll = () => {
     try {
-      await rejectAllHunks(selectedFile);
+      rejectAllHunks(selectedFile);
     } catch (e) {
       console.error('reject all failed', e);
     }

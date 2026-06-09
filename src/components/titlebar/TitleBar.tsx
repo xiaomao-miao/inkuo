@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Minus,
   Square,
@@ -6,10 +6,11 @@ import {
   Copy,
   Settings
 } from 'lucide-react';
-import { useSidebarStore, useEditorStore, SETTINGS_TAB_ID } from '../../store';
+import { useSidebarStore, useEditorStore } from '../../store';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { applyWorkspaceDirectoryLoad, openWorkspaceDirectory } from '../../services/workspace';
+import { openSettingsTab } from '../../utils/openSettingsTab';
 import styles from './TitleBar.module.css';
 
 interface MenuItem {
@@ -25,25 +26,19 @@ interface Menu {
   items: MenuItem[];
 }
 
-export const TitleBar: React.FC = () => {
+export const TitleBar = () => {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
   const [isMaximized, setIsMaximized] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   
-  const { selectedFile, setWorkspacePath, openTab } = useSidebarStore();
+  const { selectedFile, setWorkspacePath } = useSidebarStore();
   const { documentContents, markSaved } = useEditorStore();
 
   const currentDoc = selectedFile ? documentContents[selectedFile] : null;
   const isDirty = currentDoc?.isDirty || false;
 
   const handleOpenSettings = () => {
-    openTab({
-      id: SETTINGS_TAB_ID,
-      path: SETTINGS_TAB_ID,
-      name: '设置',
-      isDirty: false,
-      isSettings: true,
-    });
+    openSettingsTab();
   };
 
   // Check initial maximized state

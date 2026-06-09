@@ -1,8 +1,9 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { Sparkles, X, ChevronDown, Loader2 } from 'lucide-react';
 import { useCmdKStore, useEditorStore, useSidebarStore } from '../../store';
 import type { AIEditResponse, DiffResult } from '../../types';
+import { getModifierKeyLabel } from '../../utils/platform';
 import styles from './CmdK.module.css';
 
 const SCOPE_OPTIONS = [
@@ -19,7 +20,7 @@ const TEMPLATES = [
   { label: '添加小标题', instruction: '为每个段落添加简洁的小标题' },
 ];
 
-export const CmdK: React.FC = () => {
+export const CmdK = () => {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const {
     isOpen,
@@ -41,6 +42,7 @@ export const CmdK: React.FC = () => {
   const selection = currentDoc?.selection || null;
   
   const [showScopeDropdown, setShowScopeDropdown] = useState(false);
+  const modifierKey = getModifierKeyLabel();
 
   // Focus input when opened
   useEffect(() => {
@@ -77,9 +79,6 @@ export const CmdK: React.FC = () => {
     setIsProcessing(true);
     
     try {
-      const targetText = getTargetText();
-      
-      // Call AI edit
       const response = await invoke<AIEditResponse>('ai_edit', {
         instruction: instruction.trim(),
         originalText: targetText,
@@ -120,6 +119,7 @@ export const CmdK: React.FC = () => {
   if (!isOpen) return null;
 
   const selectedScope = SCOPE_OPTIONS.find(s => s.value === scope);
+  const targetText = getTargetText();
 
   return (
     <div className={styles.overlay} onClick={close}>
@@ -191,14 +191,14 @@ export const CmdK: React.FC = () => {
         <div className={styles.preview}>
           <span className={styles.previewLabel}>将应用于:</span>
           <code className={styles.previewText}>
-            {getTargetText().slice(0, 100)}
-            {getTargetText().length > 100 && '...'}
+            {targetText.slice(0, 100)}
+            {targetText.length > 100 && '...'}
           </code>
         </div>
         
         <div className={styles.footer}>
           <span className={styles.hint}>
-            <kbd>Cmd</kbd> + <kbd>Enter</kbd> 发送
+            <kbd>{modifierKey}</kbd> + <kbd>Enter</kbd> 发送
           </span>
           <button 
             className={styles.submitButton}

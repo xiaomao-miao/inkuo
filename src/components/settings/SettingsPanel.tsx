@@ -1,5 +1,4 @@
-import { invoke } from '@tauri-apps/api/core';
-import React, { useState } from 'react';
+import { useState } from 'react';
 import {
   Settings2,
   Cpu,
@@ -14,21 +13,19 @@ import {
 import { useSettingsStore, useInlineCompleteStore } from '../../store';
 import { ModelsSettings, KnowledgeSettings } from './index';
 import { Select } from './Select';
-import { toBackendSettings } from '../../utils/settings';
+import { saveSettings } from '../../utils/saveSettings';
 import styles from './SettingsPanel.module.css';
 
 type SettingsTab = 'models' | 'knowledge' | 'editor' | 'ai' | 'appearance' | 'about';
 
-export const SettingsPanel: React.FC = () => {
+export const SettingsPanel = () => {
   const { settings, updateSetting } = useSettingsStore();
   const { enabled, debounceMs, setEnabled } = useInlineCompleteStore();
   const [activeTab, setActiveTab] = useState<SettingsTab>('models');
 
-  const saveSettings = async () => {
+  const persistSettings = async (nextSettings = settings) => {
     try {
-      const backendSettings = toBackendSettings(settings);
-
-      await invoke('save_settings', { settings: backendSettings });
+      await saveSettings(nextSettings);
     } catch (err) {
       console.error('Failed to save settings:', err);
     }
@@ -68,7 +65,7 @@ export const SettingsPanel: React.FC = () => {
                     value={settings.editor_font_size}
                     onChange={(e) => {
                       updateSetting('editor_font_size', parseInt(e.target.value));
-                      saveSettings();
+                      persistSettings();
                     }}
                     className={styles.range}
                   />
@@ -89,7 +86,7 @@ export const SettingsPanel: React.FC = () => {
                   ]}
                   onChange={(value) => {
                     updateSetting('editor_font_family', value);
-                    saveSettings();
+                    persistSettings();
                   }}
                   className={styles.select}
                 />
@@ -111,7 +108,7 @@ export const SettingsPanel: React.FC = () => {
                       checked={settings.editor_word_wrap}
                       onChange={(e) => {
                         updateSetting('editor_word_wrap', e.target.checked);
-                        saveSettings();
+                        persistSettings();
                       }}
                     />
                     <span className={styles.toggleSlider}></span>
@@ -129,7 +126,7 @@ export const SettingsPanel: React.FC = () => {
                       checked={settings.editor_line_numbers}
                       onChange={(e) => {
                         updateSetting('editor_line_numbers', e.target.checked);
-                        saveSettings();
+                        persistSettings();
                       }}
                     />
                     <span className={styles.toggleSlider}></span>
@@ -140,7 +137,7 @@ export const SettingsPanel: React.FC = () => {
             </div>
           </div>
         );
-      case 'ai':
+      case 'ai': {
         const activeConfig = settings.apiConfigs.find(
           (c) => c.id === settings.activeApiConfigId
         );
@@ -174,7 +171,7 @@ export const SettingsPanel: React.FC = () => {
                     options={modelOptions}
                     onChange={(value) => {
                       useSettingsStore.getState().setActiveApiConfig(value);
-                      saveSettings();
+                      persistSettings();
                     }}
                     className={styles.select}
                   />
@@ -258,6 +255,7 @@ export const SettingsPanel: React.FC = () => {
             </div>
           </div>
         );
+      }
       case 'appearance':
         return (
           <div className={styles.tabContent}>
@@ -276,7 +274,7 @@ export const SettingsPanel: React.FC = () => {
                     }`}
                     onClick={() => {
                       updateSetting('theme', 'cursor-dark');
-                      saveSettings();
+                      persistSettings();
                     }}
                   >
                     <div className={styles.themePreview} style={{ background: '#1e1e1e' }}>
@@ -290,7 +288,7 @@ export const SettingsPanel: React.FC = () => {
                     }`}
                     onClick={() => {
                       updateSetting('theme', 'cursor-light');
-                      saveSettings();
+                      persistSettings();
                     }}
                   >
                     <div className={styles.themePreview} style={{ background: '#ffffff' }}>
@@ -309,7 +307,7 @@ export const SettingsPanel: React.FC = () => {
                     value={settings.accent_color}
                     onChange={(e) => {
                       updateSetting('accent_color', e.target.value);
-                      saveSettings();
+                      persistSettings();
                     }}
                     className={styles.colorInput}
                   />

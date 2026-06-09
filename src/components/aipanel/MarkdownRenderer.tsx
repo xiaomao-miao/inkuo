@@ -16,7 +16,7 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content, cla
         remarkPlugins={[remarkGfm]}
         rehypePlugins={[rehypeHighlight]}
         components={{
-          code({ node, className: codeClassName, children, ...props }) {
+          code({ className: codeClassName, children, ...props }) {
             const match = /language-(\w+)/.exec(codeClassName || '');
             const isInline = !match && !codeClassName;
 

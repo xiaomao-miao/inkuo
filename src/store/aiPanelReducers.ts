@@ -6,7 +6,6 @@ import type {
   DiffChange,
   OutputItem,
 } from '../types';
-import { useEditorStore, useSidebarStore } from '../index';
 
 export type OutputItemMatchKey = { toolCallId: string } | { contentContains: string };
 
@@ -84,7 +83,7 @@ export function trimSessionMessagesAfter(session: ChatSession, messageId: string
   };
 }
 
-export function applyHunkChanges(originalText: string, changes: DiffChange[]): string {
+export function applyHunkChanges(_originalText: string, changes: DiffChange[]): string {
   let result = '';
   let i = 0;
 

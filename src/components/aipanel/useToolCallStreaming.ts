@@ -1,28 +1,34 @@
-import { parse as parsePartialJson } from 'jsonchunk';
 import { useCallback, useRef } from 'react';
 import { useAIPanelStore } from '../../store';
 import type { StreamPayload } from './streamTypes';
 import type { PendingToolArgEntry } from './toolCallStreamActions';
 import { TIMING } from '../../constants/timing';
+import { parsePartialJsonObject } from '../../utils/json';
 import {
   applyPendingToolArgs,
   applyToolCallStartToState,
 } from './toolCallStreamActions';
 
 function parseToolArgs(rawArgs: string) {
-  const partial = parsePartialJson(rawArgs) as Record<string, unknown> | undefined;
-  const streamingContent = (partial?.content || partial?.new_text || partial?.json_content) as string | undefined;
+  const partial = parsePartialJsonObject(rawArgs);
+  const streamingContent = [partial.content, partial.new_text, partial.json_content]
+    .find((value): value is string => typeof value === 'string');
 
-  let parsedArgs: Record<string, unknown> = {};
+  let parsedArgs = partial;
   try {
-    if (rawArgs) parsedArgs = JSON.parse(rawArgs);
+    if (rawArgs) {
+      const parsed = JSON.parse(rawArgs);
+      parsedArgs = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? parsed as Record<string, unknown>
+        : partial;
+    }
   } catch {
-    parsedArgs = partial || {};
+    // Fall back to the partially parsed object while streaming.
   }
 
   return {
     parsedArgs,
-    streamingContent: streamingContent ?? undefined,
+    streamingContent,
   };
 }
 

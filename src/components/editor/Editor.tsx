@@ -36,7 +36,7 @@ const EditorContent: React.FC<{
   const currentDoc = selectedFile ? documentContents[selectedFile] : null;
   const currentContent = currentDoc?.content || '';
   const isDirty = currentDoc?.isDirty || false;
-  const diffHunks = currentDoc?.diffHunks || [];
+  const diffHunks = useMemo(() => currentDoc?.diffHunks ?? [], [currentDoc?.diffHunks]);
   const isDiffMode = currentDoc?.isDiffMode || false;
   const selection = currentDoc?.selection || null;
 

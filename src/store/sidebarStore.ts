@@ -84,7 +84,7 @@ interface SidebarState {
 }
 
 export const useSidebarStore = create<SidebarState>()(
-  persist(
+  persist<SidebarState, [], [], PersistedSidebarState>(
     (set) => ({
       workspacePath: null,
       files: [],
@@ -170,7 +170,11 @@ export const useSidebarStore = create<SidebarState>()(
             ? newTabs[Math.min(closedIndex, newTabs.length - 1)].id
             : null;
         }
-        const { [closedPath as string]: _, ...restDirtyMap } = state.openTabDirtyMap;
+
+        const restDirtyMap = closedPath
+          ? Object.fromEntries(Object.entries(state.openTabDirtyMap).filter(([path]) => path !== closedPath))
+          : state.openTabDirtyMap;
+
         return {
           openTabs: newTabs,
           activeTabId: newActiveId,
@@ -204,13 +208,13 @@ export const useSidebarStore = create<SidebarState>()(
       removeDescendants: (parentPath) => set((state) => ({
         files: state.files.filter((f) => !f.path.startsWith(parentPath + '/')),
       })),
-      isDirExpanded: (path) => {
+      isDirExpanded: (path): boolean => {
         return useSidebarStore.getState().expandedDirs.has(path);
       },
 
-      setKnowledgeBase: (kb) => set({ knowledgeBase: kb }),
-      setBuildProgress: (progress) => set({ buildProgress: progress }),
-      setKnowledgeToolCall: (toolCall) => set({ knowledgeToolCall: toolCall }),
+      setKnowledgeBase: (kb: KnowledgeBase | undefined) => set({ knowledgeBase: kb }),
+      setBuildProgress: (progress: BuildProgress | undefined) => set({ buildProgress: progress }),
+      setKnowledgeToolCall: (toolCall: ActiveToolCall | undefined) => set({ knowledgeToolCall: toolCall }),
     }),
     {
       name: 'inkuo-sidebar',
@@ -225,7 +229,7 @@ export const useSidebarStore = create<SidebarState>()(
         buildProgress: state.buildProgress,
         knowledgeToolCall: state.knowledgeToolCall,
       }),
-      merge: (persisted, current) => {
+      merge: (persisted, current): SidebarState => {
         const persistedState = persisted as PersistedSidebarState | undefined;
         return {
           ...current,
