@@ -95,6 +95,43 @@ interface WordEditorProps {
   isActive: boolean;
 }
 
+const WordInlineStatusBar: React.FC = () => {
+  const enabled = true;
+  const currentCompletion = useInlineCompleteStore((state) => state.currentCompletion);
+  const isLoading = useInlineCompleteStore((state) => state.isLoading);
+  const inlineError = useInlineCompleteStore((state) => state.error);
+
+  if (!enabled) {
+    return null;
+  }
+
+  return (
+    <div className={styles.officeStatusBar}>
+      {isLoading && (
+        <span className={styles.inlineLoading}>
+          <span className={styles.loadingDot} />
+          <span className={styles.loadingDot} />
+          <span className={styles.loadingDot} />
+          <span className={styles.inlineLoadingText}>正在补全</span>
+        </span>
+      )}
+      {!isLoading && currentCompletion && (
+        <span className={styles.inlineReady}>
+          <kbd>Tab</kbd> 接受 · <kbd>Esc</kbd> 拒绝
+        </span>
+      )}
+      {!isLoading && inlineError && (
+        <span className={styles.inlineError} title={inlineError}>补全失败</span>
+      )}
+      {!isLoading && !currentCompletion && !inlineError && (
+        <span className={styles.inlineHint}>
+          <kbd>Tab</kbd> AI 补全
+        </span>
+      )}
+    </div>
+  );
+};
+
 export const WordEditor: React.FC<WordEditorProps> = ({
   filePath,
   fileName,
@@ -118,11 +155,6 @@ export const WordEditor: React.FC<WordEditorProps> = ({
     [filePath]
   );
 
-  const enabled = true;
-  const currentCompletion = useInlineCompleteStore((s) => s.currentCompletion);
-  const isLoading = useInlineCompleteStore((s) => s.isLoading);
-  const inlineError = useInlineCompleteStore((s) => s.error);
-
   const handleEditorViewReady = useCallback((view: EditorView) => {
     pmViewRef.current = view;
   }, []);
@@ -139,6 +171,11 @@ export const WordEditor: React.FC<WordEditorProps> = ({
   const [loading, setLoading] = useState<boolean>(() => initialBuffer === null);
   const [error, setError] = useState<string | null>(null);
   const [isDirty, setIsDirty] = useState(false);
+  const dirtyStateRef = useRef(false);
+
+  useEffect(() => {
+    dirtyStateRef.current = isDirty;
+  }, [isDirty]);
 
   const setOpenTabDirty = useSidebarStore((state) => state.setOpenTabDirty);
   const officeBufferVersion = useEditorStore(s => s.documentContents[filePath]?.office.bufferVersion ?? 0);
@@ -222,6 +259,11 @@ export const WordEditor: React.FC<WordEditorProps> = ({
   useKeyboardSave({ onSave: handleSave, enabled: isDirty && isActive });
 
   const handleChange = useCallback(() => {
+    if (dirtyStateRef.current) {
+      return;
+    }
+
+    dirtyStateRef.current = true;
     setIsDirty(true);
     setOpenTabDirty(filePath, true);
   }, [filePath, setOpenTabDirty]);
@@ -283,31 +325,7 @@ export const WordEditor: React.FC<WordEditorProps> = ({
         />
         {/* Word inline completion ghost is rendered by ProseMirror decorations (externalPlugins) */}
       </div>
-      {enabled && (
-        <div className={styles.officeStatusBar}>
-          {isLoading && (
-            <span className={styles.inlineLoading}>
-              <span className={styles.loadingDot} />
-              <span className={styles.loadingDot} />
-              <span className={styles.loadingDot} />
-              <span className={styles.inlineLoadingText}>正在补全</span>
-            </span>
-          )}
-          {!isLoading && currentCompletion && (
-            <span className={styles.inlineReady}>
-              <kbd>Tab</kbd> 接受 · <kbd>Esc</kbd> 拒绝
-            </span>
-          )}
-          {!isLoading && inlineError && (
-            <span className={styles.inlineError} title={inlineError}>补全失败</span>
-          )}
-          {!isLoading && !currentCompletion && !inlineError && (
-            <span className={styles.inlineHint}>
-              <kbd>Tab</kbd> AI 补全
-            </span>
-          )}
-        </div>
-      )}
+      <WordInlineStatusBar />
     </div>
   );
 };

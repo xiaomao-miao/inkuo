@@ -256,9 +256,16 @@ export const useSidebarStore = create<SidebarState>()(
         }),
 
       setOpenTabDirty: (path, isDirty) =>
-        set((state) => ({
-          openTabs: updateOpenTabDirtyState(state.openTabs, path, isDirty),
-        })),
+        set((state) => {
+          const currentTab = state.openTabs.find((tab) => tab.path === path);
+          if (!currentTab || currentTab.isDirty === isDirty) {
+            return {};
+          }
+
+          return {
+            openTabs: updateOpenTabDirtyState(state.openTabs, path, isDirty),
+          };
+        }),
 
       setKnowledgeBase: (kb: KnowledgeBase | undefined) => set({ knowledgeBase: kb }),
       setBuildProgress: (progress: BuildProgress | undefined) => set({ buildProgress: progress }),
