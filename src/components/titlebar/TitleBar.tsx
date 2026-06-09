@@ -34,10 +34,9 @@ export const TitleBar = () => {
   
   const selectedFile = useSidebarStore((state) => state.selectedFile);
   const setWorkspacePath = useSidebarStore((state) => state.setWorkspacePath);
-  const documentContents = useEditorStore((state) => state.documentContents);
-
-  const currentDoc = selectedFile ? documentContents[selectedFile] : null;
-  const currentMetadata = currentDoc?.metadata;
+  const currentMetadata = useEditorStore((state) => (
+    selectedFile ? state.documentContents[selectedFile]?.metadata : null
+  ));
   const isDirty = currentMetadata?.isDirty ?? false;
 
   const handleOpenSettings = () => {

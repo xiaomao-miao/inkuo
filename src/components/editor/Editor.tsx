@@ -24,16 +24,15 @@ const diffDecorationsCompartment = new Compartment();
 const EditorContent: React.FC<{
   editorRef: React.RefObject<ReactCodeMirrorRef | null>;
 }> = ({ editorRef }) => {
-  const documentContents = useEditorStore((state) => state.documentContents);
+  const selectedFile = useSidebarStore((state) => state.selectedFile);
+  const currentDoc = useEditorStore((state) => (selectedFile ? state.documentContents[selectedFile] : null));
   const setContent = useEditorStore((state) => state.setContent);
   const isPreviewMode = useEditorStore((state) => state.isPreviewMode);
   const togglePreviewMode = useEditorStore((state) => state.togglePreviewMode);
   const settings = useSettingsStore((state) => state.settings);
-  const selectedFile = useSidebarStore((state) => state.selectedFile);
   const setOpenTabDirty = useSidebarStore((state) => state.setOpenTabDirty);
   const [refreshToken, setRefreshToken] = useState(0);
 
-  const currentDoc = selectedFile ? documentContents[selectedFile] : null;
   const currentMetadata = currentDoc?.metadata;
   const currentDiff = currentDoc?.diff;
   const currentContent = currentMetadata?.content ?? '';
@@ -167,12 +166,42 @@ type RenderableOfficeTab = {
   fileType: 'word' | 'excel';
 };
 
+const OfficeTabRenderer: React.FC<{
+  tab: OpenTab;
+  fileType: 'word' | 'excel';
+  isActive: boolean;
+}> = ({ tab, fileType, isActive }) => {
+  const officeState = useEditorStore((state) => state.documentContents[tab.path]?.office);
+
+  if (fileType === 'word') {
+    const tabCached = officeState?.docxBuffer ?? null;
+    return (
+      <WordEditor
+        key={tab.id}
+        filePath={tab.path}
+        fileName={tab.name}
+        initialBuffer={tabCached ? new Uint8Array(tabCached) : null}
+        isActive={isActive}
+      />
+    );
+  }
+
+  return (
+    <ExcelEditor
+      key={tab.id}
+      filePath={tab.path}
+      fileName={tab.name}
+      initialData={officeState?.excelData ?? null}
+      isActive={isActive}
+    />
+  );
+};
+
 export const Editor: React.FC = () => {
   const editorRef = useRef<ReactCodeMirrorRef>(null);
   const selectedFile = useSidebarStore((state) => state.selectedFile);
   const activeTabId = useSidebarStore((state) => state.activeTabId);
   const openTabs = useSidebarStore((state) => state.openTabs);
-  const documentContents = useEditorStore((state) => state.documentContents);
   const isSettingsTab = activeTabId === SETTINGS_TAB_ID;
 
   const activeFileType = selectedFile ? detectFileType(selectedFile) : null;
@@ -195,26 +224,11 @@ export const Editor: React.FC = () => {
       {officeTabs.map(({ tab, fileType }) => {
         const isActive = tab.path === selectedFile && activeFileType === fileType;
 
-        if (fileType === 'word') {
-          const tabCached = documentContents[tab.path]?.office.docxBuffer ?? null;
-          return (
-            <WordEditor
-              key={tab.id}
-              filePath={tab.path}
-              fileName={tab.name}
-              initialBuffer={tabCached ? new Uint8Array(tabCached) : null}
-              isActive={isActive}
-            />
-          );
-        }
-
-        const tabCached = documentContents[tab.path]?.office.excelData ?? null;
         return (
-          <ExcelEditor
+          <OfficeTabRenderer
             key={tab.id}
-            filePath={tab.path}
-            fileName={tab.name}
-            initialData={tabCached}
+            tab={tab}
+            fileType={fileType}
             isActive={isActive}
           />
         );

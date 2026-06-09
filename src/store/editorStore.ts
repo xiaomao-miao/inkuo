@@ -5,7 +5,6 @@ import {
   createDocumentSlice,
   createOfficeSlice,
   createPreviewSlice,
-  normalizeDocumentState,
   type EditorState,
 } from './editorStore.slices';
 import type { DiffApplicationActions } from './aiPanelStore.types';
@@ -18,21 +17,9 @@ function migrateEditorState(
 ): Pick<EditorState, 'documentContents' | 'isPreviewMode'> {
   const typedState = (persistedState ?? {}) as Partial<Pick<EditorState, 'documentContents' | 'isPreviewMode'>>;
 
-  if (version !== EDITOR_STORAGE_VERSION) {
-    return {
-      documentContents: {},
-      isPreviewMode: typedState.isPreviewMode ?? {},
-    };
-  }
-
   return {
-    documentContents: Object.fromEntries(
-      Object.entries(typedState.documentContents ?? {}).map(([path, documentState]) => [
-        path,
-        normalizeDocumentState(documentState),
-      ])
-    ),
-    isPreviewMode: typedState.isPreviewMode ?? {},
+    documentContents: {},
+    isPreviewMode: version === EDITOR_STORAGE_VERSION ? (typedState.isPreviewMode ?? {}) : (typedState.isPreviewMode ?? {}),
   };
 }
 
@@ -62,7 +49,7 @@ export const useEditorStore = create<EditorState>()(
       version: EDITOR_STORAGE_VERSION,
       migrate: migrateEditorState,
       partialize: (state) => ({
-        documentContents: state.documentContents,
+        documentContents: {},
         isPreviewMode: state.isPreviewMode,
       }),
     }

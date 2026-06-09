@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { useNotificationStore } from '../store';
 import { reportError } from '../utils/errors';
@@ -10,13 +10,15 @@ export function useTauriEvent<TPayload>(
   handler: (payload: TPayload) => void,
 ) {
   const pushNotification = useNotificationStore((state) => state.pushNotification);
+  const handlerRef = useRef(handler);
+  handlerRef.current = handler;
 
   useEffect(() => {
     let unlisten: Unlisten | null = null;
     let disposed = false;
 
     void listen<TPayload>(eventName, (event) => {
-      handler(event.payload);
+      handlerRef.current(event.payload);
     })
       .then((fn) => {
         if (disposed) {
@@ -44,5 +46,5 @@ export function useTauriEvent<TPayload>(
         unlisten();
       }
     };
-  }, [eventName, handler, pushNotification]);
+  }, [eventName, pushNotification]);
 }

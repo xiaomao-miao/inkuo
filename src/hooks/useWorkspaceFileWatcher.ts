@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { reportError } from '../utils/errors';
@@ -12,6 +12,9 @@ export function useWorkspaceFileWatcher(
   workspacePath: string | null,
   onFileChange: (event: FileChangePayload) => void,
 ) {
+  const onFileChangeRef = useRef(onFileChange);
+  onFileChangeRef.current = onFileChange;
+
   useEffect(() => {
     let unlisten: UnlistenFn | null = null;
     let watchingPath: string | null = null;
@@ -32,7 +35,7 @@ export function useWorkspaceFileWatcher(
         watchingPath = workspacePath;
 
         const unlistenFn = await listen<FileChangePayload>('file-change', (event) => {
-          onFileChange(event.payload);
+          onFileChangeRef.current(event.payload);
         });
 
         if (disposed) {
@@ -62,5 +65,5 @@ export function useWorkspaceFileWatcher(
         });
       }
     };
-  }, [workspacePath, onFileChange]);
+  }, [workspacePath]);
 }
