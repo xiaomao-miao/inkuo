@@ -12,7 +12,8 @@ export const DiffOverlay: React.FC<DiffOverlayProps> = ({ hunks }) => {
   const { documentContents, setActiveHunkIndex, applyHunk, rejectHunk, applyAllHunks, rejectAllHunks } = useEditorStore();
   
   const currentDoc = selectedFile ? documentContents[selectedFile] : null;
-  const activeHunkIndex = currentDoc?.activeHunkIndex || 0;
+  const currentDiff = currentDoc?.diff;
+  const activeHunkIndex = currentDiff?.activeHunkIndex ?? 0;
 
   const getHunkSummary = (hunk: DiffHunk) => {
     let added = 0, removed = 0;

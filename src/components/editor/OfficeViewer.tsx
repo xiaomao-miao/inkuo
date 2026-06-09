@@ -140,7 +140,7 @@ export const WordEditor: React.FC<WordEditorProps> = ({
   const [isDirty, setIsDirty] = useState(false);
 
   const { setOpenTabDirty } = useSidebarStore();
-  const officeBufferVersion = useEditorStore(s => s.documentContents[filePath]?.officeBufferVersion ?? 0);
+  const officeBufferVersion = useEditorStore(s => s.documentContents[filePath]?.office.bufferVersion ?? 0);
   const { setDocxBuffer } = useEditorStore();
 
   useEffect(() => {
@@ -340,7 +340,7 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
   }, [originalData]);
 
   const { setOpenTabDirty } = useSidebarStore();
-  const officeBufferVersion = useEditorStore(s => s.documentContents[filePath]?.officeBufferVersion ?? 0);
+  const officeBufferVersion = useEditorStore(s => s.documentContents[filePath]?.office.bufferVersion ?? 0);
   const { setExcelData } = useEditorStore();
   const excelLastVersionRef = useRef(-1);
 

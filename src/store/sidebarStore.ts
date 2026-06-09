@@ -2,6 +2,8 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { FileEntry, ActiveToolCall, KnowledgeBase, BuildProgress } from '../types';
 
+let getExpandedDirsSnapshot: (() => Set<string>) | null = null;
+
 export interface OpenTab {
   id: string;
   path: string;
@@ -17,7 +19,6 @@ interface PersistedSidebarState {
   openTabs: OpenTab[];
   activeTabId: string | null;
   selectedFile: string | null;
-  openTabDirtyMap: Record<string, boolean>;
   expandedDirs: string[];
   knowledgeBase?: KnowledgeBase;
   buildProgress?: BuildProgress;
@@ -45,6 +46,12 @@ function resolveWorkspaceFileEntry(path: string, files: FileEntry[], workspacePa
   }) ?? null;
 }
 
+function updateOpenTabDirtyState(openTabs: OpenTab[], path: string, isDirty: boolean): OpenTab[] {
+  return openTabs.map((tab) =>
+    tab.path === path ? { ...tab, isDirty } : tab
+  );
+}
+
 export const SETTINGS_TAB_ID = '__settings__';
 
 interface SidebarState {
@@ -55,7 +62,6 @@ interface SidebarState {
   isLoading: boolean;
   openTabs: OpenTab[];
   activeTabId: string | null;
-  openTabDirtyMap: Record<string, boolean>;
 
   knowledgeBase?: KnowledgeBase;
   buildProgress?: BuildProgress;
@@ -85,137 +91,120 @@ interface SidebarState {
 
 export const useSidebarStore = create<SidebarState>()(
   persist<SidebarState, [], [], PersistedSidebarState>(
-    (set) => ({
-      workspacePath: null,
-      files: [],
-      expandedDirs: new Set(),
-      selectedFile: null,
-      isLoading: false,
-      openTabs: [],
-      activeTabId: null,
-      openTabDirtyMap: {},
+    (set, get) => {
+      getExpandedDirsSnapshot = () => get().expandedDirs;
 
-      knowledgeBase: undefined,
-      buildProgress: undefined,
-      knowledgeToolCall: undefined,
-      hasRestoredFromPersist: false,
+      return {
+        workspacePath: null,
+        files: [],
+        expandedDirs: new Set(),
+        selectedFile: null,
+        isLoading: false,
+        openTabs: [],
+        activeTabId: null,
 
-      setWorkspacePath: (path) => set({ workspacePath: path }),
-      setFiles: (files) => set((state) => ({
-        files: typeof files === 'function' ? files(state.files) : files,
-      })),
-      toggleDir: (path) => set((state) => {
-        const newExpanded = new Set(state.expandedDirs);
-        if (newExpanded.has(path)) {
-          newExpanded.delete(path);
-        } else {
-          newExpanded.add(path);
-        }
-        return { expandedDirs: newExpanded };
-      }),
-      setSelectedFile: (path) => set({ selectedFile: path }),
-      setIsLoading: (loading) => set({ isLoading: loading }),
-      openTab: (tab) => set((state) => {
-        const existing = state.openTabs.find((t) => t.path === tab.path);
-        if (existing) {
-          return { activeTabId: existing.id, selectedFile: tab.path };
-        }
-        const newTabs = [...state.openTabs, tab];
-        const newSelectedFile = tab.isSettings ? null : tab.path;
-        return {
-          openTabs: newTabs,
-          activeTabId: tab.id,
-          selectedFile: newSelectedFile,
-          openTabDirtyMap: {
-            ...state.openTabDirtyMap,
-            [tab.path]: false,
-          },
-        };
-      }),
-      openWorkspaceFile: (path, options) => set((state) => {
-        const resolvedEntry = resolveWorkspaceFileEntry(path, state.files, state.workspacePath);
-        const resolvedPath = resolvedEntry?.path ?? path;
-        const existing = state.openTabs.find((t) => t.path === resolvedPath);
+        knowledgeBase: undefined,
+        buildProgress: undefined,
+        knowledgeToolCall: undefined,
+        hasRestoredFromPersist: false,
 
-        if (existing) {
-          return { activeTabId: existing.id, selectedFile: resolvedPath };
-        }
+        setWorkspacePath: (path) => set({ workspacePath: path }),
+        setFiles: (files) => set((state) => ({
+          files: typeof files === 'function' ? files(state.files) : files,
+        })),
+        toggleDir: (path) => set((state) => {
+          const newExpanded = new Set(state.expandedDirs);
+          if (newExpanded.has(path)) {
+            newExpanded.delete(path);
+          } else {
+            newExpanded.add(path);
+          }
+          return { expandedDirs: newExpanded };
+        }),
+        setSelectedFile: (path) => set({ selectedFile: path }),
+        setIsLoading: (loading) => set({ isLoading: loading }),
+        openTab: (tab) => set((state) => {
+          const existing = state.openTabs.find((t) => t.path === tab.path);
+          if (existing) {
+            return { activeTabId: existing.id, selectedFile: tab.path };
+          }
+          const newTabs = [...state.openTabs, { ...tab, isDirty: tab.isDirty ?? false }];
+          const newSelectedFile = tab.isSettings ? null : tab.path;
+          return {
+            openTabs: newTabs,
+            activeTabId: tab.id,
+            selectedFile: newSelectedFile,
+          };
+        }),
+        openWorkspaceFile: (path, options) => set((state) => {
+          const resolvedEntry = resolveWorkspaceFileEntry(path, state.files, state.workspacePath);
+          const resolvedPath = resolvedEntry?.path ?? path;
+          const existing = state.openTabs.find((t) => t.path === resolvedPath);
 
-        const tabName = options?.name ?? resolvedEntry?.name ?? resolvedPath.split('/').pop() ?? '未命名文档';
-        const newTab: OpenTab = {
-          id: resolvedPath,
-          path: resolvedPath,
-          name: tabName,
-          isDirty: false,
-        };
+          if (existing) {
+            return { activeTabId: existing.id, selectedFile: resolvedPath };
+          }
 
-        return {
-          openTabs: [...state.openTabs, newTab],
-          activeTabId: newTab.id,
-          selectedFile: resolvedPath,
-          openTabDirtyMap: {
-            ...state.openTabDirtyMap,
-            [resolvedPath]: false,
-          },
-        };
-      }),
-      closeTab: (tabId) => set((state) => {
-        const tab = state.openTabs.find((t) => t.id === tabId);
-        const closedPath = tab?.path;
-        const newTabs = state.openTabs.filter((t) => t.id !== tabId);
-        let newActiveId = state.activeTabId;
-        if (state.activeTabId === tabId) {
-          const closedIndex = state.openTabs.findIndex((t) => t.id === tabId);
-          newActiveId = newTabs.length > 0
-            ? newTabs[Math.min(closedIndex, newTabs.length - 1)].id
-            : null;
-        }
+          const tabName = options?.name ?? resolvedEntry?.name ?? resolvedPath.split('/').pop() ?? '未命名文档';
+          const newTab: OpenTab = {
+            id: resolvedPath,
+            path: resolvedPath,
+            name: tabName,
+            isDirty: false,
+          };
 
-        const restDirtyMap = closedPath
-          ? Object.fromEntries(Object.entries(state.openTabDirtyMap).filter(([path]) => path !== closedPath))
-          : state.openTabDirtyMap;
+          return {
+            openTabs: [...state.openTabs, newTab],
+            activeTabId: newTab.id,
+            selectedFile: resolvedPath,
+          };
+        }),
+        closeTab: (tabId) => set((state) => {
+          const newTabs = state.openTabs.filter((t) => t.id !== tabId);
+          let newActiveId = state.activeTabId;
+          if (state.activeTabId === tabId) {
+            const closedIndex = state.openTabs.findIndex((t) => t.id === tabId);
+            newActiveId = newTabs.length > 0
+              ? newTabs[Math.min(closedIndex, newTabs.length - 1)].id
+              : null;
+          }
 
-        return {
-          openTabs: newTabs,
-          activeTabId: newActiveId,
-          selectedFile: newActiveId ? (newTabs.find((t) => t.id === newActiveId)?.path || null) : null,
-          openTabDirtyMap: restDirtyMap,
-        };
-      }),
-      setActiveTab: (tabId) => set((state) => {
-        const tab = state.openTabs.find((t) => t.id === tabId);
-        const newSelectedFile = tab?.isSettings ? null : (tab?.path || state.selectedFile);
-        return {
-          activeTabId: tabId,
-          selectedFile: newSelectedFile,
-        };
-      }),
-      setOpenTabDirty: (path, isDirty) => set((state) => ({
-        openTabDirtyMap: {
-          ...state.openTabDirtyMap,
-          [path]: isDirty,
-        },
-      })),
-      addFileEntry: (entry) => set((state) => {
-        if (state.files.some((f) => f.path === entry.path)) {
-          return state;
-        }
-        return { files: [...state.files, entry] };
-      }),
-      removeFileEntry: (path) => set((state) => ({
-        files: state.files.filter((f) => !f.path.startsWith(path)),
-      })),
-      removeDescendants: (parentPath) => set((state) => ({
-        files: state.files.filter((f) => !f.path.startsWith(parentPath + '/')),
-      })),
-      isDirExpanded: (path): boolean => {
-        return useSidebarStore.getState().expandedDirs.has(path);
-      },
+          return {
+            openTabs: newTabs,
+            activeTabId: newActiveId,
+            selectedFile: newActiveId ? (newTabs.find((t) => t.id === newActiveId)?.path || null) : null,
+          };
+        }),
+        setActiveTab: (tabId) => set((state) => {
+          const tab = state.openTabs.find((t) => t.id === tabId);
+          const newSelectedFile = tab?.isSettings ? null : (tab?.path || state.selectedFile);
+          return {
+            activeTabId: tabId,
+            selectedFile: newSelectedFile,
+          };
+        }),
+        setOpenTabDirty: (path, isDirty) => set((state) => ({
+          openTabs: updateOpenTabDirtyState(state.openTabs, path, isDirty),
+        })),
+        addFileEntry: (entry) => set((state) => {
+          if (state.files.some((f) => f.path === entry.path)) {
+            return state;
+          }
+          return { files: [...state.files, entry] };
+        }),
+        removeFileEntry: (path) => set((state) => ({
+          files: state.files.filter((f) => !f.path.startsWith(path)),
+        })),
+        removeDescendants: (parentPath) => set((state) => ({
+          files: state.files.filter((f) => !f.path.startsWith(parentPath + '/')),
+        })),
+        isDirExpanded: (path) => getExpandedDirsSnapshot?.().has(path) ?? false,
 
-      setKnowledgeBase: (kb: KnowledgeBase | undefined) => set({ knowledgeBase: kb }),
-      setBuildProgress: (progress: BuildProgress | undefined) => set({ buildProgress: progress }),
-      setKnowledgeToolCall: (toolCall: ActiveToolCall | undefined) => set({ knowledgeToolCall: toolCall }),
-    }),
+        setKnowledgeBase: (kb: KnowledgeBase | undefined) => set({ knowledgeBase: kb }),
+        setBuildProgress: (progress: BuildProgress | undefined) => set({ buildProgress: progress }),
+        setKnowledgeToolCall: (toolCall: ActiveToolCall | undefined) => set({ knowledgeToolCall: toolCall }),
+      };
+    },
     {
       name: 'inkuo-sidebar',
       partialize: (state): PersistedSidebarState => ({
@@ -223,7 +212,6 @@ export const useSidebarStore = create<SidebarState>()(
         openTabs: state.openTabs,
         activeTabId: state.activeTabId,
         selectedFile: state.selectedFile,
-        openTabDirtyMap: state.openTabDirtyMap,
         expandedDirs: Array.from(state.expandedDirs),
         knowledgeBase: state.knowledgeBase,
         buildProgress: state.buildProgress,

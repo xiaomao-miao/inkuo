@@ -35,19 +35,21 @@ const EditorContent: React.FC<{
   const [refreshToken, setRefreshToken] = useState(0);
 
   const currentDoc = selectedFile ? documentContents[selectedFile] : null;
-  const currentContent = currentDoc?.content || '';
-  const isDirty = currentDoc?.isDirty || false;
-  const diffHunks = useMemo(() => currentDoc?.diffHunks ?? [], [currentDoc?.diffHunks]);
-  const isDiffMode = currentDoc?.isDiffMode || false;
-  const selection = currentDoc?.selection || null;
+  const currentMetadata = currentDoc?.metadata;
+  const currentDiff = currentDoc?.diff;
+  const currentContent = currentMetadata?.content ?? '';
+  const isDirty = currentMetadata?.isDirty ?? false;
+  const diffHunks = useMemo(() => currentDiff?.hunks ?? [], [currentDiff?.hunks]);
+  const isDiffMode = currentDiff?.isActive || false;
+  const selection = currentMetadata?.selection ?? null;
 
   const requestDocumentRefresh = useCallback(() => {
     setRefreshToken((current) => current + 1);
   }, []);
 
-  useDocumentLoader(selectedFile, currentDoc ? {
-    content: currentDoc.content,
-    mtime: currentDoc.mtime,
+  useDocumentLoader(selectedFile, currentMetadata ? {
+    content: currentMetadata.content,
+    mtime: currentMetadata.mtime,
   } : null, refreshToken);
   useExternalFileSync(selectedFile, requestDocumentRefresh);
   const handleSave = useDocumentSave(selectedFile, currentContent, isDirty);
@@ -91,7 +93,7 @@ const EditorContent: React.FC<{
         isDiffMode={isDiffMode}
         diffHunks={diffHunks}
         selection={selection}
-        document={currentDoc?.document}
+        document={currentMetadata?.document}
         onTogglePreview={toggleCurrentPreviewMode}
       >
         <>
@@ -193,7 +195,7 @@ export const Editor: React.FC = () => {
         const isActive = tab.path === selectedFile && activeFileType === fileType;
 
         if (fileType === 'word') {
-          const tabCached = documentContents[tab.path]?.docxBuffer ?? null;
+          const tabCached = documentContents[tab.path]?.office.docxBuffer ?? null;
           return (
             <WordEditor
               key={tab.id}
@@ -205,7 +207,7 @@ export const Editor: React.FC = () => {
           );
         }
 
-        const tabCached = documentContents[tab.path]?.excelData ?? null;
+        const tabCached = documentContents[tab.path]?.office.excelData ?? null;
         return (
           <ExcelEditor
             key={tab.id}

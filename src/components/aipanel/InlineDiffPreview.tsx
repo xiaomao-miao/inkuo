@@ -45,7 +45,7 @@ export const InlineDiffPreview = ({
     const currentDoc = useEditorStore.getState().documentContents[filePath];
     if (!currentDoc) return;
 
-    const fullContent = currentDoc.content;
+    const fullContent = currentDoc.metadata.content;
     const origText = storedDiffRef.current.originalText;
     const newTxt = storedDiffRef.current.newText;
 

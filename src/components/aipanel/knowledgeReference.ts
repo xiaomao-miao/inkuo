@@ -47,9 +47,9 @@ export function openKnowledgeReference(result: Pick<SearchResult, 'filePath' | '
 
   const applySelection = () => {
     const docState = useEditorStore.getState().documentContents[resolvedPath];
-    if (!docState || !docState.content) return false;
+    if (!docState || !docState.metadata.content) return false;
 
-    const content = docState.content;
+    const content = docState.metadata.content;
     const from = lineStartOffset(content, startLine);
     const to = lineStartOffset(content, (result.endLine ?? startLine) + 1);
     useEditorStore.getState().setSelection(resolvedPath, { from, to });

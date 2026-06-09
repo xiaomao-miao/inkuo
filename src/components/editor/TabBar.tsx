@@ -5,7 +5,7 @@ import type { OpenTab } from '../../store';
 import styles from './TabBar.module.css';
 
 export const TabBar = () => {
-  const { openTabs, activeTabId, setActiveTab, closeTab, openTabDirtyMap } = useSidebarStore();
+  const { openTabs, activeTabId, setActiveTab, closeTab } = useSidebarStore();
   const [confirmClosePath, setConfirmClosePath] = useState<string | null>(null);
 
   const handleTabClick = (tab: OpenTab) => {
@@ -19,7 +19,7 @@ export const TabBar = () => {
       closeTab(tabId);
       return;
     }
-    const isDirty = openTabDirtyMap[tab.path] || false;
+    const isDirty = tab.isDirty;
     if (isDirty) {
       setConfirmClosePath(tab.path);
     } else {
@@ -61,7 +61,7 @@ export const TabBar = () => {
         <div className={styles.tabList}>
           {openTabs.map(tab => {
             const isActive = tab.id === activeTabId;
-            const isDirty = tab.isSettings ? false : (openTabDirtyMap[tab.path] || false);
+            const isDirty = tab.isSettings ? false : tab.isDirty;
 
             return (
               <div

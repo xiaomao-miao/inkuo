@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import type { Document } from '../../types';
 import { useEditorStore, useSidebarStore } from '../../store';
@@ -10,8 +10,8 @@ export function useDocumentLoader(
 ) {
   const { setDocumentContent } = useEditorStore();
   const { setOpenTabDirty } = useSidebarStore();
-  const cachedContent = cachedDocument?.content ?? null;
   const cachedMtime = cachedDocument?.mtime ?? 0;
+  const lastLoadedRef = useRef<{ path: string; refreshToken: number; mtime: number } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -19,14 +19,31 @@ export function useDocumentLoader(
     const loadDocument = async () => {
       if (!selectedFile) return;
 
+      const lastLoaded = lastLoadedRef.current;
+      if (
+        lastLoaded &&
+        lastLoaded.path === selectedFile &&
+        lastLoaded.refreshToken === refreshToken &&
+        lastLoaded.mtime === cachedMtime
+      ) {
+        return;
+      }
+
       try {
         const result = await invoke<{ document: Document; content: string; mtime: number }>('read_document', {
           path: selectedFile,
         });
 
-        const needsReload = !cachedDocument || cachedContent === '' || cachedMtime === 0 || result.mtime !== cachedMtime;
+        if (cancelled) return;
 
-        if (!cancelled && needsReload) {
+        lastLoadedRef.current = {
+          path: selectedFile,
+          refreshToken,
+          mtime: result.mtime,
+        };
+
+        const needsReload = !cachedDocument || cachedMtime === 0 || result.mtime !== cachedMtime;
+        if (needsReload) {
           setDocumentContent(selectedFile, result.document, result.content, result.mtime);
           setOpenTabDirty(selectedFile, false);
         }
@@ -40,5 +57,5 @@ export function useDocumentLoader(
     return () => {
       cancelled = true;
     };
-  }, [selectedFile, cachedDocument, cachedContent, cachedMtime, refreshToken, setDocumentContent, setOpenTabDirty]);
+  }, [selectedFile, cachedMtime, refreshToken, setDocumentContent, setOpenTabDirty]);
 }

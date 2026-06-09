@@ -45,8 +45,9 @@ export const CmdK = () => {
   const { documentContents, setDiffHunks } = useEditorStore();
   
   const currentDoc = selectedFile ? documentContents[selectedFile] : null;
-  const currentContent = currentDoc?.content || '';
-  const selection = currentDoc?.selection || null;
+  const currentMetadata = currentDoc?.metadata;
+  const currentContent = currentMetadata?.content ?? '';
+  const selection = currentMetadata?.selection ?? null;
   
   const [showScopeDropdown, setShowScopeDropdown] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);

@@ -80,10 +80,10 @@ export const useSettingsStore = create<SettingsState>()(
 
       setSettings: (settings) => set({ settings }),
       updateSetting: (key, value) => {
-        const nextSettings = buildSettingsUpdate(get().settings, (currentSettings) => ({
-          ...currentSettings,
+        const nextSettings = {
+          ...get().settings,
           [key]: value,
-        }));
+        };
         set({ settings: nextSettings });
         return nextSettings;
       },
@@ -103,10 +103,11 @@ export const useSettingsStore = create<SettingsState>()(
           maxTokens: config?.maxTokens ?? 4096,
         };
 
-        const nextSettings = buildSettingsUpdate(get().settings, (currentSettings) => ({
+        const currentSettings = get().settings;
+        const nextSettings = {
           ...currentSettings,
           apiConfigs: ensureValidApiConfigs([...currentSettings.apiConfigs, newConfig]),
-        }));
+        };
 
         set({ settings: nextSettings });
 
@@ -114,42 +115,43 @@ export const useSettingsStore = create<SettingsState>()(
       },
 
       updateApiConfig: (id, updates) => {
-        const nextSettings = buildSettingsUpdate(get().settings, (currentSettings) => ({
+        const currentSettings = get().settings;
+        const nextSettings = {
           ...currentSettings,
           apiConfigs: currentSettings.apiConfigs.map((config) =>
             config.id === id ? { ...config, ...updates } : config
           ),
-        }));
+        };
         set({ settings: nextSettings });
         return nextSettings;
       },
 
       removeApiConfig: (id) => {
-        const nextSettings = buildSettingsUpdate(get().settings, (currentSettings) => {
-          const remaining = currentSettings.apiConfigs.filter((config) => config.id !== id);
-          const apiConfigs = ensureValidApiConfigs(remaining);
-          const activeApiConfigId = apiConfigs.some((config) => config.id === currentSettings.activeApiConfigId)
-            ? currentSettings.activeApiConfigId
-            : apiConfigs[0].id;
+        const currentSettings = get().settings;
+        const remaining = currentSettings.apiConfigs.filter((config) => config.id !== id);
+        const apiConfigs = ensureValidApiConfigs(remaining);
+        const activeApiConfigId = apiConfigs.some((config) => config.id === currentSettings.activeApiConfigId)
+          ? currentSettings.activeApiConfigId
+          : apiConfigs[0].id;
 
-          return {
-            ...currentSettings,
-            apiConfigs,
-            activeApiConfigId,
-          };
-        });
+        const nextSettings = {
+          ...currentSettings,
+          apiConfigs,
+          activeApiConfigId,
+        };
 
         set({ settings: nextSettings });
         return nextSettings;
       },
 
       setActiveApiConfig: (id) => {
-        const nextSettings = buildSettingsUpdate(get().settings, (currentSettings) => ({
+        const currentSettings = get().settings;
+        const nextSettings = {
           ...currentSettings,
           activeApiConfigId: currentSettings.apiConfigs.some((config) => config.id === id)
             ? id
             : currentSettings.activeApiConfigId,
-        }));
+        };
         set({ settings: nextSettings });
         return nextSettings;
       },
@@ -161,13 +163,14 @@ export const useSettingsStore = create<SettingsState>()(
       },
 
       setDefaultApiConfig: (id) => {
-        const nextSettings = buildSettingsUpdate(get().settings, (currentSettings) => ({
+        const currentSettings = get().settings;
+        const nextSettings = {
           ...currentSettings,
           apiConfigs: currentSettings.apiConfigs.map((config) => ({
             ...config,
             isDefault: config.id === id,
           })),
-        }));
+        };
         set({ settings: nextSettings });
         return nextSettings;
       },

@@ -35,7 +35,8 @@ export const TitleBar = () => {
   const { documentContents, markSaved } = useEditorStore();
 
   const currentDoc = selectedFile ? documentContents[selectedFile] : null;
-  const isDirty = currentDoc?.isDirty || false;
+  const currentMetadata = currentDoc?.metadata;
+  const isDirty = currentMetadata?.isDirty ?? false;
 
   const handleOpenSettings = () => {
     openSettingsTab();
@@ -77,7 +78,7 @@ export const TitleBar = () => {
     try {
       await invoke('write_document', {
         path: selectedFile,
-        content: currentDoc?.content || '',
+        content: currentMetadata?.content || '',
       });
       markSaved(selectedFile);
     } catch (err) {
@@ -218,7 +219,7 @@ export const TitleBar = () => {
           <>
             <span className={styles.separator}>—</span>
             <span className={styles.fileName}>
-              {currentDoc?.document?.title || '未命名'}
+              {currentMetadata?.document?.title || '未命名'}
               {isDirty && <span className={styles.dirty}>●</span>}
             </span>
           </>

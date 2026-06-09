@@ -38,6 +38,89 @@ export function updateSessions(
   );
 }
 
+export function updateSessionState(
+  sessions: ChatSession[],
+  sessionId: string,
+  patch: Partial<ChatSession>,
+): ChatSession[] {
+  return updateSessions(sessions, sessionId, (session) => ({
+    ...session,
+    ...patch,
+  }));
+}
+
+export function appendSessionMessage(
+  sessions: ChatSession[],
+  sessionId: string,
+  message: ChatMessage,
+): ChatSession[] {
+  return updateSessions(sessions, sessionId, (session) => ({
+    ...session,
+    messages: [...session.messages, message],
+  }));
+}
+
+export function appendSessionToolCall(
+  sessions: ChatSession[],
+  sessionId: string,
+  toolCall: ActiveToolCall,
+): ChatSession[] {
+  return updateSessions(sessions, sessionId, (session) => ({
+    ...session,
+    activeToolCalls: [...session.activeToolCalls, toolCall],
+  }));
+}
+
+export function removeSessionToolCall(
+  sessions: ChatSession[],
+  sessionId: string,
+  toolCallId: string,
+): ChatSession[] {
+  return updateSessions(sessions, sessionId, (session) => ({
+    ...session,
+    activeToolCalls: session.activeToolCalls.filter((toolCall) => toolCall.id !== toolCallId),
+  }));
+}
+
+export function clearSessionToolCalls(
+  sessions: ChatSession[],
+  sessionId: string,
+): ChatSession[] {
+  return updateSessionState(sessions, sessionId, { activeToolCalls: [] });
+}
+
+export function updateSessionMessage(
+  sessions: ChatSession[],
+  sessionId: string,
+  messageId: string,
+  updater: (message: ChatMessage) => ChatMessage,
+): ChatSession[] {
+  return updateSessions(sessions, sessionId, (session) => updateMessages(session, messageId, updater));
+}
+
+export function finishSessionMessageStreaming(
+  sessions: ChatSession[],
+  sessionId: string,
+  messageId: string,
+  content: string,
+): ChatSession[] {
+  return updateSessions(sessions, sessionId, (session) => ({
+    ...updateMessages(session, messageId, (message) => ({
+      ...message,
+      content,
+    })),
+    isStreaming: false,
+  }));
+}
+
+export function updatePendingDiffState(
+  sessions: ChatSession[],
+  sessionId: string,
+  pendingDiff: CurrentDiff | null,
+): ChatSession[] {
+  return updateSessionState(sessions, sessionId, { pendingDiff });
+}
+
 export function updateMessages(
   session: ChatSession,
   messageId: string,

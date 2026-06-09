@@ -9,9 +9,10 @@ export const DiffActionBar = () => {
   if (!selectedFile) return null;
 
   const doc = documentContents[selectedFile];
-  const hunks = doc?.diffHunks ?? [];
+  const diff = doc?.diff;
+  const hunks = diff?.hunks ?? [];
 
-  if (!doc?.isDiffMode || hunks.length === 0) return null;
+  if (!diff?.isActive || hunks.length === 0) return null;
 
   const handleAcceptAll = () => {
     try {

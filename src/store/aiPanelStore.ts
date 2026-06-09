@@ -15,14 +15,21 @@ import type {
 } from '../types';
 import {
   addMessageOutputItem,
+  appendSessionMessage,
+  appendSessionToolCall,
+  clearSessionToolCalls,
   clearSessionConversation,
   createNewSession,
+  finishSessionMessageStreaming,
   patchMessageOutputState,
+  removeSessionToolCall,
   setMessageDiffState,
   setMessageOutputItems,
   trimSessionMessagesAfter,
-  updateMessages,
   updatePendingDiffHunks,
+  updatePendingDiffState,
+  updateSessionMessage,
+  updateSessionState,
   updateSessions,
   updateToolCalls,
 } from './aiPanelReducers';
@@ -93,7 +100,7 @@ const createSessionSlice: AIPanelStateCreator<Pick<AIPanelState, 'sessions' | 'a
     setActiveSession: (sessionId) => set({ activeSessionId: sessionId }),
     setSessionMode: (sessionId, mode) =>
       set((state) => ({
-        sessions: updateSessions(state.sessions, sessionId, (session) => ({ ...session, mode })),
+        sessions: updateSessionState(state.sessions, sessionId, { mode }),
       })),
     getSession: (sessionId) => get().sessions.find((session) => session.id === sessionId),
     updateSession: (sessionId, updater) =>
@@ -106,32 +113,25 @@ const createSessionSlice: AIPanelStateCreator<Pick<AIPanelState, 'sessions' | 'a
 const createMessageSlice: AIPanelStateCreator<Pick<AIPanelState, 'addMessage' | 'updateMessage' | 'appendMessageContent' | 'setIsStreaming' | 'clearMessages' | 'truncateMessagesAfter' | 'getMessage' | 'updateMessageOutput' | 'addOutputToMessage' | 'patchOutputItem' | 'finishMessageStreaming' | 'setErrorMessage' | 'setMessageSearchResults'>> = (set, get) => ({
   addMessage: (sessionId, message) =>
     set((state) => ({
-      sessions: updateSessions(state.sessions, sessionId, (session) => ({
-        ...session,
-        messages: [...session.messages, message],
-      })),
+      sessions: appendSessionMessage(state.sessions, sessionId, message),
     })),
   updateMessage: (sessionId, messageId, content) =>
     set((state) => ({
-      sessions: updateSessions(state.sessions, sessionId, (session) =>
-        updateMessages(session, messageId, (message) => ({ ...message, content }))
-      ),
+      sessions: updateSessionMessage(state.sessions, sessionId, messageId, (message) => ({
+        ...message,
+        content,
+      })),
     })),
   appendMessageContent: (sessionId, messageId, content) =>
     set((state) => ({
-      sessions: updateSessions(state.sessions, sessionId, (session) =>
-        updateMessages(session, messageId, (message) => ({
-          ...message,
-          content: (message.content || '') + content,
-        }))
-      ),
+      sessions: updateSessionMessage(state.sessions, sessionId, messageId, (message) => ({
+        ...message,
+        content: (message.content || '') + content,
+      })),
     })),
   setIsStreaming: (sessionId, streaming) =>
     set((state) => ({
-      sessions: updateSessions(state.sessions, sessionId, (session) => ({
-        ...session,
-        isStreaming: streaming,
-      })),
+      sessions: updateSessionState(state.sessions, sessionId, { isStreaming: streaming }),
     })),
   clearMessages: (sessionId) =>
     set((state) => ({
@@ -167,42 +167,25 @@ const createMessageSlice: AIPanelStateCreator<Pick<AIPanelState, 'addMessage' | 
     })),
   finishMessageStreaming: (sessionId, messageId, finalContent) =>
     set((state) => ({
-      sessions: updateSessions(state.sessions, sessionId, (session) => ({
-        ...updateMessages(session, messageId, (message) => ({
-          ...message,
-          content: finalContent,
-        })),
-        isStreaming: false,
-      })),
+      sessions: finishSessionMessageStreaming(state.sessions, sessionId, messageId, finalContent),
     })),
   setErrorMessage: (sessionId, messageId, error) =>
     set((state) => ({
-      sessions: updateSessions(state.sessions, sessionId, (session) => ({
-        ...updateMessages(session, messageId, (message) => ({
-          ...message,
-          content: error,
-        })),
-        isStreaming: false,
-      })),
+      sessions: finishSessionMessageStreaming(state.sessions, sessionId, messageId, error),
     })),
   setMessageSearchResults: (sessionId, messageId, results) =>
     set((state) => ({
-      sessions: updateSessions(state.sessions, sessionId, (session) =>
-        updateMessages(session, messageId, (message) => ({
-          ...message,
-          searchResults: results,
-        }))
-      ),
+      sessions: updateSessionMessage(state.sessions, sessionId, messageId, (message) => ({
+        ...message,
+        searchResults: results,
+      })),
     })),
 });
 
 const createToolCallSlice: AIPanelStateCreator<Pick<AIPanelState, 'addToolCall' | 'updateToolCall' | 'removeToolCall' | 'clearToolCalls'>> = (set) => ({
   addToolCall: (sessionId, toolCall) =>
     set((state) => ({
-      sessions: updateSessions(state.sessions, sessionId, (session) => ({
-        ...session,
-        activeToolCalls: [...session.activeToolCalls, toolCall],
-      })),
+      sessions: appendSessionToolCall(state.sessions, sessionId, toolCall),
     })),
   updateToolCall: (sessionId, toolCallId, update) =>
     set((state) => ({
@@ -212,27 +195,18 @@ const createToolCallSlice: AIPanelStateCreator<Pick<AIPanelState, 'addToolCall' 
     })),
   removeToolCall: (sessionId, toolCallId) =>
     set((state) => ({
-      sessions: updateSessions(state.sessions, sessionId, (session) => ({
-        ...session,
-        activeToolCalls: session.activeToolCalls.filter((toolCall) => toolCall.id !== toolCallId),
-      })),
+      sessions: removeSessionToolCall(state.sessions, sessionId, toolCallId),
     })),
   clearToolCalls: (sessionId) =>
     set((state) => ({
-      sessions: updateSessions(state.sessions, sessionId, (session) => ({
-        ...session,
-        activeToolCalls: [],
-      })),
+      sessions: clearSessionToolCalls(state.sessions, sessionId),
     })),
 });
 
 const createDiffSlice: AIPanelStateCreator<Pick<AIPanelState, 'setCurrentDiff' | 'setMessageDiff' | 'setPendingDiff' | 'setDiffFromToolResult' | 'acceptHunk' | 'rejectHunk' | 'acceptAllHunks' | 'rejectAllHunks'>> = (set) => ({
   setCurrentDiff: (sessionId, diff) =>
     set((state) => ({
-      sessions: updateSessions(state.sessions, sessionId, (session) => ({
-        ...session,
-        currentDiff: diff,
-      })),
+      sessions: updateSessionState(state.sessions, sessionId, { currentDiff: diff }),
     })),
   setMessageDiff: (sessionId, messageId, diff) =>
     set((state) => ({
@@ -242,17 +216,11 @@ const createDiffSlice: AIPanelStateCreator<Pick<AIPanelState, 'setCurrentDiff' |
     })),
   setPendingDiff: (sessionId, diff) =>
     set((state) => ({
-      sessions: updateSessions(state.sessions, sessionId, (session) => ({
-        ...session,
-        pendingDiff: diff,
-      })),
+      sessions: updatePendingDiffState(state.sessions, sessionId, diff),
     })),
   setDiffFromToolResult: (sessionId, diff) =>
     set((state) => ({
-      sessions: updateSessions(state.sessions, sessionId, (session) => ({
-        ...session,
-        pendingDiff: diff,
-      })),
+      sessions: updatePendingDiffState(state.sessions, sessionId, diff),
     })),
   acceptHunk: (sessionId, hunkId) =>
     set((state) => {
