@@ -10,6 +10,10 @@ import type {
   CompletionItem,
 } from '../../types/inline-complete';
 
+const debugInlineComplete = import.meta.env.DEV
+  ? (...args: unknown[]) => console.debug('[InlineComplete]', ...args)
+  : undefined;
+
 interface InlineCompleteContextValue {
   // State
   isEnabled: boolean;
@@ -100,22 +104,20 @@ export function InlineCompleteProvider({ children }: InlineCompleteProviderProps
     requestSeqRef.current = seq;
     latestRequestRef.current = { seq, filePath: params.filePath, cursorPosition: params.cursorPosition };
 
-    if (import.meta.env.DEV) {
-      console.log('[InlineComplete] triggerCompletion called, enabled:', enabled, 'isLoading:', isLoading, 'currentCompletion:', !!currentCompletion);
-    }
+    debugInlineComplete?.('triggerCompletion called', {
+      enabled,
+      isLoading,
+      hasCurrentCompletion: !!currentCompletion,
+    });
 
     if (!enabled) {
-      if (import.meta.env.DEV) {
-        console.log('[InlineComplete] Not triggered: not enabled');
-      }
+      debugInlineComplete?.('Not triggered: not enabled');
       return;
     }
 
     // Clear any existing completion when new input happens
     if (currentCompletion) {
-      if (import.meta.env.DEV) {
-        console.log('[InlineComplete] Clearing existing completion for new request');
-      }
+      debugInlineComplete?.('Clearing existing completion for new request');
       clearCompletion();
     }
 
@@ -139,52 +141,38 @@ export function InlineCompleteProvider({ children }: InlineCompleteProviderProps
           file_path: params.filePath,
         };
 
-        if (import.meta.env.DEV) {
-          console.log('[InlineComplete] Sending request to backend');
-        }
+        debugInlineComplete?.('Sending request to backend');
         const response = await invoke<InlineCompletionResponse>(
           'ai_inline_complete',
           { request }
         );
 
-        if (import.meta.env.DEV) {
-          console.log('[InlineComplete] Received response:', response);
-        }
+        debugInlineComplete?.('Received response', response);
 
         // Drop stale/outdated responses (Cursor-like)
         const latest = latestRequestRef.current;
         if (!latest || latest.seq !== seq) {
-          if (import.meta.env.DEV) {
-            console.log('[InlineComplete] Stale response (seq mismatch), ignoring');
-          }
+          debugInlineComplete?.('Stale response ignored: seq mismatch');
           return;
         }
         if (latest.filePath !== params.filePath || latest.cursorPosition !== params.cursorPosition) {
-          if (import.meta.env.DEV) {
-            console.log('[InlineComplete] Stale response (context changed), ignoring');
-          }
+          debugInlineComplete?.('Stale response ignored: context changed');
           return;
         }
 
         // If some other completion was already set while waiting, ignore
         const currentState = useInlineCompleteStore.getState();
         if (currentState.currentCompletion) {
-          if (import.meta.env.DEV) {
-            console.log('[InlineComplete] Another completion was set, ignoring response');
-          }
+          debugInlineComplete?.('Stale response ignored: another completion already set');
           return;
         }
 
         if (response.completions.length > 0) {
-          if (import.meta.env.DEV) {
-            console.log('[InlineComplete] Setting completion:', response.completions[0]);
-          }
+          debugInlineComplete?.('Setting completion');
           // Pass the trigger position so we can detect cursor movement
           setCompletion(response.completions[0], params.cursorPosition);
         } else {
-          if (import.meta.env.DEV) {
-            console.log('[InlineComplete] No completions returned');
-          }
+          debugInlineComplete?.('No completions returned');
           clearCompletion();
         }
       } catch (err) {

@@ -1,13 +1,12 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { open } from '@tauri-apps/plugin-dialog';
-import { 
-  FolderOpen, 
-  ChevronRight, 
-  ChevronDown, 
-  FileText, 
-  File, 
+import {
+  FolderOpen,
+  ChevronRight,
+  ChevronDown,
+  FileText,
+  File,
   Folder,
   FolderOpen as FolderOpenIcon,
   Search,
@@ -17,42 +16,9 @@ import {
 } from 'lucide-react';
 import { useSidebarStore } from '../../store';
 import type { FileEntry } from '../../types';
+import { useDebouncedCallback } from '../../hooks/useDebouncedCallback';
+import { applyWorkspaceDirectoryLoad, openWorkspaceDirectory } from '../../services/workspace';
 import styles from './Sidebar.module.css';
-
-/// Debounce utility - batches rapid calls into a single invocation after the
-/// quiet window expires. Returns a wrapped function.
-function useDebouncedCallback<T extends (...args: Parameters<T>) => void>(
-  callback: T,
-  delayMs: number
-): T {
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingRef = useRef<Parameters<T> | null>(null);
-  const callbackRef = useRef(callback);
-  callbackRef.current = callback;
-
-  // Keep delay stable across renders
-  const delayRef = useRef(delayMs);
-  delayRef.current = delayMs;
-
-  return useCallback(
-    ((...args: Parameters<T>) => {
-      pendingRef.current = args;
-      if (timerRef.current !== null) {
-        clearTimeout(timerRef.current);
-      }
-      timerRef.current = setTimeout(() => {
-        timerRef.current = null;
-        if (pendingRef.current !== null) {
-          const pending = pendingRef.current as Parameters<T>;
-          callbackRef.current(...pending);
-          pendingRef.current = null;
-        }
-      }, delayRef.current);
-    }) as T,
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [] // intentionally empty – all state lives in refs
-  );
-}
 
 // Helper function to get all parent folders for search results
 function getEntriesWithParents(matchingEntries: FileEntry[], allEntries: FileEntry[]): FileEntry[] {
@@ -222,15 +188,11 @@ export const Sidebar: React.FC = () => {
 
   const openWorkspace = async () => {
     try {
-      const selected = await open({
-        directory: true,
-        multiple: false,
-        title: '选择工作区文件夹',
-      });
-      
+      const selected = await openWorkspaceDirectory();
+
       if (selected) {
         setWorkspacePath(selected);
-        loadDirectory(selected);
+        await loadDirectory(selected, false);
       }
     } catch (err) {
       console.error('Failed to open workspace:', err);
@@ -238,31 +200,15 @@ export const Sidebar: React.FC = () => {
   };
 
   const loadDirectory = useCallback(async (path: string, mergeWithExisting: boolean = true) => {
-    // Read current state from the store directly inside the async function
-    // to avoid stale closures.
-    const currentFiles = useSidebarStore.getState().files;
-    const currentExpandedDirs = useSidebarStore.getState().expandedDirs;
-
     setIsLoading(true);
     try {
-      const entries = await invoke<FileEntry[]>('list_directory', { path });
-
-      if (mergeWithExisting && currentFiles.length > 0) {
-        // Keep children of expanded directories
-        const childrenToKeep = currentFiles.filter(f =>
-          [...currentExpandedDirs].some(expanded => f.path.startsWith(expanded + '/'))
-        );
-
-        setFiles([...childrenToKeep, ...entries]);
-      } else {
-        setFiles(entries);
-      }
+      await applyWorkspaceDirectoryLoad(path, { mergeWithExisting });
     } catch (err) {
       console.error('Failed to load directory:', err);
     } finally {
       setIsLoading(false);
     }
-  }, [setFiles, setIsLoading, workspacePath]);
+  }, [setIsLoading]);
 
   // 展开文件夹时添加子项，折叠时移除子项
   const handleFileClick = async (entry: FileEntry) => {

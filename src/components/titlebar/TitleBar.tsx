@@ -1,6 +1,5 @@
-import { open } from '@tauri-apps/plugin-dialog';
 import React, { useState, useRef, useEffect } from 'react';
-import { 
+import {
   Minus,
   Square,
   X,
@@ -10,6 +9,7 @@ import {
 import { useSidebarStore, useEditorStore, SETTINGS_TAB_ID } from '../../store';
 import { invoke } from '@tauri-apps/api/core';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { applyWorkspaceDirectoryLoad, openWorkspaceDirectory } from '../../services/workspace';
 import styles from './TitleBar.module.css';
 
 interface MenuItem {
@@ -30,7 +30,7 @@ export const TitleBar: React.FC = () => {
   const [isMaximized, setIsMaximized] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   
-  const { selectedFile, setWorkspacePath, setFiles, openTab } = useSidebarStore();
+  const { selectedFile, setWorkspacePath, openTab } = useSidebarStore();
   const { documentContents, markSaved } = useEditorStore();
 
   const currentDoc = selectedFile ? documentContents[selectedFile] : null;
@@ -77,18 +77,6 @@ export const TitleBar: React.FC = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const loadDirectory = async (path: string) => {
-    try {
-      const { setIsLoading } = useSidebarStore.getState();
-      setIsLoading(true);
-      const entries = await invoke<any[]>('list_directory', { path });
-      setFiles(entries);
-      setIsLoading(false);
-    } catch (err) {
-      console.error('Failed to load directory:', err);
-    }
-  };
-
   const handleSave = async () => {
     if (!selectedFile || !isDirty) return;
     try {
@@ -105,14 +93,10 @@ export const TitleBar: React.FC = () => {
 
   const handleOpenFolder = async () => {
     try {
-      const selected = await open({
-        directory: true,
-        multiple: false,
-        title: '选择工作区文件夹',
-      });
+      const selected = await openWorkspaceDirectory();
       if (selected) {
         setWorkspacePath(selected);
-        loadDirectory(selected);
+        await applyWorkspaceDirectoryLoad(selected, { mergeWithExisting: false });
       }
     } catch (err) {
       console.error('Failed to open folder:', err);

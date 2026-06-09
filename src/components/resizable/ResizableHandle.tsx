@@ -4,8 +4,6 @@ import styles from './ResizableHandle.module.css';
 interface ResizableHandleProps {
   direction: 'horizontal' | 'vertical';
   onResize: (delta: number) => void;
-  minSize?: number;
-  maxSize?: number;
 }
 
 export const ResizableHandle: React.FC<ResizableHandleProps> = ({
