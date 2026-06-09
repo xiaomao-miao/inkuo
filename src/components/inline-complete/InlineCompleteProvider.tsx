@@ -1,6 +1,3 @@
-// Inline Completion Provider
-// Context provider that manages inline completion state
-
 import React, { createContext, useContext, useCallback, useRef, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { useInlineCompleteStore } from '../../store';
@@ -15,13 +12,11 @@ const debugInlineComplete = import.meta.env.DEV
   : undefined;
 
 interface InlineCompleteContextValue {
-  // State
   isEnabled: boolean;
   currentCompletion: CompletionItem | null;
   isLoading: boolean;
   error: string | null;
 
-  // Actions
   triggerCompletion: (params: {
     document: string;
     cursorPosition: number;
@@ -67,7 +62,6 @@ export function InlineCompleteProvider({ children }: InlineCompleteProviderProps
     clearCompletion,
   } = useInlineCompleteStore();
 
-  // Cancel any pending request
   const cancelPendingRequest = useCallback(() => {
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -92,7 +86,6 @@ export function InlineCompleteProvider({ children }: InlineCompleteProviderProps
     }
   }, []);
 
-  // Trigger completion request
   const triggerCompletion = useCallback(async (params: {
     document: string;
     cursorPosition: number;
@@ -115,23 +108,18 @@ export function InlineCompleteProvider({ children }: InlineCompleteProviderProps
       return;
     }
 
-    // Clear any existing completion when new input happens
     if (currentCompletion) {
       debugInlineComplete?.('Clearing existing completion for new request');
       clearCompletion();
     }
 
-    // Cancel previous timer/in-flight request (but do NOT invalidate this request)
     cancelPendingRequest();
 
-    // Set loading state
     setLoading(true);
     setError(null);
 
-    // Create new abort controller
     abortControllerRef.current = new AbortController();
 
-    // Debounce the actual request
     debounceTimerRef.current = setTimeout(async () => {
       try {
         const request: InlineCompletionRequest = {
@@ -149,7 +137,6 @@ export function InlineCompleteProvider({ children }: InlineCompleteProviderProps
 
         debugInlineComplete?.('Received response', response);
 
-        // Drop stale/outdated responses (Cursor-like)
         const latest = latestRequestRef.current;
         if (!latest || latest.seq !== seq) {
           debugInlineComplete?.('Stale response ignored: seq mismatch');
@@ -160,7 +147,6 @@ export function InlineCompleteProvider({ children }: InlineCompleteProviderProps
           return;
         }
 
-        // If some other completion was already set while waiting, ignore
         const currentState = useInlineCompleteStore.getState();
         if (currentState.currentCompletion) {
           debugInlineComplete?.('Stale response ignored: another completion already set');
@@ -169,7 +155,6 @@ export function InlineCompleteProvider({ children }: InlineCompleteProviderProps
 
         if (response.completions.length > 0) {
           debugInlineComplete?.('Setting completion');
-          // Pass the trigger position so we can detect cursor movement
           setCompletion(response.completions[0], params.cursorPosition);
         } else {
           debugInlineComplete?.('No completions returned');
@@ -187,7 +172,6 @@ export function InlineCompleteProvider({ children }: InlineCompleteProviderProps
     }, debounceMs);
   }, [enabled, debounceMs, cancelPendingRequest, setLoading, setError, setCompletion, clearCompletion, isLoading, currentCompletion, error]);
 
-  // Accept the current completion
   const acceptCompletion = useCallback((): CompletionItem | null => {
     const completion = useInlineCompleteStore.getState().currentCompletion;
     if (completion) {
@@ -197,13 +181,11 @@ export function InlineCompleteProvider({ children }: InlineCompleteProviderProps
     return null;
   }, [clearCompletion]);
 
-  // Dismiss the current completion
   const dismissCompletion = useCallback(() => {
     invalidateRequests();
     clearCompletion();
   }, [invalidateRequests, clearCompletion]);
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       invalidateRequests();

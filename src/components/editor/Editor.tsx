@@ -32,7 +32,6 @@ const EditorContent: React.FC<{
   } = useEditorStore();
   const { selectedFile, setOpenTabDirty } = useSidebarStore();
 
-  // Get current document state from store
   const currentDoc = selectedFile ? documentContents[selectedFile] : null;
   const currentContent = currentDoc?.content || '';
   const isDirty = currentDoc?.isDirty || false;
@@ -129,9 +128,6 @@ const EditorContent: React.FC<{
   );
 };
 
-// ============================================================================
-// Empty/No-file state component
-// ============================================================================
 const EmptyState: React.FC = () => (
   <div className={styles.editorContainer}>
     <div className={styles.editorWrapper}>
@@ -145,18 +141,12 @@ const EmptyState: React.FC = () => (
   </div>
 );
 
-// ============================================================================
-// Settings Panel wrapper
-// ============================================================================
 const SettingsState: React.FC = () => (
   <div className={styles.editorContainer}>
     <SettingsPanel />
   </div>
 );
 
-// ============================================================================
-// Main Editor Component
-// ============================================================================
 function detectFileType(path: string): 'markdown' | 'word' | 'excel' {
   const ext = path.split('.').pop()?.toLowerCase() || '';
   if (ext === 'docx') return 'word';
@@ -170,10 +160,8 @@ export const Editor: React.FC = () => {
   const { documentContents } = useEditorStore();
   const isSettingsTab = activeTabId === SETTINGS_TAB_ID;
 
-  // Determine active file type
   const activeFileType = selectedFile ? detectFileType(selectedFile) : null;
 
-  // Show empty state if no file selected
   if (isSettingsTab) {
     return <SettingsState />;
   }
@@ -184,8 +172,6 @@ export const Editor: React.FC = () => {
 
   return (
     <>
-      {/* Always render WordEditor — keep mounted for tab-switch persistence.
-          Each editor instance is keyed by tab path. */}
       {openTabs.map((tab: OpenTab) => {
         const tabFileType = detectFileType(tab.path);
         if (tabFileType !== 'word') return null;
@@ -201,7 +187,6 @@ export const Editor: React.FC = () => {
         );
       })}
 
-      {/* Always render ExcelEditor */}
       {openTabs.map((tab: OpenTab) => {
         const tabFileType = detectFileType(tab.path);
         if (tabFileType !== 'excel') return null;
@@ -217,7 +202,6 @@ export const Editor: React.FC = () => {
         );
       })}
 
-      {/* Markdown editor - only render when active (CodeMirror is lightweight) */}
       {activeFileType === 'markdown' && (
         <InlineCompleteProvider>
           <EditorContent editorRef={editorRef} />

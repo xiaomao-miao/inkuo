@@ -124,8 +124,8 @@
   outline: none;
 }
 
-.codeMirror .cm-editor.cm-focused {
-  outline: none !important;
+.codeMirror :global(.cm-editor.cm-focused) {
+  outline: none;
 }
 
 .statusBar {

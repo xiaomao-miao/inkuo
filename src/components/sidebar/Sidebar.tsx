@@ -20,15 +20,13 @@ import { useWorkspaceFileWatcher } from '../../hooks/useWorkspaceFileWatcher';
 import { applyWorkspaceDirectoryLoad, openWorkspaceDirectory } from '../../services/workspace';
 import styles from './Sidebar.module.css';
 
-// Helper function to get all parent folders for search results
+// Returns matched entries together with their ancestor folders so search results remain navigable.
 function getEntriesWithParents(matchingEntries: FileEntry[], allEntries: FileEntry[]): FileEntry[] {
   const resultSet = new Set<string>();
   
   for (const entry of matchingEntries) {
-    // Add the matching entry itself
     resultSet.add(entry.path);
     
-    // Add all parent folders
     const parts = entry.path.split('/');
     for (let i = 1; i < parts.length; i++) {
       const parentPath = parts.slice(0, i).join('/');
@@ -36,7 +34,6 @@ function getEntriesWithParents(matchingEntries: FileEntry[], allEntries: FileEnt
     }
   }
   
-  // Return all entries that are either matching or are parents of matching entries
   return allEntries.filter(e => resultSet.has(e.path));
 }
 
@@ -72,7 +69,6 @@ export const Sidebar: React.FC = () => {
     }
   }, [setIsLoading]);
 
-  // Load files when workspacePath is set (including on app startup)
   useEffect(() => {
     if (workspacePath) {
       loadDirectory(workspacePath);
@@ -99,20 +95,16 @@ export const Sidebar: React.FC = () => {
       const needsChildRefresh = isDirExpanded(parentDir);
 
       if (needsChildRefresh) {
-        // Re-fetch the parent's children to get accurate order + new entry
         const refreshedChildren = await invoke<FileEntry[]>('list_directory', {
           path: parentDir,
         });
         setFiles(prev => {
-          // Remove old children of this parent
           const cleaned = prev.filter(
             f => !f.path.startsWith(parentDir + '/') || f.path === parentDir
           );
           return [...cleaned, ...refreshedChildren];
         });
       } else {
-        // Parent is collapsed – just store the entry so it's visible when
-        // the user expands the parent later
         addFileEntry(entry);
       }
     } catch (err) {
@@ -125,16 +117,10 @@ export const Sidebar: React.FC = () => {
   }, [removeFileEntry]);
 
   const handleFileModified = useCallback((_modifiedPath: string) => {
-    // For file tree display, modification doesn't require any structural change.
-    // The tree order/name stays the same; re-render is sufficient.
-    // Force a re-render by touching files (same reference is fine – React
-    // compares by identity, but the display only depends on `files` which
-    // hasn't changed structurally here).
     setFiles(prev => [...prev]);
   }, [setFiles]);
 
-  // Debounced top-level refresh – used as a safety net when incremental
-  // logic cannot handle a situation (e.g. bulk rename outside the workspace).
+  // Falls back to a full tree refresh when incremental updates are insufficient.
   const debouncedFullRefresh = useDebouncedCallback(() => {
     if (workspacePath) {
       loadDirectory(workspacePath, false);
@@ -146,7 +132,6 @@ export const Sidebar: React.FC = () => {
     const changedPath = data?.path;
     if (!changedPath) return;
 
-    // Ignore paths outside the workspace
     if (!changedPath.startsWith(workspacePath!)) return;
 
     switch (type) {
@@ -160,7 +145,6 @@ export const Sidebar: React.FC = () => {
         handleFileModified(changedPath);
         break;
       default:
-        // Unknown event type – fall back to full refresh
         debouncedFullRefresh();
         break;
     }
@@ -181,17 +165,14 @@ export const Sidebar: React.FC = () => {
     }
   };
 
-  // 展开文件夹时添加子项，折叠时移除子项
   const handleFileClick = async (entry: FileEntry) => {
     if (entry.is_dir) {
       const wasExpanded = isDirExpanded(entry.path);
 
       if (wasExpanded) {
-        // 折叠：移除该目录的所有子项
         const folderPath = entry.path + '/';
         setFiles(prevFiles => prevFiles.filter(f => !f.path.startsWith(folderPath)));
       } else {
-        // 展开：加载并添加子项
         try {
           const childEntries = await invoke<FileEntry[]>('list_directory', { path: entry.path });
           setFiles(prevFiles => [...prevFiles, ...childEntries]);
@@ -202,27 +183,21 @@ export const Sidebar: React.FC = () => {
 
       toggleDir(entry.path);
     } else {
-      // Open file in new tab
       openWorkspaceFile(entry.path, { name: entry.name });
     }
   };
 
   const renderFileTree = (entries: FileEntry[], depth: number = 0): React.ReactNode => {
-    // Filter root level entries only when at depth 0
-    // For nested calls (depth > 0), we already have the correct subset of entries
     const rootEntries = depth === 0 ? entries.filter(e => {
       if (!workspacePath) return true;
       const relativePath = e.path.replace(workspacePath + '/', '');
       return !relativePath.includes('/');
     }) : entries;
     
-    // When searching, show all matching entries with their parent folders
-    // When not searching, show only root level entries
     const filteredEntries = searchQuery
       ? entries.filter(e => e.name.toLowerCase().includes(searchQuery.toLowerCase()))
       : rootEntries;
 
-    // When searching, we need to include parent folders of matching items
     const entriesToShow = searchQuery
       ? getEntriesWithParents(filteredEntries, entries)
       : filteredEntries;
@@ -237,9 +212,6 @@ export const Sidebar: React.FC = () => {
       const isExpanded = expandedDirs.has(entry.path);
       const isSelected = selectedFile === entry.path;
       const isOpen = openTabs.some(t => t.path === entry.path);
-
-      // Get children for this directory
-      const children = files.filter(f => f.path.startsWith(entry.path + '/'));
 
       return (
         <div

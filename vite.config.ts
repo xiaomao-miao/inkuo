@@ -1,27 +1,27 @@
-import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
 
 const VENDOR_CHUNKS: Array<[string, string]> = [
-  ["node_modules/xlsx", "xlsx"],
-  ["node_modules/@syncfusion", "syncfusion"],
-  ["node_modules/@eigenpal", "office-editor"],
-  ["node_modules/prosemirror", "prosemirror"],
-  ["node_modules/@codemirror", "codemirror"],
-  ["node_modules/@uiw", "codemirror-ui"],
-  ["node_modules/react-dom", "react-vendor"],
-  ["node_modules/react", "react-vendor"],
-  ["node_modules/lucide-react", "icon-vendor"],
-  ["node_modules/marked", "markdown-vendor"],
-  ["node_modules/react-markdown", "markdown-vendor"],
-  ["node_modules/remark-gfm", "markdown-vendor"],
-  ["node_modules/rehype-highlight", "markdown-vendor"],
-  ["node_modules/rehype-raw", "markdown-vendor"],
-  ["node_modules/diff", "diff-vendor"],
-  ["node_modules/zustand", "state-vendor"],
-  ["node_modules/@tauri-apps", "tauri-vendor"],
+  ['node_modules/xlsx', 'xlsx'],
+  ['node_modules/@syncfusion', 'syncfusion'],
+  ['node_modules/@eigenpal', 'office-editor'],
+  ['node_modules/prosemirror', 'prosemirror'],
+  ['node_modules/@codemirror', 'codemirror'],
+  ['node_modules/@uiw', 'codemirror-ui'],
+  ['node_modules/react-dom', 'react-vendor'],
+  ['node_modules/react', 'react-vendor'],
+  ['node_modules/lucide-react', 'icon-vendor'],
+  ['node_modules/marked', 'markdown-vendor'],
+  ['node_modules/react-markdown', 'markdown-vendor'],
+  ['node_modules/remark-gfm', 'markdown-vendor'],
+  ['node_modules/rehype-highlight', 'markdown-vendor'],
+  ['node_modules/rehype-raw', 'markdown-vendor'],
+  ['node_modules/diff', 'diff-vendor'],
+  ['node_modules/zustand', 'state-vendor'],
+  ['node_modules/@tauri-apps', 'tauri-vendor'],
 ];
 
 function getManualChunk(id: string) {
@@ -31,8 +31,8 @@ function getManualChunk(id: string) {
     }
   }
 
-  if (id.indexOf("node_modules") !== -1) {
-    return "vendor";
+  if (id.indexOf('node_modules') !== -1) {
+    return 'vendor';
   }
 
   return undefined;
@@ -53,14 +53,14 @@ export default defineConfig(async () => ({
     host: host || false,
     hmr: host
       ? {
-          protocol: "ws",
+          protocol: 'ws',
           host,
           port: 1421,
         }
       : undefined,
     watch: {
       // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      ignored: ['**/src-tauri/**'],
     },
   },
   build: {

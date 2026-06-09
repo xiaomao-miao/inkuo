@@ -339,13 +339,12 @@
   overflow: hidden;
 }
 
-/* Hide DocxEditor's brand logo/watermark */
-.docxContainer [class*="brand"],
-.docxContainer [class*="logo"],
-.docxContainer [class*="powered"],
-.docxContainer [data-brand],
-.docxContainer img[alt*="logo"] {
-  display: none !important;
+.docxContainer :global([class*="brand"]),
+.docxContainer :global([class*="logo"]),
+.docxContainer :global([class*="powered"]),
+.docxContainer :global([data-brand]),
+.docxContainer :global(img[alt*="logo"]) {
+  display: none;
 }
 
 .excelContainer {

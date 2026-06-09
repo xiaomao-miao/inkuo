@@ -11,17 +11,14 @@ function App() {
   const { settings } = useSettingsStore();
   const { openTabs, activeTabId, setActiveTab } = useSidebarStore();
 
-  // Apply theme
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', settings.theme);
 
-    // Apply accent color as CSS variable
     document.documentElement.style.setProperty('--accent-primary', settings.accent_color);
     document.documentElement.style.setProperty('--accent-hover', adjustColor(settings.accent_color, 20));
     document.documentElement.style.setProperty('--accent-active', adjustColor(settings.accent_color, -20));
   }, [settings.theme, settings.accent_color]);
 
-  // Restore open tabs on startup - run once when store data becomes available
   const initTabRestored = useRef(false);
   useEffect(() => {
     if (!initTabRestored.current && openTabs.length > 0 && activeTabId) {

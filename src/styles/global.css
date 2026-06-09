@@ -155,41 +155,41 @@ pre {
 }
 
 /* CodeMirror global overrides */
-.cm-editor {
-  background-color: var(--bg-primary) !important;
+.editorContainer :global(.cm-editor) {
+  background-color: var(--bg-primary);
   height: 100%;
 }
 
-.cm-editor .cm-scroller {
-  font-family: var(--font-mono) !important;
-  background-color: var(--bg-primary) !important;
+.editorContainer :global(.cm-editor .cm-scroller) {
+  font-family: var(--font-mono);
+  background-color: var(--bg-primary);
 }
 
-.cm-editor .cm-content {
-  background-color: var(--bg-primary) !important;
+.editorContainer :global(.cm-editor .cm-content) {
+  background-color: var(--bg-primary);
 }
 
-.cm-editor .cm-gutters {
-  background-color: var(--bg-secondary) !important;
-  border-right: 1px solid var(--border-color) !important;
-  color: var(--fg-muted) !important;
+.editorContainer :global(.cm-editor .cm-gutters) {
+  background-color: var(--bg-secondary);
+  border-right: 1px solid var(--border-color);
+  color: var(--fg-muted);
 }
 
-.cm-editor .cm-lineNumbers .cm-gutterElement {
-  color: var(--fg-muted) !important;
-  padding: 0 16px 0 8px !important;
+.editorContainer :global(.cm-editor .cm-lineNumbers .cm-gutterElement) {
+  color: var(--fg-muted);
+  padding: 0 16px 0 8px;
 }
 
 /* Cursor / Caret styling */
-.cm-editor .cm-cursor {
-  border-left-color: var(--accent-primary) !important;
-  border-left-width: 2px !important;
+.editorContainer :global(.cm-editor .cm-cursor) {
+  border-left-color: var(--accent-primary);
+  border-left-width: 2px;
 }
 
-.cm-editor .cm-selectionBackground {
-  background-color: var(--selection-bg) !important;
+.editorContainer :global(.cm-editor .cm-selectionBackground) {
+  background-color: var(--selection-bg);
 }
 
-.cm-editor:focus .cm-selectionBackground {
-  background-color: var(--selection-bg) !important;
+.editorContainer :global(.cm-editor.cm-focused .cm-selectionBackground) {
+  background-color: var(--selection-bg);
 }

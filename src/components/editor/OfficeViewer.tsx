@@ -12,15 +12,7 @@ import styles from './OfficeViewer.module.css';
 import '@eigenpal/docx-editor-react/styles.css';
 import { TIMING } from '../../constants/timing';
 
-// ============================================================================
-// Constants
-// ============================================================================
-
 const OFFICE_MENU_BUTTONS_TO_HIDE = ['File', 'Format', 'Insert', 'Help'] as const;
-
-// ============================================================================
-// Type Definitions
-// ============================================================================
 
 export interface Paragraph {
   text: string;
@@ -53,10 +45,6 @@ export interface Sheet {
 export interface ExcelWorkbook {
   sheets: Sheet[];
 }
-
-// ============================================================================
-// Shared Office Toolbar
-// ============================================================================
 
 interface OfficeToolbarProps {
   fileName: string;
@@ -102,21 +90,10 @@ const OfficeToolbar: React.FC<OfficeToolbarProps> = ({
   );
 };
 
-// ============================================================================
-// Word Editor Component
-//
-// Key design: the component is NEVER unmounted while a tab is open. The
-// `documentBuffer` state is initialized ONCE from the `initialBuffer` prop
-// (store cache) using lazy initialization — if the prop is null it will load
-// from disk. `isActive` only controls CSS visibility, not rendering.
-// ============================================================================
-
 interface WordEditorProps {
   filePath: string;
   fileName: string;
-  /** Buffer cached in the store (survives tab switches). Lazy-initialized. */
   initialBuffer: Uint8Array | null;
-  /** Whether this tab is currently active. Controls CSS visibility only. */
   isActive: boolean;
 }
 
@@ -130,8 +107,6 @@ export const WordEditor: React.FC<WordEditorProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const hasLoadedRef = useRef(false);
   const pmViewRef = useRef<EditorView | null>(null);
-  // Initialize to -1 so the first mount always passes the >= check.
-  // Incremented to >= 0 after loading completes.
   const wordLastVersionRef = useRef(-1);
   const hasInitializedFromCacheRef = useRef(false);
 
@@ -145,29 +120,23 @@ export const WordEditor: React.FC<WordEditorProps> = ({
     [filePath]
   );
 
-  const enabled = true; // Word inline completion is always available
+  const enabled = true;
   const currentCompletion = useInlineCompleteStore((s) => s.currentCompletion);
   const isLoading = useInlineCompleteStore((s) => s.isLoading);
   const inlineError = useInlineCompleteStore((s) => s.error);
 
-  // Debug: log component mount (disabled in production)
   useEffect(() => {
     if (import.meta.env.DEV) {
       console.log('[WordEditor] mounted, filePath:', filePath, 'isActive:', isActive);
     }
   }, []);
 
-  // Capture the ProseMirror view when it's ready
   const handleEditorViewReady = useCallback((view: EditorView) => {
     pmViewRef.current = view;
   }, []);
 
-  // Refs for effects that need stable callbacks
   const loadFromDiskRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
-  // ── Persistent state: initialized once from the store cache ──────────────
-  // Using lazy initialization: only loads from disk on first render,
-  // subsequent renders reuse the in-memory state.
   const [documentBuffer, setDocumentBuffer] = useState<Uint8Array | null>(() => {
     if (initialBuffer) {
       hasLoadedRef.current = true;
@@ -183,7 +152,6 @@ export const WordEditor: React.FC<WordEditorProps> = ({
   const officeBufferVersion = useEditorStore(s => s.documentContents[filePath]?.officeBufferVersion ?? 0);
   const { setDocxBuffer } = useEditorStore();
 
-  // Keep loadFromDiskRef.current in sync
   useEffect(() => {
     const doLoad = async () => {
       setLoading(true);
@@ -205,23 +173,16 @@ export const WordEditor: React.FC<WordEditorProps> = ({
     loadFromDiskRef.current = doLoad;
   }, [filePath, setOpenTabDirty, setDocxBuffer]);
 
-  // ── Load on mount and re-load when AI agent modifies the file.
-  // wordLastVersionRef tracks the version we last loaded, so both
-  // the initial mount and version-triggered invalidations are handled
-  // without double-loading.
+  // Re-read from disk when the backing file version changes.
   useEffect(() => {
-    // Already loaded this version — skip
     if (wordLastVersionRef.current >= officeBufferVersion) return;
     wordLastVersionRef.current = officeBufferVersion;
 
-    // When officeBufferVersion > 0, the AI agent has written a new file.
-    // Always read from disk to get the latest content, ignoring the stale cache.
     if (officeBufferVersion > 0) {
       loadFromDiskRef.current();
       return;
     }
 
-    // Initial mount (version === 0): use cached buffer if available
     if (initialBuffer) {
       hasInitializedFromCacheRef.current = true;
       setDocumentBuffer(initialBuffer);
@@ -229,13 +190,9 @@ export const WordEditor: React.FC<WordEditorProps> = ({
       return;
     }
 
-    // No cached buffer — must read from disk
     loadFromDiskRef.current();
   }, [officeBufferVersion, initialBuffer]);
 
-  // ── When the store cache becomes available (e.g., restored after reload) ─
-  // This fires when the prop changes from null → non-null (after localStorage restore).
-  // The version-keyed effect above may have already skipped (initialBuffer was null at that time).
   useEffect(() => {
     if (!loading || hasInitializedFromCacheRef.current) return;
     if (initialBuffer) {
@@ -245,14 +202,13 @@ export const WordEditor: React.FC<WordEditorProps> = ({
     }
   }, [initialBuffer, loading]);
 
-  // ── Sync dirty state to sidebar on mount (handles restored dirty state) ───
   useEffect(() => {
     if (isActive && isDirty) {
       setOpenTabDirty(filePath, true);
     }
   }, [isActive, isDirty, filePath, setOpenTabDirty]);
 
-  // ── Hide DocxEditor's top menu buttons ─────────────────────────────────
+  // Hide third-party menu items that are not part of the app's editing surface.
   useEffect(() => {
     if (!documentBuffer) return;
 
@@ -386,19 +342,10 @@ export const WordEditor: React.FC<WordEditorProps> = ({
   );
 };
 
-// ============================================================================
-// Excel Editor Component
-//
-// Same principle: lazy initialization from store cache, CSS visibility only,
-// never unmounts while tab is open.
-// ============================================================================
-
 interface ExcelEditorProps {
   filePath: string;
   fileName: string;
-  /** Data cached in the store (survives tab switches). Lazy-initialized. */
   initialData: string[][] | null;
-  /** Whether this tab is currently active. Controls CSS visibility only. */
   isActive: boolean;
 }
 
@@ -410,7 +357,6 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
 }) => {
   const hasLoadedRef = useRef(false);
 
-  // Lazy initialization from store cache
   const [data, setData] = useState<string[][] | null>(() => {
     if (initialData !== null) {
       hasLoadedRef.current = true;
@@ -422,10 +368,8 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [isDirty, setIsDirty] = useState(false);
   const [originalData, setOriginalData] = useState<string[][] | null>(() => initialData);
-  // Cache the serialized form of originalData to avoid re-stringifying on every change.
   const originalDataJsonRef = useRef<string>(JSON.stringify(initialData ?? []));
 
-  // Re-serialize when originalData changes (mount, load, save)
   useEffect(() => {
     originalDataJsonRef.current = JSON.stringify(originalData ?? []);
   }, [originalData]);
@@ -435,10 +379,8 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
   const { setExcelData } = useEditorStore();
   const excelLastVersionRef = useRef(-1);
 
-  // Ref for stable loadFromDisk callback
   const loadFromDiskRef = useRef<() => Promise<void>>(() => Promise.resolve());
 
-  // ── Re-read from disk when AI agent modified the file ─────────────────────
   useEffect(() => {
     const doLoad = async () => {
       setLoading(true);
@@ -472,20 +414,16 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
     loadFromDiskRef.current = doLoad;
   }, [filePath, setOpenTabDirty, setExcelData]);
 
-  // ── Load on mount and re-load when AI agent modifies the file.
+  // Re-read from disk when the backing file version changes.
   useEffect(() => {
-    // Already loaded this version — skip
     if (excelLastVersionRef.current >= officeBufferVersion) return;
     excelLastVersionRef.current = officeBufferVersion;
 
-    // When officeBufferVersion > 0, the AI agent has written a new file.
-    // Always read from disk to get the latest content, ignoring the stale cache.
     if (officeBufferVersion > 0) {
       loadFromDiskRef.current();
       return;
     }
 
-    // Initial mount: use cached data if available, otherwise read from disk.
     if (initialData !== null) {
       setData(initialData);
       setOriginalData(initialData);
