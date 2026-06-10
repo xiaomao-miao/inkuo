@@ -18,7 +18,6 @@ interface PersistedSidebarState {
   activeTabId: string | null;
   selectedFile: string | null;
   expandedDirs: string[];
-  /** Cached directory contents: parentPath -> children entries */
   directoryCache: Record<string, FileEntry[]>;
 }
 
@@ -58,11 +57,8 @@ export const SETTINGS_TAB_ID = '__settings__';
 
 interface SidebarState {
   workspacePath: string | null;
-  /** Cached directory contents: parentPath -> children entries */
   directoryCache: Map<string, FileEntry[]>;
-  /** Currently expanded directory paths */
   expandedDirs: Set<string>;
-  /** Directories currently being loaded */
   loadingDirs: Set<string>;
   selectedFile: string | null;
   isLoading: boolean;
@@ -73,18 +69,16 @@ interface SidebarState {
   buildProgress?: BuildProgress;
   knowledgeToolCall?: ActiveToolCall;
 
+  knowledgeSelectMode: boolean;
+  knowledgeCheckedPaths: Set<string>;
+
   hasRestoredFromPersist: boolean;
 
   setWorkspacePath: (path: string) => void;
-  /** Get entries cached for a specific directory */
   getCachedChildren: (dirPath: string) => FileEntry[];
-  /** Check if a directory's children are cached */
   hasCachedChildren: (dirPath: string) => boolean;
-  /** Cache children for a directory */
   setCachedChildren: (dirPath: string, children: FileEntry[]) => void;
-  /** Remove cached children for a directory (and all its descendants) */
   invalidateCache: (dirPath: string) => void;
-  /** Clear all cache */
   clearCache: () => void;
 
   toggleDir: (path: string) => void;
@@ -103,6 +97,13 @@ interface SidebarState {
   setKnowledgeBase: (kb: KnowledgeBase | undefined) => void;
   setBuildProgress: (progress: BuildProgress | undefined) => void;
   setKnowledgeToolCall: (toolCall: ActiveToolCall | undefined) => void;
+
+  toggleKnowledgeSelectMode: () => void;
+  setKnowledgeSelectMode: (mode: boolean) => void;
+  toggleKnowledgeChecked: (path: string) => void;
+  setKnowledgeChecked: (path: string, checked: boolean) => void;
+  checkAllKnowledgePaths: (paths: string[]) => void;
+  clearKnowledgeChecked: () => void;
 }
 
 export const useSidebarStore = create<SidebarState>()(
@@ -120,6 +121,10 @@ export const useSidebarStore = create<SidebarState>()(
       knowledgeBase: undefined,
       buildProgress: undefined,
       knowledgeToolCall: undefined,
+
+      knowledgeSelectMode: false,
+      knowledgeCheckedPaths: new Set(),
+
       hasRestoredFromPersist: false,
 
       setWorkspacePath: (path) => set({ workspacePath: path }),
@@ -267,10 +272,46 @@ export const useSidebarStore = create<SidebarState>()(
           };
         }),
 
-      setKnowledgeBase: (kb: KnowledgeBase | undefined) => set({ knowledgeBase: kb }),
-      setBuildProgress: (progress: BuildProgress | undefined) => set({ buildProgress: progress }),
-      setKnowledgeToolCall: (toolCall: ActiveToolCall | undefined) =>
-        set({ knowledgeToolCall: toolCall }),
+      setKnowledgeBase: (kb) => set({ knowledgeBase: kb }),
+      setBuildProgress: (progress) => set({ buildProgress: progress }),
+      setKnowledgeToolCall: (toolCall) => set({ knowledgeToolCall: toolCall }),
+
+      toggleKnowledgeSelectMode: () =>
+        set((state) => ({
+          knowledgeSelectMode: !state.knowledgeSelectMode,
+          knowledgeCheckedPaths: state.knowledgeSelectMode ? new Set() : state.knowledgeCheckedPaths,
+        })),
+
+      setKnowledgeSelectMode: (mode) =>
+        set({ knowledgeSelectMode: mode, knowledgeCheckedPaths: mode ? new Set() : new Set() }),
+
+      toggleKnowledgeChecked: (path) =>
+        set((state) => {
+          const newChecked = new Set(state.knowledgeCheckedPaths);
+          if (newChecked.has(path)) {
+            newChecked.delete(path);
+          } else {
+            newChecked.add(path);
+          }
+          return { knowledgeCheckedPaths: newChecked };
+        }),
+
+      setKnowledgeChecked: (path, checked) =>
+        set((state) => {
+          const newChecked = new Set(state.knowledgeCheckedPaths);
+          if (checked) {
+            newChecked.add(path);
+          } else {
+            newChecked.delete(path);
+          }
+          return { knowledgeCheckedPaths: newChecked };
+        }),
+
+      checkAllKnowledgePaths: (paths) =>
+        set({ knowledgeCheckedPaths: new Set(paths) }),
+
+      clearKnowledgeChecked: () =>
+        set({ knowledgeCheckedPaths: new Set() }),
     }),
     {
       name: 'inkuo-sidebar',

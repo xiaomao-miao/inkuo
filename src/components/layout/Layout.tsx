@@ -2,6 +2,7 @@ import { useCallback, useEffect } from 'react';
 import { TitleBar } from '../titlebar/TitleBar';
 import { ActivityBar } from '../activitybar/ActivityBar';
 import { Sidebar } from '../sidebar/Sidebar';
+import { KnowledgeView } from '../sidebar/KnowledgeView';
 import { ResizableHandle } from '../resizable';
 import { Editor } from '../editor/Editor';
 import { TabBar } from '../editor/TabBar';
@@ -74,6 +75,8 @@ export const Layout = () => {
             <div className={styles.sidebar} style={{ width: sidebarWidth }}>
               {activeView === 'files' ? (
                 <Sidebar />
+              ) : activeView === 'knowledge' ? (
+                <KnowledgeView />
               ) : (
                 <div className={styles.placeholder} aria-live="polite">
                   <p>{DISABLED_VIEW_LABELS[activeView]}</p>

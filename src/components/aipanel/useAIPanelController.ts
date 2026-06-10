@@ -28,25 +28,17 @@ export function useAIPanelController() {
     knowledgeBase,
     buildProgress,
     knowledgeToolCall,
-    handleKnowledgeBuild,
-    handleKnowledgeClear,
   } = useKnowledgeBase({ activeSessionId: activeSession?.id });
 
   const knowledgeStatusLabel = knowledgeBase
-    ? `已建立知识库：${knowledgeBase.documentCount} 文档 / ${knowledgeBase.chunkCount} 分块`
+    ? `知识库：${knowledgeBase.members.length} 个文件 / ${knowledgeBase.documentCount} 文档 / ${knowledgeBase.chunkCount} 分块`
     : buildProgress
       ? '正在构建知识库…'
       : '知识库未初始化';
 
   const knowledgeToolbar = useMemo(
-    () => buildKnowledgeToolbarModel({
-      enabled: mode === 'knowledge' && !!activeSession,
-      hasKnowledgeBase: !!knowledgeBase,
-      isBuilding: !!buildProgress,
-      onBuild: handleKnowledgeBuild,
-      onClear: handleKnowledgeClear,
-    }),
-    [mode, activeSession, knowledgeBase, buildProgress, handleKnowledgeBuild, handleKnowledgeClear]
+    () => buildKnowledgeToolbarModel(),
+    []
   );
 
   return {

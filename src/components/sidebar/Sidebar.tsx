@@ -9,10 +9,14 @@ import {
   FileText,
   Folder,
   FolderOpen as FolderOpenIcon,
+  BookMarked,
+  Check,
+  Minus,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { useWorkspaceSearch } from '../../hooks/useWorkspaceSearch';
 import { useWorkspaceTree } from '../../hooks/useWorkspaceTree';
+import { useSidebarStore } from '../../store/sidebarStore';
 import { FileTree } from './FileTree';
 import type { FileEntry } from '../../types';
 import styles from './Sidebar.module.css';
@@ -72,11 +76,33 @@ export const Sidebar = () => {
     getChildren,
   } = useWorkspaceTree();
 
+  const {
+    knowledgeSelectMode,
+    knowledgeCheckedPaths,
+    setKnowledgeSelectMode,
+    checkAllKnowledgePaths,
+    clearKnowledgeChecked,
+    knowledgeBase,
+  } = useSidebarStore();
+
   const { searchQuery, setSearchQuery, searchResults, isSearching, clearSearch } =
     useWorkspaceSearch(workspacePath);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [isSearchFocused, setIsSearchFocused] = useState(false);
+
+  // Exit knowledge select mode on Escape
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && knowledgeSelectMode) {
+        // Same as cancel - revert to initial state without syncing
+        setKnowledgeSelectMode(false);
+        clearKnowledgeChecked();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [knowledgeSelectMode, setKnowledgeSelectMode, clearKnowledgeChecked]);
 
   useEffect(() => {
     if (workspacePath) {
@@ -129,8 +155,20 @@ export const Sidebar = () => {
   return (
     <aside className={styles.sidebar}>
       <div className={styles.header}>
-        <span className={styles.title}>资源管理器</span>
+        <span className={styles.title}>
+          {knowledgeSelectMode ? '知识库选择' : '资源管理器'}
+        </span>
         <div className={styles.headerActions}>
+          {!knowledgeSelectMode && (
+            <button
+              className={`${styles.iconButton} ${knowledgeBase?.members.length ? styles.iconButtonActive : ''}`}
+              onClick={() => useSidebarStore.getState().toggleKnowledgeSelectMode()}
+              title={knowledgeBase?.members.length ? `已选 ${knowledgeBase.members.length} 个知识库文件` : '知识库模式'}
+              disabled={!workspacePath}
+            >
+              <BookMarked size={14} />
+            </button>
+          )}
           <button
             className={styles.iconButton}
             onClick={() => void refreshWorkspace()}
@@ -148,6 +186,17 @@ export const Sidebar = () => {
           </button>
         </div>
       </div>
+
+      {/* Knowledge select mode toolbar */}
+      {knowledgeSelectMode && (
+        <KnowledgeSelectToolbar
+          checkedPaths={knowledgeCheckedPaths}
+          allMembersCount={knowledgeBase?.members.length ?? 0}
+          onAdd={checkAllKnowledgePaths}
+          onRemove={clearKnowledgeChecked}
+          onCancel={() => setKnowledgeSelectMode(false)}
+        />
+      )}
 
       <div className={styles.workspaceBar}>
         <button className={styles.openWorkspace} onClick={() => void openWorkspace()}>
@@ -219,6 +268,12 @@ export const Sidebar = () => {
                 selectedFile={selectedFile}
                 openTabs={openTabs}
                 onFileClick={handleFileClick}
+                knowledgeSelectMode={knowledgeSelectMode}
+                knowledgeCheckedPaths={knowledgeCheckedPaths}
+                knowledgeMembers={knowledgeBase?.members ?? []}
+                onKnowledgeCheck={(path, checked) => {
+                  useSidebarStore.getState().setKnowledgeChecked(path, checked);
+                }}
               />
             )}
           </div>
@@ -227,3 +282,57 @@ export const Sidebar = () => {
     </aside>
   );
 };
+
+// Knowledge select mode toolbar component
+interface KnowledgeSelectToolbarProps {
+  checkedPaths: Set<string>;
+  allMembersCount: number;
+  onAdd: (paths: string[]) => void;
+  onRemove: () => void;
+  onCancel: () => void;
+}
+
+function KnowledgeSelectToolbar({
+  checkedPaths,
+  allMembersCount,
+  onAdd,
+  onRemove,
+  onCancel,
+}: KnowledgeSelectToolbarProps) {
+  const checkedCount = checkedPaths.size;
+
+  return (
+    <div className={styles.knowledgeToolbar}>
+      <span className={styles.knowledgeToolbarCount}>
+        已选 {checkedCount} 个
+        {allMembersCount > 0 && `（知识库已有 ${allMembersCount} 个）`}
+      </span>
+      <div className={styles.knowledgeToolbarActions}>
+        <button
+          className={styles.knowledgeToolbarBtn}
+          onClick={() => onAdd(Array.from(checkedPaths))}
+          title="全选"
+        >
+          <Check size={12} />
+          <span>全选</span>
+        </button>
+        <button
+          className={styles.knowledgeToolbarBtn}
+          onClick={onRemove}
+          title="取消全选"
+        >
+          <Minus size={12} />
+          <span>取消</span>
+        </button>
+        <button
+          className={`${styles.knowledgeToolbarBtn} ${styles.knowledgeToolbarBtnCancel}`}
+          onClick={onCancel}
+          title="退出选择模式（Esc）"
+        >
+          <X size={12} />
+          <span>退出</span>
+        </button>
+      </div>
+    </div>
+  );
+}

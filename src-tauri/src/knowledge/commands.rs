@@ -71,6 +71,10 @@ pub enum KnowledgeCommandError {
     HttpResponseRead(String),
     #[error("Failed to write downloaded file: {0}")]
     DownloadWrite(String),
+    #[error("Knowledge base not initialized")]
+    NotInitialized,
+    #[error("File not found: {0}")]
+    FileNotFound(String),
 }
 
 fn shared_stores() -> &'static tokio::sync::RwLock<HashMap<String, VectorStore>> {
@@ -437,6 +441,7 @@ pub fn knowledge_status(
         "chunk_count": metadata.chunk_count,
         "created_at": metadata.created_at,
         "last_updated": metadata.last_updated,
+        "members": metadata.members,
     })))
 }
 
@@ -581,6 +586,286 @@ pub async fn knowledge_clear(workspace_path: String) -> Result<(), KnowledgeComm
     stores.retain(|k, _| !k.starts_with(&format!("{}::", workspace_id)));
 
     Ok(())
+}
+
+/// Add files as members to the knowledge base
+#[tauri::command]
+pub async fn knowledge_add_members(
+    app: AppHandle,
+    workspace_path: String,
+    member_paths: Vec<String>,
+    session_id: String,
+) -> Result<UpdateResult, KnowledgeCommandError> {
+    tracing::info!(
+        "[KB_ADD_MEMBERS] workspace={}, members={:?}",
+        workspace_path,
+        member_paths
+    );
+
+    let workspace = PathBuf::from(&workspace_path);
+
+    if !workspace.exists() {
+        return Err(KnowledgeCommandError::WorkspaceNotFound(
+            workspace.display().to_string(),
+        ));
+    }
+
+    let model_name = get_embedding_model();
+    let model_path = resolve_model_dir(&app, &model_name)
+        .ok_or_else(|| KnowledgeCommandError::ModelNotFound(model_name.clone()))?;
+
+    let embedder = Embedder::new(&model_name, &model_path)
+        .map_err(|e| KnowledgeCommandError::EmbedderInit(e.to_string()))?;
+
+    let vector_store = get_or_create_vector_store(&workspace_path, &model_name).await?;
+
+    let mut metadata_store = MetadataStore::new(&workspace)
+        .map_err(|e| KnowledgeCommandError::MetadataStoreInit(e.to_string()))?;
+
+    // Ensure metadata exists
+    if !metadata_store.exists() {
+        let collection_name = format!("kb_{}", &get_workspace_id(&workspace_path)[..12]);
+        metadata_store.create(&workspace, &collection_name)
+            .map_err(|e| KnowledgeCommandError::MetadataCreate(e.to_string()))?;
+    } else {
+        metadata_store.load()
+            .map_err(|e| KnowledgeCommandError::MetadataLoad(e.to_string()))?;
+    }
+
+    // Filter out paths that are already members
+    let existing_members: std::collections::HashSet<_> = metadata_store
+        .get_metadata()
+        .map(|m| m.members.iter().collect())
+        .unwrap_or_default();
+
+    let new_paths: Vec<String> = member_paths
+        .into_iter()
+        .filter(|p| !existing_members.contains(p))
+        .collect();
+
+    if new_paths.is_empty() {
+        return Ok(UpdateResult {
+            added: 0,
+            removed: 0,
+            updated: 0,
+        });
+    }
+
+    // Add members to metadata
+    metadata_store.add_members(&new_paths)
+        .map_err(|e| KnowledgeCommandError::MetadataUpdate(e.to_string()))?;
+
+    // Scan and index only the new member files
+    let scanner = DocScanner::default();
+    let chunk_size = get_chunk_size();
+    let chunker = Chunker::new(ChunkConfig {
+        target_size: chunk_size,
+        overlap: 50,
+        min_size: 50,
+        preserve_headers: true,
+    });
+
+    let all_docs = scanner
+        .scan(&workspace)
+        .map_err(|e| KnowledgeCommandError::DocumentScan(e.to_string()))?;
+
+    let target_docs: Vec<_> = all_docs
+        .into_iter()
+        .filter(|doc| new_paths.contains(&doc.path))
+        .collect();
+
+    if target_docs.is_empty() {
+        return Ok(UpdateResult {
+            added: new_paths.len(),
+            removed: 0,
+            updated: 0,
+        });
+    }
+
+    let mut file_paths: HashMap<String, String> = HashMap::new();
+    for doc in &target_docs {
+        let abs_path = workspace.join(&doc.path);
+        file_paths.insert(doc.id.clone(), abs_path.to_string_lossy().to_string());
+    }
+
+    let mut new_chunks = Vec::new();
+    let mut owned_docs = Vec::new();
+    for doc in &target_docs {
+        let chunks = chunker.chunk_document(&doc.id, &doc.title, &doc.content);
+        new_chunks.extend(chunks);
+        owned_docs.push(doc.clone());
+    }
+
+    let batch_size = 64usize;
+    embedder
+        .encode_chunks_batched(&mut new_chunks, batch_size, |completed, total| {
+            emit_build_progress(
+                &app,
+                &session_id,
+                "embedding",
+                completed,
+                total,
+                format!("为 {} 个文件生成向量...", owned_docs.len()),
+            );
+        })
+        .map_err(|e| KnowledgeCommandError::Embedding(e.to_string()))?;
+
+    vector_store
+        .upsert_chunks(&new_chunks, &file_paths)
+        .await
+        .map_err(|e| KnowledgeCommandError::StoreVectors(e.to_string()))?;
+
+    // Update metadata with the new indexed files
+    metadata_store
+        .update(&owned_docs, new_chunks.len())
+        .map_err(|e| KnowledgeCommandError::MetadataUpdate(e.to_string()))?;
+
+    tracing::info!(
+        "[KB_ADD_MEMBERS] Done: added {} members, {} chunks",
+        new_paths.len(),
+        new_chunks.len()
+    );
+
+    Ok(UpdateResult {
+        added: new_paths.len(),
+        removed: 0,
+        updated: new_chunks.len(),
+    })
+}
+
+/// Remove files from the knowledge base members
+#[tauri::command]
+pub async fn knowledge_remove_members(
+    workspace_path: String,
+    member_paths: Vec<String>,
+) -> Result<UpdateResult, KnowledgeCommandError> {
+    tracing::info!(
+        "[KB_REMOVE_MEMBERS] workspace={}, members={:?}",
+        workspace_path,
+        member_paths
+    );
+
+    let workspace = PathBuf::from(&workspace_path);
+
+    if !workspace.exists() {
+        return Err(KnowledgeCommandError::WorkspaceNotFound(
+            workspace.display().to_string(),
+        ));
+    }
+
+    let model_name = get_embedding_model();
+    let vector_store = get_or_create_vector_store(&workspace_path, &model_name).await?;
+
+    let mut metadata_store = MetadataStore::new(&workspace)
+        .map_err(|e| KnowledgeCommandError::MetadataStoreInit(e.to_string()))?;
+
+    if !metadata_store.exists() {
+        return Ok(UpdateResult {
+            added: 0,
+            removed: 0,
+            updated: 0,
+        });
+    }
+
+    metadata_store.load()
+        .map_err(|e| KnowledgeCommandError::MetadataLoad(e.to_string()))?;
+
+    // Find which paths are actually members
+    let existing_members = metadata_store
+        .get_metadata()
+        .map(|m| m.members.clone())
+        .unwrap_or_default();
+
+    let to_remove: Vec<String> = member_paths
+        .into_iter()
+        .filter(|p| existing_members.contains(p))
+        .collect();
+
+    if to_remove.is_empty() {
+        return Ok(UpdateResult {
+            added: 0,
+            removed: 0,
+            updated: 0,
+        });
+    }
+
+    // Get all docs to find document IDs for the removed paths
+    let scanner = DocScanner::default();
+    let all_docs = scanner
+        .scan(&workspace)
+        .map_err(|e| KnowledgeCommandError::DocumentScan(e.to_string()))?;
+
+    // Delete vectors for files matching removed paths
+    for doc in &all_docs {
+        if to_remove.contains(&doc.path) {
+            vector_store
+                .delete_by_document_id(&doc.id)
+                .await
+                .map_err(|e| KnowledgeCommandError::StoreVectors(e.to_string()))?;
+        }
+    }
+
+    // Remove members from metadata
+    let removed = metadata_store.remove_members(&to_remove)
+        .map_err(|e| KnowledgeCommandError::MetadataUpdate(e.to_string()))?;
+
+    // Update document count and chunk count
+    if let Some(metadata) = metadata_store.get_metadata() {
+        let remaining_count = metadata.members.len();
+        // Recalculate chunk count based on remaining members
+        let remaining_docs: Vec<_> = all_docs
+            .into_iter()
+            .filter(|doc| metadata.members.contains(&doc.path))
+            .collect();
+        let remaining_chunks: usize = remaining_docs.len() * 2; // rough estimate
+
+        metadata_store.metadata.as_mut().map(|m| {
+            m.document_count = remaining_count;
+            m.chunk_count = remaining_chunks;
+            m.last_updated = chrono::Utc::now();
+        });
+        metadata_store.save()
+            .map_err(|e| KnowledgeCommandError::MetadataUpdate(e.to_string()))?;
+    }
+
+    tracing::info!("[KB_REMOVE_MEMBERS] Done: removed {} members", removed);
+
+    Ok(UpdateResult {
+        added: 0,
+        removed,
+        updated: 0,
+    })
+}
+
+/// Get the list of member file paths in the knowledge base
+#[tauri::command]
+pub fn knowledge_get_members(
+    workspace_path: String,
+) -> Result<Vec<String>, KnowledgeCommandError> {
+    let workspace = PathBuf::from(&workspace_path);
+
+    if !workspace.exists() {
+        return Err(KnowledgeCommandError::WorkspaceNotFound(
+            workspace.display().to_string(),
+        ));
+    }
+
+    let mut metadata_store = MetadataStore::new(&workspace)
+        .map_err(|e| KnowledgeCommandError::MetadataStoreInit(e.to_string()))?;
+
+    if !metadata_store.exists() {
+        return Ok(Vec::new());
+    }
+
+    metadata_store.load()
+        .map_err(|e| KnowledgeCommandError::MetadataLoad(e.to_string()))?;
+
+    let members = metadata_store
+        .get_metadata()
+        .map(|m| m.members.clone())
+        .unwrap_or_default();
+
+    Ok(members)
 }
 
 fn first_existing_path(paths: impl IntoIterator<Item = PathBuf>) -> Option<PathBuf> {

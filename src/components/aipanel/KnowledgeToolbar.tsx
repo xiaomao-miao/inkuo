@@ -13,6 +13,8 @@ export const KnowledgeToolbar: React.FC<KnowledgeToolbarProps> = ({
   primaryAction,
   secondaryAction,
 }) => {
+  // Only show the status label in knowledge mode - action buttons removed
+  // (knowledge management moved to the sidebar's knowledge select mode)
   return (
     <div className={styles.knowledgeToolbar}>
       <div className={styles.knowledgeToolbarSide}>

@@ -20,6 +20,8 @@ interface UseKnowledgeBaseResult {
   knowledgeToolCall: ActiveToolCall | undefined;
   handleKnowledgeBuild: () => Promise<void>;
   handleKnowledgeClear: () => Promise<void>;
+  handleAddMembers: (memberPaths: string[]) => Promise<void>;
+  handleRemoveMembers: (memberPaths: string[]) => Promise<void>;
 }
 
 interface KnowledgeStatusPayload {
@@ -29,6 +31,7 @@ interface KnowledgeStatusPayload {
   chunk_count: number;
   created_at: string;
   last_updated: string;
+  members: string[];
 }
 
 export function useKnowledgeBase({ activeSessionId }: UseKnowledgeBaseArgs): UseKnowledgeBaseResult {
@@ -71,6 +74,7 @@ export function useKnowledgeBase({ activeSessionId }: UseKnowledgeBaseArgs): Use
           documentCount: status.document_count,
           chunkCount: status.chunk_count,
           lastUpdated: new Date(status.last_updated).getTime() || Date.now(),
+          members: status.members ?? [],
         });
       } catch (err) {
         if (!cancelled) {
@@ -147,6 +151,7 @@ export function useKnowledgeBase({ activeSessionId }: UseKnowledgeBaseArgs): Use
         documentCount: result.total_documents,
         chunkCount: result.total_chunks,
         lastUpdated: Date.now(),
+        members: [],
       });
       pushNotification({
         kind: 'success',
@@ -195,6 +200,114 @@ export function useKnowledgeBase({ activeSessionId }: UseKnowledgeBaseArgs): Use
     }
   }, [activeSessionId, workspacePath, setKnowledgeBase, setBuildProgress, setKnowledgeToolCall, pushNotification]);
 
+  const handleAddMembers = useCallback(async (memberPaths: string[]) => {
+    if (!workspacePath || memberPaths.length === 0) return;
+
+    const toolCallId = `knowledge-add-members-${Date.now()}`;
+    const sessionId = activeSessionId ?? toolCallId;
+
+    let unlistenProgress: (() => void) | undefined;
+    try {
+      unlistenProgress = await listen<{
+        session_id: string;
+        phase: string;
+        current: number;
+        total: number;
+        message: string;
+      }>('kb://build-progress', (event) => {
+        if (event.payload.session_id !== sessionId) return;
+        if (event.payload.phase === 'done') {
+          setBuildProgress(undefined);
+        } else {
+          setBuildProgress({
+            phase: event.payload.phase as BuildProgress['phase'],
+            current: event.payload.current,
+            total: event.payload.total,
+            currentFile: event.payload.message,
+          });
+        }
+      });
+    } catch (err) {
+      // Silently ignore progress listener errors
+    }
+
+    try {
+      const result = await invoke<{ added: number; removed: number; updated: number }>(
+        'knowledge_add_members',
+        { workspacePath, memberPaths, sessionId },
+      );
+
+      // Refresh knowledge status to get updated member list
+      const status = await invoke<KnowledgeStatusPayload | null>('knowledge_status', {
+        workspacePath,
+      });
+      if (status) {
+        setKnowledgeBase({
+          workspaceId: status.workspace_id,
+          documentCount: status.document_count,
+          chunkCount: status.chunk_count,
+          lastUpdated: new Date(status.last_updated).getTime() || Date.now(),
+          members: status.members ?? [],
+        });
+      }
+
+      pushNotification({
+        kind: 'success',
+        title: '已加入知识库',
+        message: `已添加 ${result.added} 个文件到知识库。`,
+      });
+    } catch (err) {
+      const message = reportError('knowledge-add-members', err);
+      pushNotification({
+        kind: 'error',
+        title: '加入知识库失败',
+        message,
+      });
+    } finally {
+      unlistenProgress?.();
+    }
+  }, [workspacePath, activeSessionId, setKnowledgeBase, setBuildProgress, pushNotification]);
+
+  const handleRemoveMembers = useCallback(async (memberPaths: string[]) => {
+    if (!workspacePath || memberPaths.length === 0) return;
+
+    try {
+      const result = await invoke<{ added: number; removed: number; updated: number }>(
+        'knowledge_remove_members',
+        { workspacePath, memberPaths },
+      );
+
+      // Refresh knowledge status
+      const status = await invoke<KnowledgeStatusPayload | null>('knowledge_status', {
+        workspacePath,
+      });
+      if (status) {
+        setKnowledgeBase({
+          workspaceId: status.workspace_id,
+          documentCount: status.document_count,
+          chunkCount: status.chunk_count,
+          lastUpdated: new Date(status.last_updated).getTime() || Date.now(),
+          members: status.members ?? [],
+        });
+      } else {
+        setKnowledgeBase(undefined);
+      }
+
+      pushNotification({
+        kind: 'success',
+        title: '已移出知识库',
+        message: `已移除 ${result.removed} 个文件。`,
+      });
+    } catch (err) {
+      const message = reportError('knowledge-remove-members', err);
+      pushNotification({
+        kind: 'error',
+        title: '移出知识库失败',
+        message,
+      });
+    }
+  }, [workspacePath, setKnowledgeBase, pushNotification]);
+
   return {
     workspacePath: workspacePath ?? undefined,
     knowledgeBase,
@@ -202,5 +315,7 @@ export function useKnowledgeBase({ activeSessionId }: UseKnowledgeBaseArgs): Use
     knowledgeToolCall,
     handleKnowledgeBuild,
     handleKnowledgeClear,
+    handleAddMembers,
+    handleRemoveMembers,
   };
 }

@@ -4,11 +4,13 @@ import {
   Search,
   GitBranch,
   BookOpen,
+  Brain,
   PanelLeft
 } from 'lucide-react';
+import { useSidebarStore } from '../../store/sidebarStore';
 import styles from './ActivityBar.module.css';
 
-export type ViewType = 'files' | 'search' | 'git' | 'extensions';
+export type ViewType = 'files' | 'search' | 'git' | 'extensions' | 'knowledge';
 
 const EXTENSIONS_BADGE_COUNT = 0;
 
@@ -23,10 +25,14 @@ export const ActivityBar = ({
   onViewChange,
   onToggleSidebar,
 }: ActivityBarProps) => {
+  const knowledgeBase = useSidebarStore((s) => s.knowledgeBase);
+  const knowledgeMemberCount = knowledgeBase?.members.length ?? 0;
+
   const views: { id: ViewType; icon: React.ReactNode; label: string }[] = [
     { id: 'files', icon: <Files size={22} />, label: '资源管理器' },
     { id: 'search', icon: <Search size={22} />, label: '搜索' },
     { id: 'git', icon: <GitBranch size={22} />, label: '源代码管理' },
+    { id: 'knowledge', icon: <Brain size={22} />, label: '知识库' },
     { id: 'extensions', icon: <BookOpen size={22} />, label: '扩展' },
   ];
 
@@ -44,10 +50,13 @@ export const ActivityBar = ({
             {view.id === 'extensions' && EXTENSIONS_BADGE_COUNT > 0 && (
               <span className={styles.badge}>{EXTENSIONS_BADGE_COUNT}</span>
             )}
+            {view.id === 'knowledge' && knowledgeMemberCount > 0 && (
+              <span className={styles.badge}>{knowledgeMemberCount}</span>
+            )}
           </button>
         ))}
       </div>
-      
+
       <div className={styles.bottom}>
         <button
           className={styles.viewButton}

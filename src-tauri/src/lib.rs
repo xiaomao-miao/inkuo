@@ -96,6 +96,9 @@ pub fn run() {
             knowledge::commands::knowledge_status,
             knowledge::commands::knowledge_update,
             knowledge::commands::knowledge_clear,
+            knowledge::commands::knowledge_add_members,
+            knowledge::commands::knowledge_remove_members,
+            knowledge::commands::knowledge_get_members,
             knowledge::commands::check_available_models,
             knowledge::commands::download_model_files,
         ])

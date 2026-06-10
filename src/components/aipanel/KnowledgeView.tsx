@@ -1,16 +1,11 @@
 import { invoke } from '@tauri-apps/api/core';
 import { useEffect, useState } from 'react';
-import { Database, RefreshCw, Trash2, FileText, Layers, Clock, AlertTriangle, Settings } from 'lucide-react';
+import { Database, FileText, Layers, Clock, AlertTriangle, Settings, BookMarked, RefreshCw } from 'lucide-react';
 import { useNotificationStore, useSettingsStore, type BuildProgress } from '../../store';
 import { useSidebarStore } from '../../store';
 import { reportError } from '../../utils/errors';
 import { openSettingsTab } from '../../utils/openSettingsTab';
 import styles from './KnowledgeView.module.css';
-
-interface KnowledgeViewProps {
-  onBuild: () => void;
-  onClear: () => void;
-}
 
 interface AvailableModel {
   name: string;
@@ -20,10 +15,7 @@ interface AvailableModel {
   size: string;
 }
 
-export const KnowledgeView = ({
-  onBuild,
-  onClear,
-}: KnowledgeViewProps) => {
+export const KnowledgeView = () => {
   const knowledgeBase = useSidebarStore((state) => state.knowledgeBase);
   const buildProgress = useSidebarStore((state) => state.buildProgress);
   const settings = useSettingsStore((state) => state.settings);
@@ -112,12 +104,9 @@ export const KnowledgeView = ({
           <Database size={48} className={styles.emptyIcon} />
           <h3 className={styles.emptyTitle}>知识库未初始化</h3>
           <p className={styles.emptyDescription}>
-            构建知识库后，你可以直接在底部输入框提问，系统会自动检索工作区文档并生成带引用来源的回答。
+            在左侧资源管理器中点击顶部书签图标，
+            即可选择文件加入知识库，构建专属的 AI 回答依据库。
           </p>
-          <button className={styles.buildButton} onClick={onBuild}>
-            <Layers size={16} />
-            构建知识库
-          </button>
         </div>
       </div>
     );
@@ -127,6 +116,10 @@ export const KnowledgeView = ({
     <div className={styles.knowledgeView}>
       <div className={styles.header}>
         <div className={styles.stats}>
+          <div className={styles.stat}>
+            <BookMarked size={14} />
+            <span>{knowledgeBase.members.length} 个文件</span>
+          </div>
           <div className={styles.stat}>
             <FileText size={14} />
             <span>{knowledgeBase.documentCount} 文档</span>
@@ -140,14 +133,13 @@ export const KnowledgeView = ({
             <span>{formatTime(knowledgeBase.lastUpdated)}</span>
           </div>
         </div>
-        <div className={styles.actions}>
-          <button className={styles.actionButton} onClick={onBuild} title="重建知识库">
-            <RefreshCw size={14} />
-          </button>
-          <button className={styles.actionButton} onClick={onClear} title="清空知识库">
-            <Trash2 size={14} />
-          </button>
-        </div>
+      </div>
+
+      <div className={styles.knowledgeHint}>
+        <BookMarked size={14} />
+        <span>
+          在左侧资源管理器中点击书签图标管理知识库文件
+        </span>
       </div>
 
       {buildProgress && (

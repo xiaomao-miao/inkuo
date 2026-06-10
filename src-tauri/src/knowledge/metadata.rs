@@ -40,6 +40,9 @@ pub struct KnowledgeMetadata {
     pub chunk_count: usize,
     /// Indexed files
     pub indexed_files: Vec<IndexedFile>,
+    /// Explicitly selected member file paths (relative to workspace)
+    #[serde(default)]
+    pub members: Vec<String>,
 }
 
 /// Metadata store for a workspace
@@ -135,12 +138,13 @@ impl MetadataStore {
             document_count: 0,
             chunk_count: 0,
             indexed_files: Vec::new(),
+            members: Vec::new(),
         });
 
         self.save()
     }
 
-    /// Update metadata with new documents
+    /// Update metadata with new documents (preserves members)
     pub fn update(&mut self, documents: &[Document], chunk_count: usize) -> Result<(), MetadataError> {
         let metadata = self.metadata.as_mut()
             .ok_or_else(|| MetadataError::NoMetadata)?;
@@ -162,6 +166,83 @@ impl MetadataStore {
         metadata.last_updated = Utc::now();
 
         self.save()
+    }
+
+    /// Add a member file path to the knowledge base
+    pub fn add_member(&mut self, member_path: &str) -> Result<bool, MetadataError> {
+        let metadata = self.metadata.as_mut()
+            .ok_or_else(|| MetadataError::NoMetadata)?;
+
+        if metadata.members.contains(&member_path.to_string()) {
+            return Ok(false);
+        }
+
+        metadata.members.push(member_path.to_string());
+        metadata.last_updated = Utc::now();
+        self.save()?;
+        Ok(true)
+    }
+
+    /// Remove a member file path from the knowledge base
+    pub fn remove_member(&mut self, member_path: &str) -> Result<bool, MetadataError> {
+        let metadata = self.metadata.as_mut()
+            .ok_or_else(|| MetadataError::NoMetadata)?;
+
+        let original_len = metadata.members.len();
+        metadata.members.retain(|p| p != member_path);
+
+        if metadata.members.len() == original_len {
+            return Ok(false);
+        }
+
+        metadata.last_updated = Utc::now();
+        self.save()?;
+        Ok(true)
+    }
+
+    /// Add multiple member file paths at once
+    pub fn add_members(&mut self, member_paths: &[String]) -> Result<usize, MetadataError> {
+        let metadata = self.metadata.as_mut()
+            .ok_or_else(|| MetadataError::NoMetadata)?;
+
+        let mut added = 0;
+        for path in member_paths {
+            if !metadata.members.contains(path) {
+                metadata.members.push(path.clone());
+                added += 1;
+            }
+        }
+
+        if added > 0 {
+            metadata.last_updated = Utc::now();
+            self.save()?;
+        }
+
+        Ok(added)
+    }
+
+    /// Remove multiple member file paths at once
+    pub fn remove_members(&mut self, member_paths: &[String]) -> Result<usize, MetadataError> {
+        let metadata = self.metadata.as_mut()
+            .ok_or_else(|| MetadataError::NoMetadata)?;
+
+        let original_len = metadata.members.len();
+        metadata.members.retain(|p| !member_paths.contains(p));
+
+        let removed = original_len - metadata.members.len();
+        if removed > 0 {
+            metadata.last_updated = Utc::now();
+            self.save()?;
+        }
+
+        Ok(removed)
+    }
+
+    /// Check if a path is a member
+    pub fn is_member(&self, member_path: &str) -> bool {
+        self.metadata.as_ref()
+            .map(|m| m.members.contains(&member_path.to_string()))
+            .unwrap_or(false)
     }
 
     /// Get indexed files as a HashMap for quick lookup

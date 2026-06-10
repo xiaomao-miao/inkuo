@@ -332,6 +332,8 @@ export interface KnowledgeBase {
   documentCount: number;
   chunkCount: number;
   lastUpdated: number;
+  /** Explicitly selected member file paths (relative to workspace) */
+  members: string[];
 }
 
 export interface BuildProgress {

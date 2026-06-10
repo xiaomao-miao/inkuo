@@ -6,6 +6,7 @@ import {
   Folder,
   FolderOpen as FolderOpenIcon,
   Loader2,
+  BookMarked,
 } from 'lucide-react';
 import type { OpenTab } from '../../store';
 import type { FileEntry } from '../../types';
@@ -19,6 +20,14 @@ interface FileTreeProps {
   selectedFile: string | null;
   openTabs: OpenTab[];
   onFileClick: (entry: FileEntry) => void | Promise<void>;
+  /** Whether knowledge base selection mode is active */
+  knowledgeSelectMode?: boolean;
+  /** Paths checked in knowledge selection mode */
+  knowledgeCheckedPaths?: Set<string>;
+  /** Paths that are already knowledge base members (relative to workspace) */
+  knowledgeMembers?: string[];
+  /** Callback when a path is checked/unchecked */
+  onKnowledgeCheck?: (path: string, checked: boolean) => void;
 }
 
 export const FileTree = ({
@@ -29,6 +38,10 @@ export const FileTree = ({
   selectedFile,
   openTabs,
   onFileClick,
+  knowledgeSelectMode = false,
+  knowledgeCheckedPaths = new Set(),
+  knowledgeMembers = [],
+  onKnowledgeCheck,
 }: FileTreeProps) => {
   const rootChildren = getChildren(workspaceRoot);
 
@@ -47,6 +60,11 @@ export const FileTree = ({
           onFileClick={onFileClick}
           depth={0}
           isRoot
+          knowledgeSelectMode={knowledgeSelectMode}
+          knowledgeCheckedPaths={knowledgeCheckedPaths}
+          knowledgeMembers={knowledgeMembers}
+          onKnowledgeCheck={onKnowledgeCheck}
+          workspaceRoot={workspaceRoot}
         />
       )}
     </div>
@@ -63,6 +81,11 @@ interface FileTreeNodeProps {
   onFileClick: (entry: FileEntry) => void | Promise<void>;
   depth: number;
   isRoot?: boolean;
+  knowledgeSelectMode?: boolean;
+  knowledgeCheckedPaths?: Set<string>;
+  knowledgeMembers?: string[];
+  onKnowledgeCheck?: (path: string, checked: boolean) => void;
+  workspaceRoot?: string;
 }
 
 const FileTreeNode = ({
@@ -75,6 +98,11 @@ const FileTreeNode = ({
   onFileClick,
   depth,
   isRoot,
+  knowledgeSelectMode = false,
+  knowledgeCheckedPaths = new Set(),
+  knowledgeMembers = [],
+  onKnowledgeCheck,
+  workspaceRoot = '',
 }: FileTreeNodeProps) => {
   const isExpanded = expandedDirs.has(entry.path);
   const isLoading = loadingDirs.has(entry.path);
@@ -82,8 +110,21 @@ const FileTreeNode = ({
   const isOpen = openTabs.some((tab) => tab.path === entry.path);
   const children = getChildren(entry.path);
 
+  // Compute relative path for knowledge base matching
+  const relativePath = workspaceRoot && entry.path.startsWith(workspaceRoot + '/')
+    ? entry.path.slice(workspaceRoot.length + 1)
+    : entry.path;
+  const isKnowledgeMember = knowledgeMembers.includes(relativePath);
+  const isChecked = knowledgeCheckedPaths.has(relativePath);
+  const showCheckbox = knowledgeSelectMode && !entry.is_dir;
+
   const handleClick = () => {
     void onFileClick(entry);
+  };
+
+  const handleCheckboxChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    e.stopPropagation();
+    onKnowledgeCheck?.(relativePath, e.target.checked);
   };
 
   if (!entry.is_dir) {
@@ -101,7 +142,16 @@ const FileTreeNode = ({
           onClick={handleClick}
           data-depth={Math.min(depth, 4)}
         >
-          <span className={styles.chevronPlaceholder} />
+          {showCheckbox && (
+            <input
+              type="checkbox"
+              className={styles.knowledgeCheckbox}
+              checked={isChecked}
+              onChange={handleCheckboxChange}
+              onClick={(e) => e.stopPropagation()}
+            />
+          )}
+          {!showCheckbox && <span className={styles.chevronPlaceholder} />}
           <span
             className={`${styles.icon} ${isSelected ? styles.iconActive : ''}`}
             data-type={entry.is_markdown ? 'markdown' : 'file'}
@@ -109,6 +159,11 @@ const FileTreeNode = ({
             {entry.is_markdown ? <FileText size={14} /> : <File size={14} />}
           </span>
           <span className={styles.fileName}>{entry.name}</span>
+          {isKnowledgeMember && !showCheckbox && (
+            <span className={styles.knowledgeBadge}>
+              <BookMarked size={12} />
+            </span>
+          )}
           {isOpen && (
             <span className={`${styles.openIndicator} ${styles.openIndicatorActive}`}>
               ●
@@ -136,6 +191,11 @@ const FileTreeNode = ({
               openTabs={openTabs}
               onFileClick={onFileClick}
               depth={0}
+              knowledgeSelectMode={knowledgeSelectMode}
+              knowledgeCheckedPaths={knowledgeCheckedPaths}
+              knowledgeMembers={knowledgeMembers}
+              onKnowledgeCheck={onKnowledgeCheck}
+              workspaceRoot={workspaceRoot}
             />
           ))
         )}
@@ -197,6 +257,11 @@ const FileTreeNode = ({
                 openTabs={openTabs}
                 onFileClick={onFileClick}
                 depth={depth + 1}
+                knowledgeSelectMode={knowledgeSelectMode}
+                knowledgeCheckedPaths={knowledgeCheckedPaths}
+                knowledgeMembers={knowledgeMembers}
+                onKnowledgeCheck={onKnowledgeCheck}
+                workspaceRoot={workspaceRoot}
               />
             ))
           )}
