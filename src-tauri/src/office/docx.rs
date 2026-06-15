@@ -73,81 +73,34 @@ pub enum DocElement {
 
 impl WordDocument {
     /// Convert the document to a flat list of elements with stable IDs.
-    /// Tables are interleaved with paragraphs using their original document order.
+    /// Tables and paragraphs are interleaved by matching position markers
+    /// to tables in sequential order.
     pub fn to_elements(&self) -> Vec<DocElement> {
-        let mut elements = Vec::with_capacity(self.paragraphs.len() + self.tables.len());
+        // Match markers to tables by sequential order — ignore the stored position value.
+        let mut table_iter = self.tables.iter().peekable();
+        let mut elements: Vec<DocElement> = Vec::with_capacity(self.paragraphs.len() + self.tables.len());
 
-        // We interleave based on XML order: scan all nodes sequentially.
-        // OOXML stores paragraphs and tables as siblings in <w:body>.
-        // Since we parse them separately, we reconstruct order by tracking
-        // the last-seen paragraph index when each table appears.
-
-        let mut para_idx = 0;
-        let mut table_idx = 0;
-        let mut last_para_before_table: Vec<usize> = vec![];
-
-        // First pass: determine which table follows which paragraphs
-        // We track the para_idx at the time each table is encountered
-        // by scanning the body for tbl elements interleaved with paragraphs.
-
-        // Rebuild by scanning the original XML order.
-        // Since parse_document_xml and parse_table_xml consumed the XML separately,
-        // we track table positions by paragraph count before each table.
-        // Simple heuristic: tables appear at known paragraph indices in document order.
-
-        // Actually, the simplest reliable approach is to NOT interleave.
-        // Return paragraphs first, then tables, and rely on position index.
-        // The position is stored as a hint; for elements[] from to_elements(),
-        // we compute relative positions.
-
-        // Better approach: track interleaving from the table paragraph markers
-        // we used to store. Look for __tbl_idx_N__ markers.
-        let mut table_positions: Vec<usize> = vec![];
-
-        for para in &self.paragraphs {
-            if let Some(rest) = para.text.strip_prefix("<__tbl_pos_") {
-                if let Some(end) = rest.find(">") {
-                    if let Ok(pos) = rest[..end].parse::<usize>() {
-                        table_positions.push(pos);
-                    }
-                }
-            }
-        }
-
-        // Now rebuild: go through paragraphs, emitting those before each table
-        let mut current_pos = 0usize;
-        let mut table_list: Vec<(usize, &WordTable)> = table_positions
-            .iter()
-            .copied()
-            .zip(self.tables.iter())
-            .collect();
-        table_list.sort_by_key(|x| x.0);
-
-        let mut t_idx = 0;
         for p in &self.paragraphs {
-            // Skip marker paragraphs
             if p.text.starts_with("<__tbl_") {
+                // Emit the next table in sequential order
+                if let Some(tbl) = table_iter.next() {
+                    let (header, rows) = if tbl.rows.is_empty() {
+                        (vec![], vec![])
+                    } else {
+                        let h = tbl.rows[0].cells.iter().map(|c| c.text.clone()).collect();
+                        let r: Vec<Vec<String>> = tbl.rows[1..].iter()
+                            .map(|r| r.cells.iter().map(|c| c.text.clone()).collect())
+                            .collect();
+                        (h, r)
+                    };
+                    elements.push(DocElement::Table {
+                        id: tbl.id.clone(),
+                        position: elements.len(),
+                        header,
+                        rows,
+                    });
+                }
                 continue;
-            }
-            // Emit tables whose position equals current_pos
-            while t_idx < table_list.len() && table_list[t_idx].0 == current_pos {
-                let tbl = table_list[t_idx].1;
-                let (header, rows) = if tbl.rows.is_empty() {
-                    (vec![], vec![])
-                } else {
-                    let h = tbl.rows[0].cells.iter().map(|c| c.text.clone()).collect();
-                    let r: Vec<Vec<String>> = tbl.rows[1..].iter()
-                        .map(|r| r.cells.iter().map(|c| c.text.clone()).collect())
-                        .collect();
-                    (h, r)
-                };
-                elements.push(DocElement::Table {
-                    id: tbl.id.clone(),
-                    position: elements.len(),
-                    header,
-                    rows,
-                });
-                t_idx += 1;
             }
             elements.push(DocElement::Paragraph {
                 id: p.id.clone(),
@@ -155,11 +108,9 @@ impl WordDocument {
                 style: p.style.clone(),
                 runs: p.runs.clone(),
             });
-            current_pos += 1;
         }
-        // Emit remaining tables
-        while t_idx < table_list.len() {
-            let tbl = table_list[t_idx].1;
+        // Any tables with no preceding marker get appended at the end
+        for tbl in table_iter {
             let (header, rows) = if tbl.rows.is_empty() {
                 (vec![], vec![])
             } else {
@@ -175,67 +126,29 @@ impl WordDocument {
                 header,
                 rows,
             });
-            t_idx += 1;
         }
 
         elements
     }
 
-    /// Build a WordDocument from a list of elements, using absolute positions.
-    /// Tables are placed at their `position` index among all elements.
+    /// Build a WordDocument from a list of elements.
+    /// Tables are placed after their corresponding position markers in the paragraph list.
+    /// Marker and table are matched by sequential order, not by stored position value.
     pub fn from_elements(elements: Vec<DocElement>) -> Self {
-        // Partition into paragraphs and tables
-        let paras: Vec<WordParagraph> = elements
-            .iter()
-            .filter_map(|e| match e {
-                DocElement::Paragraph { id, text, style, runs } => {
-                    Some(WordParagraph { id: id.clone(), text: text.clone(), style: style.clone(), runs: runs.clone() })
-                }
-                DocElement::Table { .. } => None,
-            })
-            .collect();
-
-        let mut tables: Vec<WordTable> = Vec::new();
-
-        // Collect table positions
-        let table_positions: Vec<usize> = elements
-            .iter()
-            .filter_map(|e| match e {
-                DocElement::Paragraph { .. } => None,
-                DocElement::Table { position, .. } => Some(*position),
-            })
-            .collect();
-
-        // Insert position markers into paragraphs at the right spots
-        let mut paragraphs_with_markers: Vec<WordParagraph> = Vec::new();
-        let mut para_iter = paras.into_iter().peekable();
-        let mut marker_idx = 0usize;
-
-        // We need to insert a marker before each table's position.
-        // Each table at position P means: before element P in the final document,
-        // we insert a table marker in the paragraph list.
-        // But OOXML paragraphs and tables are siblings, so we just need to track
-        // which table goes after which paragraphs.
-
-        // Simpler: use position markers in a dedicated paragraph at the right index.
-        // We'll insert __tbl_pos_N__ paragraphs at the right positions.
         let mut out_paras: Vec<WordParagraph> = Vec::new();
+        let mut tables: Vec<WordTable> = Vec::new();
+        let mut tbl_idx = 0usize;
 
-        for elem in &elements {
+        for elem in elements {
             match elem {
                 DocElement::Paragraph { id, text, style, runs } => {
-                    out_paras.push(WordParagraph {
-                        id: id.clone(),
-                        text: text.clone(),
-                        style: style.clone(),
-                        runs: runs.clone(),
-                    });
+                    out_paras.push(WordParagraph { id, text, style, runs });
                 }
-                DocElement::Table { id, position, header, rows } => {
-                    // Emit position marker at current paragraph index
+                DocElement::Table { id, position: _, header, rows } => {
+                    // Emit position marker paired to this table by sequential index
                     out_paras.push(WordParagraph {
-                        id: format!("__tbl_pos_{}__", *position),
-                        text: format!("<__tbl_pos_{}__>", *position),
+                        id: format!("__tbl_pos_{}__", tbl_idx),
+                        text: format!("<__tbl_pos_{}__>", tbl_idx),
                         style: None,
                         runs: None,
                     });
@@ -243,19 +156,20 @@ impl WordDocument {
                     let mut table_rows = vec![];
                     if !header.is_empty() {
                         table_rows.push(crate::office::TableRow {
-                            cells: header.iter()
-                                .map(|text| crate::office::TableCell { text: text.clone(), col_span: 1, row_span: 1 })
+                            cells: header.into_iter()
+                                .map(|text| crate::office::TableCell { text, col_span: 1, row_span: 1 })
                                 .collect()
                         });
                     }
                     for row in rows {
                         table_rows.push(crate::office::TableRow {
-                            cells: row.iter()
-                                .map(|text| crate::office::TableCell { text: text.clone(), col_span: 1, row_span: 1 })
+                            cells: row.into_iter()
+                                .map(|text| crate::office::TableCell { text, col_span: 1, row_span: 1 })
                                 .collect()
                         });
                     }
-                    tables.push(WordTable { id: id.clone(), rows: table_rows });
+                    tables.push(WordTable { id, rows: table_rows });
+                    tbl_idx += 1;
                 }
             }
         }
