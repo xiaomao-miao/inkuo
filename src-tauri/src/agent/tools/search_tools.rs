@@ -10,8 +10,9 @@ pub struct ListDirTool;
 impl ListDirTool {
     pub fn new() -> Self { Self }
     pub fn definition(&self) -> ToolDefinition {
-        ToolDefinition::new(
+        ToolDefinition::new_with_label(
             "list_dir",
+            "列出目录",
             "List the contents of a directory.",
             ToolParameters::new(
                 vec!["path"],
@@ -64,8 +65,9 @@ pub struct GlobTool;
 impl GlobTool {
     pub fn new() -> Self { Self }
     pub fn definition(&self) -> ToolDefinition {
-        ToolDefinition::new(
+        ToolDefinition::new_with_label(
             "glob",
+            "查找文件",
             "Find all files matching a glob pattern.",
             ToolParameters::new(
                 vec!["pattern", "base_dir"],
@@ -131,8 +133,9 @@ pub struct GrepTool;
 impl GrepTool {
     pub fn new() -> Self { Self }
     pub fn definition(&self) -> ToolDefinition {
-        ToolDefinition::new(
+        ToolDefinition::new_with_label(
             "grep",
+            "搜索文本",
             "Search for lines containing a pattern in files. Supports basic regex patterns.",
             ToolParameters::new(
                 vec!["pattern", "paths"],
@@ -242,26 +245,8 @@ async fn grep_directory_traverse(
             ))
             .await?;
         } else if file_type.is_file() {
-            let is_text = name.ends_with(".rs")
-                || name.ends_with(".ts")
-                || name.ends_with(".tsx")
-                || name.ends_with(".js")
-                || name.ends_with(".jsx")
-                || name.ends_with(".py")
-                || name.ends_with(".md")
-                || name.ends_with(".json")
-                || name.ends_with(".txt")
-                || name.ends_with(".css")
-                || name.ends_with(".html")
-                || name.ends_with(".yaml")
-                || name.ends_with(".yml")
-                || name.ends_with(".toml");
-
-            if is_text {
-                let content = tokio::fs::read_to_string(&path)
-                    .await
-                    .map_err(|e| ToolError::IoError(format!("Failed to read {}: {}", path.display(), e)))?;
-
+            // Try to read as text - if it fails (binary file), skip silently
+            if let Ok(content) = tokio::fs::read_to_string(&path).await {
                 let search_content = if case_sensitive {
                     content.clone()
                 } else {

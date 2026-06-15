@@ -145,7 +145,15 @@ pub fn write_excel_workbook(workbook: &ExcelWorkbook, output_path: &std::path::P
 
         for (row_idx, row) in sheet.rows.iter().enumerate() {
             for (col_idx, cell) in row.iter().enumerate() {
-                if let Ok(num) = cell.parse::<f64>() {
+                let trimmed = cell.trim();
+                if trimmed.eq_ignore_ascii_case("true") || trimmed.eq_ignore_ascii_case("false") {
+                    let val = trimmed.eq_ignore_ascii_case("true");
+                    worksheet.write(row_idx as u32, col_idx as u16, val)
+                        .map_err(|e| OfficeError::Excel(e.to_string()))?;
+                } else if let Ok(num) = trimmed.parse::<f64>() {
+                    worksheet.write(row_idx as u32, col_idx as u16, num)
+                        .map_err(|e| OfficeError::Excel(e.to_string()))?;
+                } else if let Ok(num) = trimmed.parse::<i64>() {
                     worksheet.write(row_idx as u32, col_idx as u16, num)
                         .map_err(|e| OfficeError::Excel(e.to_string()))?;
                 } else {

@@ -8,7 +8,7 @@ use serde_json::Value;
 use super::{ToolDefinition, ToolError, ToolParameters};
 
 /// Database search tool — semantic search over the workspace knowledge base.
-/// Requires that the knowledge base has been built first (via knowledge_build).
+/// Requires that the knowledge base has been built first (via the Knowledge tab in the UI).
 #[derive(Clone)]
 pub struct DatabaseSearchTool {
     app: tauri::AppHandle,
@@ -20,13 +20,14 @@ impl DatabaseSearchTool {
     }
 
     pub fn definition(&self) -> ToolDefinition {
-        ToolDefinition::new(
+        ToolDefinition::new_with_label(
             "database_search",
+            "搜索知识库",
             "Search the workspace knowledge base using semantic (vector) search. \
             Use this when the user asks questions about code, documents, or information \
             that may be answered from indexed files in the workspace. \
             Returns the most relevant chunks ranked by semantic similarity. \
-            Note: the knowledge base must be built first using knowledge_build.",
+            Note: the knowledge base must be built first via the Knowledge tab in the UI.",
             ToolParameters::new(
                 vec!["query"],
                 vec![

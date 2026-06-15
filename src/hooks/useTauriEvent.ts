@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { useNotificationStore } from '../store';
 import { reportError } from '../utils/errors';
+import { isTauriRuntime } from '../utils/tauri';
 
 type Unlisten = () => void;
 
@@ -14,6 +15,10 @@ export function useTauriEvent<TPayload>(
   handlerRef.current = handler;
 
   useEffect(() => {
+    if (!isTauriRuntime()) {
+      return;
+    }
+
     let unlisten: Unlisten | null = null;
     let disposed = false;
 

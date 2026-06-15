@@ -388,9 +388,9 @@ impl AgentExecutor {
                     None
                 };
 
-                // Detect if write_office_file succeeded (non-error, has path)
+                // Detect if create_word_doc succeeded (non-error, has path)
                 let office_file_modified: Option<OfficeFileModified> = if !result.is_error
-                    && parsed.name == "write_office_file"
+                    && parsed.name == "create_word_doc"
                 {
                     if let Some(path) = result.file_path.as_ref() {
                         let format = std::path::Path::new(path)

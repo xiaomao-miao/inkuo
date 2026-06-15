@@ -169,6 +169,19 @@ impl ToolDefinition {
                 name: name.to_string(),
                 description: description.to_string(),
                 parameters,
+                label_zh: None,
+            },
+        }
+    }
+
+    pub fn new_with_label(name: &str, label_zh: &str, description: &str, parameters: ToolParameters) -> Self {
+        Self {
+            tool_type: "function".to_string(),
+            function: ToolFunction {
+                name: name.to_string(),
+                description: description.to_string(),
+                parameters,
+                label_zh: Some(label_zh.to_string()),
             },
         }
     }
@@ -179,6 +192,9 @@ pub struct ToolFunction {
     pub name: String,
     pub description: String,
     pub parameters: ToolParameters,
+    /// Chinese label shown in the frontend UI. Optional.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label_zh: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -247,7 +263,7 @@ mod database_tools;
 
 pub use file_tools::{ReadFileTool, WriteFileTool, EditFileTool, CreateDirTool, MoveFileTool};
 pub use search_tools::{ListDirTool, GlobTool, GrepTool};
-pub use office_tools::{ReadOfficeFileTool, WriteOfficeFileTool};
+pub use office_tools::{ReadOfficeFileTool, CreateWordDocTool};
 pub use database_tools::DatabaseSearchTool;
 
 /// Unified executor enum combining all tool implementations
@@ -261,7 +277,7 @@ pub enum ToolExecutor {
     Glob(search_tools::GlobTool),
     Grep(search_tools::GrepTool),
     ReadOfficeFile(office_tools::ReadOfficeFileTool),
-    WriteOfficeFile(office_tools::WriteOfficeFileTool),
+    CreateWordDoc(office_tools::CreateWordDocTool),
     DatabaseSearch(database_tools::DatabaseSearchTool),
 }
 
@@ -277,7 +293,7 @@ impl ToolExecutor {
             ToolExecutor::Glob(_) => "glob",
             ToolExecutor::Grep(_) => "grep",
             ToolExecutor::ReadOfficeFile(_) => "read_office_file",
-            ToolExecutor::WriteOfficeFile(_) => "write_office_file",
+            ToolExecutor::CreateWordDoc(_) => "create_word_doc",
             ToolExecutor::DatabaseSearch(_) => "database_search",
         }
     }
@@ -293,7 +309,7 @@ impl ToolExecutor {
             ToolExecutor::Glob(t) => t.definition(),
             ToolExecutor::Grep(t) => t.definition(),
             ToolExecutor::ReadOfficeFile(t) => t.definition(),
-            ToolExecutor::WriteOfficeFile(t) => t.definition(),
+            ToolExecutor::CreateWordDoc(t) => t.definition(),
             ToolExecutor::DatabaseSearch(t) => t.definition(),
         }
     }
@@ -309,7 +325,7 @@ impl ToolExecutor {
             ToolExecutor::Glob(t) => t.execute(arguments, workspace).await,
             ToolExecutor::Grep(t) => t.execute(arguments, workspace).await,
             ToolExecutor::ReadOfficeFile(t) => t.execute(arguments, workspace).await,
-            ToolExecutor::WriteOfficeFile(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::CreateWordDoc(t) => t.execute(arguments, workspace).await,
             ToolExecutor::DatabaseSearch(t) => t.execute(arguments, workspace).await,
         }
     }
@@ -391,7 +407,7 @@ impl ToolRegistry {
             ToolExecutor::Glob(GlobTool),
             ToolExecutor::Grep(GrepTool),
             ToolExecutor::ReadOfficeFile(ReadOfficeFileTool),
-            ToolExecutor::WriteOfficeFile(WriteOfficeFileTool),
+            ToolExecutor::CreateWordDoc(CreateWordDocTool),
             // DatabaseSearchTool added lazily via with_app_handle()
         ];
 
@@ -437,7 +453,7 @@ impl ToolRegistry {
 
         let is_file_modification = matches!(
             tool_call.name.as_str(),
-            "write_file" | "edit_file" | "write_office_file" | "create_dir"
+            "write_file" | "edit_file" | "create_word_doc" | "create_dir"
         );
 
         let file_path = is_file_modification

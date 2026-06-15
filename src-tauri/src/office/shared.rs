@@ -15,6 +15,8 @@ pub enum OfficeError {
     Xml(String),
     #[error("Excel error: {0}")]
     Excel(String),
+    #[error("JSON error: {0}")]
+    Json(String),
     #[error("Unsupported file type: {0}")]
     UnsupportedFileType(String),
 }

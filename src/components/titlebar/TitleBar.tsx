@@ -6,12 +6,13 @@ import {
   Copy,
   Settings
 } from 'lucide-react';
-import { useSidebarStore, useEditorStore } from '../../store';
+import { useSidebarStore, useEditorStore, useNotificationStore } from '../../store';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { applyWorkspaceDirectoryLoad, openWorkspaceDirectory } from '../../services/workspace';
 import { persistDocument } from '../../services/documentSave';
 import { reportError } from '../../utils/errors';
 import { openSettingsTab } from '../../utils/openSettingsTab';
+import { isTauriRuntime } from '../../utils/tauri';
 import styles from './TitleBar.module.css';
 
 interface MenuItem {
@@ -31,9 +32,11 @@ export const TitleBar = () => {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
   const [isMaximized, setIsMaximized] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-  
+  const isTauri = isTauriRuntime();
+
   const selectedFile = useSidebarStore((state) => state.selectedFile);
   const setWorkspacePath = useSidebarStore((state) => state.setWorkspacePath);
+  const pushNotification = useNotificationStore((state) => state.pushNotification);
   const currentMetadata = useEditorStore((state) => (
     selectedFile ? state.documentContents[selectedFile]?.metadata : null
   ));
@@ -45,6 +48,10 @@ export const TitleBar = () => {
 
   // Check initial maximized state
   useEffect(() => {
+    if (!isTauri) {
+      return;
+    }
+
     const win = getCurrentWindow();
     let disposed = false;
     let unlistenResize: (() => void) | null = null;
@@ -80,7 +87,7 @@ export const TitleBar = () => {
       disposed = true;
       unlistenResize?.();
     };
-  }, []);
+  }, [isTauri]);
 
   // Close menu when clicking outside
   useEffect(() => {
@@ -95,6 +102,16 @@ export const TitleBar = () => {
   }, []);
 
   const handleSave = async () => {
+    if (!isTauri) {
+      pushNotification({
+        kind: 'info',
+        title: '浏览器模式不支持保存',
+        message: '当前页面未运行在 Tauri 桌面环境中，无法写入本地文件。',
+      });
+      setActiveMenu(null);
+      return;
+    }
+
     const result = await persistDocument({
       path: selectedFile,
       content: currentMetadata?.content || '',
@@ -109,6 +126,16 @@ export const TitleBar = () => {
   };
 
   const handleOpenFolder = async () => {
+    if (!isTauri) {
+      pushNotification({
+        kind: 'info',
+        title: '浏览器模式不支持打开文件夹',
+        message: '文件夹选择依赖 Tauri 对话框与本地后端能力。',
+      });
+      setActiveMenu(null);
+      return;
+    }
+
     try {
       const selected = await openWorkspaceDirectory();
       if (selected) {
@@ -122,11 +149,19 @@ export const TitleBar = () => {
   };
 
   const handleMinimize = async () => {
+    if (!isTauri) {
+      return;
+    }
+
     const win = getCurrentWindow();
     await win.minimize();
   };
 
   const handleMaximize = async () => {
+    if (!isTauri) {
+      return;
+    }
+
     const win = getCurrentWindow();
     await win.toggleMaximize();
     try {
@@ -137,6 +172,10 @@ export const TitleBar = () => {
   };
 
   const handleClose = async () => {
+    if (!isTauri) {
+      return;
+    }
+
     const win = getCurrentWindow();
     await win.close();
   };
@@ -259,27 +298,31 @@ export const TitleBar = () => {
         >
           <Settings size={14} />
         </button>
-        <button
-          className={styles.actionButton}
-          onClick={handleMinimize}
-          title="最小化"
-        >
-          <Minus size={14} />
-        </button>
-        <button
-          className={styles.actionButton}
-          onClick={handleMaximize}
-          title={isMaximized ? '还原' : '最大化'}
-        >
-          {isMaximized ? <Copy size={12} /> : <Square size={12} />}
-        </button>
-        <button
-          className={`${styles.actionButton} ${styles.close}`}
-          onClick={handleClose}
-          title="关闭"
-        >
-          <X size={14} />
-        </button>
+        {isTauri && (
+          <>
+            <button
+              className={styles.actionButton}
+              onClick={handleMinimize}
+              title="最小化"
+            >
+              <Minus size={14} />
+            </button>
+            <button
+              className={styles.actionButton}
+              onClick={handleMaximize}
+              title={isMaximized ? '还原' : '最大化'}
+            >
+              {isMaximized ? <Copy size={12} /> : <Square size={12} />}
+            </button>
+            <button
+              className={`${styles.actionButton} ${styles.close}`}
+              onClick={handleClose}
+              title="关闭"
+            >
+              <X size={14} />
+            </button>
+          </>
+        )}
       </div>
     </div>
   );

@@ -39,22 +39,46 @@ Search for lines containing a pattern in files. Supports regex.
 ### read_office_file
 Read a Word (.docx) or Excel (.xlsx) file and extract its content as readable text with JSON representation.
 - **Parameters**: `path` (string, required)
-- **Output**: Returns `text_content` (human-readable text), `json_content` (structured data), and `sheet_names` (for Excel).
+- **Output**: Returns `text_content` (human-readable text), `json_content` (structured data), and `sheets` (for Excel only: list of sheet names).
 - **Supported formats**: `.docx` (Word documents) and `.xlsx` (Excel spreadsheets)
 - **Note**: For Excel files, you can see all sheet names. Output is limited to 100 rows per sheet to avoid token limits.
 
-### write_office_file
-Write a modified Word (.docx) or Excel (.xlsx) file from a JSON representation.
-- **Parameters**: `path` (string, required), `json_content` (string, required)
-- **Input**: Pass the modified `json_content` you received from `read_office_file` (or a modified version of it).
-- **Supported formats**: `.docx` and `.xlsx`
-- **Note**: Use this after `read_office_file` to apply modifications. The file will be written directly to disk.
+### create_word_doc
+Create a new Word (.docx) document from structured content. Pass title, paragraphs, and tables as structured parameters — no JSON string needed.
+- **Parameters**: `path` (string, required), `title` (string, required), `paragraphs` (array of paragraph objects, required), `tables` (array of table objects, optional), `append_to` (string, optional — path to an existing .docx to append content to; title is ignored in append mode)
+- **Paragraph format**: Each paragraph is an object:
+  - `text`: the paragraph text (string)
+  - `style`: optional — `"Heading1"` (large blue, 16pt bold), `"Heading2"` (medium, 13pt bold), `"Heading3"` (small, 12pt bold), `"Normal"` (default body text)
+  - `runs`: optional array of formatted text segments. Each run has `text` plus optional `bold`, `italic`, `underline`, `font_size` (half-points, e.g. 24=12pt), `color` (hex RGB like `"FF0000"`), `font_name`
+- **Table format**: Each table object has `{ "header": ["col1", "col2"], "rows": [["r1c1", "r1c2"], ["r2c1", "r2c2"]] }`. The header row becomes the first row of the table.
+- **Example — styled document**:
+  ```
+  create_word_doc with
+    path="/workspace/report.docx",
+    title="项目分析报告",
+    paragraphs=[
+      {text: "第一章 概述", style: "Heading1"},
+      {text: "本报告分析了项目的关键指标。", style: "Normal"},
+      {text: "1.1 关键数据", style: "Heading2"},
+      {text: "项目总体评分为", runs: [{text: "优秀", bold: true, color: "FF0000"}, {text: "，符合预期。"}]},
+      ...
+    ],
+    tables=[{header: ["指标", "数值"], rows: [["完成率", "95%"], ["满意度", "4.8"]]}]
+  ```
+- **Long documents — incremental generation**: When generating a long document, write it in sections/chapters rather than all at once. Use `append_to` to add content incrementally to the same file:
+  ```
+  create_word_doc with path="/workspace/report.docx", title="完整报告", paragraphs=[...章节1...], append_to=null
+  create_word_doc with path="/workspace/report.docx", paragraphs=[...章节2...], append_to="/workspace/report.docx"
+  create_word_doc with path="/workspace/report.docx", paragraphs=[...章节3...], append_to="/workspace/report.docx"
+  ```
+  When `append_to` is set, `title` is ignored and content is appended to the existing document.
+- **Note**: For creating new Word documents, use this tool. For Excel files, use `read_office_file` first to understand the structure, then modify using file operations.
 
 ### database_search
-Search the workspace knowledge base using semantic (vector) search over the shared `knowledge/*` backend. Use this when the user asks questions about code, documents, or information that may be answered from indexed files in the workspace.
+Search the workspace knowledge base using semantic (vector) search. Use this when the user asks questions about code, documents, or information that may be answered from indexed files in the workspace.
 - **Parameters**: `query` (string, required), `workspace_path` (string, required), `top_k` (integer, optional, default: 5, range: 1-20)
 - **Returns**: Most relevant document chunks ranked by semantic similarity, with file paths, line numbers, and relevance scores.
-- **Note**: The knowledge base must be built first using `knowledge_build`. This tool reads from the same knowledge store used by knowledge mode in the UI.
+- **Note**: The knowledge base must be built first via the "Knowledge" tab in the UI before this tool can return results. If no results are found, inform the user they may need to build the knowledge base from the UI.
 
 ## Core Behavioral Rules
 
@@ -285,10 +309,9 @@ For **Plan Mode** (read-only planning), the AI outputs structured plans without 
 
 For **Agent Mode**, in addition to file operations, the AI has `database_search` to query the workspace knowledge base.
 
-**Office Document Workflow**: To modify a Word or Excel file:
-1. Call `read_office_file` to get `text_content` and `json_content`
-2. Analyze and understand the content
-3. Call `write_office_file` with the modified `json_content` to save changes back to disk
+**Office Document Workflow**:
+- **Creating new Word documents**: Use `create_word_doc` (structured, no JSON needed)
+- **Reading existing documents**: Use `read_office_file`
 </read_only_vs_full>
 
 ## Example Workflow

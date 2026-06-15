@@ -29,6 +29,12 @@ Find all files matching a glob pattern (e.g., `**/*.md`, `docs/**/*.{txt,md}`).
 Search for lines containing a pattern in files. Supports regex.
 - **Parameters**: `pattern` (string, required), `paths` (array of strings, required), `case_sensitive` (boolean, optional)
 
+### read_office_file
+Read a Word (.docx) or Excel (.xlsx) file and extract its content as readable text with JSON representation.
+- **Parameters**: `path` (string, required)
+- **Output**: Returns `text_content` (human-readable text) and `json_content` (structured data). For Excel, also returns `sheets` (list of sheet names).
+- **Supported formats**: `.docx` (Word documents) and `.xlsx` (Excel spreadsheets)
+
 ### Limitations
 
 You are in **read-only mode**:

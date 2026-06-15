@@ -5,10 +5,36 @@ use std::io::{Cursor, Write as IoWrite};
 
 use super::shared::{OfficeError, read_zip_entry, TableCell, TableRow};
 
+/// Inline text formatting — embedded within a paragraph's text.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FontRun {
+    pub text: String,
+    #[serde(default)]
+    pub bold: bool,
+    #[serde(default)]
+    pub italic: bool,
+    #[serde(default)]
+    pub underline: bool,
+    #[serde(default)]
+    pub font_size: Option<u32>,  // half-points, e.g. 24 = 12pt
+    #[serde(default)]
+    pub color: Option<String>,   // hex RGB, e.g. "FF0000"
+    #[serde(default)]
+    pub font_name: Option<String>,
+}
+
+/// Rich paragraph: either plain text OR an array of formatted runs.
+/// If `runs` is present, `text` is ignored.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WordParagraph {
+    /// Plain text (used when runs is absent).
     pub text: String,
+    /// Paragraph-level style, e.g. "Heading1", "Heading2", "Title", "Normal".
+    #[serde(default)]
     pub style: Option<String>,
+    /// Rich formatted runs. When present, overrides `text`.
+    #[serde(default)]
+    pub runs: Option<Vec<FontRun>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -144,6 +170,7 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
                             paragraphs.push(WordParagraph {
                                 text,
                                 style: current_style.clone(),
+                                runs: None,
                             });
                         }
                     }
@@ -314,6 +341,39 @@ pub fn write_word_document(doc: &WordDocument, output_path: &std::path::Path) ->
     Ok(())
 }
 
+pub fn build_run_xml(run: &FontRun) -> String {
+    let mut xml = String::from("<w:r>");
+    let mut rpr = String::new();
+
+    if run.bold { rpr.push_str("<w:b/>"); }
+    if run.italic { rpr.push_str("<w:i/>"); }
+    if run.underline { rpr.push_str("<w:u w:val=\"single\"/>"); }
+    if let Some(ref color) = run.color {
+        if !color.is_empty() {
+            rpr.push_str(&format!("<w:color w:val=\"{}\"/>", escape_xml(color)));
+        }
+    }
+    if let Some(size) = run.font_size {
+        rpr.push_str(&format!("<w:sz w:val=\"{}\"/>", size));
+        rpr.push_str(&format!("<w:szCs w:val=\"{}\"/>", size));
+    }
+    if let Some(ref font) = run.font_name {
+        rpr.push_str(&format!("<w:rFonts w:ascii=\"{}\" w:hAnsi=\"{}\"/>", escape_xml(font), escape_xml(font)));
+    }
+
+    if !rpr.is_empty() {
+        xml.push_str("<w:rPr>");
+        xml.push_str(&rpr);
+        xml.push_str("</w:rPr>");
+    }
+
+    xml.push_str(&format!(
+        "<w:t xml:space=\"preserve\">{}</w:t></w:r>",
+        escape_xml(&run.text)
+    ));
+    xml
+}
+
 pub fn build_document_xml(doc: &WordDocument) -> String {
     let mut xml = String::from(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -327,36 +387,57 @@ pub fn build_document_xml(doc: &WordDocument) -> String {
         if let Some(ref style) = para.style {
             xml.push_str(&format!("<w:pPr><w:pStyle w:val=\"{}\"/></w:pPr>", escape_xml(style)));
         }
-        for chunk in para.text.split('\n') {
-            if !chunk.is_empty() {
-                xml.push_str(&format!(
-                    "<w:r><w:t xml:space=\"preserve\">{}</w:t></w:r>",
-                    escape_xml(chunk)
-                ));
+
+        if let Some(ref runs) = para.runs {
+            for run in runs {
+                xml.push_str(&build_run_xml(run));
             }
-            xml.push_str("<w:r><w:br/></w:r>");
+        } else {
+            for chunk in para.text.split('\n') {
+                if !chunk.is_empty() {
+                    xml.push_str(&format!(
+                        "<w:r><w:t xml:space=\"preserve\">{}</w:t></w:r>",
+                        escape_xml(chunk)
+                    ));
+                }
+                xml.push_str("<w:r><w:br/></w:r>");
+            }
         }
         xml.push_str("</w:p>");
     }
 
     for table in &doc.tables {
         xml.push_str("\n    <w:tbl>");
+        xml.push_str("\n      <w:tblPr>");
+        xml.push_str("<w:tblStyle w:val=\"TableGrid\"/>");
+        xml.push_str("<w:tblW w:type=\"auto\" w:w=\"0\"/>");
+        xml.push_str("<w:tblBorders>");
+        xml.push_str("<w:top w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
+        xml.push_str("<w:left w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
+        xml.push_str("<w:bottom w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
+        xml.push_str("<w:right w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
+        xml.push_str("<w:insideH w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
+        xml.push_str("<w:insideV w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
+        xml.push_str("</w:tblBorders>");
+        xml.push_str("</w:tblPr>");
         for row in &table.rows {
-            xml.push_str("\n      <w:tr>");
+            xml.push_str("\n        <w:tr>");
             for cell in &row.cells {
                 xml.push_str("<w:tc><w:tcPr>");
                 if cell.col_span > 1 {
                     xml.push_str(&format!("<w:gridSpan w:val=\"{}\"/>", cell.col_span));
                 }
                 xml.push_str("</w:tcPr><w:p>");
-                for chunk in cell.text.split('\n') {
+                for (chunk_idx, chunk) in cell.text.split('\n').enumerate() {
                     if !chunk.is_empty() {
                         xml.push_str(&format!(
                             "<w:r><w:t xml:space=\"preserve\">{}</w:t></w:r>",
                             escape_xml(chunk)
                         ));
                     }
-                    xml.push_str("<w:r><w:br/></w:r>");
+                    if chunk_idx < cell.text.split('\n').count().saturating_sub(1) {
+                        xml.push_str("<w:r><w:br/></w:r>");
+                    }
                 }
                 xml.push_str("</w:p></w:tc>");
             }
@@ -414,6 +495,113 @@ pub const STYLES_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone=
       </w:rPr>
     </w:rPrDefault>
   </w:docDefaults>
+
+  <w:style w:type="paragraph" w:styleId="Normal">
+    <w:name w:val="Normal"/>
+    <w:pPr>
+      <w:spacing w:after="200" w:line="276" w:lineRule="auto"/>
+    </w:pPr>
+    <w:rPr>
+      <w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/>
+      <w:sz w:val="22"/>
+    </w:rPr>
+  </w:style>
+
+  <w:style w:type="paragraph" w:styleId="Title">
+    <w:name w:val="Title"/>
+    <w:basedOn w:val="Normal"/>
+    <w:pPr>
+      <w:jc w:val="center"/>
+      <w:spacing w:after="0" w:before="240"/>
+    </w:pPr>
+    <w:rPr>
+      <w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/>
+      <w:b/>
+      <w:sz w:val="56"/>
+      <w:szCs w:val="56"/>
+      <w:color w:val="1F3864"/>
+    </w:rPr>
+  </w:style>
+
+  <w:style w:type="paragraph" w:styleId="Heading1">
+    <w:name w:val="Heading 1"/>
+    <w:basedOn w:val="Normal"/>
+    <w:pPr>
+      <w:keepNext/>
+      <w:keepLines/>
+      <w:spacing w:before="480" w:after="120"/>
+      <w:outlineLvl w:val="0"/>
+    </w:pPr>
+    <w:rPr>
+      <w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/>
+      <w:b/>
+      <w:sz w:val="32"/>
+      <w:szCs w:val="32"/>
+      <w:color w:val="2E74B5"/>
+    </w:rPr>
+  </w:style>
+
+  <w:style w:type="paragraph" w:styleId="Heading2">
+    <w:name w:val="Heading 2"/>
+    <w:basedOn w:val="Normal"/>
+    <w:pPr>
+      <w:keepNext/>
+      <w:keepLines/>
+      <w:spacing w:before="360" w:after="80"/>
+      <w:outlineLvl w:val="1"/>
+    </w:pPr>
+    <w:rPr>
+      <w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/>
+      <w:b/>
+      <w:sz w:val="26"/>
+      <w:szCs w:val="26"/>
+      <w:color w:val="2F5496"/>
+    </w:rPr>
+  </w:style>
+
+  <w:style w:type="paragraph" w:styleId="Heading3">
+    <w:name w:val="Heading 3"/>
+    <w:basedOn w:val="Normal"/>
+    <w:pPr>
+      <w:keepNext/>
+      <w:keepLines/>
+      <w:spacing w:before="240" w:after="60"/>
+      <w:outlineLvl w:val="2"/>
+    </w:pPr>
+    <w:rPr>
+      <w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/>
+      <w:b/>
+      <w:sz w:val="24"/>
+      <w:szCs w:val="24"/>
+      <w:color w:val="1F497D"/>
+    </w:rPr>
+  </w:style>
+
+  <w:style w:type="table" w:styleId="TableGrid">
+    <w:name w:val="Table Grid"/>
+    <w:tblPr>
+      <w:tblBorders>
+        <w:top w:val="single" w:sz="4" w:space="0" w:color="auto"/>
+        <w:left w:val="single" w:sz="4" w:space="0" w:color="auto"/>
+        <w:bottom w:val="single" w:sz="4" w:space="0" w:color="auto"/>
+        <w:right w:val="single" w:sz="4" w:space="0" w:color="auto"/>
+        <w:insideH w:val="single" w:sz="4" w:space="0" w:color="auto"/>
+        <w:insideV w:val="single" w:sz="4" w:space="0" w:color="auto"/>
+      </w:tblBorders>
+    </w:tblPr>
+    <w:tcPr>
+      <w:tcMar>
+        <w:top w:w="80" w:type="dxa"/>
+        <w:left w:w="108" w:type="dxa"/>
+        <w:bottom w:w="80" w:type="dxa"/>
+        <w:right w:w="108" w:type="dxa"/>
+      </w:tcMar>
+    </w:tcPr>
+    <w:rPr>
+      <w:sz w:val="20"/>
+    </w:rPr>
+  </w:style>
+
 </w:styles>"#;
 
 pub const SETTINGS_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>

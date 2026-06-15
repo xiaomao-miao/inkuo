@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { reportError } from '../utils/errors';
+import { isTauriRuntime } from '../utils/tauri';
 
 interface FileChangePayload {
   type: string;
@@ -16,6 +17,10 @@ export function useWorkspaceFileWatcher(
   onFileChangeRef.current = onFileChange;
 
   useEffect(() => {
+    if (!isTauriRuntime()) {
+      return;
+    }
+
     let unlisten: UnlistenFn | null = null;
     let watchingPath: string | null = null;
     let disposed = false;

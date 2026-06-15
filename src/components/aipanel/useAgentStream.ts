@@ -8,6 +8,7 @@ import type { StreamPayload } from './streamTypes';
 import { dispatchStreamEvent } from './streamEventDispatcher';
 import { useTextStreaming } from './useTextStreaming';
 import { useToolCallStreaming } from './useToolCallStreaming';
+import { isTauriRuntime } from '../../utils/tauri';
 
 interface UseAgentStreamArgs {
   mode: ChatMode;
@@ -49,6 +50,12 @@ export function useAgentStream({ mode }: UseAgentStreamArgs) {
   }, [flushTextDeltas, flushToolArgs]);
 
   useEffect(() => {
+    if (!isTauriRuntime()) {
+      resetTextStreaming();
+      resetToolCallStreaming();
+      return;
+    }
+
     const setupListener = async () => {
       if (unlistenRef.current || isSettingUpRef.current) return;
       isSettingUpRef.current = true;
