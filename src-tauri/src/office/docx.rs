@@ -27,6 +27,8 @@ pub struct FontRun {
 /// If `runs` is present, `text` is ignored.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WordParagraph {
+    /// Unique identifier for this paragraph, stable across reads.
+    pub id: String,
     /// Plain text (used when runs is absent).
     pub text: String,
     /// Paragraph-level style, e.g. "Heading1", "Heading2", "Title", "Normal".
@@ -39,7 +41,322 @@ pub struct WordParagraph {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WordTable {
+    /// Unique identifier for this table, stable across reads.
+    pub id: String,
     pub rows: Vec<TableRow>,
+}
+
+/// A document element — either a paragraph or a table.
+/// Tables carry `position` (index in the flattened document order) so the
+/// write path knows exactly where to insert each table.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum DocElement {
+    #[serde(rename = "paragraph")]
+    Paragraph {
+        id: String,
+        text: String,
+        style: Option<String>,
+        #[serde(default)]
+        runs: Option<Vec<FontRun>>,
+    },
+    #[serde(rename = "table")]
+    Table {
+        id: String,
+        /// Zero-based position among all document elements (0 = before p0).
+        #[serde(default)]
+        position: usize,
+        header: Vec<String>,
+        rows: Vec<Vec<String>>,
+    },
+}
+
+impl WordDocument {
+    /// Convert the document to a flat list of elements with stable IDs.
+    /// Tables are interleaved with paragraphs using their original document order.
+    pub fn to_elements(&self) -> Vec<DocElement> {
+        let mut elements = Vec::with_capacity(self.paragraphs.len() + self.tables.len());
+
+        // We interleave based on XML order: scan all nodes sequentially.
+        // OOXML stores paragraphs and tables as siblings in <w:body>.
+        // Since we parse them separately, we reconstruct order by tracking
+        // the last-seen paragraph index when each table appears.
+
+        let mut para_idx = 0;
+        let mut table_idx = 0;
+        let mut last_para_before_table: Vec<usize> = vec![];
+
+        // First pass: determine which table follows which paragraphs
+        // We track the para_idx at the time each table is encountered
+        // by scanning the body for tbl elements interleaved with paragraphs.
+
+        // Rebuild by scanning the original XML order.
+        // Since parse_document_xml and parse_table_xml consumed the XML separately,
+        // we track table positions by paragraph count before each table.
+        // Simple heuristic: tables appear at known paragraph indices in document order.
+
+        // Actually, the simplest reliable approach is to NOT interleave.
+        // Return paragraphs first, then tables, and rely on position index.
+        // The position is stored as a hint; for elements[] from to_elements(),
+        // we compute relative positions.
+
+        // Better approach: track interleaving from the table paragraph markers
+        // we used to store. Look for __tbl_idx_N__ markers.
+        let mut table_positions: Vec<usize> = vec![];
+
+        for para in &self.paragraphs {
+            if let Some(rest) = para.text.strip_prefix("<__tbl_pos_") {
+                if let Some(end) = rest.find(">") {
+                    if let Ok(pos) = rest[..end].parse::<usize>() {
+                        table_positions.push(pos);
+                    }
+                }
+            }
+        }
+
+        let table_count = table_positions.len();
+
+        // Now rebuild: go through paragraphs, emitting those before each table
+        let mut current_pos = 0usize;
+        let mut table_list: Vec<(usize, &WordTable)> = table_positions
+            .iter()
+            .copied()
+            .zip(self.tables.iter())
+            .collect();
+        table_list.sort_by_key(|x| x.0);
+
+        let mut t_idx = 0;
+        for p in &self.paragraphs {
+            // Skip marker paragraphs
+            if p.text.starts_with("<__tbl_") {
+                continue;
+            }
+            // Emit tables whose position equals current_pos
+            while t_idx < table_list.len() && table_list[t_idx].0 == current_pos {
+                let tbl = table_list[t_idx].1;
+                let (header, rows) = if tbl.rows.is_empty() {
+                    (vec![], vec![])
+                } else {
+                    let h = tbl.rows[0].cells.iter().map(|c| c.text.clone()).collect();
+                    let r: Vec<Vec<String>> = tbl.rows[1..].iter()
+                        .map(|r| r.cells.iter().map(|c| c.text.clone()).collect())
+                        .collect();
+                    (h, r)
+                };
+                elements.push(DocElement::Table {
+                    id: tbl.id.clone(),
+                    position: elements.len(),
+                    header,
+                    rows,
+                });
+                t_idx += 1;
+            }
+            elements.push(DocElement::Paragraph {
+                id: p.id.clone(),
+                text: p.text.clone(),
+                style: p.style.clone(),
+                runs: p.runs.clone(),
+            });
+            current_pos += 1;
+        }
+        // Emit remaining tables
+        while t_idx < table_list.len() {
+            let tbl = table_list[t_idx].1;
+            let (header, rows) = if tbl.rows.is_empty() {
+                (vec![], vec![])
+            } else {
+                let h = tbl.rows[0].cells.iter().map(|c| c.text.clone()).collect();
+                let r: Vec<Vec<String>> = tbl.rows[1..].iter()
+                    .map(|r| r.cells.iter().map(|c| c.text.clone()).collect())
+                    .collect();
+                (h, r)
+            };
+            elements.push(DocElement::Table {
+                id: tbl.id.clone(),
+                position: elements.len(),
+                header,
+                rows,
+            });
+            t_idx += 1;
+        }
+
+        elements
+    }
+
+    /// Build a WordDocument from a list of elements, using absolute positions.
+    /// Tables are placed at their `position` index among all elements.
+    pub fn from_elements(elements: Vec<DocElement>) -> Self {
+        // Partition into paragraphs and tables
+        let paras: Vec<WordParagraph> = elements
+            .iter()
+            .filter_map(|e| match e {
+                DocElement::Paragraph { id, text, style, runs } => {
+                    Some(WordParagraph { id: id.clone(), text: text.clone(), style: style.clone(), runs: runs.clone() })
+                }
+                DocElement::Table { .. } => None,
+            })
+            .collect();
+
+        let mut tables: Vec<WordTable> = Vec::new();
+
+        // Collect table positions
+        let table_positions: Vec<usize> = elements
+            .iter()
+            .filter_map(|e| match e {
+                DocElement::Paragraph { .. } => None,
+                DocElement::Table { position, .. } => Some(*position),
+            })
+            .collect();
+
+        // Insert position markers into paragraphs at the right spots
+        let mut paragraphs_with_markers: Vec<WordParagraph> = Vec::new();
+        let mut para_iter = paras.into_iter().peekable();
+        let mut marker_idx = 0usize;
+
+        // We need to insert a marker before each table's position.
+        // Each table at position P means: before element P in the final document,
+        // we insert a table marker in the paragraph list.
+        // But OOXML paragraphs and tables are siblings, so we just need to track
+        // which table goes after which paragraphs.
+
+        // Simpler: use position markers in a dedicated paragraph at the right index.
+        // We'll insert __tbl_pos_N__ paragraphs at the right positions.
+        let mut out_paras: Vec<WordParagraph> = Vec::new();
+        let mut tbl_idx = 0usize;
+        let mut global_idx = 0usize;
+
+        for elem in &elements {
+            match elem {
+                DocElement::Paragraph { id, text, style, runs } => {
+                    out_paras.push(WordParagraph {
+                        id: id.clone(),
+                        text: text.clone(),
+                        style: style.clone(),
+                        runs: runs.clone(),
+                    });
+                    global_idx += 1;
+                }
+                DocElement::Table { id, position, header, rows } => {
+                    // Emit position marker at current global index
+                    out_paras.push(WordParagraph {
+                        id: format!("__tbl_pos_{}__", *position),
+                        text: format!("<__tbl_pos_{}__>", *position),
+                        style: None,
+                        runs: None,
+                    });
+                    global_idx += 1;
+
+                    let mut table_rows = vec![];
+                    if !header.is_empty() {
+                        table_rows.push(crate::office::TableRow {
+                            cells: header.iter()
+                                .map(|text| crate::office::TableCell { text: text.clone(), col_span: 1, row_span: 1 })
+                                .collect()
+                        });
+                    }
+                    for row in rows {
+                        table_rows.push(crate::office::TableRow {
+                            cells: row.iter()
+                                .map(|text| crate::office::TableCell { text: text.clone(), col_span: 1, row_span: 1 })
+                                .collect()
+                        });
+                    }
+                    tables.push(WordTable { id: id.clone(), rows: table_rows });
+                    tbl_idx += 1;
+                }
+            }
+        }
+
+        WordDocument { paragraphs: out_paras, tables }
+    }
+
+    /// Modify the document by applying a list of edit operations.
+    pub fn modify(
+        &mut self,
+        modifies: Vec<DocElement>,
+        deletes: Vec<String>,
+        insert_after: Option<String>,
+        insert_elements: Vec<DocElement>,
+    ) {
+        // Build a set of IDs to delete
+        let delete_set: std::collections::HashSet<String> = deletes.into_iter().collect();
+
+        // Start from current elements
+        let elements = self.to_elements();
+
+        // Partition modifies into a lookup map (id -> element)
+        let modify_map: std::collections::HashMap<String, DocElement> = modifies
+            .into_iter()
+            .map(|e| (e.id().to_string(), e))
+            .collect();
+
+        // Build result: apply deletes and replaces
+        let mut result: Vec<DocElement> = Vec::new();
+
+        for elem in elements {
+            if delete_set.contains(elem.id()) {
+                continue; // skip deleted
+            }
+            if let Some(replacement) = modify_map.get(elem.id()) {
+                // Replace with new content, but only if it's a different ID
+                // (if same ID, it's a no-op replace which is fine)
+                if replacement.id() != elem.id() {
+                    result.push(replacement.clone());
+                } else {
+                    result.push(replacement.clone());
+                }
+            } else {
+                result.push(elem);
+            }
+        }
+
+        // Handle insertions
+        if let Some(ref aid) = insert_after {
+            let pos = result.iter().position(|e| e.id() == aid);
+            if let Some(idx) = pos {
+                // Insert new elements after position idx
+                let insert_idx = idx + 1;
+                let mut new_items: Vec<DocElement> = Vec::new();
+                for e in insert_elements {
+                    // Don't re-insert elements that are also in modifies (already placed)
+                    if !modify_map.contains_key(e.id()) {
+                        new_items.push(e);
+                    }
+                }
+                result.splice(insert_idx..insert_idx, new_items);
+            } else {
+                // anchor not found, append
+                for e in insert_elements {
+                    if !modify_map.contains_key(e.id()) {
+                        result.push(e);
+                    }
+                }
+            }
+        } else if !insert_elements.is_empty() {
+            for e in insert_elements {
+                if !modify_map.contains_key(e.id()) {
+                    result.push(e);
+                }
+            }
+        }
+
+        // Rebuild document from result
+        *self = Self::from_elements(result);
+    }
+}
+
+/// Trait for getting the ID out of a DocElement.
+pub trait ElementId {
+    fn id(&self) -> &str;
+}
+
+impl ElementId for DocElement {
+    fn id(&self) -> &str {
+        match self {
+            DocElement::Paragraph { ref id, .. } => id,
+            DocElement::Table { ref id, .. } => id,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,10 +456,12 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
     let mut current_text = String::new();
     let mut current_style: Option<String> = None;
     let mut para_depth = 0;
+    let mut para_counter = 0usize;
 
     loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(quick_xml::events::Event::Start(ref e)) | Ok(quick_xml::events::Event::Empty(ref e)) => {
+        let event = reader.read_event_into(&mut buf);
+        match event {
+            Ok(quick_xml::events::Event::Start(ref e)) => {
                 let name = e.local_name();
                 if name.as_ref() == b"p" {
                     in_para = true;
@@ -154,8 +473,41 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
                         current_text.push_str(&t.unescape().unwrap_or_default());
                     }
                 } else if name.as_ref() == b"pStyle" {
+                    // Read w:val attribute
+                    for attr in e.attributes().with_checks(false) {
+                        if let Ok(attr) = attr {
+                            if attr.key.as_ref() == b"val" {
+                                if let Ok(v) = std::str::from_utf8(&attr.value) {
+                                    current_style = Some(v.to_string());
+                                }
+                            }
+                        }
+                    }
+                    // Also check for text content: <w:pStyle>Heading1</w:pStyle>
                     if let Ok(quick_xml::events::Event::Text(t)) = reader.read_event_into(&mut buf) {
-                        current_style = Some(t.unescape().unwrap_or_default().to_string());
+                        let val = t.unescape().unwrap_or_default();
+                        if !val.is_empty() {
+                            current_style = Some(val.to_string());
+                        }
+                    }
+                }
+            }
+            Ok(quick_xml::events::Event::Empty(ref e)) => {
+                let name = e.local_name();
+                if name.as_ref() == b"p" {
+                    in_para = true;
+                    para_depth += 1;
+                    current_text.clear();
+                    current_style = None;
+                } else if name.as_ref() == b"pStyle" {
+                    for attr in e.attributes().with_checks(false) {
+                        if let Ok(attr) = attr {
+                            if attr.key.as_ref() == b"val" {
+                                if let Ok(v) = std::str::from_utf8(&attr.value) {
+                                    current_style = Some(v.to_string());
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -167,7 +519,10 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
                         in_para = false;
                         let text = current_text.trim().to_string();
                         if !text.is_empty() {
+                            let id = format!("p{}", para_counter);
+                            para_counter += 1;
                             paragraphs.push(WordParagraph {
+                                id,
                                 text,
                                 style: current_style.clone(),
                                 runs: None,
@@ -200,6 +555,7 @@ fn parse_table_xml(content: &str) -> Result<Vec<WordTable>, OfficeError> {
     let mut table_depth = 0;
     let mut row_depth = 0;
     let mut cell_depth = 0;
+    let mut table_counter = 0usize;
 
     loop {
         match reader.read_event_into(&mut buf) {
@@ -208,7 +564,11 @@ fn parse_table_xml(content: &str) -> Result<Vec<WordTable>, OfficeError> {
                 match name.as_ref() {
                     b"tbl" => {
                         table_depth += 1;
-                        current_table = Some(WordTable { rows: Vec::new() });
+                        current_table = Some(WordTable {
+                            id: format!("t{}", table_counter),
+                            rows: Vec::new(),
+                        });
+                        table_counter += 1;
                     }
                     b"tr" => {
                         row_depth += 1;
@@ -383,6 +743,10 @@ pub fn build_document_xml(doc: &WordDocument) -> String {
     );
 
     for para in &doc.paragraphs {
+        // Skip table-position marker paragraphs
+        if para.text.starts_with("<__tbl_") {
+            continue;
+        }
         xml.push_str("\n    <w:p>");
         if let Some(ref style) = para.style {
             xml.push_str(&format!("<w:pPr><w:pStyle w:val=\"{}\"/></w:pPr>", escape_xml(style)));
@@ -406,6 +770,7 @@ pub fn build_document_xml(doc: &WordDocument) -> String {
         xml.push_str("</w:p>");
     }
 
+    // Render tables separately
     for table in &doc.tables {
         xml.push_str("\n    <w:tbl>");
         xml.push_str("\n      <w:tblPr>");
@@ -428,14 +793,15 @@ pub fn build_document_xml(doc: &WordDocument) -> String {
                     xml.push_str(&format!("<w:gridSpan w:val=\"{}\"/>", cell.col_span));
                 }
                 xml.push_str("</w:tcPr><w:p>");
-                for (chunk_idx, chunk) in cell.text.split('\n').enumerate() {
+                let lines: Vec<&str> = cell.text.split('\n').collect();
+                for (chunk_idx, chunk) in lines.iter().enumerate() {
                     if !chunk.is_empty() {
                         xml.push_str(&format!(
                             "<w:r><w:t xml:space=\"preserve\">{}</w:t></w:r>",
                             escape_xml(chunk)
                         ));
                     }
-                    if chunk_idx < cell.text.split('\n').count().saturating_sub(1) {
+                    if chunk_idx < lines.len().saturating_sub(1) {
                         xml.push_str("<w:r><w:br/></w:r>");
                     }
                 }

@@ -7,7 +7,7 @@ mod docx;
 mod xlsx;
 
 pub use shared::{OfficeError, TableCell, TableRow};
-pub use docx::{WordDocument, WordParagraph, WordTable, FontRun, read_word_document, word_document_to_text, write_word_document};
+pub use docx::{WordDocument, WordParagraph, WordTable, FontRun, DocElement, read_word_document, word_document_to_text, write_word_document};
 pub use xlsx::{ExcelWorkbook, read_excel_workbook, excel_workbook_to_text};
 
 use std::path::Path;
@@ -16,6 +16,11 @@ use std::path::Path;
 pub enum OfficeFileType {
     Word(docx::WordDocument),
     Excel(xlsx::ExcelWorkbook),
+}
+
+/// Structured elements for Word documents (paragraphs + tables with IDs).
+pub struct WordElements {
+    pub elements: Vec<DocElement>,
 }
 
 pub fn read_office_file(path: &Path) -> Result<(OfficeFileType, String), OfficeError> {
@@ -40,6 +45,10 @@ pub fn read_office_file(path: &Path) -> Result<(OfficeFileType, String), OfficeE
         }
         _ => Err(OfficeError::UnsupportedFileType(extension)),
     }
+}
+
+pub fn word_document_to_elements(doc: &docx::WordDocument) -> Vec<DocElement> {
+    doc.to_elements()
 }
 
 pub fn write_office_file(path: &Path, json_content: &str) -> Result<(), OfficeError> {

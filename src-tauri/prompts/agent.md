@@ -37,42 +37,97 @@ Search for lines containing a pattern in files. Supports regex.
 - **Parameters**: `pattern` (string, required), `paths` (array of strings, required), `case_sensitive` (boolean, optional)
 
 ### read_office_file
-Read a Word (.docx) or Excel (.xlsx) file and extract its content as readable text with JSON representation.
+Read a Word (.docx) or Excel (.xlsx) file and extract its content.
 - **Parameters**: `path` (string, required)
-- **Output**: Returns `text_content` (human-readable text), `json_content` (structured data), and `sheets` (for Excel only: list of sheet names).
-- **Supported formats**: `.docx` (Word documents) and `.xlsx` (Excel spreadsheets)
-- **Note**: For Excel files, you can see all sheet names. Output is limited to 100 rows per sheet to avoid token limits.
+- **Output**:
+  - `text_content` (string): Human-readable text representation
+  - `elements` (array, Word only): Structured document elements (paragraphs and tables) with stable `id`s. Use these IDs in `create_word_doc` to modify/delete specific content.
+    - Paragraph element: `{id, type:"paragraph", text, style, runs?}`
+    - Table element: `{id, type:"table", header, rows}`
+  - `json_content` (string): Full structured data for programmatic processing
+  - `sheets` (array, Excel only): List of sheet names
+- **Supported formats**: `.docx` (Word) and `.xlsx` (Excel)
+- **Note**: Always read the file before modifying it. Use the `id` values from `elements` to target specific paragraphs or tables for modification.
 
 ### create_word_doc
-Create a new Word (.docx) document from structured content. Pass title, paragraphs, and tables as structured parameters — no JSON string needed.
-- **Parameters**: `path` (string, required), `title` (string, required), `paragraphs` (array of paragraph objects, required), `tables` (array of table objects, optional), `append_to` (string, optional — path to an existing .docx to append content to; title is ignored in append mode)
-- **Paragraph format**: Each paragraph is an object:
-  - `text`: the paragraph text (string)
-  - `style`: optional — `"Heading1"` (large blue, 16pt bold), `"Heading2"` (medium, 13pt bold), `"Heading3"` (small, 12pt bold), `"Normal"` (default body text)
-  - `runs`: optional array of formatted text segments. Each run has `text` plus optional `bold`, `italic`, `underline`, `font_size` (half-points, e.g. 24=12pt), `color` (hex RGB like `"FF0000"`), `font_name`
-- **Table format**: Each table object has `{ "header": ["col1", "col2"], "rows": [["r1c1", "r1c2"], ["r2c1", "r2c2"]] }`. The header row becomes the first row of the table.
-- **Example — styled document**:
+Create, modify, append, or delete content in a Word (.docx) document. Uses a unified `elements[]` interface for all operations.
+- **Parameters**: `path` (string, required), `title` (string, optional, for new files only), `elements` (array, optional — see below), `deletes` (array of element IDs, optional)
+
+#### Element types
+
+**Paragraph** (`type: "paragraph"`):
+  - `id` (string, optional): Unique ID from `read_office_file`. If provided, replaces that paragraph. If absent, creates a new element.
+  - `text` (string, required): The paragraph text.
+  - `style` (string, optional): `"Title"` (centered large blue), `"Heading1"` (blue 16pt bold), `"Heading2"` (blue 13pt bold), `"Heading3"` (blue 12pt bold), `"Normal"` (default).
+  - `runs` (array, optional): Inline formatting. Each run has `text` plus optional `bold`, `italic`, `underline`, `font_size` (half-points, e.g. `24`=12pt), `color` (hex RGB like `"FF0000"`), `font_name`.
+  - `anchor_id` + `position` (optional): Insert new element at position relative to anchor. `position`: `"before"` or `"after"`. Example: `{text: "新章节", style: "Heading2", anchor_id: "p3", position: "after"}`.
+  - `action` (string, optional): Set to `"delete"` to remove the element with this `id`.
+
+**Table** (`type: "table"`):
+  - `id` (string, optional): Unique ID from `read_office_file`. If provided, replaces that table.
+  - `header` (array of strings, required): Column header labels (becomes the first row).
+  - `rows` (array of string arrays, required): Data rows. Example: `[["指标1", "95%"], ["指标2", "88%"]]`.
+  - `anchor_id` + `position` (optional): Insert the table at a specific position.
+  - `action` (string, optional): Set to `"delete"` to remove the table with this `id`.
+
+#### Behavior rules
+  - **Preserve styles**: When modifying a paragraph (providing an `id`), you MUST keep the original `style` value from `read_office_file` unless the user explicitly asks to change it. Do NOT omit `style` when modifying — if you don't change it, echo the original style back.
+  - **Read before modifying**: Always call `read_office_file` first to get the current `elements` with their `id`s before modifying or deleting anything.
+  - **Append**: New elements without `id` and without `anchor_id` are appended to the end of the document.
+
+#### Examples
+
+**Create a new document**:
   ```
   create_word_doc with
     path="/workspace/report.docx",
     title="项目分析报告",
-    paragraphs=[
-      {text: "第一章 概述", style: "Heading1"},
-      {text: "本报告分析了项目的关键指标。", style: "Normal"},
-      {text: "1.1 关键数据", style: "Heading2"},
-      {text: "项目总体评分为", runs: [{text: "优秀", bold: true, color: "FF0000"}, {text: "，符合预期。"}]},
-      ...
-    ],
-    tables=[{header: ["指标", "数值"], rows: [["完成率", "95%"], ["满意度", "4.8"]]}]
+    elements=[
+      {type: "paragraph", text: "第一章 概述", style: "Heading1"},
+      {type: "paragraph", text: "本报告分析了项目的关键指标。", style: "Normal"},
+      {type: "table", header: ["指标", "数值"], rows: [["完成率", "95%"], ["满意度", "4.8"]]}
+    ]
   ```
-- **Long documents — incremental generation**: When generating a long document, write it in sections/chapters rather than all at once. Use `append_to` to add content incrementally to the same file:
+
+**Modify an existing paragraph** (preserve the original style):
   ```
-  create_word_doc with path="/workspace/report.docx", title="完整报告", paragraphs=[...章节1...], append_to=null
-  create_word_doc with path="/workspace/report.docx", paragraphs=[...章节2...], append_to="/workspace/report.docx"
-  create_word_doc with path="/workspace/report.docx", paragraphs=[...章节3...], append_to="/workspace/report.docx"
+  create_word_doc with
+    path="/workspace/report.docx",
+    elements=[
+      {id: "p2", type: "paragraph", text: "修改后的内容，保留了 Heading1 样式", style: "Heading1"}
+    ]
   ```
-  When `append_to` is set, `title` is ignored and content is appended to the existing document.
-- **Note**: For creating new Word documents, use this tool. For Excel files, use `read_office_file` first to understand the structure, then modify using file operations.
+
+**Insert a new chapter after a heading**:
+  ```
+  create_word_doc with
+    path="/workspace/report.docx",
+    elements=[
+      {type: "paragraph", text: "第二章 新内容", style: "Heading1", anchor_id: "p3", position: "after"}
+    ]
+  ```
+
+**Delete a paragraph**:
+  ```
+  create_word_doc with path="/workspace/report.docx", elements=[{id: "p5", type: "paragraph", action: "delete"}]
+  ```
+
+**Modify a table**:
+  ```
+  create_word_doc with
+    path="/workspace/report.docx",
+    elements=[
+      {id: "t0", type: "table", header: ["指标", "新数值"], rows: [["完成率", "99%"], ["满意度", "4.9"]]}
+    ]
+  ```
+
+**Long documents — incremental generation**: Write in sections. Each call appends to the document:
+  ```
+  create_word_doc with path="/workspace/report.docx", title="完整报告", elements=[{type: "paragraph", text: "第一章 概述", style: "Heading1"}, ...]
+  create_word_doc with path="/workspace/report.docx", elements=[{type: "paragraph", text: "第二章 详细分析", style: "Heading1", anchor_id: "p1", position: "after"}, ...]
+  ```
+
+**Note**: For Excel files, use `read_office_file` first to understand the structure, then modify using file operations.
 
 ### database_search
 Search the workspace knowledge base using semantic (vector) search. Use this when the user asks questions about code, documents, or information that may be answered from indexed files in the workspace.
