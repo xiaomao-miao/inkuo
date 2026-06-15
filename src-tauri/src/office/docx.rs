@@ -205,13 +205,28 @@ impl WordDocument {
                 continue; // skip deleted
             }
             if let Some(replacement) = modify_map.get(elem.id()) {
-                // Replace with new content, but only if it's a different ID
-                // (if same ID, it's a no-op replace which is fine)
-                if replacement.id() != elem.id() {
-                    result.push(replacement.clone());
-                } else {
-                    result.push(replacement.clone());
-                }
+                // Preserve original style/runs when replacing a paragraph unless the
+                // replacement explicitly provides them
+                let to_push = match (elem, replacement.clone()) {
+                    (DocElement::Paragraph { id: oi, text: ot, style: os, runs: ors },
+                     DocElement::Paragraph { id: ri, text: rt, style: rs, runs: rr }) => {
+                        DocElement::Paragraph {
+                            id: ri,
+                            text: rt,
+                            style: rs.or(os),
+                            runs: rr.or(ors),
+                        }
+                    }
+                    (e, r) => {
+                        // Non-paragraph: replace as-is
+                        if r.id() != e.id() {
+                            r
+                        } else {
+                            r
+                        }
+                    }
+                };
+                result.push(to_push);
             } else {
                 result.push(elem);
             }
