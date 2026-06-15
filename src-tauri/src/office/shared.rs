@@ -40,3 +40,19 @@ pub fn read_zip_entry(zip_data: &[u8], name: &str) -> Result<String, OfficeError
     file.read_to_string(&mut content)?;
     Ok(content)
 }
+
+/// Read all entries from a docx zip and return them as a map of path -> raw bytes.
+/// Used to preserve the original document's boilerplate (styles, settings, fonts, etc.)
+/// when modifying only the document.xml body.
+pub fn read_all_zip_entries(zip_data: &[u8]) -> Result<std::collections::HashMap<String, Vec<u8>>, OfficeError> {
+    let mut archive = ZipArchive::new(std::io::Cursor::new(zip_data))?;
+    let mut entries = std::collections::HashMap::new();
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i)?;
+        let name = file.name().to_string();
+        let mut content = Vec::new();
+        file.read_to_end(&mut content)?;
+        entries.insert(name, content);
+    }
+    Ok(entries)
+}

@@ -1,7 +1,7 @@
 //! Word (.docx) document parsing and writing
 
 use serde::{Deserialize, Serialize};
-use std::io::{Cursor, Write as IoWrite};
+use std::io::{Read, Write};
 
 use super::shared::{OfficeError, read_zip_entry, TableCell, TableRow};
 
@@ -137,6 +137,23 @@ impl WordDocument {
         elements
     }
 
+    /// Returns a map: table ID -> marker paragraph ID for tables that have a
+    /// preceding `<__tbl_pos_>` marker. This lets `modify()` delete the marker
+    /// along with the table so no stale visible paragraphs are left behind.
+    pub fn marker_to_table_map(&self) -> std::collections::HashMap<String, String> {
+        let mut map = std::collections::HashMap::new();
+        for p in &self.paragraphs {
+            if let Some(rest) = p.text.strip_prefix("<__tbl_pos_") {
+                if let Some(end) = rest.find("__>") {
+                    let tbl_id = &rest[..end];
+                    // The marker paragraph's ID is p.id; the table's ID is tbl_id
+                    map.insert(tbl_id.to_string(), p.id.clone());
+                }
+            }
+        }
+        map
+    }
+
     /// Build a WordDocument from a list of elements.
     /// Each table is preceded by a marker paragraph whose ID encodes the table's own ID
     /// (e.g. table id "t0" → marker id "__tbl_pos_t0__"), so deletions of the table
@@ -191,8 +208,18 @@ impl WordDocument {
         insert_after: Option<String>,
         insert_elements: Vec<DocElement>,
     ) {
-        // Build a set of IDs to delete
-        let delete_set: std::collections::HashSet<String> = deletes.into_iter().collect();
+        // When a table is deleted, also delete its marker paragraph (if any).
+        // Build the marker map before consuming `deletes`.
+        let marker_map = self.marker_to_table_map();
+        let delete_ids_for_tables: Vec<String> = deletes.clone();
+
+        // Build a set of IDs to delete (includes marker paragraphs for tables).
+        let mut delete_set: std::collections::HashSet<String> = deletes.into_iter().collect();
+        for tbl_id in &delete_ids_for_tables {
+            if let Some(marker_id) = marker_map.get(tbl_id) {
+                delete_set.insert(marker_id.clone());
+            }
+        }
 
         // Start from current elements
         let elements = self.to_elements();
@@ -383,7 +410,10 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
     let mut in_para = false;
     let mut current_text = String::new();
     let mut current_style: Option<String> = None;
-    let mut para_depth = 0;
+    let mut para_depth = 0usize;
+    // Track whether we are inside a table cell — paragraphs inside cells must NOT
+    // be added to the top-level paragraph list (they are stored separately in tables).
+    let mut tbl_cell_depth = 0usize;
     let mut para_counter = 0usize;
 
     loop {
@@ -391,7 +421,9 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
         match event {
             Ok(quick_xml::events::Event::Start(ref e)) => {
                 let name = e.local_name();
-                if name.as_ref() == b"p" {
+                if name.as_ref() == b"tc" {
+                    tbl_cell_depth += 1;
+                } else if name.as_ref() == b"p" {
                     in_para = true;
                     para_depth += 1;
                     current_text.clear();
@@ -401,7 +433,6 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
                         current_text.push_str(&t.unescape().unwrap_or_default());
                     }
                 } else if name.as_ref() == b"pStyle" {
-                    // Read w:val attribute
                     for attr in e.attributes().with_checks(false) {
                         if let Ok(attr) = attr {
                             if attr.key.as_ref() == b"val" {
@@ -411,7 +442,6 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
                             }
                         }
                     }
-                    // Also check for text content: <w:pStyle>Heading1</w:pStyle>
                     if let Ok(quick_xml::events::Event::Text(t)) = reader.read_event_into(&mut buf) {
                         let val = t.unescape().unwrap_or_default();
                         if !val.is_empty() {
@@ -441,9 +471,11 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
             }
             Ok(quick_xml::events::Event::End(ref e)) => {
                 let name = e.local_name();
-                if name.as_ref() == b"p" {
-                    para_depth -= 1;
-                    if para_depth == 0 {
+                if name.as_ref() == b"tc" {
+                    tbl_cell_depth = tbl_cell_depth.saturating_sub(1);
+                } else if name.as_ref() == b"p" {
+                    para_depth = para_depth.saturating_sub(1);
+                    if para_depth == 0 && tbl_cell_depth == 0 {
                         in_para = false;
                         let text = current_text.trim().to_string();
                         if !text.is_empty() {
@@ -588,45 +620,116 @@ fn parse_table_xml(content: &str) -> Result<Vec<WordTable>, OfficeError> {
 
 // ─── Write Functions ──────────────────────────────────────────────────────────
 
-pub fn write_word_document(doc: &WordDocument, output_path: &std::path::Path) -> Result<(), OfficeError> {
-    let mut buf = Vec::new();
-    {
-        let mut zip = zip::ZipWriter::new(Cursor::new(&mut buf));
+/// Files we always regenerate (these define the document structure).
+/// All other entries (styles, settings, fonts, images, etc.) are copied from
+/// the original file to preserve custom formatting and embedded objects.
+const GENERATED_FILES: &[&str] = &[
+    "[Content_Types].xml",
+    "_rels/.rels",
+    "word/_rels/document.xml.rels",
+    "word/document.xml",
+    // NOTE: word/styles.xml, word/settings.xml, word/fontTable.xml and
+    // word/theme/theme1.xml are intentionally NOT here — they are copied from
+    // the original file so custom styles and formatting are preserved.
+];
 
-        let opts = zip::write::SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated)
-            .unix_permissions(0o644);
+/// Write a Word document to a .docx file.
+/// If `preserve_from` is Some(bytes), all ZIP entries from the original file are
+/// copied over first, then the generated content (document.xml, styles.xml, etc.)
+/// is used to replace the corresponding entries. This preserves styles, images,
+/// headers, footers, custom settings and any other embedded parts.
+/// Falls back to hardcoded boilerplate when `preserve_from` is None.
+pub fn write_word_document<W: std::io::Write + std::io::Seek>(
+    doc: &WordDocument,
+    output: W,
+    preserve_from: Option<&[u8]>,
+) -> Result<(), OfficeError> {
+    let mut zip = zip::ZipWriter::new(output);
+    let opts = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .unix_permissions(0o644);
 
-        zip.start_file("[Content_Types].xml", opts)?;
-        zip.write_all(CONTENT_TYPES_XML.as_bytes())?;
+    // Build the generated content strings once
+    let doc_xml = build_document_xml(doc);
+    let content_types = CONTENT_TYPES_XML;
+    let rels = RELS_XML;
+    let word_rels = WORD_RELS_XML;
+    let styles = STYLES_XML;
+    let settings = SETTINGS_XML;
+    let font_table = FONT_TABLE_XML;
+    let theme = THEME_XML;
 
-        zip.start_file("_rels/.rels", opts)?;
-        zip.write_all(RELS_XML.as_bytes())?;
+    if let Some(bytes) = preserve_from {
+        // Copy all original entries first
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))?;
+        for i in 0..archive.len() {
+            let mut file = archive.by_index(i)?;
+            let name = file.name().to_string();
+            // Skip entries we'll generate fresh (they'll be overwritten below)
+            if GENERATED_FILES.contains(&name.as_str()) {
+                continue;
+            }
+            let mut content = Vec::new();
+            file.read_to_end(&mut content)?;
 
-        zip.start_file("word/_rels/document.xml.rels", opts)?;
-        zip.write_all(WORD_RELS_XML.as_bytes())?;
+            // Preserve the original compression method
+            let file_opts = if file.compression() == zip::CompressionMethod::Deflated {
+                opts
+            } else {
+                zip::write::SimpleFileOptions::default()
+                    .compression_method(zip::CompressionMethod::Stored)
+                    .unix_permissions(0o644)
+            };
 
-        let doc_xml = build_document_xml(doc);
-        zip.start_file("word/document.xml", opts)?;
-        zip.write_all(doc_xml.as_bytes())?;
-
-        zip.start_file("word/styles.xml", opts)?;
-        zip.write_all(STYLES_XML.as_bytes())?;
-
-        zip.start_file("word/settings.xml", opts)?;
-        zip.write_all(SETTINGS_XML.as_bytes())?;
-
-        zip.start_file("word/fontTable.xml", opts)?;
-        zip.write_all(FONT_TABLE_XML.as_bytes())?;
-
-        zip.start_file("word/theme/theme1.xml", opts)?;
-        zip.write_all(THEME_XML.as_bytes())?;
-
-        zip.finish()?;
+            zip.start_file(&name, file_opts)?;
+            zip.write_all(&content)?;
+        }
     }
 
-    std::fs::write(output_path, &buf)?;
+    // Always write the generated (up-to-date) entries last so they take precedence
+    zip.start_file("[Content_Types].xml", opts)?;
+    zip.write_all(content_types.as_bytes())?;
+
+    zip.start_file("_rels/.rels", opts)?;
+    zip.write_all(rels.as_bytes())?;
+
+    zip.start_file("word/_rels/document.xml.rels", opts)?;
+    zip.write_all(word_rels.as_bytes())?;
+
+    zip.start_file("word/document.xml", opts)?;
+    zip.write_all(doc_xml.as_bytes())?;
+
+    // Only write hardcoded styles/settings/fontTable/theme when no original is
+    // being preserved. When `preserve_from` is Some, those entries are already
+    // copied from the original zip above, so writing them again would produce
+    // duplicate filenames in the resulting archive.
+    if preserve_from.is_none() {
+        zip.start_file("word/styles.xml", opts)?;
+        zip.write_all(styles.as_bytes())?;
+
+        zip.start_file("word/settings.xml", opts)?;
+        zip.write_all(settings.as_bytes())?;
+
+        zip.start_file("word/fontTable.xml", opts)?;
+        zip.write_all(font_table.as_bytes())?;
+
+        zip.start_file("word/theme/theme1.xml", opts)?;
+        zip.write_all(theme.as_bytes())?;
+    }
+
+    zip.finish()?;
     Ok(())
+}
+
+/// Convenience wrapper that writes to a file path.
+pub fn write_word_document_to_path(
+    doc: &WordDocument,
+    output_path: &std::path::Path,
+    preserve_from: Option<&[u8]>,
+) -> Result<(), OfficeError> {
+    let file = std::fs::File::create(output_path)?;
+    let buf = std::io::BufWriter::new(file);
+    write_word_document(doc, buf, preserve_from)
 }
 
 pub fn build_run_xml(run: &FontRun) -> String {
@@ -671,8 +774,9 @@ pub fn build_document_xml(doc: &WordDocument) -> String {
     );
 
     for para in &doc.paragraphs {
-        // Skip table-position marker paragraphs
-        if para.text.starts_with("<__tbl_") {
+        // Skip table-position marker paragraphs entirely (they are used only to
+        // link tables to their position in the flattened element list).
+        if para.text.starts_with("<__tbl_pos_") {
             continue;
         }
         xml.push_str("\n    <w:p>");

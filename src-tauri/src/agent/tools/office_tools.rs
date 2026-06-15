@@ -434,7 +434,7 @@ impl CreateWordDocTool {
                 existing.paragraphs.extend(new_paras);
                 existing.tables.extend(new_tables);
 
-                crate::office::write_word_document(&existing, path_obj)
+                crate::office::write_word_document_to_path(&existing, path_obj, Some(&bytes))
                     .map_err(|e| ToolError::ExecutionError(format!("Failed to write doc: {}", e)))?;
                 return Ok(format!("Successfully appended content to: {}", params.path));
             }
@@ -455,7 +455,7 @@ impl CreateWordDocTool {
             existing.paragraphs.extend(temp_doc.paragraphs);
             existing.tables.extend(temp_doc.tables);
 
-            crate::office::write_word_document(&existing, path_obj)
+            crate::office::write_word_document_to_path(&existing, path_obj, Some(&bytes))
                 .map_err(|e| ToolError::ExecutionError(format!("Failed to append to doc: {}", e)))?;
             return Ok(format!("Successfully appended {} element(s) to: {}", new_count, params.path));
         }
@@ -481,7 +481,7 @@ impl CreateWordDocTool {
 
             existing.modify(modifies, deletes, anchor_id, new_elements);
 
-            crate::office::write_word_document(&existing, path_obj)
+            crate::office::write_word_document_to_path(&existing, path_obj, Some(&bytes))
                 .map_err(|e| ToolError::ExecutionError(format!("Failed to write doc: {}", e)))?;
             return Ok(format!("Successfully modified document: {}", params.path));
         }
@@ -510,7 +510,7 @@ impl CreateWordDocTool {
         }
 
         let doc = crate::office::WordDocument::from_elements(elements_for_new);
-        crate::office::write_word_document(&doc, path_obj)
+        crate::office::write_word_document_to_path(&doc, path_obj, None)
             .map_err(|e| ToolError::ExecutionError(format!("Failed to write Word document: {}", e)))?;
 
         Ok(format!("Successfully created Word document: {}", params.path))

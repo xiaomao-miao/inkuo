@@ -7,7 +7,7 @@ mod docx;
 mod xlsx;
 
 pub use shared::{OfficeError, TableCell, TableRow};
-pub use docx::{WordDocument, WordParagraph, WordTable, FontRun, DocElement, read_word_document, word_document_to_text, write_word_document};
+pub use docx::{WordDocument, WordParagraph, WordTable, FontRun, DocElement, read_word_document, word_document_to_text, write_word_document_to_path};
 pub use xlsx::{ExcelWorkbook, read_excel_workbook, excel_workbook_to_text};
 
 use std::path::Path;
@@ -68,7 +68,7 @@ pub fn write_office_file(path: &Path, json_content: &str) -> Result<(), OfficeEr
         "docx" => {
             let doc: docx::WordDocument = serde_json::from_str(json_content)
                 .map_err(|e| OfficeError::Json(e.to_string()))?;
-            docx::write_word_document(&doc, path)?;
+            docx::write_word_document_to_path(&doc, path, None)?;
             Ok(())
         }
         _ => Err(OfficeError::UnsupportedFileType(extension)),
