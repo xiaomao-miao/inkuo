@@ -7,7 +7,7 @@ interface StreamEventDispatcherArgs {
   payload: StreamPayload;
   currentMode: ChatMode;
   clearToolCalls: (sessionId: string) => void;
-  flushAllPending: () => void;
+  flushAllPending: (sessionId: string) => void;
   streamingContentRef: MutableRefObject<Record<string, string>>;
   appendTextDelta: (messageId: string, content: string) => void;
   handleToolCallStart: (payload: StreamPayload) => void;
@@ -34,7 +34,7 @@ export async function dispatchStreamEvent({
     handleStreamError({
       payload,
       currentMode,
-      flushAllPending,
+      flushAllPending: () => flushAllPending(session_id),
       streamingContentRef,
     });
     return;
@@ -51,7 +51,9 @@ export async function dispatchStreamEvent({
   }
 
   if (event_type === 'tool_result') {
-    handleToolResult(payload);
+    // Flush buffered args BEFORE applying the result so the outputItem
+    // has complete arguments at the moment it is marked done.
+    handleToolResult(payload, () => flushAllPending(session_id));
     return;
   }
 
@@ -65,7 +67,7 @@ export async function dispatchStreamEvent({
       currentMode,
       clearToolCalls,
       setPendingDiff,
-      flushAllPending,
+      flushAllPending: () => flushAllPending(session_id),
       streamingContentRef,
     });
   }

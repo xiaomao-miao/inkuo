@@ -78,9 +78,17 @@ export async function handleStreamDone({
   }
 }
 
-export function handleToolResult(payload: StreamPayload) {
+export function handleToolResult(
+  payload: StreamPayload,
+  flushAllPending: () => void,
+) {
   const { session_id, message_id, tool_call_id, content, error, diff_summary, office_file_modified } = payload;
   if (!tool_call_id) return;
+
+  // Flush buffered args so the outputItem has complete arguments before
+  // being marked as done. This also clears the pending state so a later
+  // flush timer fire won't overwrite the completed item.
+  flushAllPending();
 
   const toolCall = useAIPanelStore.getState().sessions
     .find((session) => session.id === session_id)?.activeToolCalls.find((entry) => entry.id === tool_call_id);

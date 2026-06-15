@@ -38,55 +38,97 @@ function stripOpenTrailingTableBlock(text: string): string {
   return lines.slice(0, lastTableStart).join('\n').trimEnd();
 }
 
+/** Per-session pending text state. */
+type SessionTextPending = {
+  deltas: Record<string, string>;
+  flushTimer: ReturnType<typeof setTimeout> | null;
+};
+
 export function useTextStreaming() {
+  // Accumulated content per messageId (flat: messageId → text)
+  // This shape is required by handleStreamDone / handleStreamError (they access by messageId).
   const streamingContentRef = useRef<Record<string, string>>({});
-  const pendingTextDeltasRef = useRef<Record<string, string>>({});
+
+  // Per-session pending deltas
+  const sessionPendingRef = useRef<Record<string, SessionTextPending>>({});
   const flushTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const pendingFlushRef = useRef<Set<string>>(new Set());
+
+  const getOrCreateSession = (_sessionId: string): SessionTextPending => {
+    if (!sessionPendingRef.current[_sessionId]) {
+      sessionPendingRef.current[_sessionId] = { deltas: {}, flushTimer: null };
+    }
+    return sessionPendingRef.current[_sessionId];
+  };
 
   const flushTextDeltas = useCallback(() => {
-    const deltas = pendingTextDeltasRef.current;
-    const toFlush = [...pendingFlushRef.current];
+    const allPending = sessionPendingRef.current;
+    const hasAny = Object.values(allPending).some((p) => Object.keys(p.deltas).length > 0);
+    if (!hasAny) return;
+
+    const toFlush: Array<[string, string]> = [];
+    for (const pending of Object.values(allPending)) {
+      for (const [messageId, delta] of Object.entries(pending.deltas)) {
+        if (delta) toFlush.push([messageId, delta]);
+      }
+    }
+
     if (toFlush.length === 0) return;
 
-    pendingTextDeltasRef.current = {};
-    pendingFlushRef.current = new Set();
-    flushTimeoutRef.current = null;
+    // Reset all pending deltas
+    for (const pending of Object.values(allPending)) {
+      pending.deltas = {};
+    }
+    if (flushTimeoutRef.current !== null) {
+      clearTimeout(flushTimeoutRef.current);
+      flushTimeoutRef.current = null;
+    }
 
     useAIPanelStore.setState((state) => {
-      const deltaMap = new Map(toFlush.map((id) => [id, deltas[id]]));
+      const deltaMap = new Map(toFlush);
       return applyStreamingTextDeltas(
         state,
         deltaMap,
-        (content) => content !== stripOpenTrailingTableBlock(content)
+        (text) => text !== stripOpenTrailingTableBlock(text)
       );
     });
   }, []);
 
-  const scheduleTextFlush = useCallback(() => {
+  const scheduleFlush = useCallback(() => {
     if (flushTimeoutRef.current !== null) return;
     flushTimeoutRef.current = setTimeout(flushTextDeltas, TIMING.STREAM_FLUSH_INTERVAL_MS);
   }, [flushTextDeltas]);
 
   const appendTextDelta = useCallback((messageId: string, content: string) => {
     const normalizedDelta = normalizeStreamChunk(content);
-    const currentAccumulated = streamingContentRef.current[messageId] || '';
-    streamingContentRef.current[messageId] = currentAccumulated + normalizedDelta;
+    if (normalizedDelta.length === 0) return;
 
-    pendingTextDeltasRef.current[messageId] =
-      (pendingTextDeltasRef.current[messageId] || '') + normalizedDelta;
-    pendingFlushRef.current.add(messageId);
+    const pending = getOrCreateSession('current');
+    pending.deltas[messageId] = (pending.deltas[messageId] || '') + normalizedDelta;
 
-    scheduleTextFlush();
-  }, [scheduleTextFlush]);
+    // Keep streamingContentRef flat (messageId → accumulated text)
+    streamingContentRef.current[messageId] =
+      (streamingContentRef.current[messageId] || '') + normalizedDelta;
 
+    scheduleFlush();
+  }, [scheduleFlush]);
+
+  /** Get accumulated content for a message (for streaming preview). */
+  const getStreamingContent = useCallback((messageId: string): string => {
+    return streamingContentRef.current[messageId] || '';
+  }, []);
+
+  /** Clear pending state for a specific session. */
+  const resetSession = useCallback((sessionId: string) => {
+    delete sessionPendingRef.current[sessionId];
+  }, []);
+
+  /** Clear all pending text state. */
   const resetTextStreaming = useCallback(() => {
     if (flushTimeoutRef.current !== null) {
       clearTimeout(flushTimeoutRef.current);
       flushTimeoutRef.current = null;
     }
-    pendingTextDeltasRef.current = {};
-    pendingFlushRef.current = new Set();
+    sessionPendingRef.current = {};
     streamingContentRef.current = {};
   }, []);
 
@@ -95,5 +137,7 @@ export function useTextStreaming() {
     flushTextDeltas,
     appendTextDelta,
     resetTextStreaming,
+    resetSession,
+    getStreamingContent,
   };
 }

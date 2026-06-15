@@ -19,73 +19,73 @@ export function useAgentStream({ mode }: UseAgentStreamArgs) {
   const setPendingDiff = useAIPanelStore((state) => state.setPendingDiff);
 
   const unlistenRef = useRef<(() => void) | null>(null);
-  const isSettingUpRef = useRef(false);
   const modeRef = useRef(mode);
 
   const {
     streamingContentRef,
     flushTextDeltas,
     appendTextDelta,
-    resetTextStreaming,
   } = useTextStreaming();
 
   const {
     flushToolArgs,
     handleToolCallStart,
     handleToolCallArgsDelta,
-    resetToolCallStreaming,
   } = useToolCallStreaming();
-
-  const flushAllPendingRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     modeRef.current = mode;
   }, [mode]);
 
+  // Hold a stable reference to the latest flush callbacks so the Tauri listener
+  // (registered once) always invokes the most recent functions.
+  const flushAllPendingRef = useRef<(sessionId: string) => void>(() => {});
+
   useEffect(() => {
-    flushAllPendingRef.current = () => {
+    flushAllPendingRef.current = (sessionId) => {
       flushTextDeltas();
-      flushToolArgs();
+      flushToolArgs(sessionId);
     };
   }, [flushTextDeltas, flushToolArgs]);
 
+  // Register the Tauri listener exactly once per mount. Callbacks read from
+  // refs that are updated above, so they always see the latest closures
+  // without re-registering on every render.
   useEffect(() => {
-    if (!isTauriRuntime()) {
-      resetTextStreaming();
-      resetToolCallStreaming();
-      return;
-    }
+    if (!isTauriRuntime()) return;
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
 
-    const setupListener = async () => {
-      if (unlistenRef.current || isSettingUpRef.current) return;
-      isSettingUpRef.current = true;
-
-      try {
-        unlistenRef.current = await listen<StreamPayload>('ai://stream', async (event) => {
-          await dispatchStreamEvent({
-            payload: event.payload,
-            currentMode: modeRef.current,
-            clearToolCalls,
-            flushAllPending: () => flushAllPendingRef.current(),
-            streamingContentRef,
-            appendTextDelta,
-            handleToolCallStart,
-            handleToolCallArgsDelta,
-            setPendingDiff,
-          });
+    (async () => {
+      unlisten = await listen<StreamPayload>('ai://stream', (event) => {
+        if (disposed) return;
+        void dispatchStreamEvent({
+          payload: event.payload,
+          currentMode: modeRef.current,
+          clearToolCalls,
+          flushAllPending: (sessionId) => flushAllPendingRef.current(sessionId),
+          streamingContentRef,
+          appendTextDelta,
+          handleToolCallStart,
+          handleToolCallArgsDelta,
+          setPendingDiff,
         });
-      } finally {
-        isSettingUpRef.current = false;
+      });
+      if (disposed) {
+        unlisten();
+        unlisten = null;
+      } else {
+        unlistenRef.current = unlisten;
       }
-    };
-
-    setupListener();
+    })();
 
     return () => {
-      unlistenRef.current?.();
+      disposed = true;
+      unlisten?.();
+      unlisten = null;
       unlistenRef.current = null;
-      resetTextStreaming();
-      resetToolCallStreaming();
     };
-  }, [appendTextDelta, clearToolCalls, handleToolCallArgsDelta, handleToolCallStart, resetTextStreaming, resetToolCallStreaming, setPendingDiff, streamingContentRef]);
+    // Register once. Inner callbacks read from refs to stay up-to-date.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 }

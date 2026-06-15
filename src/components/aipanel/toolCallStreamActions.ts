@@ -9,6 +9,7 @@ import type { AIPanelState } from '../../store/aiPanelStore.types';
 export interface PendingToolArgEntry {
   sessionId: string;
   messageId: string;
+  tool_call_id: string;
   rawArgs: string;
   parsedArgs: Record<string, unknown>;
   streamingContent?: string;
@@ -102,39 +103,22 @@ export function applyToolCallStartToState({
     sessions: state.sessions.map((session) => {
       if (session.id !== sessionId) return session;
 
-      const alreadyExists = session.activeToolCalls.some((toolCall) => toolCall.id === toolCallId);
-      const updatedActiveToolCalls = alreadyExists
-        ? session.activeToolCalls.map((toolCall) =>
-            toolCall.id === toolCallId
-              ? { ...toolCall, name: toolName, arguments: parsedArgs, status: 'executing' as const }
-              : toolCall
-          )
-        : [...session.activeToolCalls, buildToolCallEntry(toolCallId, toolName, parsedArgs, startTime)];
+      // Add to activeToolCalls so the panel can show "executing" status.
+      // The tool is removed from activeToolCalls in applyToolResultToState.
+      const activeToolCalls = [
+        ...session.activeToolCalls,
+        buildToolCallEntry(toolCallId, toolName, parsedArgs, startTime),
+      ];
 
       return {
         ...session,
-        activeToolCalls: updatedActiveToolCalls,
+        activeToolCalls,
         messages: session.messages.map((message) => {
           if (message.id !== messageId) return message;
 
-          const existingIdx = message.outputItems.findIndex(
-            (item) => item.type === 'tool_call_start' && item.toolCallId === toolCallId
-          );
-
-          if (existingIdx >= 0) {
-            const updated = [...message.outputItems];
-            const previous = updated[existingIdx] as Extract<OutputItem, { type: 'tool_call_start' }>;
-            updated[existingIdx] = {
-              ...previous,
-              toolName,
-              arguments: parsedArgs,
-              rawArguments: rawArgs,
-              streamingContent,
-              isExecuting: true,
-            };
-            return { ...message, outputItems: updated };
-          }
-
+          // Always append a new outputItem. Do NOT try to "update existing" —
+          // that creates subtle bugs where an old entry's streamingContent
+          // leaks into the new card via object spread.
           return {
             ...message,
             toolCalls: [...(message.toolCalls || []), { id: toolCallId, name: toolName, arguments: parsedArgs }],
@@ -162,31 +146,44 @@ export function applyPendingToolArgs(
     sessions: state.sessions.map((session) => {
       if (!sessionIds.has(session.id)) return session;
 
-      return {
-        ...session,
-        messages: session.messages.map((message) => {
-          let mutated = false;
-          const updatedItems = message.outputItems.map((item) => {
-            if (item.type !== 'tool_call_start') return item;
+      let sessionMutated = false;
+      const updatedMessages = session.messages.map((message) => {
+        let messageMutated = false;
+        const updatedItems = message.outputItems.map((item) => {
+          if (item.type !== 'tool_call_start') return item;
 
-            const entry = pendingEntries.find(
-              (candidate) => candidate.messageId === message.id && item.toolCallId in { [item.toolCallId]: true } && candidate.sessionId === session.id
-            );
-            if (!entry || item.toolCallId === undefined) return item;
+          const entry = pendingEntries.find(
+            (candidate) =>
+              candidate.messageId === message.id &&
+              item.toolCallId === candidate.tool_call_id &&
+              candidate.sessionId === session.id
+          );
+          if (!entry) return item;
 
-            mutated = true;
-            return {
-              ...item,
-              arguments: entry.parsedArgs,
-              rawArguments: entry.rawArgs,
-              streamingContent: entry.streamingContent,
-              isExecuting: true,
-            };
-          });
+          // Skip items that have already received their result — updating
+          // those would create an unnecessary new reference and re-render
+          // a card that is already in its final state.
+          if ('result' in item) return item;
 
-          return mutated ? { ...message, outputItems: updatedItems } : message;
-        }),
-      };
+          messageMutated = true;
+          return {
+            ...item,
+            arguments: entry.parsedArgs,
+            rawArguments: entry.rawArgs,
+          };
+        });
+
+        if (messageMutated) {
+          sessionMutated = true;
+          return { ...message, outputItems: updatedItems };
+        }
+        return message;
+      });
+
+      if (sessionMutated) {
+        return { ...session, messages: updatedMessages };
+      }
+      return session;
     }),
   };
 }
@@ -208,19 +205,15 @@ export function applyToolResultToState({
     sessions: state.sessions.map((session) => {
       if (session.id !== sessionId) return session;
 
+      // Remove from activeToolCalls so that a subsequent tool_call_start
+      // with the same tool_call_id (which can happen when the AI references
+      // a previous tool) will correctly create a NEW outputItem instead of
+      // patching the completed one.
+      const activeToolCalls = session.activeToolCalls.filter((entry) => entry.id !== toolCallId);
+
       return {
         ...session,
-        activeToolCalls: session.activeToolCalls.map((entry) =>
-          entry.id === toolCallId
-            ? {
-                ...entry,
-                status: isError ? 'error' : 'success',
-                result: content,
-                error: isError ? error : undefined,
-                duration,
-              }
-            : entry
-        ),
+        activeToolCalls,
         messages: session.messages.map((message) => {
           if (message.id !== messageId) return message;
 
