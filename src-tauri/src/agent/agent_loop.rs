@@ -294,38 +294,6 @@ impl AgentExecutor {
 
             // Execute each tool call
             for parsed in &parsed_calls {
-                // Emit tool call start event
-                on_event(StreamPayload {
-                    session_id: session_id.to_string(),
-                    message_id: message_id.to_string(),
-                    event_type: "tool_call_start".to_string(),
-                    content: None,
-                    summary: None,
-                    tool_call_id: Some(parsed.id.clone()),
-                    tool_name: Some(parsed.name.clone()),
-                    tool_args: Some(match serde_json::to_string(&parsed.arguments) {
-                        Ok(arguments) => arguments,
-                        Err(error) => {
-                            tracing::warn!(
-                                "Failed to serialize parsed tool arguments for {} ({}): {}",
-                                parsed.name,
-                                parsed.id,
-                                error
-                            );
-                            "{}".to_string()
-                        }
-                    }),
-                    final_content: None,
-                    error: None,
-                    search_results: None,
-                    done: false,
-                    file_path: None,
-                    original_content: None,
-                    new_content: None,
-                    diff_summary: None,
-                    office_file_modified: None,
-                });
-
                 // Execute tool
                 let tool_call = ToolCall {
                     id: parsed.id.clone(),
@@ -712,6 +680,8 @@ impl AgentExecutor {
                                     };
 
                                     // Emit `tool_call_start` the first time we see this index.
+                                    // This lets the frontend show the tool card with partial arguments
+                                    // during streaming. The card will be finalized when tool_result arrives.
                                     if !tool_call_started.contains(&tc.index) {
                                         tool_call_started.insert(tc.index);
                                         let live_id = entry.id.clone();
