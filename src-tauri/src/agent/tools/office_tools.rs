@@ -178,6 +178,12 @@ struct CreateWordDocParams {
     /// Deprecated: use elements[]. Path to an existing .docx to append content to.
     #[serde(default)]
     append_to: Option<String>,
+    /// When true, the content in `elements[]` is appended to the end of the existing
+    /// document without reading/modifying its current structure. Useful for progressive
+    /// document building — call repeatedly as you generate content section by section.
+    /// Takes effect only when the file already exists.
+    #[serde(default)]
+    append: Option<bool>,
 }
 
 pub struct CreateWordDocTool;
@@ -432,6 +438,26 @@ impl CreateWordDocTool {
                     .map_err(|e| ToolError::ExecutionError(format!("Failed to write doc: {}", e)))?;
                 return Ok(format!("Successfully appended content to: {}", params.path));
             }
+        }
+
+        // Progressive append mode: append new elements to existing document without reading/modifying structure
+        if params.append == Some(true) && file_exists && !new_elements.is_empty() {
+            let bytes = tokio::fs::read(&params.path)
+                .await
+                .map_err(|e| ToolError::IoError(format!("Failed to read existing doc: {}", e)))?;
+            let mut existing = crate::office::read_word_document(&bytes)
+                .map_err(|e| ToolError::ExecutionError(format!("Failed to read existing doc: {}", e)))?;
+
+            // Build a temporary document from just the new elements, then extract its parts
+            let temp_doc = crate::office::WordDocument::from_elements(new_elements);
+            let new_count = temp_doc.paragraphs.len() + temp_doc.tables.len();
+
+            existing.paragraphs.extend(temp_doc.paragraphs);
+            existing.tables.extend(temp_doc.tables);
+
+            crate::office::write_word_document(&existing, path_obj)
+                .map_err(|e| ToolError::ExecutionError(format!("Failed to append to doc: {}", e)))?;
+            return Ok(format!("Successfully appended {} element(s) to: {}", new_count, params.path));
         }
 
         // Existing file with operations: modify/delete/insert

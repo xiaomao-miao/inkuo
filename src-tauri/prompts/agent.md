@@ -43,15 +43,14 @@ Read a Word (.docx) or Excel (.xlsx) file and extract its content.
   - `text_content` (string): Human-readable text representation
   - `elements` (array, Word only): Structured document elements (paragraphs and tables) with stable `id`s. Use these IDs in `create_word_doc` to modify/delete specific content.
     - Paragraph element: `{id, type:"paragraph", text, style, runs?}`
-    - Table element: `{id, type:"table", header, rows}`
-  - `json_content` (string): Full structured data for programmatic processing
+    - Table element: `{id, type:"table", position, header, rows}`
   - `sheets` (array, Excel only): List of sheet names
 - **Supported formats**: `.docx` (Word) and `.xlsx` (Excel)
 - **Note**: Always read the file before modifying it. Use the `id` values from `elements` to target specific paragraphs or tables for modification.
 
 ### create_word_doc
 Create, modify, append, or delete content in a Word (.docx) document. Uses a unified `elements[]` interface for all operations.
-- **Parameters**: `path` (string, required), `title` (string, optional, for new files only), `elements` (array, optional — see below), `deletes` (array of element IDs, optional)
+- **Parameters**: `path` (string, required), `title` (string, optional, for new files only), `elements` (array, optional — see below), `deletes` (array of element IDs, optional), `append` (boolean, optional — see below)
 
 #### Element types
 
@@ -71,9 +70,33 @@ Create, modify, append, or delete content in a Word (.docx) document. Uses a uni
   - `action` (string, optional): Set to `"delete"` to remove the table with this `id`.
 
 #### Behavior rules
+  - **Use styles proactively**: Apply `style` to every paragraph — `Heading1`/`Heading2`/`Heading3` for section headers, `Normal` for body text. Never leave `style` unset unless intentionally inheriting defaults.
   - **Preserve styles**: When modifying a paragraph (providing an `id`), you MUST keep the original `style` value from `read_office_file` unless the user explicitly asks to change it. Do NOT omit `style` when modifying — if you don't change it, echo the original style back.
   - **Read before modifying**: Always call `read_office_file` first to get the current `elements` with their `id`s before modifying or deleting anything.
   - **Append**: New elements without `id` and without `anchor_id` are appended to the end of the document.
+
+#### Progressive document generation (long content)
+
+For documents with **roughly 2000 characters of generated text or more**, build the document incrementally instead of outputting everything at once. This keeps each tool call manageable and avoids token bloat.
+
+**Strategy:**
+1. Call `create_word_doc` with `title` to create the document header (title paragraph with `style: "Title"`)
+2. Generate a logical chunk of content (one section, ~1500-2000 characters of text)
+3. Call `create_word_doc` with `append: true` and the new `elements[]` to append that chunk
+4. Repeat step 2-3 for each subsequent section
+5. For the first section, include a `Heading1` as the opening paragraph
+
+**When to chunk:**
+- The document is expected to have multiple sections or subsections
+- A single paragraph's text exceeds ~500 characters
+- The user asks for a "comprehensive", "detailed", or "complete" report
+
+**Append mode example** (3 sections of a report):
+  ```
+  create_word_doc with path="/workspace/report.docx", title="项目分析报告", elements=[{type: "paragraph", text: "第一章 概述", style: "Heading1"}]
+  create_word_doc with path="/workspace/report.docx", append=true, elements=[{type: "paragraph", text: "本报告分析了项目的关键指标，涵盖进度、质量和风险三个方面。", style: "Normal"}, {type: "paragraph", text: "1.1 整体进度", style: "Heading2"}, ...]
+  create_word_doc with path="/workspace/report.docx", append=true, elements=[{type: "paragraph", text: "第二章 详细分析", style: "Heading1"}, ...]
+  ```
 
 #### Examples
 
@@ -119,12 +142,6 @@ Create, modify, append, or delete content in a Word (.docx) document. Uses a uni
     elements=[
       {id: "t0", type: "table", header: ["指标", "新数值"], rows: [["完成率", "99%"], ["满意度", "4.9"]]}
     ]
-  ```
-
-**Long documents — incremental generation**: Write in sections. Each call appends to the document:
-  ```
-  create_word_doc with path="/workspace/report.docx", title="完整报告", elements=[{type: "paragraph", text: "第一章 概述", style: "Heading1"}, ...]
-  create_word_doc with path="/workspace/report.docx", elements=[{type: "paragraph", text: "第二章 详细分析", style: "Heading1", anchor_id: "p1", position: "after"}, ...]
   ```
 
 **Note**: For Excel files, use `read_office_file` first to understand the structure, then modify using file operations.

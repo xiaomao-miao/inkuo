@@ -114,8 +114,6 @@ impl WordDocument {
             }
         }
 
-        let table_count = table_positions.len();
-
         // Now rebuild: go through paragraphs, emitting those before each table
         let mut current_pos = 0usize;
         let mut table_list: Vec<(usize, &WordTable)> = table_positions
@@ -222,8 +220,6 @@ impl WordDocument {
         // Simpler: use position markers in a dedicated paragraph at the right index.
         // We'll insert __tbl_pos_N__ paragraphs at the right positions.
         let mut out_paras: Vec<WordParagraph> = Vec::new();
-        let mut tbl_idx = 0usize;
-        let mut global_idx = 0usize;
 
         for elem in &elements {
             match elem {
@@ -234,17 +230,15 @@ impl WordDocument {
                         style: style.clone(),
                         runs: runs.clone(),
                     });
-                    global_idx += 1;
                 }
                 DocElement::Table { id, position, header, rows } => {
-                    // Emit position marker at current global index
+                    // Emit position marker at current paragraph index
                     out_paras.push(WordParagraph {
                         id: format!("__tbl_pos_{}__", *position),
                         text: format!("<__tbl_pos_{}__>", *position),
                         style: None,
                         runs: None,
                     });
-                    global_idx += 1;
 
                     let mut table_rows = vec![];
                     if !header.is_empty() {
@@ -262,7 +256,6 @@ impl WordDocument {
                         });
                     }
                     tables.push(WordTable { id: id.clone(), rows: table_rows });
-                    tbl_idx += 1;
                 }
             }
         }
