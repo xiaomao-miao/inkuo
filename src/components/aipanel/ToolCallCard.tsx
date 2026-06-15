@@ -117,9 +117,12 @@ const ToolCardPreview: React.FC<{
   preview: ToolPreview | null;
   showCursor: boolean;
   isStreamingArguments: boolean;
-}> = ({ preview, showCursor, isStreamingArguments }) => {
+  toolName: string;
+}> = ({ preview, showCursor, isStreamingArguments, toolName }) => {
   const [isExpanded, setIsExpanded] = React.useState(true);
   const previewRef = useRef<HTMLPreElement | null>(null);
+
+  const previewMaxHeight = '80px';
 
   useEffect(() => {
     if (!isStreamingArguments) return;
@@ -154,7 +157,7 @@ const ToolCardPreview: React.FC<{
         </span>
       </button>
       {isExpanded && (
-        <div className={styles.previewContainer}>
+        <div className={styles.previewContainer} style={{ maxHeight: previewMaxHeight }}>
           <pre ref={previewRef} className={styles.previewContent}>
             {preview.text}
             {showCursor && <span className={styles.streamingCaret} />}
@@ -269,6 +272,7 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = React.memo(function Too
         preview={preview}
         showCursor={showCursor}
         isStreamingArguments={isStreamingArguments}
+        toolName={name}
       />
       <ToolCardDiff diffSummary={diffSummary} />
       <ToolCardError error={error} />
