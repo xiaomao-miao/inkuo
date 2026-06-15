@@ -76,31 +76,35 @@ impl WordDocument {
     /// Tables and paragraphs are interleaved by matching position markers
     /// to tables in sequential order.
     pub fn to_elements(&self) -> Vec<DocElement> {
-        // Match markers to tables by sequential order — ignore the stored position value.
-        let mut table_iter = self.tables.iter().peekable();
+        // Build a map of table id -> table for O(1) lookup.
+        let table_map: std::collections::HashMap<&str, &WordTable> =
+            self.tables.iter().map(|t| (t.id.as_str(), t)).collect();
+
         let mut elements: Vec<DocElement> = Vec::with_capacity(self.paragraphs.len() + self.tables.len());
 
         for p in &self.paragraphs {
-            if p.text.starts_with("<__tbl_") {
-                // Emit the next table in sequential order
-                if let Some(tbl) = table_iter.next() {
-                    let (header, rows) = if tbl.rows.is_empty() {
-                        (vec![], vec![])
-                    } else {
-                        let h = tbl.rows[0].cells.iter().map(|c| c.text.clone()).collect();
-                        let r: Vec<Vec<String>> = tbl.rows[1..].iter()
-                            .map(|r| r.cells.iter().map(|c| c.text.clone()).collect())
-                            .collect();
-                        (h, r)
-                    };
-                    elements.push(DocElement::Table {
-                        id: tbl.id.clone(),
-                        position: elements.len(),
-                        header,
-                        rows,
-                    });
+            if let Some(rest) = p.text.strip_prefix("<__tbl_pos_") {
+                if let Some(end) = rest.find("__>") {
+                    let tbl_id = &rest[..end];
+                    if let Some(tbl) = table_map.get(tbl_id) {
+                        let (header, rows) = if tbl.rows.is_empty() {
+                            (vec![], vec![])
+                        } else {
+                            let h = tbl.rows[0].cells.iter().map(|c| c.text.clone()).collect();
+                            let r: Vec<Vec<String>> = tbl.rows[1..].iter()
+                                .map(|r| r.cells.iter().map(|c| c.text.clone()).collect())
+                                .collect();
+                            (h, r)
+                        };
+                        elements.push(DocElement::Table {
+                            id: tbl.id.clone(),
+                            position: elements.len(),
+                            header,
+                            rows,
+                        });
+                    }
+                    continue;
                 }
-                continue;
             }
             elements.push(DocElement::Paragraph {
                 id: p.id.clone(),
@@ -109,35 +113,37 @@ impl WordDocument {
                 runs: p.runs.clone(),
             });
         }
-        // Any tables with no preceding marker get appended at the end
-        for tbl in table_iter {
-            let (header, rows) = if tbl.rows.is_empty() {
-                (vec![], vec![])
-            } else {
-                let h = tbl.rows[0].cells.iter().map(|c| c.text.clone()).collect();
-                let r: Vec<Vec<String>> = tbl.rows[1..].iter()
-                    .map(|r| r.cells.iter().map(|c| c.text.clone()).collect())
-                    .collect();
-                (h, r)
-            };
-            elements.push(DocElement::Table {
-                id: tbl.id.clone(),
-                position: elements.len(),
-                header,
-                rows,
-            });
+        // Tables without preceding markers (e.g. added via append mode) go at the end.
+        for tbl in &self.tables {
+            if !table_map.contains_key(tbl.id.as_str()) {
+                let (header, rows) = if tbl.rows.is_empty() {
+                    (vec![], vec![])
+                } else {
+                    let h = tbl.rows[0].cells.iter().map(|c| c.text.clone()).collect();
+                    let r: Vec<Vec<String>> = tbl.rows[1..].iter()
+                        .map(|r| r.cells.iter().map(|c| c.text.clone()).collect())
+                        .collect();
+                    (h, r)
+                };
+                elements.push(DocElement::Table {
+                    id: tbl.id.clone(),
+                    position: elements.len(),
+                    header,
+                    rows,
+                });
+            }
         }
 
         elements
     }
 
     /// Build a WordDocument from a list of elements.
-    /// Tables are placed after their corresponding position markers in the paragraph list.
-    /// Marker and table are matched by sequential order, not by stored position value.
+    /// Each table is preceded by a marker paragraph whose ID encodes the table's own ID
+    /// (e.g. table id "t0" → marker id "__tbl_pos_t0__"), so deletions of the table
+    /// by ID also remove the marker.
     pub fn from_elements(elements: Vec<DocElement>) -> Self {
         let mut out_paras: Vec<WordParagraph> = Vec::new();
         let mut tables: Vec<WordTable> = Vec::new();
-        let mut tbl_idx = 0usize;
 
         for elem in elements {
             match elem {
@@ -145,10 +151,11 @@ impl WordDocument {
                     out_paras.push(WordParagraph { id, text, style, runs });
                 }
                 DocElement::Table { id, position: _, header, rows } => {
-                    // Emit position marker paired to this table by sequential index
+                    // Emit a position marker whose ID matches the table's ID.
+                    // This lets delete_set remove both the marker and the table together.
                     out_paras.push(WordParagraph {
-                        id: format!("__tbl_pos_{}__", tbl_idx),
-                        text: format!("<__tbl_pos_{}__>", tbl_idx),
+                        id: format!("__tbl_pos_{}__", id),
+                        text: format!("<__tbl_pos_{}__>", id),
                         style: None,
                         runs: None,
                     });
@@ -169,7 +176,6 @@ impl WordDocument {
                         });
                     }
                     tables.push(WordTable { id, rows: table_rows });
-                    tbl_idx += 1;
                 }
             }
         }
