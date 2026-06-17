@@ -98,11 +98,15 @@ struct DocTextRun {
     #[serde(default)]
     underline: Option<bool>,
     #[serde(default)]
+    strikethrough: Option<bool>,
+    #[serde(default)]
     font_size: Option<u32>,   // half-points, e.g. 24 = 12pt
     #[serde(default)]
     color: Option<String>,    // hex RGB, e.g. "FF0000"
     #[serde(default)]
     font_name: Option<String>,
+    #[serde(default)]
+    highlight: Option<String>,
 }
 
 /// A paragraph in the document.
@@ -120,6 +124,9 @@ struct DocParagraph {
     /// Rich text runs for inline formatting.
     #[serde(default)]
     runs: Option<Vec<DocTextRun>>,
+    /// List/numbering reference: {num_id: u32, level: u32}.
+    #[serde(default)]
+    numbering: Option<NumberingInput>,
     /// Insert position relative to anchor_id: "before", "after", "end".
     /// Only used when id is absent (new element).
     #[serde(default)]
@@ -130,6 +137,20 @@ struct DocParagraph {
     /// If true, delete the element with this id instead.
     #[serde(default, rename = "action")]
     delete_action: Option<String>,
+}
+
+/// Same shape as `NumberingRef` but deserialized from the wire-format JSON.
+#[derive(Debug, Clone, Deserialize)]
+struct NumberingInput {
+    num_id: u32,
+    #[serde(default)]
+    level: u32,
+}
+
+impl From<NumberingInput> for crate::office::NumberingRef {
+    fn from(n: NumberingInput) -> Self {
+        crate::office::NumberingRef { num_id: n.num_id, level: n.level }
+    }
 }
 
 /// A table in the document.
@@ -219,9 +240,11 @@ impl CreateWordDocTool {
             bold: r.bold.unwrap_or(false),
             italic: r.italic.unwrap_or(false),
             underline: r.underline.unwrap_or(false),
+            strikethrough: r.strikethrough.unwrap_or(false),
             font_size: r.font_size,
             color: r.color,
             font_name: r.font_name,
+            highlight: r.highlight,
         }
     }
 
@@ -234,6 +257,7 @@ impl CreateWordDocTool {
                     omit_text: false,
                     style: None,
                     runs: None,
+                    numbering: None,
                 }));
             }
             return Err("delete action requires an id".to_string());
@@ -265,9 +289,11 @@ impl CreateWordDocTool {
                         bold: r["bold"].as_bool().unwrap_or(false),
                         italic: r["italic"].as_bool().unwrap_or(false),
                         underline: r["underline"].as_bool().unwrap_or(false),
+                        strikethrough: r["strikethrough"].as_bool().unwrap_or(false),
                         font_size: r["font_size"].as_u64().map(|n| n as u32),
                         color: r["color"].as_str().map(|s| s.to_string()),
                         font_name: r["font_name"].as_str().map(|s| s.to_string()),
+                        highlight: r["highlight"].as_str().map(|s| s.to_string()),
                     })
                 }).collect()
             })
@@ -275,12 +301,19 @@ impl CreateWordDocTool {
             None
         };
 
+        let numbering: Option<crate::office::NumberingRef> = v["numbering"].as_object().and_then(|obj| {
+            let num_id = obj.get("num_id")?.as_u64()? as u32;
+            let level = obj.get("level").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            Some(crate::office::NumberingRef { num_id, level })
+        });
+
         Ok(Some(crate::office::DocElement::Paragraph {
             id: id.unwrap_or_else(|| format!("__new_p{}", uuid_simple())),
             text,
             omit_text,
             style,
             runs,
+            numbering,
         }))
     }
 
@@ -381,6 +414,7 @@ impl CreateWordDocTool {
                         omit_text: false,
                         style: p.style.clone(),
                         runs: p.runs.as_ref().map(|rvec| rvec.iter().map(|r| Self::to_font_run(r.clone())).collect()),
+                        numbering: p.numbering.clone().map(crate::office::NumberingRef::from),
                     };
                     if p.id.is_some() {
                         modifies.push(elem);
@@ -433,8 +467,8 @@ impl CreateWordDocTool {
                 let mut new_tables = Vec::new();
                 for e in new_elements {
                     match e {
-                        crate::office::DocElement::Paragraph { id, text, style, runs, .. } => {
-                            new_paras.push(crate::office::WordParagraph { id, text, style, runs });
+                        crate::office::DocElement::Paragraph { id, text, style, runs, numbering, .. } => {
+                            new_paras.push(crate::office::WordParagraph { id, text, style, runs, numbering });
                         }
                         crate::office::DocElement::Table { id, position: _, header, rows } => {
                             let mut table_rows = vec![];
@@ -527,6 +561,7 @@ impl CreateWordDocTool {
                     omit_text: false,
                     style: Some("Title".to_string()),
                     runs: None,
+                    numbering: None,
                 });
             }
         }
@@ -554,4 +589,208 @@ fn uuid_simple() -> String {
     thread_local! { static CNT: AtomicU64 = AtomicU64::new(0); }
     let cnt = CNT.with(|c| c.fetch_add(1, Ordering::Relaxed));
     format!("{}{}", now.as_nanos(), cnt)
+}
+
+// ─── compare_word_docs ─────────────────────────────────────────────────────────
+
+/// Compare two .docx files and return a structured diff.
+///
+/// Strategy: load both docs, build a map `id -> text` for each, then
+/// categorise every element id as added (only in B), removed (only in A),
+/// or modified (in both, but text differs). Paragraphs are matched by their
+/// stable `p<N>` id; tables by `t<N>` id.
+pub struct CompareWordDocsTool;
+
+impl CompareWordDocsTool {
+    pub fn new() -> Self { Self }
+    pub fn definition(&self) -> ToolDefinition {
+        ToolDefinition::new_with_label(
+            "compare_word_docs",
+            "比较 Word 文档差异",
+            "Compare two Word (.docx) files and return a structured diff of added, removed and modified paragraphs and tables.",
+            ToolParameters::new(
+                vec!["path1", "path2"],
+                vec![
+                    ("path1", "string", Some("Absolute path to the first .docx file (the 'before' version)")),
+                    ("path2", "string", Some("Absolute path to the second .docx file (the 'after' version)")),
+                ],
+            ),
+        )
+    }
+    pub async fn execute(&self, arguments: Value, workspace: Option<String>) -> Result<String, ToolError> {
+        let path1 = arguments["path1"].as_str()
+            .ok_or_else(|| ToolError::InvalidArguments("compare_word_docs".to_string(), "path1 must be a string".into()))?;
+        let path2 = arguments["path2"].as_str()
+            .ok_or_else(|| ToolError::InvalidArguments("compare_word_docs".to_string(), "path2 must be a string".into()))?;
+        validate_workspace_path(path1, &workspace)?;
+        validate_workspace_path(path2, &workspace)?;
+
+        let bytes1 = tokio::fs::read(path1).await
+            .map_err(|e| ToolError::IoError(format!("Failed to read {}: {}", path1, e)))?;
+        let bytes2 = tokio::fs::read(path2).await
+            .map_err(|e| ToolError::IoError(format!("Failed to read {}: {}", path2, e)))?;
+
+        let doc1 = crate::office::read_word_document(&bytes1)
+            .map_err(|e| ToolError::ExecutionError(format!("Failed to parse {}: {}", path1, e)))?;
+        let doc2 = crate::office::read_word_document(&bytes2)
+            .map_err(|e| ToolError::ExecutionError(format!("Failed to parse {}: {}", path2, e)))?;
+
+        // Build id -> (kind, text) maps for each side.
+        let mut left: std::collections::BTreeMap<String, (String, String)> = std::collections::BTreeMap::new();
+        for p in &doc1.paragraphs {
+            left.insert(p.id.clone(), ("paragraph".into(), p.text.clone()));
+        }
+        for t in &doc1.tables {
+            let flat = t.rows.iter()
+                .map(|r| r.cells.iter().map(|c| c.text.clone()).collect::<Vec<_>>().join(" | "))
+                .collect::<Vec<_>>()
+                .join("\n");
+            left.insert(t.id.clone(), ("table".into(), flat));
+        }
+
+        let mut right: std::collections::BTreeMap<String, (String, String)> = std::collections::BTreeMap::new();
+        for p in &doc2.paragraphs {
+            right.insert(p.id.clone(), ("paragraph".into(), p.text.clone()));
+        }
+        for t in &doc2.tables {
+            let flat = t.rows.iter()
+                .map(|r| r.cells.iter().map(|c| c.text.clone()).collect::<Vec<_>>().join(" | "))
+                .collect::<Vec<_>>()
+                .join("\n");
+            right.insert(t.id.clone(), ("table".into(), flat));
+        }
+
+        let mut added: Vec<serde_json::Value> = Vec::new();
+        let mut removed: Vec<serde_json::Value> = Vec::new();
+        let mut modified: Vec<serde_json::Value> = Vec::new();
+
+        for (id, (kind, text)) in &right {
+            match left.get(id) {
+                None => added.push(serde_json::json!({"id": id, "kind": kind, "text": text})),
+                Some((_, old_text)) if old_text != text => {
+                    modified.push(serde_json::json!({"id": id, "kind": kind, "old_text": old_text, "new_text": text}));
+                }
+                _ => {}
+            }
+        }
+        for (id, (kind, text)) in &left {
+            if !right.contains_key(id) {
+                removed.push(serde_json::json!({"id": id, "kind": kind, "text": text}));
+            }
+        }
+
+        let total_changes = added.len() + removed.len() + modified.len();
+        let summary = format!(
+            "{} added, {} removed, {} modified (total {} changes)",
+            added.len(), removed.len(), modified.len(), total_changes
+        );
+
+        let result = serde_json::json!({
+            "added": added,
+            "removed": removed,
+            "modified": modified,
+            "summary": summary,
+        });
+        Ok(result.to_string())
+    }
+}
+
+impl Default for CompareWordDocsTool {
+    fn default() -> Self { Self::new() }
+}
+
+// ─── get_docx_info ─────────────────────────────────────────────────────────────
+
+/// Return a cheap-to-compute summary of a .docx file (paragraph/table counts,
+/// character counts, presence of headers/footers/images). Use this before
+/// `read_office_file` to decide whether the file is worth the full parse.
+pub struct GetDocxInfoTool;
+
+impl GetDocxInfoTool {
+    pub fn new() -> Self { Self }
+    pub fn definition(&self) -> ToolDefinition {
+        ToolDefinition::new_with_label(
+            "get_docx_info",
+            "获取 Word 文档信息",
+            "Read summary metadata of a Word (.docx) file without returning its full content.",
+            ToolParameters::new(
+                vec!["path"],
+                vec![
+                    ("path", "string", Some("Absolute path to the .docx file")),
+                ],
+            ),
+        )
+    }
+    pub async fn execute(&self, arguments: Value, workspace: Option<String>) -> Result<String, ToolError> {
+        let path = arguments["path"].as_str()
+            .ok_or_else(|| ToolError::InvalidArguments("get_docx_info".to_string(), "path must be a string".into()))?;
+        validate_workspace_path(path, &workspace)?;
+
+        let path_obj = std::path::Path::new(path);
+        if path_obj.extension().and_then(|e| e.to_str()).unwrap_or("") != "docx" {
+            return Err(ToolError::InvalidArguments("get_docx_info".to_string(), "Only .docx files are supported".into()));
+        }
+
+        let bytes = tokio::fs::read(path).await
+            .map_err(|e| ToolError::IoError(format!("Failed to read {}: {}", path, e)))?;
+        let doc = crate::office::read_word_document(&bytes)
+            .map_err(|e| ToolError::ExecutionError(format!("Failed to parse docx: {}", e)))?;
+
+        let mut total_chars: usize = 0;
+        let mut word_count: usize = 0;
+        let mut styles_used: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        for p in &doc.paragraphs {
+            let t = &p.text;
+            total_chars += t.chars().count();
+            word_count += t.split_whitespace().count();
+            if let Some(ref s) = p.style {
+                styles_used.insert(s.clone());
+            }
+        }
+        // Include table cell text in the totals too.
+        for tbl in &doc.tables {
+            for row in &tbl.rows {
+                for cell in &row.cells {
+                    total_chars += cell.text.chars().count();
+                    word_count += cell.text.split_whitespace().count();
+                }
+            }
+        }
+
+        // Inspect the zip for headers/footers/images without parsing their XML.
+        let entries = crate::office::shared::read_all_zip_entries(&bytes).ok();
+        let (has_headers, has_footers, has_images) = if let Some(map) = entries {
+            let mut h = false;
+            let mut f = false;
+            let mut imgs = 0usize;
+            for name in map.keys() {
+                if name.starts_with("word/header") && name.ends_with(".xml") { h = true; }
+                if name.starts_with("word/footer") && name.ends_with(".xml") { f = true; }
+                if name.starts_with("word/media/") { imgs += 1; }
+            }
+            (h, f, imgs > 0)
+        } else {
+            (false, false, false)
+        };
+
+        let file_name = path_obj.file_name().and_then(|n| n.to_str()).unwrap_or("unknown");
+        let result = serde_json::json!({
+            "file_name": file_name,
+            "path": path,
+            "paragraph_count": doc.paragraphs.len(),
+            "table_count": doc.tables.len(),
+            "word_count": word_count,
+            "total_characters": total_chars,
+            "styles_used": styles_used.into_iter().collect::<Vec<_>>(),
+            "has_headers": has_headers,
+            "has_footers": has_footers,
+            "has_images": has_images,
+            "file_size_bytes": bytes.len(),
+        });
+        Ok(result.to_string())
+    }
+}
+
+impl Default for GetDocxInfoTool {
+    fn default() -> Self { Self::new() }
 }

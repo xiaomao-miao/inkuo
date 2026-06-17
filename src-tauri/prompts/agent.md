@@ -42,11 +42,16 @@ Read a Word (.docx) or Excel (.xlsx) file and extract its content.
 - **Output**:
   - `text_content` (string): Human-readable text representation
   - `elements` (array, Word only): Structured document elements (paragraphs and tables) with stable `id`s. Use these IDs in `create_word_doc` to modify/delete specific content.
-    - Paragraph element: `{id, type:"paragraph", text, style, runs?}`
+    - Paragraph element: `{id, type:"paragraph", text, style, runs?, numbering?}`
     - Table element: `{id, type:"table", position, header, rows}`
   - `sheets` (array, Excel only): List of sheet names
 - **Supported formats**: `.docx` (Word) and `.xlsx` (Excel)
 - **Note**: Always read the file before modifying it. Use the `id` values from `elements` to target specific paragraphs or tables for modification.
+
+### get_docx_info
+Read summary metadata about a Word (.docx) file without returning the full content. Useful for understanding document size before opening it.
+- **Parameters**: `path` (string, required)
+- **Output**: JSON with `paragraph_count`, `table_count`, `word_count`, `has_headers`, `has_footers`, `has_images`, `styles_used`, `total_characters`.
 
 ### create_word_doc
 Create, modify, append, or delete content in a Word (.docx) document. Uses a unified `elements[]` interface for all operations.
@@ -58,7 +63,8 @@ Create, modify, append, or delete content in a Word (.docx) document. Uses a uni
   - `id` (string, optional): Unique ID from `read_office_file`. If provided, replaces that paragraph. If absent, creates a new element.
   - `text` (string, optional): The paragraph text. **When modifying an existing paragraph (`id` is set), you may omit this field to keep the original text.** When creating a new paragraph, you must provide this (or an empty string for an intentional blank line).
   - `style` (string, optional): `"Title"` (centered large blue), `"Heading1"` (blue 16pt bold), `"Heading2"` (blue 13pt bold), `"Heading3"` (blue 12pt bold), `"Normal"` (default). When modifying, you may omit this to keep the original style.
-  - `runs` (array, optional): Inline formatting with rich text. Each run is a `{text, bold?, italic?, underline?, font_size?, color?, font_name?}` object. When modifying, you may omit `runs` to keep the original inline formatting (including bold/italic/underline/color/size of every run in the paragraph). When you supply `runs`, they REPLACE the entire run list of that paragraph — do not omit any runs you want to keep.
+  - `runs` (array, optional): Inline formatting with rich text. Each run is a `{text, bold?, italic?, underline?, strikethrough?, font_size?, color?, font_name?, highlight?}` object. When modifying, you may omit `runs` to keep the original inline formatting (including bold/italic/underline/strikethrough/color/highlight/size of every run in the paragraph). When you supply `runs`, they REPLACE the entire run list of that paragraph — do not omit any runs you want to keep.
+  - `numbering` (object, optional): `{num_id: number, level: number}` — turns this paragraph into a list item at indent level `level` of list `num_id`. Use `num_id: 1` for a bulleted list or `num_id: 2` for a decimal-numbered list. When modifying, omit to keep the original list membership.
   - `anchor_id` + `position` (optional): Insert new element at position relative to anchor. `position`: `"before"` or `"after"`. Example: `{text: "新章节", style: "Heading2", anchor_id: "p3", position: "after"}`.
   - `action` (string, optional): Set to `"delete"` to remove the element with this `id`.
 
@@ -68,6 +74,19 @@ Create, modify, append, or delete content in a Word (.docx) document. Uses a uni
   - `rows` (array of string arrays, required): Data rows. Example: `[["指标1", "95%"], ["指标2", "88%"]]`.
   - `anchor_id` + `position` (optional): Insert the table at a specific position.
   - `action` (string, optional): Set to `"delete"` to remove the table with this `id`.
+
+#### Inline run formatting fields
+
+Each `runs[]` entry accepts:
+  - `text` (string, required): the visible text of this segment
+  - `bold` (boolean): bold weight
+  - `italic` (boolean): italic style
+  - `underline` (boolean): single underline
+  - `strikethrough` (boolean): horizontal line through the text (e.g. for "已废弃" or revision marks)
+  - `font_size` (integer): size in half-points; `24` = 12pt, `28` = 14pt, etc.
+  - `color` (string): hex RGB without leading `#`, e.g. `"FF0000"` for red, `"1F3864"` for dark blue
+  - `font_name` (string): font family name, e.g. `"Calibri"`, `"Times New Roman"`, `"Arial"`
+  - `highlight` (string): one of `"yellow"`, `"green"`, `"cyan"`, `"magenta"`, `"red"`, `"darkYellow"`, `"darkGreen"`, `"darkCyan"`, `"darkMagenta"`, `"darkRed"`, `"lightGray"`, `"darkGray"`, `"black"`, `"white"` — sets Word's highlight color (the "荧光笔" effect)
 
 #### Behavior rules
   - **Use styles proactively**: Apply `style` to every paragraph — `Heading1`/`Heading2`/`Heading3` for section headers, `Normal` for body text. Never leave `style` unset unless intentionally inheriting defaults.
@@ -155,6 +174,45 @@ For documents with **roughly 2000 characters of generated text or more**, build 
     ]
   ```
 
+**Strikethrough and highlight**:
+  ```
+  create_word_doc with
+    path="/workspace/report.docx",
+    elements=[
+      {id: "p4", type: "paragraph", runs: [
+        {text: "已删除", strikethrough: true},
+        {text: "  ", highlight: "yellow"},
+        {text: "重要", bold: true, color: "FF0000", highlight: "yellow"},
+        {text: "：保留"}
+      ]}
+    ]
+  ```
+
+**Create a bulleted list**:
+  ```
+  create_word_doc with
+    path="/workspace/report.docx",
+    elements=[
+      {type: "paragraph", text: "项目要点", style: "Heading2"},
+      {type: "paragraph", text: "需求评审完成", numbering: {num_id: 1, level: 0}},
+      {type: "paragraph", text: "技术方案确认", numbering: {num_id: 1, level: 0}},
+      {type: "paragraph", text: "开发启动", numbering: {num_id: 1, level: 0}}
+    ]
+  ```
+
+**Create a numbered list with sub-items**:
+  ```
+  create_word_doc with
+    path="/workspace/report.docx",
+    elements=[
+      {type: "paragraph", text: "阶段计划", style: "Heading2"},
+      {type: "paragraph", text: "第一阶段：调研", numbering: {num_id: 2, level: 0}},
+      {type: "paragraph", text: "市场分析", numbering: {num_id: 2, level: 1}},
+      {type: "paragraph", text: "竞品研究", numbering: {num_id: 2, level: 1}},
+      {type: "paragraph", text: "第二阶段：开发", numbering: {num_id: 2, level: 0}}
+    ]
+  ```
+
 **Insert a new chapter after a heading**:
   ```
   create_word_doc with
@@ -179,6 +237,11 @@ For documents with **roughly 2000 characters of generated text or more**, build 
   ```
 
 **Note**: For Excel files, use `read_office_file` first to understand the structure, then modify using file operations.
+
+### compare_word_docs
+Compare two Word (.docx) files and return a structured diff identifying which paragraphs/tables were added, removed, or modified. Useful for reviewing what changed between a backup and the current version, or between two AI-generated revisions.
+- **Parameters**: `path1` (string, required), `path2` (string, required)
+- **Output**: JSON with `added[]`, `removed[]`, `modified[]` (each entry has `id`, `old_text`, `new_text`), and a `summary` string.
 
 ### database_search
 Search the workspace knowledge base using semantic (vector) search. Use this when the user asks questions about code, documents, or information that may be answered from indexed files in the workspace.

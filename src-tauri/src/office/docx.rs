@@ -16,11 +16,15 @@ pub struct FontRun {
     #[serde(default)]
     pub underline: bool,
     #[serde(default)]
+    pub strikethrough: bool,
+    #[serde(default)]
     pub font_size: Option<u32>,  // half-points, e.g. 24 = 12pt
     #[serde(default)]
     pub color: Option<String>,   // hex RGB, e.g. "FF0000"
     #[serde(default)]
     pub font_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub highlight: Option<String>,  // e.g. "yellow", "green", "red"
 }
 
 /// Rich paragraph: either plain text OR an array of formatted runs.
@@ -37,6 +41,21 @@ pub struct WordParagraph {
     /// Rich formatted runs. When present, overrides `text`.
     #[serde(default)]
     pub runs: Option<Vec<FontRun>>,
+    /// List/numbering reference id, when this paragraph is part of a list.
+    /// `Some((num_id, ilvl))` means "this paragraph is item ilvl of list num_id".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub numbering: Option<NumberingRef>,
+}
+
+/// Reference to a list/numbering definition: which numbered/bulleted list the
+/// paragraph belongs to and at which indent level.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NumberingRef {
+    /// `w:numId` — the list instance id (a docx can have many instances of the
+    /// same abstract definition).
+    pub num_id: u32,
+    /// `w:ilvl` — zero-based indent level (0..=8).
+    pub level: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,6 +84,8 @@ pub enum DocElement {
         style: Option<String>,
         #[serde(default)]
         runs: Option<Vec<FontRun>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        numbering: Option<NumberingRef>,
     },
     #[serde(rename = "table")]
     Table {
@@ -118,6 +139,7 @@ impl WordDocument {
                 omit_text: false,
                 style: p.style.clone(),
                 runs: p.runs.clone(),
+                numbering: p.numbering.clone(),
             });
         }
         // Tables without preceding markers (e.g. added via append mode) go at the end.
@@ -171,8 +193,8 @@ impl WordDocument {
 
         for elem in elements {
             match elem {
-                DocElement::Paragraph { id, text, style, runs, .. } => {
-                    out_paras.push(WordParagraph { id, text, style, runs });
+                DocElement::Paragraph { id, text, style, runs, numbering, .. } => {
+                    out_paras.push(WordParagraph { id, text, style, runs, numbering });
                 }
                 DocElement::Table { id, position: _, header, rows } => {
                     // Emit a position marker whose ID matches the table's ID.
@@ -182,6 +204,7 @@ impl WordDocument {
                         text: format!("<__tbl_pos_{}__>", id),
                         style: None,
                         runs: None,
+                        numbering: None,
                     });
 
                     let mut table_rows = vec![];
@@ -249,12 +272,15 @@ impl WordDocument {
                 // unless the replacement explicitly provides them. AI callers
                 // can omit fields to mean "keep what's already there".
                 let to_push = match (elem, replacement.clone()) {
-                    (DocElement::Paragraph { id: _oi, text: ot, style: os, runs: ors, .. },
-                     DocElement::Paragraph { id: ri, text: rt, style: rs, runs: rr, omit_text }) => {
+                    (DocElement::Paragraph { id: _oi, text: ot, style: os, runs: ors, numbering: onum, .. },
+                     DocElement::Paragraph { id: ri, text: rt, style: rs, runs: rr, numbering: rnum, omit_text }) => {
                         // Three-way merge: keep original where the caller didn't specify.
                         let merged_text = if omit_text { ot.clone() } else { rt };
                         let merged_style = rs.or(os);
                         let merged_runs = rr.or(ors);
+                        // numbering: if replacement provides one, use it; otherwise
+                        // keep the original (so list membership survives a modify).
+                        let merged_numbering = rnum.or(onum);
                         // If AI provided runs, drop the plain text field — runs
                         // describe the paragraph's full rich content and mixing
                         // plain `text` with `runs` produces inconsistent XML.
@@ -269,6 +295,7 @@ impl WordDocument {
                             omit_text: false,
                             style: merged_style,
                             runs: out_runs,
+                            numbering: merged_numbering,
                         }
                     }
                     // Table replace: pass through. `modify` is only called with
@@ -442,9 +469,11 @@ struct RunFormat {
     bold: bool,
     italic: bool,
     underline: bool,
+    strikethrough: bool,
     font_size: Option<u32>,
     color: Option<String>,
     font_name: Option<String>,
+    highlight: Option<String>,
 }
 
 /// Apply a single `<w:rPr>` attribute to a `RunFormat`.
@@ -455,7 +484,16 @@ fn apply_run_attr(fmt: &mut RunFormat, tag: &[u8], attr_val: Option<&[u8]>) {
         b"b" | b"bCs" => fmt.bold = true,
         b"i" | b"iCs" => fmt.italic = true,
         b"u" => fmt.underline = true,
-        b"strike" => { /* noop for now — could expose as strikethrough later */ }
+        b"strike" => fmt.strikethrough = true,
+        b"highlight" => {
+            if let Some(v) = attr_val {
+                if let Ok(s) = std::str::from_utf8(v) {
+                    if !s.is_empty() {
+                        fmt.highlight = Some(s.to_string());
+                    }
+                }
+            }
+        }
         b"color" => {
             if let Some(v) = attr_val {
                 if let Ok(s) = std::str::from_utf8(v) {
@@ -522,6 +560,7 @@ fn apply_run_attrs_from_event(fmt: &mut RunFormat, e: &quick_xml::events::BytesS
                 b"b" | b"bCs" => fmt.bold = false,
                 b"i" | b"iCs" => fmt.italic = false,
                 b"u" => fmt.underline = false,
+                b"strike" => fmt.strikethrough = false,
                 _ => {}
             }
         }
@@ -564,6 +603,10 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
     let mut current_text = String::new();
     let mut current_style: Option<String> = None;
     let mut current_runs: Vec<FontRun> = Vec::new();
+    let mut current_numbering: Option<NumberingRef> = None;
+    let mut in_numpr = false;
+    let mut pending_num_id: Option<u32> = None;
+    let mut pending_ilvl: Option<u32> = None;
 
     // ── Per-run state (reset on each <w:r>) ────────────────────────────────
     let mut in_run = false;
@@ -588,6 +631,10 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
                     current_text.clear();
                     current_style = None;
                     current_runs.clear();
+                    current_numbering = None;
+                    in_numpr = false;
+                    pending_num_id = None;
+                    pending_ilvl = None;
                     paragraph_saw_run = false;
                 } else if name.as_ref() == b"r" && tbl_cell_depth == 0 {
                     // Only top-level runs count toward the paragraph's `runs` list.
@@ -629,6 +676,26 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
                             current_style = Some(val.to_string());
                         }
                     }
+                } else if name.as_ref() == b"numPr" {
+                    in_numpr = true;
+                    pending_num_id = None;
+                    pending_ilvl = None;
+                } else if in_numpr && name.as_ref() == b"numId" {
+                    if let Some(v) = attr_value(e, b"val") {
+                        if let Ok(s) = std::str::from_utf8(v.as_ref()) {
+                            if let Ok(n) = s.parse::<u32>() {
+                                pending_num_id = Some(n);
+                            }
+                        }
+                    }
+                } else if in_numpr && name.as_ref() == b"ilvl" {
+                    if let Some(v) = attr_value(e, b"val") {
+                        if let Ok(s) = std::str::from_utf8(v.as_ref()) {
+                            if let Ok(n) = s.parse::<u32>() {
+                                pending_ilvl = Some(n);
+                            }
+                        }
+                    }
                 }
             }
             Ok(quick_xml::events::Event::Empty(ref e)) => {
@@ -646,6 +713,7 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
                             text: String::new(),
                             style: Some(style),
                             runs: None,
+                            numbering: None,
                         });
                     }
                 } else if name.as_ref() == b"r" && tbl_cell_depth == 0 && para_depth > 0 {
@@ -664,6 +732,38 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
                             }
                         }
                     }
+                } else if in_run_props {
+                    // Self-closing run-property children like `<w:strike/>`,
+                    // `<w:b/>`, `<w:color w:val="..."/>` come through here.
+                    let val = attr_value(e, b"val");
+                    let ascii = attr_value(e, b"ascii");
+                    let hansi = attr_value(e, b"hAnsi");
+                    let cs = attr_value(e, b"cs");
+                    apply_run_attr(&mut current_run_format, name.as_ref(), val.as_deref());
+                    if let Some(v) = ascii.or(hansi).or(cs) {
+                        apply_run_attr(&mut current_run_format, b"rFonts", Some(v.as_ref()));
+                    }
+                } else if in_numpr && name.as_ref() == b"numId" {
+                    // numId is typically a self-closing element like `<w:numId w:val="2"/>`.
+                    if let Some(v) = attr_value(e, b"val") {
+                        if let Ok(s) = std::str::from_utf8(v.as_ref()) {
+                            if let Ok(n) = s.parse::<u32>() {
+                                pending_num_id = Some(n);
+                            }
+                        }
+                    }
+                } else if in_numpr && name.as_ref() == b"ilvl" {
+                    if let Some(v) = attr_value(e, b"val") {
+                        if let Ok(s) = std::str::from_utf8(v.as_ref()) {
+                            if let Ok(n) = s.parse::<u32>() {
+                                pending_ilvl = Some(n);
+                            }
+                        }
+                    }
+                } else if name.as_ref() == b"numPr" {
+                    // Self-closing `<w:numPr/>` — empty list (no numId); still
+                    // flip the in_numpr flag off in case more events follow.
+                    in_numpr = false;
                 }
             }
             Ok(quick_xml::events::Event::End(ref e)) => {
@@ -672,7 +772,16 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
                     tbl_cell_depth = tbl_cell_depth.saturating_sub(1);
                 } else if name.as_ref() == b"rPr" {
                     in_run_props = false;
-                } else if name.as_ref() == b"r" {
+                } else if name.as_ref() == b"numPr" {
+                    // Commit the numbering reference when numPr closes.
+                    if let Some(num_id) = pending_num_id {
+                        current_numbering = Some(NumberingRef {
+                            num_id,
+                            level: pending_ilvl.unwrap_or(0),
+                        });
+                    }
+                    in_numpr = false;
+                } else                 if name.as_ref() == b"r" {
                     in_run = false;
                     in_run_props = false;
                     if tbl_cell_depth == 0 && para_depth > 0 {
@@ -683,9 +792,11 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
                         let has_format = current_run_format.bold
                             || current_run_format.italic
                             || current_run_format.underline
+                            || current_run_format.strikethrough
                             || current_run_format.font_size.is_some()
                             || current_run_format.color.is_some()
-                            || current_run_format.font_name.is_some();
+                            || current_run_format.font_name.is_some()
+                            || current_run_format.highlight.is_some();
                         if !current_run_text.is_empty() || has_format {
                             current_text.push_str(&current_run_text);
                             current_runs.push(FontRun {
@@ -693,9 +804,11 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
                                 bold: current_run_format.bold,
                                 italic: current_run_format.italic,
                                 underline: current_run_format.underline,
+                                strikethrough: current_run_format.strikethrough,
                                 font_size: current_run_format.font_size,
                                 color: current_run_format.color.clone(),
                                 font_name: current_run_format.font_name.clone(),
+                                highlight: current_run_format.highlight.clone(),
                             });
                         }
                     }
@@ -708,11 +821,13 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
                         // no information at all. Such paragraphs are usually
                         // artefacts of trailing whitespace and dropping them is safe.
                         let has_format = current_runs.iter().any(|r| {
-                            r.bold || r.italic || r.underline
+                            r.bold || r.italic || r.underline || r.strikethrough
                                 || r.font_size.is_some() || r.color.is_some() || r.font_name.is_some()
+                                || r.highlight.is_some()
                         });
                         let keep = !current_text.is_empty()
                             || current_style.is_some()
+                            || current_numbering.is_some()
                             || has_format
                             || paragraph_saw_run;
                         if keep {
@@ -724,6 +839,7 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
                                 text: current_text.trim().to_string(),
                                 style: current_style.clone(),
                                 runs: runs_opt,
+                                numbering: current_numbering.clone(),
                             });
                         }
                     }
@@ -900,6 +1016,27 @@ pub fn write_word_document<W: std::io::Write + std::io::Seek>(
     if let Some(bytes) = preserve_from {
         // Copy all original entries first
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))?;
+        let mut has_styles = false;
+        let mut has_settings = false;
+        let mut has_font_table = false;
+        let mut has_theme = false;
+        let mut has_numbering = false;
+        for i in 0..archive.len() {
+            let file = archive.by_index(i)?;
+            let name = file.name().to_string();
+            match name.as_str() {
+                "word/styles.xml" => has_styles = true,
+                "word/settings.xml" => has_settings = true,
+                "word/fontTable.xml" => has_font_table = true,
+                "word/theme/theme1.xml" => has_theme = true,
+                "word/numbering.xml" => has_numbering = true,
+                _ => {}
+            }
+        }
+        drop(archive);
+
+        // Re-open to copy entries (we needed to scan first for the missing-files case)
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))?;
         for i in 0..archive.len() {
             let mut file = archive.by_index(i)?;
             let name = file.name().to_string();
@@ -921,6 +1058,35 @@ pub fn write_word_document<W: std::io::Write + std::io::Seek>(
 
             zip.start_file(&name, file_opts)?;
             zip.write_all(&content)?;
+        }
+        drop(archive);
+
+        // If the original docx was missing one of styles/settings/fontTable/theme/numbering,
+        // backfill with our hardcoded ones so the new docx stays valid.
+        if !has_styles {
+            zip.start_file("word/styles.xml", opts)?;
+            zip.write_all(STYLES_XML.as_bytes())?;
+        }
+        if !has_settings {
+            zip.start_file("word/settings.xml", opts)?;
+            zip.write_all(SETTINGS_XML.as_bytes())?;
+        }
+        if !has_font_table {
+            zip.start_file("word/fontTable.xml", opts)?;
+            zip.write_all(FONT_TABLE_XML.as_bytes())?;
+        }
+        if !has_theme {
+            zip.start_file("word/theme/theme1.xml", opts)?;
+            zip.write_all(THEME_XML.as_bytes())?;
+        }
+        // Numbering: only backfill when the doc actually references lists. Without
+        // this, references to `numId` would resolve to nothing. The minimum we
+        // provide is one bullet list and one decimal list (numId 1 and 2) so
+        // that AI-generated `numbering: { num_id: 1, level: 0 }` works out of
+        // the box on freshly-created docs.
+        if !has_numbering && doc_has_numbering(doc) {
+            zip.start_file("word/numbering.xml", opts)?;
+            zip.write_all(NUMBERING_XML.as_bytes())?;
         }
     }
 
@@ -953,10 +1119,22 @@ pub fn write_word_document<W: std::io::Write + std::io::Seek>(
 
         zip.start_file("word/theme/theme1.xml", opts)?;
         zip.write_all(theme.as_bytes())?;
+
+        // Only emit numbering.xml if the document references any list items.
+        if doc_has_numbering(doc) {
+            zip.start_file("word/numbering.xml", opts)?;
+            zip.write_all(NUMBERING_XML.as_bytes())?;
+        }
     }
 
     zip.finish()?;
     Ok(())
+}
+
+/// True when the document contains at least one paragraph with a numbering
+/// reference. Used to decide whether `word/numbering.xml` should be emitted.
+fn doc_has_numbering(doc: &WordDocument) -> bool {
+    doc.paragraphs.iter().any(|p| p.numbering.is_some())
 }
 
 /// Convenience wrapper that writes to a file path.
@@ -977,6 +1155,12 @@ pub fn build_run_xml(run: &FontRun) -> String {
     if run.bold { rpr.push_str("<w:b/>"); }
     if run.italic { rpr.push_str("<w:i/>"); }
     if run.underline { rpr.push_str("<w:u w:val=\"single\"/>"); }
+    if run.strikethrough { rpr.push_str("<w:strike/>"); }
+    if let Some(ref highlight) = run.highlight {
+        if !highlight.is_empty() {
+            rpr.push_str(&format!("<w:highlight w:val=\"{}\"/>", escape_xml(highlight)));
+        }
+    }
     if let Some(ref color) = run.color {
         if !color.is_empty() {
             rpr.push_str(&format!("<w:color w:val=\"{}\"/>", escape_xml(color)));
@@ -1018,8 +1202,20 @@ pub fn build_document_xml(doc: &WordDocument) -> String {
             continue;
         }
         xml.push_str("\n    <w:p>");
-        if let Some(ref style) = para.style {
-            xml.push_str(&format!("<w:pPr><w:pStyle w:val=\"{}\"/></w:pPr>", escape_xml(style)));
+        // Build paragraph properties: style (if any) + numbering (if any)
+        let has_ppr = para.style.is_some() || para.numbering.is_some();
+        if has_ppr {
+            xml.push_str("<w:pPr>");
+            if let Some(ref style) = para.style {
+                xml.push_str(&format!("<w:pStyle w:val=\"{}\"/>", escape_xml(style)));
+            }
+            if let Some(ref num) = para.numbering {
+                xml.push_str("<w:numPr>");
+                xml.push_str(&format!("<w:ilvl w:val=\"{}\"/>", num.level));
+                xml.push_str(&format!("<w:numId w:val=\"{}\"/>", num.num_id));
+                xml.push_str("</w:numPr>");
+            }
+            xml.push_str("</w:pPr>");
         }
 
         if let Some(ref runs) = para.runs {
@@ -1100,11 +1296,18 @@ pub const CONTENT_TYPES_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" stan
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
+  <Default Extension="png" ContentType="image/png"/>
+  <Default Extension="jpeg" ContentType="image/jpeg"/>
+  <Default Extension="jpg" ContentType="image/jpeg"/>
+  <Default Extension="gif" ContentType="image/gif"/>
   <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
   <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
   <Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>
   <Override PartName="/word/fontTable.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml"/>
   <Override PartName="/word/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>
+  <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
+  <Override PartName="/word/header1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/>
+  <Override PartName="/word/footer1.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footer+xml"/>
 </Types>"#;
 
 pub const RELS_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -1118,6 +1321,7 @@ pub const WORD_RELS_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalo
   <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/>
   <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable" Target="fontTable.xml"/>
   <Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/>
+  <Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>
 </Relationships>"#;
 
 pub const STYLES_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -1306,3 +1510,211 @@ pub const THEME_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="
   <a:objectDefaults/>
   <a:extraClrSchemeLst/>
 </a:theme>"#;
+
+/// Minimal numbering definitions: one bullet list (numId 1) and one decimal
+/// list (numId 2), each with up to 3 indent levels. AI-created documents that
+/// reference `numId: 1` or `numId: 2` will get proper bullet/decimal markers
+/// when this file is emitted.
+pub const NUMBERING_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:abstractNum w:abstractNumId="0">
+    <w:lvl w:ilvl="0">
+      <w:start w:val="1"/>
+      <w:numFmt w:val="bullet"/>
+      <w:lvlText w:val="•"/>
+      <w:lvlJc w:val="left"/>
+      <w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr>
+    </w:lvl>
+    <w:lvl w:ilvl="1">
+      <w:start w:val="1"/>
+      <w:numFmt w:val="bullet"/>
+      <w:lvlText w:val="◦"/>
+      <w:lvlJc w:val="left"/>
+      <w:pPr><w:ind w:left="1440" w:hanging="360"/></w:pPr>
+    </w:lvl>
+    <w:lvl w:ilvl="2">
+      <w:start w:val="1"/>
+      <w:numFmt w:val="bullet"/>
+      <w:lvlText w:val="▪"/>
+      <w:lvlJc w:val="left"/>
+      <w:pPr><w:ind w:left="2160" w:hanging="360"/></w:pPr>
+    </w:lvl>
+  </w:abstractNum>
+  <w:abstractNum w:abstractNumId="1">
+    <w:lvl w:ilvl="0">
+      <w:start w:val="1"/>
+      <w:numFmt w:val="decimal"/>
+      <w:lvlText w:val="%1."/>
+      <w:lvlJc w:val="left"/>
+      <w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr>
+    </w:lvl>
+    <w:lvl w:ilvl="1">
+      <w:start w:val="1"/>
+      <w:numFmt w:val="lowerLetter"/>
+      <w:lvlText w:val="%2)"/>
+      <w:lvlJc w:val="left"/>
+      <w:pPr><w:ind w:left="1440" w:hanging="360"/></w:pPr>
+    </w:lvl>
+    <w:lvl w:ilvl="2">
+      <w:start w:val="1"/>
+      <w:numFmt w:val="lowerRoman"/>
+      <w:lvlText w:val="%3."/>
+      <w:lvlJc w:val="left"/>
+      <w:pPr><w:ind w:left="2160" w:hanging="360"/></w:pPr>
+    </w:lvl>
+  </w:abstractNum>
+  <w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>
+  <w:num w:numId="2"><w:abstractNumId w:val="1"/></w:num>
+</w:numbering>"#;
+
+// ─── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A paragraph with both inline formatting and a numbering reference
+    /// should round-trip: parse the XML, then re-emit it with the same fields
+    /// intact.
+    #[test]
+    fn roundtrip_strikethrough_highlight_numbering() {
+        let src = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p>
+      <w:pPr>
+        <w:pStyle w:val="Heading1"/>
+        <w:numPr><w:ilvl w:val="0"/><w:numId w:val="2"/></w:numPr>
+      </w:pPr>
+      <w:r>
+        <w:rPr><w:strike/><w:highlight w:val="yellow"/></w:rPr>
+        <w:t xml:space="preserve">已删除</w:t>
+      </w:r>
+      <w:r>
+        <w:rPr><w:b/><w:color w:val="FF0000"/></w:rPr>
+        <w:t xml:space="preserve">重点</w:t>
+      </w:r>
+    </w:p>
+  </w:body>
+</w:document>"#;
+        let paragraphs = parse_document_xml(src).expect("parse should succeed");
+        assert_eq!(paragraphs.len(), 1);
+        let p = &paragraphs[0];
+        assert_eq!(p.style.as_deref(), Some("Heading1"));
+        let num = p.numbering.as_ref().expect("numbering should be parsed");
+        assert_eq!(num.num_id, 2);
+        assert_eq!(num.level, 0);
+        let runs = p.runs.as_ref().expect("runs should be present");
+        assert_eq!(runs.len(), 2);
+        assert!(runs[0].strikethrough);
+        assert_eq!(runs[0].highlight.as_deref(), Some("yellow"));
+        assert!(runs[1].bold);
+        assert_eq!(runs[1].color.as_deref(), Some("FF0000"));
+    }
+
+    /// Re-emitting the document must include numPr in the pPr block — otherwise
+    /// Word will silently drop the list membership.
+    #[test]
+    fn build_xml_includes_numpr() {
+        let doc = WordDocument {
+            paragraphs: vec![WordParagraph {
+                id: "p0".to_string(),
+                text: "Item one".to_string(),
+                style: None,
+                runs: None,
+                numbering: Some(NumberingRef { num_id: 1, level: 0 }),
+            }],
+            tables: vec![],
+        };
+        let xml = build_document_xml(&doc);
+        assert!(xml.contains("<w:numPr>"), "xml was: {}", xml);
+        assert!(xml.contains("<w:numId w:val=\"1\"/>"));
+        assert!(xml.contains("<w:ilvl w:val=\"0\"/>"));
+    }
+
+    /// Re-emitting a strike/highlight run must include the corresponding rPr
+    /// children. This guards against accidentally dropping the new fields.
+    #[test]
+    fn build_xml_includes_strike_highlight() {
+        let run = FontRun {
+            text: "x".to_string(),
+            strikethrough: true,
+            highlight: Some("red".to_string()),
+            ..Default::default()
+        };
+        let xml = build_run_xml(&run);
+        assert!(xml.contains("<w:strike/>"), "xml was: {}", xml);
+        assert!(xml.contains("<w:highlight w:val=\"red\"/>"), "xml was: {}", xml);
+    }
+
+    /// doc_has_numbering must reflect whether the document references lists —
+    /// it controls whether `word/numbering.xml` is written.
+    #[test]
+    fn doc_has_numbering_detection() {
+        let doc_no = WordDocument {
+            paragraphs: vec![WordParagraph {
+                id: "p0".to_string(),
+                text: "x".to_string(),
+                style: None,
+                runs: None,
+                numbering: None,
+            }],
+            tables: vec![],
+        };
+        assert!(!doc_has_numbering(&doc_no));
+
+        let doc_yes = WordDocument {
+            paragraphs: vec![WordParagraph {
+                id: "p0".to_string(),
+                text: "x".to_string(),
+                style: None,
+                runs: None,
+                numbering: Some(NumberingRef { num_id: 1, level: 0 }),
+            }],
+            tables: vec![],
+        };
+        assert!(doc_has_numbering(&doc_yes));
+    }
+
+    /// End-to-end: build a doc with bullet list, write it, then read it back.
+    /// This guards against the most common regression — emitting
+    /// `<w:numPr>` but forgetting to emit `<w:numbering.xml>`, or vice versa.
+    #[test]
+    fn write_then_read_list_item() {
+        let doc = WordDocument {
+            paragraphs: vec![
+                WordParagraph {
+                    id: "p0".to_string(),
+                    text: "Title".to_string(),
+                    style: Some("Title".to_string()),
+                    runs: None,
+                    numbering: None,
+                },
+                WordParagraph {
+                    id: "p1".to_string(),
+                    text: "first".to_string(),
+                    style: None,
+                    runs: None,
+                    numbering: Some(NumberingRef { num_id: 1, level: 0 }),
+                },
+            ],
+            tables: vec![],
+        };
+        let mut buf = std::io::Cursor::new(Vec::<u8>::new());
+        write_word_document(&doc, &mut buf, None).expect("write should succeed");
+        let bytes = buf.into_inner();
+
+        // zip the output and confirm numbering.xml is present
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).expect("output must be a valid zip");
+        let names: Vec<String> = (0..archive.len())
+            .map(|i| archive.by_index(i).unwrap().name().to_string())
+            .collect();
+        assert!(names.contains(&"word/numbering.xml".to_string()), "entries: {:?}", names);
+        assert!(names.contains(&"word/document.xml".to_string()));
+
+        // Read it back
+        let parsed = read_word_document(&bytes).expect("round-trip read should succeed");
+        assert_eq!(parsed.paragraphs.len(), 2);
+        assert!(parsed.paragraphs[1].numbering.is_some(), "list membership must survive the round trip");
+    }
+}

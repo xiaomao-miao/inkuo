@@ -2,12 +2,12 @@
 //!
 //! Provides utilities to read and write Office documents (Word .docx and Excel .xlsx)
 
-mod shared;
+pub mod shared;
 mod docx;
 mod xlsx;
 
-pub use shared::{OfficeError, TableCell, TableRow};
-pub use docx::{WordDocument, WordParagraph, WordTable, FontRun, DocElement, read_word_document, word_document_to_text, write_word_document_to_path};
+pub use shared::{OfficeError, TableCell, TableRow, read_all_zip_entries};
+pub use docx::{WordDocument, WordParagraph, WordTable, FontRun, DocElement, NumberingRef, read_word_document, word_document_to_text, write_word_document_to_path};
 pub use xlsx::{ExcelWorkbook, read_excel_workbook, excel_workbook_to_text};
 
 use std::path::Path;

@@ -263,7 +263,7 @@ mod database_tools;
 
 pub use file_tools::{ReadFileTool, WriteFileTool, EditFileTool, CreateDirTool, MoveFileTool};
 pub use search_tools::{ListDirTool, GlobTool, GrepTool};
-pub use office_tools::{ReadOfficeFileTool, CreateWordDocTool};
+pub use office_tools::{ReadOfficeFileTool, CreateWordDocTool, CompareWordDocsTool, GetDocxInfoTool};
 pub use database_tools::DatabaseSearchTool;
 
 /// Unified executor enum combining all tool implementations
@@ -278,6 +278,8 @@ pub enum ToolExecutor {
     Grep(search_tools::GrepTool),
     ReadOfficeFile(office_tools::ReadOfficeFileTool),
     CreateWordDoc(office_tools::CreateWordDocTool),
+    CompareWordDocs(office_tools::CompareWordDocsTool),
+    GetDocxInfo(office_tools::GetDocxInfoTool),
     DatabaseSearch(database_tools::DatabaseSearchTool),
 }
 
@@ -294,6 +296,8 @@ impl ToolExecutor {
             ToolExecutor::Grep(_) => "grep",
             ToolExecutor::ReadOfficeFile(_) => "read_office_file",
             ToolExecutor::CreateWordDoc(_) => "create_word_doc",
+            ToolExecutor::CompareWordDocs(_) => "compare_word_docs",
+            ToolExecutor::GetDocxInfo(_) => "get_docx_info",
             ToolExecutor::DatabaseSearch(_) => "database_search",
         }
     }
@@ -310,6 +314,8 @@ impl ToolExecutor {
             ToolExecutor::Grep(t) => t.definition(),
             ToolExecutor::ReadOfficeFile(t) => t.definition(),
             ToolExecutor::CreateWordDoc(t) => t.definition(),
+            ToolExecutor::CompareWordDocs(t) => t.definition(),
+            ToolExecutor::GetDocxInfo(t) => t.definition(),
             ToolExecutor::DatabaseSearch(t) => t.definition(),
         }
     }
@@ -326,6 +332,8 @@ impl ToolExecutor {
             ToolExecutor::Grep(t) => t.execute(arguments, workspace).await,
             ToolExecutor::ReadOfficeFile(t) => t.execute(arguments, workspace).await,
             ToolExecutor::CreateWordDoc(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::CompareWordDocs(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::GetDocxInfo(t) => t.execute(arguments, workspace).await,
             ToolExecutor::DatabaseSearch(t) => t.execute(arguments, workspace).await,
         }
     }
@@ -408,6 +416,8 @@ impl ToolRegistry {
             ToolExecutor::Grep(GrepTool),
             ToolExecutor::ReadOfficeFile(ReadOfficeFileTool),
             ToolExecutor::CreateWordDoc(CreateWordDocTool),
+            ToolExecutor::CompareWordDocs(CompareWordDocsTool),
+            ToolExecutor::GetDocxInfo(GetDocxInfoTool),
             // DatabaseSearchTool added lazily via with_app_handle()
         ];
 
