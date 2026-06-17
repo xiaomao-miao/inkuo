@@ -56,9 +56,9 @@ Create, modify, append, or delete content in a Word (.docx) document. Uses a uni
 
 **Paragraph** (`type: "paragraph"`):
   - `id` (string, optional): Unique ID from `read_office_file`. If provided, replaces that paragraph. If absent, creates a new element.
-  - `text` (string, required): The paragraph text.
-  - `style` (string, optional): `"Title"` (centered large blue), `"Heading1"` (blue 16pt bold), `"Heading2"` (blue 13pt bold), `"Heading3"` (blue 12pt bold), `"Normal"` (default).
-  - `runs` (array, optional): Inline formatting. Each run has `text` plus optional `bold`, `italic`, `underline`, `font_size` (half-points, e.g. `24`=12pt), `color` (hex RGB like `"FF0000"`), `font_name`.
+  - `text` (string, optional): The paragraph text. **When modifying an existing paragraph (`id` is set), you may omit this field to keep the original text.** When creating a new paragraph, you must provide this (or an empty string for an intentional blank line).
+  - `style` (string, optional): `"Title"` (centered large blue), `"Heading1"` (blue 16pt bold), `"Heading2"` (blue 13pt bold), `"Heading3"` (blue 12pt bold), `"Normal"` (default). When modifying, you may omit this to keep the original style.
+  - `runs` (array, optional): Inline formatting with rich text. Each run is a `{text, bold?, italic?, underline?, font_size?, color?, font_name?}` object. When modifying, you may omit `runs` to keep the original inline formatting (including bold/italic/underline/color/size of every run in the paragraph). When you supply `runs`, they REPLACE the entire run list of that paragraph — do not omit any runs you want to keep.
   - `anchor_id` + `position` (optional): Insert new element at position relative to anchor. `position`: `"before"` or `"after"`. Example: `{text: "新章节", style: "Heading2", anchor_id: "p3", position: "after"}`.
   - `action` (string, optional): Set to `"delete"` to remove the element with this `id`.
 
@@ -71,8 +71,13 @@ Create, modify, append, or delete content in a Word (.docx) document. Uses a uni
 
 #### Behavior rules
   - **Use styles proactively**: Apply `style` to every paragraph — `Heading1`/`Heading2`/`Heading3` for section headers, `Normal` for body text. Never leave `style` unset unless intentionally inheriting defaults.
-  - **Preserve styles**: When modifying a paragraph (providing an `id`), you MUST keep the original `style` value from `read_office_file` unless the user explicitly asks to change it. Do NOT omit `style` when modifying — if you don't change it, echo the original style back.
-  - **Read before modifying**: Always call `read_office_file` first to get the current `elements` with their `id`s before modifying or deleting anything.
+  - **Preserve text/style/runs when modifying**: When modifying an existing paragraph (you provide `id`), you may omit `text`, `style`, and/or `runs`. Any field you omit is kept from the original paragraph. This is the safe default for "edit just one thing" tasks. **Do not omit a field unless you intend to keep the original value.**
+    - To change only the text: provide `{id, text}` (style and runs preserved automatically).
+    - To change only the style: provide `{id, style}` (text and runs preserved automatically).
+    - To change only the inline formatting: provide `{id, runs: [...]}` (text and style preserved automatically).
+    - To change the text AND keep all formatting: provide `{id, text}` — do NOT pass `runs` or you will drop the original inline formatting.
+  - **Read before modifying**: Always call `read_office_file` first to get the current `elements` with their `id`s, `style`s, and `runs` before modifying or deleting anything.
+  - **runs is the source of truth for inline formatting**: When a paragraph in `read_office_file` has a non-empty `runs` array, that array describes its full rich content. Do not invent parallel `text` content for the same paragraph — when you supply `runs` in a modify, the backend replaces the entire run list.
   - **Append**: New elements without `id` and without `anchor_id` are appended to the end of the document.
 
 #### Progressive document generation (long content)
@@ -117,7 +122,36 @@ For documents with **roughly 2000 characters of generated text or more**, build 
   create_word_doc with
     path="/workspace/report.docx",
     elements=[
-      {id: "p2", type: "paragraph", text: "修改后的内容，保留了 Heading1 样式", style: "Heading1"}
+      {id: "p2", type: "paragraph", text: "修改后的内容，保留了 Heading1 样式"}
+      // style omitted → backend keeps "Heading1" from original
+    ]
+  ```
+
+**Modify inline formatting only** (preserve the original text):
+  ```
+  create_word_doc with
+    path="/workspace/report.docx",
+    elements=[
+      {id: "p2", type: "paragraph", runs: [
+        {text: "重要", bold: true, color: "FF0000"},
+        {text: "：这是关键提示"}
+      ]}
+      // text omitted → backend keeps original text
+    ]
+  ```
+
+**Modify inline formatting of a single word** (replace the whole runs array):
+  ```
+  // Original reads: "今日任务：完成进度更新"
+// To make "进度" bold you must echo the OTHER runs too:
+  create_word_doc with
+    path="/workspace/report.docx",
+    elements=[
+      {id: "p2", type: "paragraph", runs: [
+        {text: "今日任务：完成"},
+        {text: "进度", bold: true},
+        {text: "更新"}
+      ]}
     ]
   ```
 

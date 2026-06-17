@@ -200,7 +200,13 @@ impl CreateWordDocTool {
                 vec![
                     ("path", "string", Some("Absolute path of the .docx file to create or modify")),
                     ("title", "string", Some("Document title (for new files only; ignored when modifying existing)")),
-                    ("elements", "array", Some("Array of element objects. Paragraph: {id?, text, style, runs, position?, anchor_id?}. Table: {id?, header, rows, position?, anchor_id?}. Elements with id replace existing ones; without id are appended or inserted at anchor_id+position. Use action:'delete' with id to delete.")),
+                    ("elements", "array", Some(
+                        "Array of element objects. Paragraph: {id?, text?, style?, runs?, position?, anchor_id?}. Table: {id?, header, rows, position?, anchor_id?}.\n\
+                         Elements with id replace existing ones; without id are appended or inserted at anchor_id+position. Use action:'delete' with id to delete.\n\
+                         When modifying (id present), any field omitted from text/style/runs is preserved from the original — this is how 'edit just the text' works without losing formatting.\n\
+                         runs shape: array of {text, bold?, italic?, underline?, font_size? (half-points, e.g. 24=12pt), color? (hex RGB, e.g. 'FF0000'), font_name?}.\n\
+                         Supplying runs fully replaces the paragraph's run list."
+                    )),
                     ("deletes", "array", Some("Array of element IDs to delete.")),
                 ],
             ),
@@ -225,6 +231,7 @@ impl CreateWordDocTool {
                 return Ok(Some(crate::office::DocElement::Paragraph {
                     id: id.to_string(),
                     text: String::new(),
+                    omit_text: false,
                     style: None,
                     runs: None,
                 }));
@@ -233,28 +240,45 @@ impl CreateWordDocTool {
         }
 
         let id = v["id"].as_str().map(|s| s.to_string());
-        let text = v["text"].as_str().unwrap_or("").to_string();
+
+        // The `text` field is optional when modifying an existing paragraph
+        // (id is set). Omitting it tells the backend to keep the original
+        // text. We record that intent via `omit_text` so `WordDocument::modify`
+        // can do the right merge.
+        let has_text_key = v.as_object().map(|o| o.contains_key("text")).unwrap_or(false);
+        let text = v["text"]
+            .as_str()
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+        let omit_text = !has_text_key;
+
         let style = v["style"].as_str().map(|s| s.to_string());
 
-        let runs: Option<Vec<_>> = v["runs"].as_array().map(|arr| {
-            arr.iter().filter_map(|r| {
-                let text = r["text"].as_str().unwrap_or("").to_string();
-                if text.is_empty() { return None; }
-                Some(crate::office::FontRun {
-                    text,
-                    bold: r["bold"].as_bool().unwrap_or(false),
-                    italic: r["italic"].as_bool().unwrap_or(false),
-                    underline: r["underline"].as_bool().unwrap_or(false),
-                    font_size: r["font_size"].as_u64().map(|n| n as u32),
-                    color: r["color"].as_str().map(|s| s.to_string()),
-                    font_name: r["font_name"].as_str().map(|s| s.to_string()),
-                })
-            }).collect()
-        });
+        let has_runs_key = v.as_object().map(|o| o.contains_key("runs")).unwrap_or(false);
+        let runs: Option<Vec<_>> = if has_runs_key {
+            v["runs"].as_array().map(|arr| {
+                arr.iter().filter_map(|r| {
+                    let text = r["text"].as_str().unwrap_or("").to_string();
+                    if text.is_empty() { return None; }
+                    Some(crate::office::FontRun {
+                        text,
+                        bold: r["bold"].as_bool().unwrap_or(false),
+                        italic: r["italic"].as_bool().unwrap_or(false),
+                        underline: r["underline"].as_bool().unwrap_or(false),
+                        font_size: r["font_size"].as_u64().map(|n| n as u32),
+                        color: r["color"].as_str().map(|s| s.to_string()),
+                        font_name: r["font_name"].as_str().map(|s| s.to_string()),
+                    })
+                }).collect()
+            })
+        } else {
+            None
+        };
 
         Ok(Some(crate::office::DocElement::Paragraph {
             id: id.unwrap_or_else(|| format!("__new_p{}", uuid_simple())),
             text,
+            omit_text,
             style,
             runs,
         }))
@@ -354,6 +378,7 @@ impl CreateWordDocTool {
                     let elem = crate::office::DocElement::Paragraph {
                         id: p.id.clone().unwrap_or_else(|| format!("__new_p{}", uuid_simple())),
                         text: p.text.clone(),
+                        omit_text: false,
                         style: p.style.clone(),
                         runs: p.runs.as_ref().map(|rvec| rvec.iter().map(|r| Self::to_font_run(r.clone())).collect()),
                     };
@@ -408,7 +433,7 @@ impl CreateWordDocTool {
                 let mut new_tables = Vec::new();
                 for e in new_elements {
                     match e {
-                        crate::office::DocElement::Paragraph { id, text, style, runs } => {
+                        crate::office::DocElement::Paragraph { id, text, style, runs, .. } => {
                             new_paras.push(crate::office::WordParagraph { id, text, style, runs });
                         }
                         crate::office::DocElement::Table { id, position: _, header, rows } => {
@@ -499,6 +524,7 @@ impl CreateWordDocTool {
                 elements_for_new.push(crate::office::DocElement::Paragraph {
                     id: format!("__new_p{}", uuid_simple()),
                     text: title.clone(),
+                    omit_text: false,
                     style: Some("Title".to_string()),
                     runs: None,
                 });

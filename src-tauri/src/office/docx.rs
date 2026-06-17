@@ -56,6 +56,12 @@ pub enum DocElement {
     Paragraph {
         id: String,
         text: String,
+        /// `true` means "the caller did not provide a `text` field; the original
+        /// text should be kept as-is during a modify operation." This is encoded
+        /// as a separate boolean (rather than making `text` an Option) to keep
+        /// the JSON wire format simple and avoid breaking existing callers.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        omit_text: bool,
         style: Option<String>,
         #[serde(default)]
         runs: Option<Vec<FontRun>>,
@@ -109,6 +115,7 @@ impl WordDocument {
             elements.push(DocElement::Paragraph {
                 id: p.id.clone(),
                 text: p.text.clone(),
+                omit_text: false,
                 style: p.style.clone(),
                 runs: p.runs.clone(),
             });
@@ -164,7 +171,7 @@ impl WordDocument {
 
         for elem in elements {
             match elem {
-                DocElement::Paragraph { id, text, style, runs } => {
+                DocElement::Paragraph { id, text, style, runs, .. } => {
                     out_paras.push(WordParagraph { id, text, style, runs });
                 }
                 DocElement::Table { id, position: _, header, rows } => {
@@ -238,26 +245,36 @@ impl WordDocument {
                 continue; // skip deleted
             }
             if let Some(replacement) = modify_map.get(elem.id()) {
-                // Preserve original style/runs when replacing a paragraph unless the
-                // replacement explicitly provides them
+                // Preserve original style/runs/text when replacing a paragraph
+                // unless the replacement explicitly provides them. AI callers
+                // can omit fields to mean "keep what's already there".
                 let to_push = match (elem, replacement.clone()) {
-                    (DocElement::Paragraph { id: oi, text: ot, style: os, runs: ors },
-                     DocElement::Paragraph { id: ri, text: rt, style: rs, runs: rr }) => {
+                    (DocElement::Paragraph { id: _oi, text: ot, style: os, runs: ors, .. },
+                     DocElement::Paragraph { id: ri, text: rt, style: rs, runs: rr, omit_text }) => {
+                        // Three-way merge: keep original where the caller didn't specify.
+                        let merged_text = if omit_text { ot.clone() } else { rt };
+                        let merged_style = rs.or(os);
+                        let merged_runs = rr.or(ors);
+                        // If AI provided runs, drop the plain text field — runs
+                        // describe the paragraph's full rich content and mixing
+                        // plain `text` with `runs` produces inconsistent XML.
+                        let (out_text, out_runs) = if merged_runs.is_some() {
+                            (String::new(), merged_runs)
+                        } else {
+                            (merged_text, None)
+                        };
                         DocElement::Paragraph {
                             id: ri,
-                            text: rt,
-                            style: rs.or(os),
-                            runs: rr.or(ors),
+                            text: out_text,
+                            omit_text: false,
+                            style: merged_style,
+                            runs: out_runs,
                         }
                     }
-                    (e, r) => {
-                        // Non-paragraph: replace as-is
-                        if r.id() != e.id() {
-                            r
-                        } else {
-                            r
-                        }
-                    }
+                    // Table replace: pass through. `modify` is only called with
+                    // a modify_map keyed by element id, so id collisions between
+                    // a paragraph and a table are impossible by construction.
+                    (_e, r) => r,
                 };
                 result.push(to_push);
             } else {
@@ -330,12 +347,31 @@ pub fn read_word_document(bytes: &[u8]) -> Result<WordDocument, OfficeError> {
 pub fn word_document_to_text(doc: &WordDocument) -> String {
     let mut output = String::new();
 
+    // Helper: render a paragraph's runs to a markdown-flavoured string. Falls
+    // back to the plain `text` field when no runs are present.
+    fn render_paragraph(p: &WordParagraph) -> String {
+        if let Some(ref runs) = p.runs {
+            if !runs.is_empty() {
+                let mut s = String::new();
+                for r in runs {
+                    let mut chunk = r.text.clone();
+                    if r.italic { chunk = format!("*{}*", chunk); }
+                    if r.bold { chunk = format!("**{}**", chunk); }
+                    if r.underline { chunk = format!("__{}__", chunk); }
+                    s.push_str(&chunk);
+                }
+                return s;
+            }
+        }
+        p.text.clone()
+    }
+
     if doc.tables.is_empty() {
         for para in &doc.paragraphs {
             if let Some(ref style) = para.style {
                 output.push_str(&format!("[{}] ", style));
             }
-            output.push_str(&para.text);
+            output.push_str(&render_paragraph(para));
             output.push_str("\n\n");
         }
     } else {
@@ -389,7 +425,7 @@ pub fn word_document_to_text(doc: &WordDocument) -> String {
                 if let Some(ref style) = para.style {
                     output.push_str(&format!("[{}] ", style));
                 }
-                output.push_str(&para.text);
+                output.push_str(&render_paragraph(para));
                 output.push_str("\n\n");
             }
             para_idx += 1;
@@ -401,20 +437,144 @@ pub fn word_document_to_text(doc: &WordDocument) -> String {
 
 // ─── XML Parsing ───────────────────────────────────────────────────────────────
 
+#[derive(Debug, Clone, Default)]
+struct RunFormat {
+    bold: bool,
+    italic: bool,
+    underline: bool,
+    font_size: Option<u32>,
+    color: Option<String>,
+    font_name: Option<String>,
+}
+
+/// Apply a single `<w:rPr>` attribute to a `RunFormat`.
+/// `tag` is the local element name (e.g. "b", "i", "u", "color", "sz").
+/// When `tag` is "color" or "rFonts" or "sz" / "szCs", `attr_val` carries the attribute.
+fn apply_run_attr(fmt: &mut RunFormat, tag: &[u8], attr_val: Option<&[u8]>) {
+    match tag {
+        b"b" | b"bCs" => fmt.bold = true,
+        b"i" | b"iCs" => fmt.italic = true,
+        b"u" => fmt.underline = true,
+        b"strike" => { /* noop for now — could expose as strikethrough later */ }
+        b"color" => {
+            if let Some(v) = attr_val {
+                if let Ok(s) = std::str::from_utf8(v) {
+                    // Strip leading '#' if present so output is plain hex.
+                    let s = s.trim_start_matches('#');
+                    if !s.is_empty() {
+                        fmt.color = Some(s.to_string());
+                    }
+                }
+            }
+        }
+        b"sz" | b"szCs" => {
+            if let Some(v) = attr_val {
+                if let Ok(s) = std::str::from_utf8(v) {
+                    if let Ok(n) = s.parse::<u32>() {
+                        fmt.font_size = Some(n);
+                    }
+                }
+            }
+        }
+        b"rFonts" => {
+            // ascii / hAnsi / cs are all valid carriers of the font name.
+            if let Some(v) = attr_val {
+                if let Ok(s) = std::str::from_utf8(v) {
+                    if !s.is_empty() {
+                        fmt.font_name = Some(s.to_string());
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Walk attributes of an `<w:rPr>` (or any other) start event and apply them to `fmt`.
+/// Recognized attributes map to their element siblings — this is the standard OOXML
+/// compact form: `<w:b w:val="true"/>` instead of `<w:b><w:val .../></w:b>`.
+fn apply_run_attrs_from_event(fmt: &mut RunFormat, e: &quick_xml::events::BytesStart) {
+    for attr in e.attributes().with_checks(false).flatten() {
+        let key = attr.key.as_ref().to_vec();
+        let local = key
+            .iter()
+            .position(|&b| b == b':')
+            .map(|i| &key[i + 1..])
+            .unwrap_or(&key[..]);
+        let val = attr.value.as_ref();
+        apply_run_attr(fmt, local, Some(val));
+    }
+    // `w:val="false"` / `w:val="0"` should explicitly disable the flag.
+    if let Some(val_attr) = e.attributes().with_checks(false).flatten().find(|a| {
+        let k = a.key.as_ref();
+        k.ends_with(b":val") || k == b"val"
+    }) {
+        let v = val_attr.value.as_ref();
+        let is_off = v == b"false" || v == b"0" || v == b"off";
+        if is_off {
+            let key = val_attr.key.as_ref().to_vec();
+            let local = key
+                .iter()
+                .position(|&b| b == b':')
+                .map(|i| &key[i + 1..])
+                .unwrap_or(&key[..]);
+            match local {
+                b"b" | b"bCs" => fmt.bold = false,
+                b"i" | b"iCs" => fmt.italic = false,
+                b"u" => fmt.underline = false,
+                _ => {}
+            }
+        }
+    }
+}
+
+fn parse_run_attrs_from_nested(e: &quick_xml::events::BytesStart, fmt: &mut RunFormat) {
+    apply_run_attrs_from_event(fmt, e);
+}
+
+/// Extract the "val" attribute from a `<w:color w:val="...">` / `<w:sz w:val="...">` / `<w:rFonts w:ascii="...">` etc.
+fn attr_value<'a>(e: &'a quick_xml::events::BytesStart, name: &[u8]) -> Option<std::borrow::Cow<'a, [u8]>> {
+    for attr in e.attributes().with_checks(false).flatten() {
+        let key = attr.key.as_ref().to_vec();
+        let local = key
+            .iter()
+            .position(|&b| b == b':')
+            .map(|i| &key[i + 1..])
+            .unwrap_or(&key[..]);
+        if local == name {
+            return Some(std::borrow::Cow::Owned(attr.value.into_owned()));
+        }
+    }
+    None
+}
+
 fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> {
     let mut paragraphs = Vec::new();
     let mut reader = quick_xml::Reader::from_str(content);
     reader.config_mut().trim_text(false);
 
     let mut buf = Vec::new();
-    let mut in_para = false;
-    let mut current_text = String::new();
-    let mut current_style: Option<String> = None;
+
+    // ── Top-level state ────────────────────────────────────────────────────
     let mut para_depth = 0usize;
-    // Track whether we are inside a table cell — paragraphs inside cells must NOT
-    // be added to the top-level paragraph list (they are stored separately in tables).
     let mut tbl_cell_depth = 0usize;
     let mut para_counter = 0usize;
+
+    // ── Per-paragraph state (reset on each <w:p>) ──────────────────────────
+    let mut current_text = String::new();
+    let mut current_style: Option<String> = None;
+    let mut current_runs: Vec<FontRun> = Vec::new();
+
+    // ── Per-run state (reset on each <w:r>) ────────────────────────────────
+    let mut in_run = false;
+    let mut in_run_props = false;
+    let mut current_run_text = String::new();
+    let mut current_run_format = RunFormat::default();
+
+    // Track whether this paragraph actually saw any run (even an empty one).
+    // We use this to decide whether to keep the paragraph even if it ended up
+    // textless — see "preserve empty paragraphs" below.
+    let mut paragraph_saw_run = false;
 
     loop {
         let event = reader.read_event_into(&mut buf);
@@ -424,24 +584,45 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
                 if name.as_ref() == b"tc" {
                     tbl_cell_depth += 1;
                 } else if name.as_ref() == b"p" {
-                    in_para = true;
                     para_depth += 1;
                     current_text.clear();
                     current_style = None;
-                } else if name.as_ref() == b"t" && in_para {
+                    current_runs.clear();
+                    paragraph_saw_run = false;
+                } else if name.as_ref() == b"r" && tbl_cell_depth == 0 {
+                    // Only top-level runs count toward the paragraph's `runs` list.
+                    in_run = true;
+                    in_run_props = false;
+                    current_run_text.clear();
+                    current_run_format = RunFormat::default();
+                } else if name.as_ref() == b"rPr" && in_run {
+                    in_run_props = true;
+                    // `<w:rPr>` itself can carry attributes (compact form).
+                    parse_run_attrs_from_nested(e, &mut current_run_format);
+                } else if in_run_props {
+                    // `<w:b/>`, `<w:color w:val="..."/>`, `<w:sz w:val="24"/>` etc.
+                    // Use the "compact" attributes path for val-bearing tags.
+                    let val = attr_value(e, b"val");
+                    let ascii = attr_value(e, b"ascii");
+                    let hansi = attr_value(e, b"hAnsi");
+                    let cs = attr_value(e, b"cs");
+                    apply_run_attr(&mut current_run_format, name.as_ref(), val.as_deref());
+                    if let Some(v) = ascii.or(hansi).or(cs) {
+                        apply_run_attr(&mut current_run_format, b"rFonts", Some(v.as_ref()));
+                    }
+                } else if name.as_ref() == b"t" && in_run {
                     if let Ok(quick_xml::events::Event::Text(t)) = reader.read_event_into(&mut buf) {
-                        current_text.push_str(&t.unescape().unwrap_or_default());
+                        current_run_text.push_str(&t.unescape().unwrap_or_default());
                     }
                 } else if name.as_ref() == b"pStyle" {
-                    for attr in e.attributes().with_checks(false) {
-                        if let Ok(attr) = attr {
-                            if attr.key.as_ref() == b"val" {
-                                if let Ok(v) = std::str::from_utf8(&attr.value) {
-                                    current_style = Some(v.to_string());
-                                }
+                    if let Some(v) = attr_value(e, b"val") {
+                        if let Ok(s) = std::str::from_utf8(v.as_ref()) {
+                            if !s.is_empty() {
+                                current_style = Some(s.to_string());
                             }
                         }
                     }
+                    // Some writers emit `<w:pStyle>Heading1</w:pStyle>` (text body).
                     if let Ok(quick_xml::events::Event::Text(t)) = reader.read_event_into(&mut buf) {
                         let val = t.unescape().unwrap_or_default();
                         if !val.is_empty() {
@@ -453,17 +634,33 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
             Ok(quick_xml::events::Event::Empty(ref e)) => {
                 let name = e.local_name();
                 if name.as_ref() == b"p" {
-                    in_para = true;
-                    para_depth += 1;
-                    current_text.clear();
-                    current_style = None;
+                    // Self-closing paragraph (e.g. empty <w:p/>).
+                    para_depth = para_depth.saturating_sub(0);
+                    let id = format!("p{}", para_counter);
+                    para_counter += 1;
+                    // Keep as a placeholder so the empty paragraph's position is
+                    // preserved (esp. when it carries a style).
+                    if let Some(style) = current_style.clone() {
+                        paragraphs.push(WordParagraph {
+                            id,
+                            text: String::new(),
+                            style: Some(style),
+                            runs: None,
+                        });
+                    }
+                } else if name.as_ref() == b"r" && tbl_cell_depth == 0 && para_depth > 0 {
+                    // Self-closing run — typically `<w:r><w:br/></w:r>` for line breaks.
+                    // We model this by pushing an empty run with whatever format was set.
+                    paragraph_saw_run = true;
+                    if let Some(style) = current_style.clone() {
+                        // ignore runs for paragraphs that haven't been started yet
+                        let _ = style;
+                    }
                 } else if name.as_ref() == b"pStyle" {
-                    for attr in e.attributes().with_checks(false) {
-                        if let Ok(attr) = attr {
-                            if attr.key.as_ref() == b"val" {
-                                if let Ok(v) = std::str::from_utf8(&attr.value) {
-                                    current_style = Some(v.to_string());
-                                }
+                    if let Some(v) = attr_value(e, b"val") {
+                        if let Ok(s) = std::str::from_utf8(v.as_ref()) {
+                            if !s.is_empty() {
+                                current_style = Some(s.to_string());
                             }
                         }
                     }
@@ -473,19 +670,60 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
                 let name = e.local_name();
                 if name.as_ref() == b"tc" {
                     tbl_cell_depth = tbl_cell_depth.saturating_sub(1);
+                } else if name.as_ref() == b"rPr" {
+                    in_run_props = false;
+                } else if name.as_ref() == b"r" {
+                    in_run = false;
+                    in_run_props = false;
+                    if tbl_cell_depth == 0 && para_depth > 0 {
+                        paragraph_saw_run = true;
+                        // Commit this run only if it produced text OR has a format
+                        // flag the AI should know about. Empty runs with no flags
+                        // are skipped — they would just bloat the response.
+                        let has_format = current_run_format.bold
+                            || current_run_format.italic
+                            || current_run_format.underline
+                            || current_run_format.font_size.is_some()
+                            || current_run_format.color.is_some()
+                            || current_run_format.font_name.is_some();
+                        if !current_run_text.is_empty() || has_format {
+                            current_text.push_str(&current_run_text);
+                            current_runs.push(FontRun {
+                                text: std::mem::take(&mut current_run_text),
+                                bold: current_run_format.bold,
+                                italic: current_run_format.italic,
+                                underline: current_run_format.underline,
+                                font_size: current_run_format.font_size,
+                                color: current_run_format.color.clone(),
+                                font_name: current_run_format.font_name.clone(),
+                            });
+                        }
+                    }
                 } else if name.as_ref() == b"p" {
                     para_depth = para_depth.saturating_sub(1);
                     if para_depth == 0 && tbl_cell_depth == 0 {
-                        in_para = false;
-                        let text = current_text.trim().to_string();
-                        if !text.is_empty() {
+                        // Always preserve the paragraph's slot in the document.
+                        // We only skip it if it had zero text AND zero runs AND no
+                        // style — i.e. it was a totally empty paragraph that carries
+                        // no information at all. Such paragraphs are usually
+                        // artefacts of trailing whitespace and dropping them is safe.
+                        let has_format = current_runs.iter().any(|r| {
+                            r.bold || r.italic || r.underline
+                                || r.font_size.is_some() || r.color.is_some() || r.font_name.is_some()
+                        });
+                        let keep = !current_text.is_empty()
+                            || current_style.is_some()
+                            || has_format
+                            || paragraph_saw_run;
+                        if keep {
                             let id = format!("p{}", para_counter);
                             para_counter += 1;
+                            let runs_opt = if current_runs.is_empty() { None } else { Some(current_runs.clone()) };
                             paragraphs.push(WordParagraph {
                                 id,
-                                text,
+                                text: current_text.trim().to_string(),
                                 style: current_style.clone(),
-                                runs: None,
+                                runs: runs_opt,
                             });
                         }
                     }

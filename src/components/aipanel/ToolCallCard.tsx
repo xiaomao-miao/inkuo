@@ -118,7 +118,7 @@ const ToolCardPreview: React.FC<{
   showCursor: boolean;
   isStreamingArguments: boolean;
   toolName: string;
-}> = ({ preview, showCursor, isStreamingArguments, toolName }) => {
+}> = ({ preview, showCursor, isStreamingArguments }) => {
   const [isExpanded, setIsExpanded] = React.useState(true);
   const previewRef = useRef<HTMLPreElement | null>(null);
 
