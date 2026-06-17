@@ -257,50 +257,25 @@ export const WordEditor: React.FC<WordEditorProps> = ({
     setOpenTabDirty(filePath, true);
   }, [filePath, setOpenTabDirty]);
 
-  // ── Render: CSS visibility, NOT conditional unmount ───────────────────────
-  if (loading) {
-    return (
-      <div className={styles.officeEditor} style={{ display: isActive ? undefined : 'none' }}>
-        <OfficeToolbar fileName={fileName} isDirty={false} onSave={handleSave} canSave={false} formatIcon={<FileText size={16} />} editLabel="加载中..." />
-        <div className={styles.editorLoading}>
-          <div className={styles.loadingSpinner} />
-          <span>正在加载 Word 文档...</span>
-        </div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className={styles.officeEditor} style={{ display: isActive ? undefined : 'none' }}>
-        <OfficeToolbar fileName={fileName} isDirty={false} onSave={handleSave} canSave={false} formatIcon={<FileText size={16} />} editLabel="加载失败" />
-        <div className={styles.editorError}>
-          <span>加载失败: {error}</span>
-        </div>
-      </div>
-    );
-  }
-
-  if (!documentBuffer) {
-    return (
-      <div className={styles.officeEditor} style={{ display: isActive ? undefined : 'none' }}>
-        <OfficeToolbar fileName={fileName} isDirty={false} onSave={handleSave} canSave={false} formatIcon={<FileText size={16} />} editLabel="无文档" />
-        <div className={styles.editorError}>
-          <span>无法加载文档</span>
-        </div>
-      </div>
-    );
-  }
-
+  // ── Render
+  // We keep the `<DocxEditor>` mounted at all times (loading, error, ready)
+  // so that the right-hand scrollbar's containing block — the paged-editor's
+  // scroll container — exists from the very first paint. Toggling between
+  // a loading spinner and the editor caused the scrollbar to flicker on the
+  // first open, because each branch changed the height of `.docxContainer`
+  // and forced a fresh reflow. With the editor always mounted, switching
+  // branches only updates opacity / text inside an existing box.
+  // Visibility (display vs none) is controlled by the parent stack container
+  // (see OfficeTabRenderer in Editor.tsx).
   return (
-    <div className={styles.officeEditor} style={{ display: isActive ? undefined : 'none' }}>
+    <div className={styles.officeEditor}>
       <OfficeToolbar
         fileName={fileName}
         isDirty={isDirty}
         onSave={handleSave}
-        canSave={isDirty}
+        canSave={isDirty && !loading && !error}
         formatIcon={<FileText size={16} />}
-        editLabel="可编辑"
+        editLabel={loading ? '加载中...' : error ? '加载失败' : '可编辑'}
       />
       <div ref={containerRef} className={styles.docxContainer} data-office-editor-root="word">
         <DocxEditor
@@ -313,6 +288,18 @@ export const WordEditor: React.FC<WordEditorProps> = ({
           renderLogo={() => null}
         />
         {/* Word inline completion ghost is rendered by ProseMirror decorations (externalPlugins) */}
+        {(loading || error) && (
+          <div className={styles.editorOverlay} role="status" aria-live="polite">
+            {loading ? (
+              <>
+                <div className={styles.loadingSpinner} />
+                <span>正在加载 Word 文档...</span>
+              </>
+            ) : (
+              <span className={styles.editorErrorMessage}>加载失败: {error}</span>
+            )}
+          </div>
+        )}
       </div>
       <WordInlineStatusBar />
     </div>
@@ -476,52 +463,26 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
 
   const activeSheet = workbook?.sheets[activeSheetIndex] ?? null;
 
-  // ── Render: CSS visibility only ──────────────────────────────────────────
-  if (loading) {
-    return (
-      <div className={styles.officeEditor} style={{ display: isActive ? undefined : 'none' }}>
-        <OfficeToolbar fileName={fileName} isDirty={false} onSave={handleSave} canSave={false} formatIcon={<Table2 size={16} />} editLabel="加载中..." />
-        <div className={styles.editorLoading}>
-          <div className={styles.loadingSpinner} />
-          <span>正在加载 Excel 文档...</span>
-        </div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className={styles.officeEditor} style={{ display: isActive ? undefined : 'none' }}>
-        <OfficeToolbar fileName={fileName} isDirty={false} onSave={handleSave} canSave={false} formatIcon={<Table2 size={16} />} editLabel="加载失败" />
-        <div className={styles.editorError}>
-          <span>加载失败: {error}</span>
-        </div>
-      </div>
-    );
-  }
-
-  if (workbook === null || activeSheet === null) {
-    return (
-      <div className={styles.officeEditor} style={{ display: isActive ? undefined : 'none' }}>
-        <OfficeToolbar fileName={fileName} isDirty={false} onSave={handleSave} canSave={false} formatIcon={<Table2 size={16} />} editLabel="无数据" />
-        <div className={styles.editorError}>
-          <span>无法加载文档</span>
-        </div>
-      </div>
-    );
-  }
+  // ── Render
+  // Keep the sheet tabs + ExcelGrid mounted at all times (loading / error /
+  // ready) so that switching states only changes content inside an existing
+  // box. Toggling between the loading spinner and the grid previously caused
+  // the right-hand scrollbar to flicker on first open. Visibility is
+  // controlled by the parent stack container (see OfficeTabRenderer).
+  const showSheetTabs = workbook !== null && workbook.sheets.length > 0;
+  const showGrid = workbook !== null && activeSheet !== null;
 
   return (
-    <div className={styles.officeEditor} style={{ display: isActive ? undefined : 'none' }}>
+    <div className={styles.officeEditor}>
       <OfficeToolbar
         fileName={fileName}
         isDirty={isDirty}
         onSave={handleSave}
-        canSave={isDirty}
+        canSave={isDirty && !loading && !error && workbook !== null}
         formatIcon={<Table2 size={16} />}
-        editLabel="可编辑"
+        editLabel={loading ? '加载中...' : error ? '加载失败' : workbook === null ? '无数据' : '可编辑'}
       />
-      {workbook.sheets.length > 0 && (
+      {showSheetTabs && workbook && (
         <div className={styles.sheetTabs}>
           {workbook.sheets.map((sheet, i) => (
             <button
@@ -535,10 +496,26 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
         </div>
       )}
       <div className={styles.excelContainer}>
-        <ExcelGrid
-          data={activeSheet.data}
-          onChange={(newData) => handleSheetChange(activeSheetIndex, newData)}
-        />
+        {showGrid && activeSheet && (
+          <ExcelGrid
+            data={activeSheet.data}
+            onChange={(newData) => handleSheetChange(activeSheetIndex, newData)}
+          />
+        )}
+        {(loading || error || !showGrid) && (
+          <div className={styles.editorOverlay} role="status" aria-live="polite">
+            {loading ? (
+              <>
+                <div className={styles.loadingSpinner} />
+                <span>正在加载 Excel 文档...</span>
+              </>
+            ) : error ? (
+              <span className={styles.editorErrorMessage}>加载失败: {error}</span>
+            ) : (
+              <span className={styles.editorErrorMessage}>无法加载文档</span>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

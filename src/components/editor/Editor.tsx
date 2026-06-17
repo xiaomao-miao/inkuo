@@ -173,6 +173,16 @@ const OfficeTabRenderer: React.FC<{
 }> = ({ tab, fileType, isActive }) => {
   const officeState = useEditorStore((state) => state.documentContents[tab.path]?.office);
 
+  // We render the active tab (and only the active tab). Switching tabs
+  // unmounts the previous editor and mounts the new one, which is the only
+  // reliable way to keep ProseMirror / ExcelGrid quiescent when not in
+  // view. With `visibility: hidden` the editors continue to run their
+  // ResizeObserver + measurement loops in the background, which leaked
+  // out as a constantly flickering right-hand scrollbar on first open.
+  if (!isActive) {
+    return null;
+  }
+
   if (fileType === 'word') {
     const tabCached = officeState?.docxBuffer ?? null;
     return (
@@ -220,7 +230,7 @@ export const Editor: React.FC = () => {
   }
 
   return (
-    <>
+    <div className={styles.officeStack}>
       {officeTabs.map(({ tab, fileType }) => {
         const isActive = tab.path === selectedFile && activeFileType === fileType;
 
@@ -235,10 +245,12 @@ export const Editor: React.FC = () => {
       })}
 
       {(activeFileType === 'markdown' || activeFileType === 'plaintext') && (
-        <InlineCompleteProvider>
-          <EditorContent editorRef={editorRef} />
-        </InlineCompleteProvider>
+        <div className={styles.officeStackItem}>
+          <InlineCompleteProvider>
+            <EditorContent editorRef={editorRef} />
+          </InlineCompleteProvider>
+        </div>
       )}
-    </>
+    </div>
   );
 };

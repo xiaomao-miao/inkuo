@@ -206,7 +206,8 @@
 .officeEditor {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
   background-color: var(--bg-primary);
   overflow: hidden;
 }
@@ -338,7 +339,15 @@
   flex: 1;
   overflow: hidden;
   position: relative;
-  scrollbar-gutter: stable;
+  /* Isolate the editor's internal layout/measure from the rest of the
+     document. The paged editor inside the DocxEditor performs multiple
+     measurements on first mount (zoom calculation, scroll position, etc.)
+     which would otherwise cause the right-hand scrollbar's geometry to
+     reflow. `contain: layout paint` makes those reflows local. */
+  contain: layout paint;
+  /* Avoid the browser scrolling the container into view as a
+     scroll-anchoring candidate while ProseMirror is still initialising. */
+  overflow-anchor: none;
 }
 
 .docxContainer :global([class*="brand"]),
@@ -373,7 +382,10 @@
 .excelContainer {
   flex: 1;
   overflow: hidden;
+  position: relative;
   background-color: var(--bg-primary);
+  contain: layout paint;
+  overflow-anchor: none;
 }
 
 /* ============================================================================
@@ -393,6 +405,30 @@
 }
 
 .editorError {
+  color: #ef4444;
+}
+
+/* Overlay shown inside `.docxContainer` / `.excelContainer` while the
+   underlying editor (DocxEditor / ExcelGrid) is loading or has errored.
+   Keeping the editor mounted behind it prevents the right-hand scrollbar
+   from reflowing — and therefore flickering — when the first document is
+   opened. */
+.editorOverlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-md);
+  background-color: var(--bg-primary);
+  color: var(--fg-muted);
+  font-size: 14px;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.editorErrorMessage {
   color: #ef4444;
 }
 

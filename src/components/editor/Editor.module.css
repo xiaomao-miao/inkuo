@@ -1,10 +1,46 @@
 .editorContainer {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
   background-color: var(--bg-primary);
   position: relative;
   overflow: hidden;
+}
+
+/* ============================================================================
+   Office / Editor stack
+   All office (Word/Excel) and the markdown editor are stacked on top of
+   each other inside this container. Only the active one is visible. This
+   keeps each tab mounted (so its internal state — ProseMirror view, scroll
+   position, etc. — is preserved across switches) while preventing the
+   scrollbar flicker that occurs when `display: none` is toggled, because
+   toggling visibility only repaints, it does not relayout.
+   ============================================================================ */
+.officeStack {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  background-color: var(--bg-primary);
+  /* Isolate the stack's internal layout from the surrounding flex tree
+     so that each office tab's measurements do not propagate and cause the
+     outer scrollbar to flicker. */
+  contain: layout;
+  overflow-anchor: none;
+}
+
+.officeStackItem {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  background-color: var(--bg-primary);
 }
 
 .editorHeader {
