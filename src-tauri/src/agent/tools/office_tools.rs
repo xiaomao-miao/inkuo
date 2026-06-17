@@ -64,15 +64,73 @@ impl ReadOfficeFileTool {
                 }).to_string()
             }
             crate::office::OfficeFileType::Excel(workbook) => {
+                // Re-parse from the file on disk to access the structured
+                // representation (formulas, merged ranges, sheet metadata).
+                // The `OfficeFileType::Excel` payload here only carries the
+                // legacy flat 2D view used for `text_content`.
+                let structured = match crate::office::read_xlsx_structured(&_bytes) {
+                    Ok(s) => Some(s),
+                    Err(_) => None,
+                };
+                let sheets_summary: Vec<serde_json::Value> = structured
+                    .as_ref()
+                    .map(|sw| {
+                        sw.sheets
+                            .iter()
+                            .map(|s| {
+                                serde_json::json!({
+                                    "name": s.name,
+                                    "max_row": s.max_row,
+                                    "max_col": s.max_col,
+                                    "cell_count": s.cells.len(),
+                                    "merged_count": s.merged_cells.len(),
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                // Build a per-sheet "values" array (string grid) from the
+                // structured data — much more useful for the AI than the
+                // legacy headers/rows split which assumed a single header row.
+                let values_summary: Vec<serde_json::Value> = structured
+                    .as_ref()
+                    .map(|sw| {
+                        sw.sheets
+                            .iter()
+                            .map(|s| {
+                                let mut grid: Vec<Vec<String>> =
+                                    vec![vec![String::new(); s.max_col.max(1)]; s.max_row.max(1)];
+                                for c in &s.cells {
+                                    if c.row < grid.len() && c.col < (grid.get(0).map(|r| r.len()).unwrap_or(0)) {
+                                        grid[c.row][c.col] = if let Some(f) = &c.formula {
+                                            format!("={}", f)
+                                        } else {
+                                            c.value.as_string_for_display()
+                                        };
+                                    }
+                                }
+                                serde_json::json!({
+                                    "name": s.name,
+                                    "values": grid,
+                                    "merged_cells": s.merged_cells.iter().map(|m| m.address()).collect::<Vec<_>>(),
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
                 let json = serde_json::to_string(&workbook)
                     .map_err(|e| ToolError::ExecutionError(format!("JSON serialization failed: {}", e)))?;
                 serde_json::json!({
                     "file_type": "xlsx",
                     "file_name": path_obj.file_name().and_then(|n| n.to_str()).unwrap_or("unknown"),
                     "sheets": workbook.sheets.iter().map(|s| s.name.clone()).collect::<Vec<_>>(),
+                    "sheets_summary": sheets_summary,
+                    "values": values_summary,
                     "text_content": text_content,
                     "json_content": json,
-                    "note": "Modify json_content to update spreadsheet data."
+                    "note": "Use modify_excel to change specific cells. Each modification targets one cell address and preserves all other workbook content (formulas, styles, charts, etc.)."
                 }).to_string()
             }
         };
@@ -792,5 +850,495 @@ impl GetDocxInfoTool {
 }
 
 impl Default for GetDocxInfoTool {
+    fn default() -> Self { Self::new() }
+}
+
+// ─── modify_excel ─────────────────────────────────────────────────────────────
+
+/// Cell-level modification accepted by [`ModifyExcelTool`].
+#[derive(Debug, Clone, Deserialize)]
+struct ExcelCellInput {
+    /// Sheet name (case-sensitive).
+    sheet: String,
+    /// Cell address in A1 form, e.g. "B3".
+    address: String,
+    /// New value. JSON shape:
+    ///   {"type":"int","value":100}
+    ///   {"type":"float","value":3.14}
+    ///   {"type":"bool","value":true}
+    ///   {"type":"string","value":"hello"}
+    ///   {"type":"empty"}
+    #[serde(default)]
+    value: Option<serde_json::Value>,
+    /// New formula (without leading "="), e.g. "SUM(A1:A10)".
+    #[serde(default)]
+    formula: Option<String>,
+    /// Optional new number format, e.g. "0.00%" or "yyyy-mm-dd".
+    #[serde(default)]
+    number_format: Option<String>,
+}
+
+impl ExcelCellInput {
+    fn into_modification(self) -> Result<crate::office::CellModification, String> {
+        let mut m = crate::office::CellModification::new(self.sheet, self.address);
+        if let Some(v) = self.value {
+            m.new_value = Some(parse_cell_value_json(v)?);
+        }
+        m.new_formula = self.formula;
+        m.new_number_format = self.number_format;
+        Ok(m)
+    }
+}
+
+fn parse_cell_value_json(v: serde_json::Value) -> Result<crate::office::CellValue, String> {
+    use crate::office::CellValue;
+    let obj = v.as_object().ok_or_else(|| "value must be an object {type, value}".to_string())?;
+    let kind = obj.get("type").and_then(|t| t.as_str()).ok_or_else(|| "value missing 'type'".to_string())?;
+    match kind {
+        "empty" => Ok(CellValue::Empty),
+        "int" => {
+            let n = obj.get("value").and_then(|x| x.as_i64()).ok_or_else(|| "int.value missing".to_string())?;
+            Ok(CellValue::Int(n))
+        }
+        "float" => {
+            let n = obj.get("value").and_then(|x| x.as_f64()).ok_or_else(|| "float.value missing".to_string())?;
+            Ok(CellValue::Float(n))
+        }
+        "bool" => {
+            let b = obj.get("value").and_then(|x| x.as_bool()).ok_or_else(|| "bool.value missing".to_string())?;
+            Ok(CellValue::Bool(b))
+        }
+        "string" => {
+            let s = obj.get("value").and_then(|x| x.as_str()).ok_or_else(|| "string.value missing".to_string())?;
+            Ok(CellValue::String(s.to_string()))
+        }
+        "datetime" => {
+            let n = obj.get("value").and_then(|x| x.as_f64()).ok_or_else(|| "datetime.value missing".to_string())?;
+            Ok(CellValue::DateTime(n))
+        }
+        "error" => {
+            let s = obj.get("value").and_then(|x| x.as_str()).ok_or_else(|| "error.value missing".to_string())?;
+            Ok(CellValue::Error(s.to_string()))
+        }
+        other => Err(format!("unknown value type '{}'", other)),
+    }
+}
+
+/// Surgical cell-level editor for Excel workbooks. Unlike rewriting the entire
+/// workbook, this tool only changes the listed cells and leaves every other
+/// part of the file (formulas, styles, charts, defined names, themes, etc.)
+/// intact.
+pub struct ModifyExcelTool;
+
+impl ModifyExcelTool {
+    pub fn new() -> Self { Self }
+    pub fn definition(&self) -> ToolDefinition {
+        ToolDefinition::new_with_label(
+            "modify_excel",
+            "修改 Excel 单元格",
+            "Modify specific cells in an Excel (.xlsx) file by surgically rewriting only the changed cells. All other workbook content (formulas, styles, charts) is preserved. Use read_office_file first to confirm sheet names and current values.",
+            ToolParameters::new(
+                vec!["path", "modifications"],
+                vec![
+                    ("path", "string", Some("Absolute path to the .xlsx file to modify")),
+                    ("modifications", "array", Some(
+                        "Array of cell modifications. Each entry: {sheet, address, value?, formula?, number_format?}.\n\
+                         - sheet: sheet name (e.g. \"Sales\")\n\
+                         - address: cell address in A1 form (e.g. \"B3\")\n\
+                         - value: {type, value} where type is one of: empty|int|float|bool|string|datetime|error\n\
+                         - formula: formula text without leading '=' (e.g. \"SUM(A1:A10)\"). Setting a formula replaces any existing value.\n\
+                         - number_format: optional Excel number format string (e.g. \"0.00%\", \"yyyy-mm-dd\")\n\
+                         At least one of value/formula must be provided."
+                    )),
+                ],
+            ),
+        )
+    }
+
+    pub async fn execute(&self, arguments: Value, workspace: Option<String>) -> Result<String, ToolError> {
+        let path = arguments["path"]
+            .as_str()
+            .ok_or_else(|| ToolError::InvalidArguments("modify_excel".to_string(), "path must be a string".into()))?
+            .to_string();
+        validate_workspace_path(&path, &workspace)?;
+
+        let mods_json = arguments["modifications"].as_array()
+            .ok_or_else(|| ToolError::InvalidArguments("modify_excel".to_string(), "modifications must be an array".into()))?;
+
+        let path_obj = std::path::Path::new(&path);
+        if path_obj.extension().and_then(|e| e.to_str()).unwrap_or("") != "xlsx" {
+            return Err(ToolError::InvalidArguments(
+                "modify_excel".to_string(),
+                "Only .xlsx files are supported".into(),
+            ));
+        }
+
+        let mut inputs: Vec<ExcelCellInput> = Vec::new();
+        for v in mods_json {
+            let parsed: ExcelCellInput = serde_json::from_value(v.clone())
+                .map_err(|e| ToolError::InvalidArguments("modify_excel".to_string(), format!("Invalid modification entry: {}", e)))?;
+            inputs.push(parsed);
+        }
+        let modifications: Vec<crate::office::CellModification> = inputs
+            .into_iter()
+            .map(|i| i.into_modification().map_err(|e| ToolError::InvalidArguments("modify_excel".to_string(), e)))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        if modifications.is_empty() {
+            return Err(ToolError::InvalidArguments(
+                "modify_excel".to_string(),
+                "modifications array is empty".into(),
+            ));
+        }
+
+        let bytes = tokio::fs::read(&path).await
+            .map_err(|e| ToolError::IoError(format!("Failed to read {}: {}", path, e)))?;
+
+        // Write to a sibling .tmp first, then atomically replace the original.
+        let tmp_path = path_obj.with_extension("xlsx.tmp");
+        crate::office::incremental_write_xlsx(&bytes, &modifications, &tmp_path)
+            .map_err(|e| ToolError::ExecutionError(format!("Failed to modify xlsx: {}", e)))?;
+        tokio::fs::rename(&tmp_path, &path).await
+            .map_err(|e| ToolError::IoError(format!("Failed to replace original file: {}", e)))?;
+
+        let summary: Vec<String> = modifications.iter().map(|m| {
+            let mut parts = vec![format!("{}!{}", m.sheet, m.address)];
+            if let Some(v) = &m.new_value {
+                parts.push(format!("value={}", v.as_string_for_display()));
+            }
+            if let Some(f) = &m.new_formula {
+                parts.push(format!("formula={}", f));
+            }
+            if let Some(fmt) = &m.new_number_format {
+                parts.push(format!("format={}", fmt));
+            }
+            parts.join(" ")
+        }).collect();
+
+        Ok(format!(
+            "Successfully modified {} cell(s) in {}: {}",
+            modifications.len(),
+            path,
+            summary.join("; ")
+        ))
+    }
+}
+
+impl Default for ModifyExcelTool {
+    fn default() -> Self { Self::new() }
+}
+
+// ─── get_excel_info ───────────────────────────────────────────────────────────
+
+/// Cheap-to-compute summary of a .xlsx file. Use this before `read_office_file`
+/// to decide whether the workbook is worth the full structured parse.
+pub struct GetExcelInfoTool;
+
+impl GetExcelInfoTool {
+    pub fn new() -> Self { Self }
+    pub fn definition(&self) -> ToolDefinition {
+        ToolDefinition::new_with_label(
+            "get_excel_info",
+            "获取 Excel 工作簿信息",
+            "Read summary metadata of an Excel (.xlsx) file without returning its full content.",
+            ToolParameters::new(
+                vec!["path"],
+                vec![
+                    ("path", "string", Some("Absolute path to the .xlsx file")),
+                ],
+            ),
+        )
+    }
+    pub async fn execute(&self, arguments: Value, workspace: Option<String>) -> Result<String, ToolError> {
+        let path = arguments["path"].as_str()
+            .ok_or_else(|| ToolError::InvalidArguments("get_excel_info".to_string(), "path must be a string".into()))?;
+        validate_workspace_path(path, &workspace)?;
+
+        let path_obj = std::path::Path::new(path);
+        if path_obj.extension().and_then(|e| e.to_str()).unwrap_or("") != "xlsx" {
+            return Err(ToolError::InvalidArguments("get_excel_info".to_string(), "Only .xlsx files are supported".into()));
+        }
+
+        let bytes = tokio::fs::read(path).await
+            .map_err(|e| ToolError::IoError(format!("Failed to read {}: {}", path, e)))?;
+
+        let workbook = crate::office::read_xlsx_structured(&bytes)
+            .map_err(|e| ToolError::ExecutionError(format!("Failed to parse xlsx: {}", e)))?;
+
+        let sheet_summaries: Vec<serde_json::Value> = workbook.sheets.iter().map(|s| {
+            serde_json::json!({
+                "name": s.name,
+                "state": s.state,
+                "max_row": s.max_row,
+                "max_col": s.max_col,
+                "cell_count": s.cells.len(),
+                "merged_count": s.merged_cells.len(),
+                "cells_with_formulas": s.cells.iter().filter(|c| c.formula.is_some()).count(),
+            })
+        }).collect();
+
+        let total_cells: usize = workbook.sheets.iter().map(|s| s.cells.len()).sum();
+        let total_formulas: usize = workbook.sheets.iter()
+            .map(|s| s.cells.iter().filter(|c| c.formula.is_some()).count())
+            .sum();
+
+        let result = serde_json::json!({
+            "file_name": path_obj.file_name().and_then(|n| n.to_str()).unwrap_or("unknown"),
+            "path": path,
+            "sheet_count": workbook.sheets.len(),
+            "total_cells": total_cells,
+            "total_formulas": total_formulas,
+            "sheets": sheet_summaries,
+            "file_size_bytes": bytes.len(),
+        });
+        Ok(result.to_string())
+    }
+}
+
+impl Default for GetExcelInfoTool {
+    fn default() -> Self { Self::new() }
+}
+
+// ─── create_excel ────────────────────────────────────────────────────────────
+
+/// A cell value passed to [`CreateExcelTool`]. Mirrors [`crate::office::CellValue`]
+/// so AI callers can express typed values without re-implementing the parser.
+#[derive(Debug, Clone, Deserialize)]
+struct CreateExcelCellValue {
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(default)]
+    value: Option<serde_json::Value>,
+}
+
+impl CreateExcelCellValue {
+    fn into_cell_value(self) -> Result<crate::office::CellValue, String> {
+        use crate::office::CellValue;
+        match self.kind.as_str() {
+            "empty" => Ok(CellValue::Empty),
+            "int" => {
+                let n = self.value.as_ref()
+                    .and_then(|v| v.as_i64())
+                    .ok_or_else(|| "int.value missing".to_string())?;
+                Ok(CellValue::Int(n))
+            }
+            "float" => {
+                let n = self.value.as_ref()
+                    .and_then(|v| v.as_f64())
+                    .ok_or_else(|| "float.value missing".to_string())?;
+                Ok(CellValue::Float(n))
+            }
+            "bool" => {
+                let b = self.value.as_ref()
+                    .and_then(|v| v.as_bool())
+                    .ok_or_else(|| "bool.value missing".to_string())?;
+                Ok(CellValue::Bool(b))
+            }
+            "string" => {
+                let s = self.value.as_ref()
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| "string.value missing".to_string())?;
+                Ok(CellValue::String(s.to_string()))
+            }
+            "datetime" => {
+                let n = self.value.as_ref()
+                    .and_then(|v| v.as_f64())
+                    .ok_or_else(|| "datetime.value missing".to_string())?;
+                Ok(CellValue::DateTime(n))
+            }
+            "error" => {
+                let s = self.value.as_ref()
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| "error.value missing".to_string())?;
+                Ok(CellValue::Error(s.to_string()))
+            }
+            other => Err(format!("unknown value type '{}'", other)),
+        }
+    }
+}
+
+/// A single cell entry used by [`CreateExcelTool`].
+#[derive(Debug, Clone, Deserialize)]
+struct CreateExcelCell {
+    /// A1-style cell address, e.g. "B3".
+    address: String,
+    /// Cell value. JSON shape: {"type": "int|float|bool|string|datetime|error|empty", "value": ...}.
+    /// May be omitted when `formula` is provided.
+    #[serde(default)]
+    value: Option<CreateExcelCellValue>,
+    /// Optional formula text (without leading "="), e.g. "SUM(A1:A10)".
+    #[serde(default)]
+    formula: Option<String>,
+}
+
+/// Sheet specification accepted by [`CreateExcelTool`].
+#[derive(Debug, Clone, Deserialize)]
+struct CreateExcelSheet {
+    /// Display name for the sheet (max 31 chars in xlsx).
+    name: String,
+    /// Cell entries. Optional — useful when the sheet starts empty.
+    #[serde(default)]
+    cells: Vec<CreateExcelCell>,
+    /// Optional list of merged ranges in A1:B3 form.
+    #[serde(default)]
+    merged: Vec<String>,
+}
+
+/// Create a new .xlsx file from scratch. The user provides sheet names and
+/// their cells; we assemble a valid OOXML package and write it atomically.
+pub struct CreateExcelTool;
+
+impl CreateExcelTool {
+    pub fn new() -> Self { Self }
+    pub fn definition(&self) -> ToolDefinition {
+        ToolDefinition::new_with_label(
+            "create_excel",
+            "创建 Excel 文件",
+            "Create a new Excel (.xlsx) file with the given sheets and cells. The file is created atomically; if a file already exists at the path it is overwritten.",
+            ToolParameters::new(
+                vec!["path", "sheets"],
+                vec![
+                    ("path", "string", Some("Absolute path where the new .xlsx file will be written")),
+                    ("sheets", "array", Some(
+                        "Array of sheet definitions. Each entry: {name, cells?, merged?}.\n\
+                         - name: sheet name (1-31 chars, must be unique)\n\
+                         - cells: array of {address, value?, formula?}\n\
+                         - merged: optional array of \"A1:B3\" range strings\n\
+                         - value: {type, value} where type is one of: empty|int|float|bool|string|datetime|error\n\
+                         - formula: formula text without leading '=' (e.g. \"SUM(A1:A10)\")\n\
+                         At least one sheet is required. The first sheet becomes the active sheet."
+                    )),
+                ],
+            ),
+        )
+    }
+
+    pub async fn execute(&self, arguments: Value, workspace: Option<String>) -> Result<String, ToolError> {
+        let path = arguments["path"]
+            .as_str()
+            .ok_or_else(|| ToolError::InvalidArguments("create_excel".to_string(), "path must be a string".into()))?
+            .to_string();
+        validate_workspace_path(&path, &workspace)?;
+
+        let sheets_json = arguments["sheets"].as_array()
+            .ok_or_else(|| ToolError::InvalidArguments("create_excel".to_string(), "sheets must be an array".into()))?;
+
+        if sheets_json.is_empty() {
+            return Err(ToolError::InvalidArguments(
+                "create_excel".to_string(),
+                "sheets array is empty (at least one sheet is required)".into(),
+            ));
+        }
+
+        // Build the structured workbook.
+        let mut sheets: Vec<crate::office::XlsxSheet> = Vec::new();
+        let mut names_seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for (idx, s) in sheets_json.iter().enumerate() {
+            let sheet_input: CreateExcelSheet = serde_json::from_value(s.clone())
+                .map_err(|e| ToolError::InvalidArguments("create_excel".to_string(), format!("Invalid sheets[{}]: {}", idx, e)))?;
+            if sheet_input.name.is_empty() {
+                return Err(ToolError::InvalidArguments("create_excel".to_string(), format!("sheets[{}].name is empty", idx)));
+            }
+            if sheet_input.name.len() > 31 {
+                return Err(ToolError::InvalidArguments(
+                    "create_excel".to_string(),
+                    format!("sheets[{}].name is too long: '{}' (max 31 chars)", idx, sheet_input.name),
+                ));
+            }
+            if !names_seen.insert(sheet_input.name.clone()) {
+                return Err(ToolError::InvalidArguments(
+                    "create_excel".to_string(),
+                    format!("Duplicate sheet name: '{}'", sheet_input.name),
+                ));
+            }
+
+            let mut cells: Vec<crate::office::Cell> = Vec::new();
+            let mut max_row = 0usize;
+            let mut max_col = 0usize;
+            for (ci, c) in sheet_input.cells.iter().enumerate() {
+                let (row, col) = crate::office::parse_cell_address(&c.address)
+                    .ok_or_else(|| ToolError::InvalidArguments(
+                        "create_excel".to_string(),
+                        format!("sheets[{}].cells[{}].address is invalid: '{}'", idx, ci, c.address),
+                    ))?;
+                let value = match c.value.clone() {
+                    Some(v) => Some(v.into_cell_value().map_err(|e| ToolError::InvalidArguments(
+                        "create_excel".to_string(),
+                        format!("sheets[{}].cells[{}].value: {}", idx, ci, e),
+                    ))?),
+                    None => Some(crate::office::CellValue::Empty),
+                };
+                if row + 1 > max_row { max_row = row + 1; }
+                if col + 1 > max_col { max_col = col + 1; }
+                cells.push(crate::office::Cell {
+                    row,
+                    col,
+                    value: value.unwrap_or(crate::office::CellValue::Empty),
+                    formula: c.formula.clone(),
+                    style: None,
+                });
+            }
+
+            let mut merged_cells: Vec<crate::office::MergedRange> = Vec::new();
+            for (mi, m) in sheet_input.merged.iter().enumerate() {
+                let (start, end) = m.split_once(':').ok_or_else(|| ToolError::InvalidArguments(
+                    "create_excel".to_string(),
+                    format!("sheets[{}].merged[{}] must be in A1:B3 form: '{}'", idx, mi, m),
+                ))?;
+                let (sr, sc) = crate::office::parse_cell_address(start).ok_or_else(|| ToolError::InvalidArguments(
+                    "create_excel".to_string(),
+                    format!("sheets[{}].merged[{}] start is invalid: '{}'", idx, mi, start),
+                ))?;
+                let (er, ec) = crate::office::parse_cell_address(end).ok_or_else(|| ToolError::InvalidArguments(
+                    "create_excel".to_string(),
+                    format!("sheets[{}].merged[{}] end is invalid: '{}'", idx, mi, end),
+                ))?;
+                merged_cells.push(crate::office::MergedRange { start_row: sr, start_col: sc, end_row: er, end_col: ec });
+                if er + 1 > max_row { max_row = er + 1; }
+                if ec + 1 > max_col { max_col = ec + 1; }
+            }
+
+            sheets.push(crate::office::XlsxSheet {
+                name: sheet_input.name,
+                state: "visible".to_string(),
+                cells,
+                merged_cells,
+                max_row,
+                max_col,
+            });
+        }
+
+        let workbook = crate::office::XlsxWorkbook {
+            sheets,
+            shared_strings: Vec::new(),
+        };
+
+        // Ensure parent directory exists, then write atomically.
+        let path_obj = std::path::Path::new(&path);
+        if let Some(parent) = path_obj.parent() {
+            if !parent.as_os_str().is_empty() && !parent.exists() {
+                tokio::fs::create_dir_all(parent).await
+                    .map_err(|e| ToolError::IoError(format!("Failed to create parent dir: {}", e)))?;
+            }
+        }
+        let tmp_path = path_obj.with_extension("xlsx.tmp");
+        crate::office::create_xlsx_workbook(&workbook, &tmp_path)
+            .map_err(|e| ToolError::ExecutionError(format!("Failed to create xlsx: {}", e)))?;
+        tokio::fs::rename(&tmp_path, &path).await
+            .map_err(|e| ToolError::IoError(format!("Failed to move temp file into place: {}", e)))?;
+
+        let total_cells: usize = workbook.sheets.iter().map(|s| s.cells.len()).sum();
+        let sheet_names: Vec<String> = workbook.sheets.iter().map(|s| s.name.clone()).collect();
+        Ok(format!(
+            "Created {} with {} sheet(s) and {} cell(s): {}",
+            path,
+            sheet_names.len(),
+            total_cells,
+            sheet_names.join(", "),
+        ))
+    }
+}
+
+impl Default for CreateExcelTool {
     fn default() -> Self { Self::new() }
 }

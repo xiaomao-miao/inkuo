@@ -263,7 +263,7 @@ mod database_tools;
 
 pub use file_tools::{ReadFileTool, WriteFileTool, EditFileTool, CreateDirTool, MoveFileTool};
 pub use search_tools::{ListDirTool, GlobTool, GrepTool};
-pub use office_tools::{ReadOfficeFileTool, CreateWordDocTool, CompareWordDocsTool, GetDocxInfoTool};
+pub use office_tools::{ReadOfficeFileTool, CreateWordDocTool, CompareWordDocsTool, GetDocxInfoTool, ModifyExcelTool, GetExcelInfoTool, CreateExcelTool};
 pub use database_tools::DatabaseSearchTool;
 
 /// Unified executor enum combining all tool implementations
@@ -280,6 +280,9 @@ pub enum ToolExecutor {
     CreateWordDoc(office_tools::CreateWordDocTool),
     CompareWordDocs(office_tools::CompareWordDocsTool),
     GetDocxInfo(office_tools::GetDocxInfoTool),
+    ModifyExcel(office_tools::ModifyExcelTool),
+    GetExcelInfo(office_tools::GetExcelInfoTool),
+    CreateExcel(office_tools::CreateExcelTool),
     DatabaseSearch(database_tools::DatabaseSearchTool),
 }
 
@@ -298,6 +301,9 @@ impl ToolExecutor {
             ToolExecutor::CreateWordDoc(_) => "create_word_doc",
             ToolExecutor::CompareWordDocs(_) => "compare_word_docs",
             ToolExecutor::GetDocxInfo(_) => "get_docx_info",
+            ToolExecutor::ModifyExcel(_) => "modify_excel",
+            ToolExecutor::GetExcelInfo(_) => "get_excel_info",
+            ToolExecutor::CreateExcel(_) => "create_excel",
             ToolExecutor::DatabaseSearch(_) => "database_search",
         }
     }
@@ -316,6 +322,9 @@ impl ToolExecutor {
             ToolExecutor::CreateWordDoc(t) => t.definition(),
             ToolExecutor::CompareWordDocs(t) => t.definition(),
             ToolExecutor::GetDocxInfo(t) => t.definition(),
+            ToolExecutor::ModifyExcel(t) => t.definition(),
+            ToolExecutor::GetExcelInfo(t) => t.definition(),
+            ToolExecutor::CreateExcel(t) => t.definition(),
             ToolExecutor::DatabaseSearch(t) => t.definition(),
         }
     }
@@ -334,6 +343,9 @@ impl ToolExecutor {
             ToolExecutor::CreateWordDoc(t) => t.execute(arguments, workspace).await,
             ToolExecutor::CompareWordDocs(t) => t.execute(arguments, workspace).await,
             ToolExecutor::GetDocxInfo(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::ModifyExcel(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::GetExcelInfo(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::CreateExcel(t) => t.execute(arguments, workspace).await,
             ToolExecutor::DatabaseSearch(t) => t.execute(arguments, workspace).await,
         }
     }
@@ -418,6 +430,9 @@ impl ToolRegistry {
             ToolExecutor::CreateWordDoc(CreateWordDocTool),
             ToolExecutor::CompareWordDocs(CompareWordDocsTool),
             ToolExecutor::GetDocxInfo(GetDocxInfoTool),
+            ToolExecutor::ModifyExcel(ModifyExcelTool),
+            ToolExecutor::GetExcelInfo(GetExcelInfoTool),
+            ToolExecutor::CreateExcel(CreateExcelTool),
             // DatabaseSearchTool added lazily via with_app_handle()
         ];
 
@@ -463,7 +478,7 @@ impl ToolRegistry {
 
         let is_file_modification = matches!(
             tool_call.name.as_str(),
-            "write_file" | "edit_file" | "create_word_doc" | "create_dir"
+            "write_file" | "edit_file" | "create_word_doc" | "create_dir" | "modify_excel" | "create_excel"
         );
 
         let file_path = is_file_modification

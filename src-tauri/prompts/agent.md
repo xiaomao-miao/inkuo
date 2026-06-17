@@ -45,6 +45,8 @@ Read a Word (.docx) or Excel (.xlsx) file and extract its content.
     - Paragraph element: `{id, type:"paragraph", text, style, runs?, numbering?}`
     - Table element: `{id, type:"table", position, header, rows}`
   - `sheets` (array, Excel only): List of sheet names
+  - `sheets_summary` (array, Excel only): For each sheet — `{name, max_row, max_col, cell_count, merged_count}`. Use this to understand workbook size.
+  - `values` (array, Excel only): For each sheet — `{name, values: [[...row 0], [...row 1], ...], merged_cells: ["A1:B3", ...]}`. `values` is a 2D string grid with formula cells rendered as `=...`. This is the primary way to inspect cell contents; the legacy `text_content` is a best-effort human render.
 - **Supported formats**: `.docx` (Word) and `.xlsx` (Excel)
 - **Note**: Always read the file before modifying it. Use the `id` values from `elements` to target specific paragraphs or tables for modification.
 
@@ -52,6 +54,11 @@ Read a Word (.docx) or Excel (.xlsx) file and extract its content.
 Read summary metadata about a Word (.docx) file without returning the full content. Useful for understanding document size before opening it.
 - **Parameters**: `path` (string, required)
 - **Output**: JSON with `paragraph_count`, `table_count`, `word_count`, `has_headers`, `has_footers`, `has_images`, `styles_used`, `total_characters`.
+
+### get_excel_info
+Read summary metadata about an Excel (.xlsx) file without returning the full content. Useful for understanding workbook size before opening it.
+- **Parameters**: `path` (string, required)
+- **Output**: JSON with `sheet_count`, `total_cells`, `total_formulas`, and per-sheet `{name, state, max_row, max_col, cell_count, merged_count, cells_with_formulas}`.
 
 ### create_word_doc
 Create, modify, append, or delete content in a Word (.docx) document. Uses a unified `elements[]` interface for all operations.
@@ -237,6 +244,109 @@ For documents with **roughly 2000 characters of generated text or more**, build 
   ```
 
 **Note**: For Excel files, use `read_office_file` first to understand the structure, then modify using file operations.
+
+### create_excel
+Create a new Excel (.xlsx) file from scratch. Builds a valid OOXML package and writes it atomically. If a file already exists at the path it is overwritten.
+- **Parameters**:
+  - `path` (string, required): Absolute path where the new .xlsx file will be written
+  - `sheets` (array, required): Sheet definitions; at least one is required. Each entry:
+    - `name` (string, required): Sheet name (1-31 chars, must be unique within the workbook)
+    - `cells` (array, optional): List of cell entries, each:
+      - `address` (string, required): A1-style cell address, e.g. `"B3"`
+      - `value` (object, optional): `{type, value}` where `type` is one of:
+        - `{"type": "empty"}` — clear the cell
+        - `{"type": "int", "value": 100}`
+        - `{"type": "float", "value": 3.14}`
+        - `{"type": "bool", "value": true}`
+        - `{"type": "string", "value": "hello"}`
+        - `{"type": "datetime", "value": 45292.0}` (Excel serial date)
+        - `{"type": "error", "value": "#DIV/0!"}`
+      - `formula` (string, optional): Formula text without leading `=`, e.g. `"SUM(A1:A10)"`. If provided, the cached `value` is what the formula evaluates to.
+    - `merged` (array of strings, optional): Merged ranges in `A1:B3` form, e.g. `["A1:C1"]`
+
+**Create a new workbook**:
+```
+create_excel with
+  path="/workspace/sales.xlsx",
+  sheets=[
+    {name: "Sales", cells: [
+      {address: "A1", value: {type: "string", value: "Region"}},
+      {address: "B1", value: {type: "string", value: "Revenue"}},
+      {address: "A2", value: {type: "string", value: "North"}},
+      {address: "B2", value: {type: "int", value: 1200}},
+      {address: "A3", value: {type: "string", value: "South"}},
+      {address: "B3", value: {type: "int", value: 800}},
+      {address: "B4", formula: "SUM(B2:B3)"}
+    ]},
+    {name: "Notes", cells: [
+      {address: "A1", value: {type: "string", value: "Q1 summary"}}
+    ]}
+  ]
+```
+
+**Create a sheet with a merged header**:
+```
+create_excel with
+  path="/workspace/report.xlsx",
+  sheets=[
+    {name: "Summary",
+     merged: ["A1:C1"],
+     cells: [
+       {address: "A1", value: {type: "string", value: "Monthly Report"}},
+       {address: "A2", value: {type: "string", value: "Month"}},
+       {address: "B2", value: {type: "string", value: "Sales"}},
+       {address: "C2", value: {type: "string", value: "Profit"}},
+       {address: "A3", value: {type: "string", value: "January"}},
+       {address: "B3", value: {type: "int", value: 5000}},
+       {address: "C3", value: {type: "int", value: 1200}}
+     ]}
+  ]
+```
+
+### modify_excel
+Surgically modify specific cells in an existing Excel (.xlsx) file. Only the listed cells are rewritten — every other part of the workbook (formulas, styles, charts, defined names) is preserved verbatim. The file is rewritten atomically via a `.xlsx.tmp` sibling.
+- **Parameters**:
+  - `path` (string, required): Absolute path to the .xlsx file to modify
+  - `modifications` (array, required): At least one entry, each:
+    - `sheet` (string, required): Sheet name (case-sensitive, must match a sheet in the workbook)
+    - `address` (string, required): Cell address in A1 form, e.g. `"B3"`
+    - `value` (object, optional): Same shape as in `create_excel`
+    - `formula` (string, optional): Formula text without leading `=`. Setting a formula replaces any existing value with the cached value you provide in `value`.
+    - `number_format` (string, optional): Excel number format string, e.g. `"0.00%"`, `"yyyy-mm-dd"`, `"#,##0"`
+
+**Before calling `modify_excel`**, you almost always want to call `read_office_file` (or `get_excel_info`) first to confirm:
+1. The exact sheet names (case-sensitive)
+2. The current value at the target cell address
+
+**Common workflows**:
+- **Fix a single number**: `[{sheet: "Sales", address: "B5", value: {type: "int", value: 1500}}]`
+- **Update several cells at once**: pass them all in a single `modifications` array
+- **Change a formula**: `[{sheet: "Totals", address: "C10", formula: "SUM(C2:C9)"}]`
+- **Set a percentage format**: `[{sheet: "Ratios", address: "B2", value: {type: "float", value: 0.85}, number_format: "0.00%"}]`
+- **Clear a cell**: `[{sheet: "Sheet1", address: "A1", value: {type: "empty"}}]`
+
+**Example** — update two cells and apply a percentage format:
+```
+modify_excel with
+  path="/workspace/budget.xlsx",
+  modifications=[
+    {sheet: "2024", address: "B5", value: {type: "float", value: 0.92}, number_format: "0.00%"},
+    {sheet: "2024", address: "C5", value: {type: "float", value: 1.15}, number_format: "0.00%"}
+  ]
+```
+
+**Key guarantees**:
+- All cells you do NOT mention in `modifications` are kept exactly as-is, including their formulas, styles, and number formats.
+- New cells (addresses that did not exist in the original file) are inserted as the last row in their target sheet.
+- The operation is atomic: a `.xlsx.tmp` sibling is written and then renamed onto the target path.
+
+### Excel editing strategy
+When the user asks you to "edit", "fix", "update", or "change" something in an .xlsx file:
+1. **Inspect first** with `get_excel_info` (cheap) or `read_office_file` (full content). The `values` array shows you every cell as a 2D string grid with formulas rendered as `=...`.
+2. **Identify the exact sheet name and cell addresses** from the inspection result.
+3. **Call `modify_excel`** with only the cells that actually need to change. Do NOT pass every cell — pass just the diff.
+4. **If you need a fresh file**, use `create_excel` to build it from scratch.
+5. **Avoid `write_file` for .xlsx files**: xlsx is a binary zip package and writing text over it will corrupt the file. Always go through `modify_excel` or `create_excel`.
 
 ### compare_word_docs
 Compare two Word (.docx) files and return a structured diff identifying which paragraphs/tables were added, removed, or modified. Useful for reviewing what changed between a backup and the current version, or between two AI-generated revisions.
@@ -480,7 +590,11 @@ For **Agent Mode**, in addition to file operations, the AI has `database_search`
 
 **Office Document Workflow**:
 - **Creating new Word documents**: Use `create_word_doc` (structured, no JSON needed)
+- **Modifying Word documents**: Use `read_office_file` first to get stable element IDs, then call `create_word_doc` with the IDs and the changes you want.
 - **Reading existing documents**: Use `read_office_file`
+- **Creating new Excel workbooks**: Use `create_excel` (builds a valid .xlsx from scratch)
+- **Inspecting Excel size**: Use `get_excel_info` (cheap, no full parse)
+- **Modifying Excel cells**: Use `modify_excel` (preserves formulas, styles, and all other content). **Never use `write_file` on an .xlsx** — that would corrupt the binary zip package.
 </read_only_vs_full>
 
 ## Example Workflow

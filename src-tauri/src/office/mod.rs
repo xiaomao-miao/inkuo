@@ -8,7 +8,13 @@ mod xlsx;
 
 pub use shared::{OfficeError, TableCell, TableRow, read_all_zip_entries};
 pub use docx::{WordDocument, WordParagraph, WordTable, FontRun, DocElement, NumberingRef, read_word_document, word_document_to_text, write_word_document_to_path};
-pub use xlsx::{ExcelWorkbook, read_excel_workbook, excel_workbook_to_text};
+pub use xlsx::{
+    ExcelWorkbook, read_excel_workbook, excel_workbook_to_text,
+    XlsxWorkbook, XlsxSheet, Cell, CellValue, CellStyle, MergedRange,
+    CellModification, read_xlsx_structured, xlsx_workbook_to_text,
+    incremental_write_xlsx, create_xlsx_workbook,
+    cell_address, parse_cell_address,
+};
 
 use std::path::Path;
 
