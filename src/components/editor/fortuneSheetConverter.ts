@@ -154,7 +154,8 @@ function rustCellToFortune(cell: RustCell): FortuneCell {
   }
 
   if (cell.formula) {
-    fortune.f = cell.formula;
+    // OOXML <f> has no leading "=", HyperFormula requires it.
+    fortune.f = cell.formula.startsWith('=') ? cell.formula : `=${cell.formula}`;
   }
 
   const s = cell.style;
@@ -230,6 +231,9 @@ export function rustSheetToFortuneSheet(sheet: RustXlsxSheet): FortuneSheetCoreS
     row:    Math.max(sheet.max_row || 100, 100),
     celldata,
     config: Object.keys(mergeConfig).length > 0 ? { merge: mergeConfig } : undefined,
+    // Omit calcChain so FortuneSheet rebuilds it from celldata.
+    // calcChain becomes stale after loading external data and causes cross-sheet
+    // formula references to stop working. calculateFormula() will regenerate it.
   };
 }
 
@@ -242,36 +246,73 @@ export function rustWorkbookToFortuneSheets(workbook: RustXlsxWorkbook): Fortune
 
 // ─── Reverse conversion: FortuneSheet Sheet -> Rust XlsxSheet ─────────────────
 
-/** Infer Rust CellValue from a FortuneSheet cell value. */
+/** Infer Rust CellValue from a FortuneSheet cell value.
+ * FortuneSheet formula cells:
+ *   - f: formula text (e.g. "=SUM(A1:A10)")
+ *   - v: computed value (set by HyperFormula after calculateFormula)
+ *   - m: formatted string of the computed value
+ *
+ * When a cell has a formula but HyperFormula hasn't computed yet, v may be
+ * the formula string itself or the previous cached value. We only treat v
+ * as a result if it doesn't start with '=' or if there's an m field.
+ */
 function fortuneValueToRust(v: FortuneCell): RustCellValue {
-  if (v.v === undefined || v.v === null || v.v === '') {
+  const hasFormula = typeof v.f === 'string' && v.f.length > 0;
+  const raw = v.v;
+
+  // Empty / no value — even for formula cells (formula may produce empty)
+  if (raw === undefined || raw === null || raw === '') {
     return { type: 'empty' };
   }
-  const raw = v.v;
-  const ct = v.ct;
 
+  // Formula that produced a zero/numeric result
+  if (hasFormula && typeof raw === 'number' && !isNaN(raw)) {
+    if (Number.isInteger(raw)) return { type: 'int', value: raw };
+    return { type: 'float', value: raw };
+  }
+
+  // Formula that produced a boolean
+  if (hasFormula && typeof raw === 'boolean') {
+    return { type: 'bool', value: raw ? 1 : 0 };
+  }
+
+  // Formula that produced an error string
+  if (hasFormula && typeof raw === 'string' && raw.startsWith('#')) {
+    return { type: 'error', value: raw };
+  }
+
+  // Formula that produced a string result
+  if (hasFormula && typeof raw === 'string') {
+    if (raw.startsWith('=')) {
+      // HyperFormula hasn't run yet — treat as empty; formula text is stored
+      // separately in the Rust formula field (handled by the caller).
+      return { type: 'empty' };
+    }
+    return { type: 'string', value: raw };
+  }
+
+  // Non-formula cells
+  const ct = v.ct;
   if (ct?.t === 's') {
     return { type: 'string', value: String(raw) };
   }
-
   if (ct?.t === 'n') {
     const num = typeof raw === 'number' ? raw : Number(raw);
     if (isNaN(num)) return { type: 'string', value: String(raw) };
-    if (Number.isInteger(num)) {
-      return { type: 'int', value: num };
-    }
+    if (Number.isInteger(num)) return { type: 'int', value: num };
     const fa = ct.fa ?? '';
     if (fa.includes('yy') || fa.includes('mm') || fa.includes('dd') || fa.includes('hh')) {
       return { type: 'datetime', value: num };
     }
     return { type: 'float', value: num };
   }
-
   if (ct?.t === 'b') {
     return { type: 'bool', value: raw ? 1 : 0 };
   }
-
-  return { type: 'string', value: (raw as string) };
+  if (typeof raw === 'string' && raw.startsWith('=')) {
+    return { type: 'string', value: raw };
+  }
+  return { type: 'string', value: String(raw) };
 }
 
 /** Infer Rust CellStyle from FortuneSheet cell styles. */
@@ -310,27 +351,50 @@ export function fortuneSheetToRustSheet(sheet: FortuneSheetCoreSheet): RustXlsxS
   const mergedRanges: RustMergedRange[] = [];
 
   const celldata = sheet.celldata ?? [];
-  const dataMatrix = sheet.data ?? [];
-
-  const allCells: CellWithRowAndCol[] = [...celldata];
-
-  if (dataMatrix.length > 0) {
-    dataMatrix.forEach((row, r) => {
-      row.forEach((cell, c) => {
-        if (cell !== null) {
-          allCells.push({ r, c, v: cell });
-        }
-      });
-    });
-  }
-
   // Collect merged anchors
   const mergeConfig = sheet.config?.merge ?? {};
   const anchorKeys = new Set(Object.keys(mergeConfig));
 
-  for (const item of allCells) {
-    const { r, c, v } = item;
-    if (!v) continue;
+  // Build a sparse set of all cells that exist in celldata (authoritative source
+  // of what the user explicitly created). We only add cells to this set — we do
+  // NOT iterate over sheet.data and add cells that are not in celldata, because:
+  //   1. sheet.data is a dense array of size (row × column) — by default
+  //      100 × 26 = 2600 cells, most of which are empty {}
+  //   2. Converting those empty {} to Rust Cells and writing them to the xlsx
+  //      pollutes the file with phantom cells that overwrite real data on reload
+  //   3. sheet.data is updated by HyperFormula with computed formula results;
+  //      we only use it to enrich cells already in celldata, not to discover new ones
+  const celldataKeys = new Set<string>();
+  const celldataMap = new Map<string, FortuneCell>();
+  for (const item of celldata) {
+    if (item.v) {
+      const key = `${item.r}_${item.c}`;
+      celldataKeys.add(key);
+      celldataMap.set(key, item.v);
+    }
+  }
+
+  // For cells in celldata: prefer sheet.data's computed value (from HyperFormula)
+  // if the cell is non-null there. This ensures formula results (v) are captured.
+  const dataMatrix = sheet.data ?? [];
+  for (let r = 0; r < dataMatrix.length; r++) {
+    const row = dataMatrix[r];
+    if (!row) continue;
+    for (let c = 0; c < row.length; c++) {
+      const cell = row[c];
+      if (!cell) continue;
+      const key = `${r}_${c}`;
+      // Only use sheet.data for cells that are already in celldata.
+      // This prevents phantom empty cells from polluting the save.
+      if (celldataKeys.has(key)) {
+        celldataMap.set(key, cell);
+      }
+    }
+  }
+
+  for (const key of celldataKeys) {
+    const [r, c] = key.split('_').map(Number);
+    const v = celldataMap.get(key)!;
 
     const mergeKey = `${r}_${c}`;
     const isAnchor = anchorKeys.has(mergeKey);
@@ -343,7 +407,7 @@ export function fortuneSheetToRustSheet(sheet: FortuneSheetCoreSheet): RustXlsxS
       row: r,
       col: c,
       value: cellValue,
-      formula: v.f,
+      formula: v.f?.startsWith('=') ? v.f.slice(1) : v.f,
       style: hasStyle ? cellStyle : undefined,
     });
 
