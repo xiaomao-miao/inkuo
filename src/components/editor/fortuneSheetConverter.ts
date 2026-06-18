@@ -346,84 +346,50 @@ function fortuneStyleToRust(v: FortuneCell): RustCellStyle {
  * Convert a FortuneSheet Sheet back to a Rust XlsxSheet.
  * Used when saving edits back to an xlsx file.
  */
-export function fortuneSheetToRustSheet(sheet: FortuneSheetCoreSheet): RustXlsxSheet {
+/**
+ * Convert a FortuneSheet Sheet back to a Rust XlsxSheet.
+ * Used when saving edits back to an xlsx file.
+ *
+ * The `celldata` parameter should be the result of calling
+ * `workbookRef.current.dataToCelldata(sheet.data)`. This converts the dense
+ * data matrix back to the sparse celldata format — the standard/authoritative
+ * format for storing and loading spreadsheet data.
+ */
+export function fortuneSheetToRustSheet(sheet: FortuneSheetCoreSheet, celldata: { r: number; c: number; v: FortuneCell }[]): RustXlsxSheet {
   const cells: RustCell[] = [];
   const mergedRanges: RustMergedRange[] = [];
 
-  const celldata = sheet.celldata ?? [];
   // Collect merged anchors
   const mergeConfig = sheet.config?.merge ?? {};
-  const anchorKeys = new Set(Object.keys(mergeConfig));
 
-  // Build a sparse set of all cells that exist in celldata (authoritative source
-  // of what the user explicitly created). We only add cells to this set — we do
-  // NOT iterate over sheet.data and add cells that are not in celldata, because:
-  //   1. sheet.data is a dense array of size (row × column) — by default
-  //      100 × 26 = 2600 cells, most of which are empty {}
-  //   2. Converting those empty {} to Rust Cells and writing them to the xlsx
-  //      pollutes the file with phantom cells that overwrite real data on reload
-  //   3. sheet.data is updated by HyperFormula with computed formula results;
-  //      we only use it to enrich cells already in celldata, not to discover new ones
-  const celldataKeys = new Set<string>();
-  const celldataMap = new Map<string, FortuneCell>();
+  for (const def of Object.values(mergeConfig)) {
+    mergedRanges.push({
+      start_row: def.r,
+      start_col: def.c,
+      end_row:   def.r + (def.rs ?? 1) - 1,
+      end_col:   def.c + (def.cs ?? 1) - 1,
+    });
+  }
+
   for (const item of celldata) {
-    if (item.v) {
-      const key = `${item.r}_${item.c}`;
-      celldataKeys.add(key);
-      celldataMap.set(key, item.v);
-    }
-  }
-
-  // For cells in celldata: prefer sheet.data's computed value (from HyperFormula)
-  // if the cell is non-null there. This ensures formula results (v) are captured.
-  const dataMatrix = sheet.data ?? [];
-  for (let r = 0; r < dataMatrix.length; r++) {
-    const row = dataMatrix[r];
-    if (!row) continue;
-    for (let c = 0; c < row.length; c++) {
-      const cell = row[c];
-      if (!cell) continue;
-      const key = `${r}_${c}`;
-      // Only use sheet.data for cells that are already in celldata.
-      // This prevents phantom empty cells from polluting the save.
-      if (celldataKeys.has(key)) {
-        celldataMap.set(key, cell);
-      }
-    }
-  }
-
-  for (const key of celldataKeys) {
-    const [r, c] = key.split('_').map(Number);
-    const v = celldataMap.get(key)!;
-
-    const mergeKey = `${r}_${c}`;
-    const isAnchor = anchorKeys.has(mergeKey);
+    const v = item.v;
+    if (!v || typeof v !== 'object') continue;
 
     const cellValue = fortuneValueToRust(v);
     const cellStyle = fortuneStyleToRust(v);
     const hasStyle = Object.keys(cellStyle).length > 0;
 
     cells.push({
-      row: r,
-      col: c,
-      value: cellValue,
+      row:    item.r,
+      col:    item.c,
+      value:  cellValue,
       formula: v.f?.startsWith('=') ? v.f.slice(1) : v.f,
-      style: hasStyle ? cellStyle : undefined,
+      style:  hasStyle ? cellStyle : undefined,
     });
-
-    if (isAnchor) {
-      const def = mergeConfig[mergeKey];
-      mergedRanges.push({
-        start_row: def.r,
-        start_col: def.c,
-        end_row:  def.r + (def.rs ?? 1) - 1,
-        end_col:  def.c + (def.cs ?? 1) - 1,
-      });
-    }
   }
 
-  const maxRow = cells.reduce((m, c) => Math.max(m, c.row + 1), 0);
-  const maxCol = cells.reduce((m, c) => Math.max(m, c.col + 1), 0);
+  const maxRow = cells.reduce((m, cell) => Math.max(m, cell.row + 1), 0);
+  const maxCol = cells.reduce((m, cell) => Math.max(m, cell.col + 1), 0);
 
   return {
     name: sheet.name,
@@ -437,10 +403,19 @@ export function fortuneSheetToRustSheet(sheet: FortuneSheetCoreSheet): RustXlsxS
 
 /**
  * Convert a FortuneSheet Workbook (Sheet[]) back to a Rust XlsxWorkbook.
+ * Calls `workbookRef.current.dataToCelldata` for each sheet's data matrix to get
+ * the authoritative celldata, then converts to Rust format for xlsx writing.
  */
-export function fortuneSheetsToRustWorkbook(sheets: FortuneSheetCoreSheet[]): RustXlsxWorkbook {
+export function fortuneSheetsToRustWorkbook(
+  sheets: FortuneSheetCoreSheet[],
+  dataToCelldata: (data: unknown[][]) => { r: number; c: number; v: FortuneCell }[],
+): RustXlsxWorkbook {
   return {
-    sheets: sheets.map(fortuneSheetToRustSheet),
+    sheets: sheets.map((sheet) => {
+      const data = sheet.data ?? [];
+      const celldata = dataToCelldata(data as unknown[][]);
+      return fortuneSheetToRustSheet(sheet, celldata);
+    }),
     shared_strings: [],
   };
 }

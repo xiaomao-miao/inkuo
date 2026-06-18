@@ -354,43 +354,29 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
   // which would cause FortuneSheet's useEffect([onChange]) to re-fire.
   const recalcAllSheetsRef = useRef<() => void>(() => {});
   const loadedSheetsRef = useRef<FortuneSheetCoreSheet[]>([]);
+  const hasRecalculatedRef = useRef(false);
 
-  // Debounce timer for formula recalculation — avoids blocking the main thread
-  // on every keystroke while still keeping formulas reasonably up to date.
-  const recalcTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // ── Hooks — stable via useMemo with stable dependencies ──────────────────
-  // Uses prevActiveSheetIdRef to track which sheet was previously active,
-  // so we can recalculate it when switching away.
-  const prevActiveSheetIdRef = useRef<string | null>(null);
-  const hooks = useMemo((): import('@fortune-sheet/core').Hooks => ({
-    afterActivateSheet(newSheetId: string) {
-      const prev = prevActiveSheetIdRef.current;
-      if (prev && prev !== newSheetId && workbookRef.current) {
-        workbookRef.current.calculateFormula(prev);
-      }
-      prevActiveSheetIdRef.current = newSheetId;
-    },
-  }), []);
+  // ── Hooks — empty. Formula recalculation is handled by FortuneSheet internally.
+  const hooks = useMemo((): import('@fortune-sheet/core').Hooks => ({}), []);
 
   // onChange handler: stable ref function, called by Workbook on every change.
   // Updates loadedSheetsRef for save; does NOT call setFortuneSheets to avoid
   // triggering a Workbook data prop change on every keystroke (which re-initializes
   // the entire sheet and causes lag).
-  // Formula recalculation is debounced: runs 300ms after the user stops typing,
-  // so rapid input doesn't block the main thread on every keystroke.
+  // Formula recalculation is run once on the very first onChange (Workbook mount),
+  // because that's the only reliable moment when workbookRef.current is available
+  // AND initSheetData has finished populating the data matrices.
   const handleFortuneChange = useCallback(
     (changedSheets: FortuneSheetCoreSheet[]) => {
+      // loadedSheetsRef is kept for backward compatibility, but save now reads
+      // directly from workbookRef.getAllSheets() which is always current.
       loadedSheetsRef.current = changedSheets;
       setIsDirty(true);
 
-      if (recalcTimerRef.current !== null) {
-        clearTimeout(recalcTimerRef.current);
+      if (!hasRecalculatedRef.current && workbookRef.current) {
+        hasRecalculatedRef.current = true;
+        recalcAllSheetsRef.current();
       }
-      recalcTimerRef.current = setTimeout(() => {
-        recalcTimerRef.current = null;
-        recalcAllSheetsRef.current?.();
-      }, 300);
     },
     [],
   );
@@ -453,35 +439,39 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
     }
   }, [isActive, isDirty, filePath, setOpenTabDirty]);
 
-  // ── After load + Workbook mount: trigger formula calculation ──────────────────
-  // Runs whenever loading becomes false and Workbook has mounted.
-  // Also serves to set prevActiveSheetIdRef for the afterActivateSheet hook.
+  // ── Sync dirty state to sidebar tab ────────────────────────────────
   useEffect(() => {
     if (loading) return;
-    recalcAllSheetsRef.current();
-    const sheets = workbookRef.current?.getAllSheets();
-    if (sheets?.[0]?.id) {
-      prevActiveSheetIdRef.current = sheets[0].id;
-    }
   }, [loading]);
 
   // ── Save ────────────────────────────────────────────────────────────────
   const handleSave = useCallback(async () => {
-    if (!isDirty) return;
+    const wb = workbookRef.current;
+    if (!wb) {
+      pushNotification({ kind: 'error', title: '保存失败', message: '表格引擎未就绪' });
+      return;
+    }
+    const sheets = wb.getAllSheets();
+    if (!sheets?.length) {
+      pushNotification({ kind: 'error', title: '保存失败', message: '没有可用的工作表数据' });
+      return;
+    }
     try {
       recalcAllSheetsRef.current();
-      const sheets = workbookRef.current?.getAllSheets();
-      if (!sheets) return;
-      const rustWorkbook = fortuneSheetsToRustWorkbook(sheets);
+      const latestSheets = wb.getAllSheets();
+      if (!latestSheets?.length) return;
+      const rustWorkbook = fortuneSheetsToRustWorkbook(latestSheets, wb.dataToCelldata.bind(wb));
       await invoke('write_xlsx_structured', { path: filePath, workbook: rustWorkbook });
-      setFortuneSheetsToStore(filePath, { sheets });
+      loadedSheetsRef.current = latestSheets;
+      setFortuneSheetsToStore(filePath, { sheets: latestSheets });
       setIsDirty(false);
       setOpenTabDirty(filePath, false);
     } catch (err) {
       const message = reportError('office-excel-save', err);
       pushNotification({ kind: 'error', title: '保存 Excel 文档失败', message });
+      console.error('[Excel Save] Error:', err);
     }
-  }, [isDirty, filePath, setFortuneSheetsToStore, setOpenTabDirty, pushNotification]);
+  }, [filePath, setFortuneSheetsToStore, setOpenTabDirty, pushNotification]);
 
   useKeyboardSave({ onSave: handleSave, enabled: isDirty && isActive });
 
