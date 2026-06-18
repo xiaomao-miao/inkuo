@@ -329,55 +329,90 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
   const workbookRef = useRef<WorkbookInstance | null>(null);
   const hasLoadedRef = useRef(false);
 
-  // Track the previously active sheet ID so we can recalculate it on switch.
-  // When the user clicks a sheet tab, HyperFormula has already updated that sheet's
-  // cell values, but the previously active sheet's cross-sheet formula references
-  // may still show stale cached results.
-  const prevActiveSheetIdRef = useRef<string | null>(null);
-
-  // FortuneSheet data — this is what the Workbook component uses directly
+  // ── State that actually needs to trigger re-renders ──────────────────────
+  // fortuneSheets is the single source of truth for the Workbook data prop.
+  // We intentionally update it ONLY for initial load and external file changes,
+  // NOT for every edit (onChange only sets loadedSheetsRef for dirty tracking).
   const [fortuneSheets, setFortuneSheets] = useState<FortuneSheetCoreSheet[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isDirty, setIsDirty] = useState(false);
-  // Track the last saved state for dirty comparison
-  const savedJsonRef = useRef<string>('');
 
+  // ── Store actions (stable selectors, no re-render on other state) ─────────
   const setOpenTabDirty = useSidebarStore((s) => s.setOpenTabDirty);
-  const officeBufferVersion = useEditorStore((s) => s.documentContents[filePath]?.office.bufferVersion ?? 0);
   const setFortuneSheetsToStore = useEditorStore((s) => s.setFortuneSheets);
   const pushNotification = useNotificationStore((s) => s.pushNotification);
-  const excelLastVersionRef = useRef(-1);
 
-  // ── Sheet-switch hook: recalculate the previously active sheet.
-  // HyperFormula evaluates cross-sheet formula references when a cell is edited,
-  // but it caches the result per cell. If sheet B is modified and then sheet A
-  // (which has a cross-sheet formula like =SheetB!A1) is re-visited, FortuneSheet
-  // renders the stale cached v without re-evaluating. By re-calculating the
-  // previous sheet on every tab switch we ensure its cross-sheet references refresh.
-  const hooks = useMemo(
-    (): import('@fortune-sheet/core').Hooks => ({
-      afterActivateSheet(newSheetId: string) {
-        const prev = prevActiveSheetIdRef.current;
-        if (prev && prev !== newSheetId && workbookRef.current) {
-          workbookRef.current.calculateFormula(prev);
-        }
-        prevActiveSheetIdRef.current = newSheetId;
-      },
-    }),
+  // ── External file version watcher ─────────────────────────────────────────
+  const excelLastVersionRef = useRef(-1);
+  const officeBufferVersion = useEditorStore(
+    (s) => s.documentContents[filePath]?.office.bufferVersion ?? 0,
+  );
+
+  // ── Stable callback refs — updated via ref, not state ────────────────────
+  // These avoid creating new function references on every render,
+  // which would cause FortuneSheet's useEffect([onChange]) to re-fire.
+  const recalcAllSheetsRef = useRef<() => void>(() => {});
+  const loadedSheetsRef = useRef<FortuneSheetCoreSheet[]>([]);
+
+  // Debounce timer for formula recalculation — avoids blocking the main thread
+  // on every keystroke while still keeping formulas reasonably up to date.
+  const recalcTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ── Hooks — stable via useMemo with stable dependencies ──────────────────
+  // Uses prevActiveSheetIdRef to track which sheet was previously active,
+  // so we can recalculate it when switching away.
+  const prevActiveSheetIdRef = useRef<string | null>(null);
+  const hooks = useMemo((): import('@fortune-sheet/core').Hooks => ({
+    afterActivateSheet(newSheetId: string) {
+      const prev = prevActiveSheetIdRef.current;
+      if (prev && prev !== newSheetId && workbookRef.current) {
+        workbookRef.current.calculateFormula(prev);
+      }
+      prevActiveSheetIdRef.current = newSheetId;
+    },
+  }), []);
+
+  // onChange handler: stable ref function, called by Workbook on every change.
+  // Updates loadedSheetsRef for save; does NOT call setFortuneSheets to avoid
+  // triggering a Workbook data prop change on every keystroke (which re-initializes
+  // the entire sheet and causes lag).
+  // Formula recalculation is debounced: runs 300ms after the user stops typing,
+  // so rapid input doesn't block the main thread on every keystroke.
+  const handleFortuneChange = useCallback(
+    (changedSheets: FortuneSheetCoreSheet[]) => {
+      loadedSheetsRef.current = changedSheets;
+      setIsDirty(true);
+
+      if (recalcTimerRef.current !== null) {
+        clearTimeout(recalcTimerRef.current);
+      }
+      recalcTimerRef.current = setTimeout(() => {
+        recalcTimerRef.current = null;
+        recalcAllSheetsRef.current?.();
+      }, 300);
+    },
     [],
   );
 
-  // ── Load from disk ─────────────────────────────────────────────────────────
+  // ── Recalculate all sheets (stable, called from multiple places) ─────────
+  recalcAllSheetsRef.current = () => {
+    const wb = workbookRef.current;
+    if (!wb) return;
+    for (const sheet of wb.getAllSheets()) {
+      wb.calculateFormula(sheet.id);
+    }
+  };
+
+  // ── Load from disk ──────────────────────────────────────────────────────
   const loadFromDisk = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      // Use the structured xlsx command to get full cell/style/merge data
       const rustWorkbook = await invoke<RustXlsxWorkbook>('read_xlsx_structured', { path: filePath });
       const sheets = rustWorkbookToFortuneSheets(rustWorkbook);
+      loadedSheetsRef.current = sheets;
       setFortuneSheets(sheets);
-      savedJsonRef.current = JSON.stringify(sheets);
       setFortuneSheetsToStore(filePath, { sheets });
       setIsDirty(false);
       setOpenTabDirty(filePath, false);
@@ -418,59 +453,27 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
     }
   }, [isActive, isDirty, filePath, setOpenTabDirty]);
 
-  // Trigger formula calculation after the sheet finishes loading.
-  // onChange won't fire on initial render, so we handle it here.
+  // ── After load + Workbook mount: trigger formula calculation ──────────────────
+  // Runs whenever loading becomes false and Workbook has mounted.
+  // Also serves to set prevActiveSheetIdRef for the afterActivateSheet hook.
   useEffect(() => {
     if (loading) return;
+    recalcAllSheetsRef.current();
     const sheets = workbookRef.current?.getAllSheets();
-    if (!sheets?.length) return;
-    for (const sheet of sheets) {
-      workbookRef.current?.calculateFormula(sheet.id);
-    }
-    // Record the initially active sheet so the next switch fires the hook correctly.
-    if (sheets[0]?.id) {
+    if (sheets?.[0]?.id) {
       prevActiveSheetIdRef.current = sheets[0].id;
     }
   }, [loading]);
 
-  // ── Data change from FortuneSheet ─────────────────────────────────────────
-  // handleFortuneChange is called by the Workbook's onChange whenever
-  // luckysheetfile (FortuneSheet's internal context) changes.
-  // We do NOT call setFortuneSheets here — the Workbook's internal useEffect
-  // already propagates the updated context to React state. We only need to
-  // trigger formula recalculation; calculateFormula is synchronous so it
-  // finishes before onChange's useEffect fires again.
-  const handleFortuneChange = useCallback(
-    (changedSheets: FortuneSheetCoreSheet[]) => {
-      // changedSheets is already the latest data from FortuneSheet's context.
-      // Compare against saved snapshot to track dirty state.
-      const changed = JSON.stringify(changedSheets) !== savedJsonRef.current;
-      setIsDirty(changed);
-
-      // Recalculate all changed sheets so that formula results (v) are up-to-date.
-      for (const sheet of changedSheets) {
-        workbookRef.current?.calculateFormula(sheet.id);
-      }
-    },
-    [],
-  );
-
-  // ── Save ─────────────────────────────────────────────────────────────────
+  // ── Save ────────────────────────────────────────────────────────────────
   const handleSave = useCallback(async () => {
     if (!isDirty) return;
     try {
-      // Force HyperFormula to recalculate before reading the sheet data,
-      // so that formula results (v) are up-to-date in getAllSheets().
-      // calculateFormula is synchronous — it finishes before the next statement.
-      for (const sheet of workbookRef.current?.getAllSheets() ?? []) {
-        workbookRef.current?.calculateFormula(sheet.id);
-      }
+      recalcAllSheetsRef.current();
       const sheets = workbookRef.current?.getAllSheets();
       if (!sheets) return;
       const rustWorkbook = fortuneSheetsToRustWorkbook(sheets);
       await invoke('write_xlsx_structured', { path: filePath, workbook: rustWorkbook });
-      savedJsonRef.current = JSON.stringify(sheets);
-      setFortuneSheets(sheets);
       setFortuneSheetsToStore(filePath, { sheets });
       setIsDirty(false);
       setOpenTabDirty(filePath, false);
@@ -491,7 +494,7 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
         onSave={handleSave}
         canSave={isDirty && !loading && !error}
         formatIcon={<Table2 size={16} />}
-        editLabel={loading ? '加载中...' : error ? '加载失败' : fortuneSheets.length === 0 ? '无数据' : '可编辑'}
+        editLabel={loading ? '加载中...' : error ? '加载失败' : '可编辑'}
       />
       <div className={styles.excelContainer}>
         {(loading || error) ? (
