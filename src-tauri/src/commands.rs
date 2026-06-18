@@ -561,6 +561,24 @@ pub struct OfficeFileResult {
 }
 
 #[tauri::command]
+pub async fn read_xlsx_structured(path: String) -> Result<office::XlsxWorkbook, AppCommandError> {
+    tracing::info!("Reading xlsx as structured workbook: {}", path);
+    let bytes = std::fs::read(&path).map_err(|e| AppCommandError::ReadOfficeFile(e.to_string()))?;
+    office::read_xlsx_structured(&bytes).map_err(|e| AppCommandError::ReadOfficeFile(e.to_string()))
+}
+
+#[tauri::command]
+pub async fn write_xlsx_structured(
+    path: String,
+    workbook: office::XlsxWorkbook,
+) -> Result<(), AppCommandError> {
+    tracing::info!("Writing structured xlsx workbook: {}", path);
+    let path_obj = std::path::Path::new(&path);
+    office::create_xlsx_workbook(&workbook, path_obj)
+        .map_err(|e| AppCommandError::WriteOfficeFile(e.to_string()))
+}
+
+#[tauri::command]
 pub async fn write_office_text(
     path: String,
     json_content: String,

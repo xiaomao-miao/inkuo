@@ -18,6 +18,7 @@ use super::shared::OfficeError;
 
 // ─── Legacy flat API (kept for backward compatibility) ────────────────────────
 
+/// Deprecated: use StructuredExcelWorkbook instead.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ExcelSheet {
     pub name: String,
@@ -25,10 +26,31 @@ pub struct ExcelSheet {
     pub rows: Vec<Vec<String>>,
 }
 
+/// Deprecated: use StructuredExcelWorkbook instead.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ExcelWorkbook {
     pub sheets: Vec<ExcelSheet>,
 }
+
+// ─── Structured cell-level API ────────────────────────────────────────────────
+
+/// Alias for the structured cell type — use this instead of the flat string grid.
+pub type StructuredCell = Cell;
+
+/// Alias for the structured style type.
+pub type StructuredCellStyle = CellStyle;
+
+/// Alias for the structured value type.
+pub type StructuredCellValue = CellValue;
+
+/// Alias for a merged cell range.
+pub type StructuredMergedRange = MergedRange;
+
+/// Alias for a structured sheet.
+pub type StructuredXlsxSheet = XlsxSheet;
+
+/// Alias for a structured workbook — the recommended type for Excel operations.
+pub type StructuredExcelWorkbook = XlsxWorkbook;
 
 pub fn read_excel_workbook(bytes: &[u8]) -> Result<ExcelWorkbook, OfficeError> {
     let cursor = Cursor::new(bytes.to_vec());
@@ -189,7 +211,7 @@ pub fn write_excel_workbook(workbook: &ExcelWorkbook, output_path: &std::path::P
 /// strings discards information the AI needs (e.g. a date stored as a serial
 /// number with `number_format="yyyy-mm-dd"` is not a string).
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", content = "value")]
 pub enum CellValue {
     Empty,
     Int(i64),

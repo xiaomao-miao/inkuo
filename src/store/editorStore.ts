@@ -56,4 +56,7 @@ export const useEditorStore = create<EditorState>()(
   )
 );
 
-export type { DocumentState, EditorState, ExcelWorkbook, Sheet } from './editorStore.slices';
+export type {
+  DocumentState, EditorState,
+  FortuneSheetWorkbook, Sheet, CellData, Cell, Config,
+} from './editorStore.slices';

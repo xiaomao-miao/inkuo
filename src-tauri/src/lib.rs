@@ -91,6 +91,8 @@ pub fn run() {
             commands::write_office_file,
             commands::read_office_text,
             commands::write_office_text,
+            commands::read_xlsx_structured,
+            commands::write_xlsx_structured,
             knowledge::commands::knowledge_build,
             knowledge::commands::knowledge_search,
             knowledge::commands::knowledge_status,

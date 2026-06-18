@@ -25,17 +25,32 @@ export interface DocumentDiffState {
 export interface DocumentOfficeState {
   docxBuffer: number[] | null;
   excelData: ExcelWorkbook | null;
+  /** FortuneSheet-native format — set by ExcelEditor and used directly by the Workbook component. */
+  fortuneSheets: FortuneSheetWorkbook | null;
   bufferVersion: number;
 }
 
+// Re-export FortuneSheet core types so consumers don't need to import from the library directly
+import type {
+  Cell as FortuneSheetCell,
+  Sheet as FortuneSheetCoreSheet,
+} from '@fortune-sheet/core';
+
+export type { FortuneSheetCell, FortuneSheetCoreSheet };
+
+// Legacy flat types (kept for backward compat)
 export interface ExcelWorkbook {
-  sheets: Sheet[];
+  sheets: { name: string; data: string[][] }[];
 }
 
-export interface Sheet {
-  name: string;
-  data: string[][];
-}
+// Store-friendly alias wrapping the core Sheet[]
+export type FortuneSheetWorkbook = { sheets: FortuneSheetCoreSheet[] };
+
+// Local re-exports of FortuneSheet core types for store use
+export type Sheet = FortuneSheetCoreSheet;
+export type CellData = import('@fortune-sheet/core').CellWithRowAndCol;
+export type Cell = import('@fortune-sheet/core').Cell;
+export type Config = import('@fortune-sheet/core').SheetConfig;
 
 export interface DocumentState {
   metadata: DocumentMetadata;
@@ -63,8 +78,10 @@ export interface EditorState {
   removeDocumentContent: (path: string) => void;
   setDocxBuffer: (path: string, buffer: number[]) => void;
   setExcelData: (path: string, workbook: ExcelWorkbook) => void;
+  setFortuneSheets: (path: string, sheets: FortuneSheetWorkbook) => void;
   clearDocxBuffer: (path: string) => void;
   clearExcelData: (path: string) => void;
+  clearFortuneSheets: (path: string) => void;
   invalidateOfficeBuffer: (path: string) => void;
   togglePreviewMode: (path: string) => void;
 }
@@ -81,7 +98,7 @@ type DiffSlice = Pick<
 
 type OfficeSlice = Pick<
   EditorState,
-  'setDocxBuffer' | 'setExcelData' | 'clearDocxBuffer' | 'clearExcelData' | 'invalidateOfficeBuffer'
+  'setDocxBuffer' | 'setExcelData' | 'setFortuneSheets' | 'clearDocxBuffer' | 'clearExcelData' | 'clearFortuneSheets' | 'invalidateOfficeBuffer'
 >;
 
 type PreviewSlice = Pick<EditorState, 'isPreviewMode' | 'togglePreviewMode'>;
@@ -122,6 +139,7 @@ function createDefaultDocumentOfficeState(overrides?: Partial<DocumentOfficeStat
   return {
     docxBuffer: null,
     excelData: null,
+    fortuneSheets: null,
     bufferVersion: 0,
     ...overrides,
   };
@@ -364,10 +382,23 @@ export const createOfficeSlice: EditorStoreCreator<OfficeSlice> = (set) => ({
           : createDefaultDocumentState({ office: { excelData: workbook } })
       )
     ),
+  setFortuneSheets: (path, fortuneSheets) =>
+    set((state) =>
+      setOrCreateDocumentContent(state, path, (current) =>
+        current
+          ? {
+            ...current,
+            office: { ...current.office, fortuneSheets },
+            }
+          : createDefaultDocumentState({ office: { fortuneSheets } })
+      )
+    ),
   clearDocxBuffer: (path) =>
     set((state) => updateDocumentSection(state, path, 'office', { docxBuffer: null })),
   clearExcelData: (path) =>
     set((state) => updateDocumentSection(state, path, 'office', { excelData: null })),
+  clearFortuneSheets: (path) =>
+    set((state) => updateDocumentSection(state, path, 'office', { fortuneSheets: null })),
   invalidateOfficeBuffer: (path) =>
     set((state) => {
       const current = state.documentContents[path];

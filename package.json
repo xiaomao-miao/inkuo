@@ -24,6 +24,7 @@
     "@codemirror/view": "^6.36.5",
     "@eigenpal/docx-editor-core": "^1.2.1",
     "@eigenpal/docx-editor-react": "^1.2.1",
+    "@fortune-sheet/react": "^1.0.4",
     "@lezer/highlight": "^1.2.1",
     "@mukundakatta/streamparse": "^1.0.1",
     "@tauri-apps/api": "^2",

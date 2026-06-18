@@ -1,17 +1,24 @@
 import React, { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { DocxEditor, type DocxEditorRef } from '@eigenpal/docx-editor-react';
-import { ExcelGrid } from 'react-excel-lite';
+import { Workbook } from '@fortune-sheet/react';
+import type { WorkbookInstance } from '@fortune-sheet/react';
+import type { Sheet as FortuneSheetCoreSheet } from '@fortune-sheet/core';
 import { Save, Table2, FileText } from 'lucide-react';
 import { useKeyboardSave } from './useKeyboardSave';
 import { useSidebarStore, useEditorStore, useInlineCompleteStore, useNotificationStore } from '../../store';
-import type { ExcelWorkbook, Sheet } from '../../store/editorStore';
+import {
+  rustWorkbookToFortuneSheets,
+  fortuneSheetsToRustWorkbook,
+} from './fortuneSheetConverter';
+import type { RustXlsxWorkbook } from './fortuneSheetConverter';
 import { reportError } from '../../utils/errors';
 import { scheduleWordInlineCompletion } from '../inline-complete/useWordInlineCompleteTrigger';
 import { createWordInlineCompletePlugin } from '../inline-complete/wordInlineCompletePlugin';
 import type { EditorView } from 'prosemirror-view';
 import styles from './OfficeViewer.module.css';
 import '@eigenpal/docx-editor-react/styles.css';
+import '@fortune-sheet/react/dist/index.css';
 
 export interface Paragraph {
   text: string;
@@ -306,215 +313,149 @@ export const WordEditor: React.FC<WordEditorProps> = ({
   );
 };
 
+// ─── Excel Editor (FortuneSheet) ─────────────────────────────────────────────────
+
 interface ExcelEditorProps {
   filePath: string;
   fileName: string;
-  initialWorkbook: ExcelWorkbook | null;
   isActive: boolean;
-}
-
-function convertSheetToStrings(jsonData: (string | number | null)[][]): string[][] {
-  return jsonData.map(row =>
-    row.map(cell => {
-      if (cell === null || cell === undefined) return '';
-      if (typeof cell === 'number') return cell.toString();
-      return String(cell);
-    })
-  );
 }
 
 export const ExcelEditor: React.FC<ExcelEditorProps> = ({
   filePath,
   fileName,
-  initialWorkbook,
   isActive,
 }) => {
+  const workbookRef = useRef<WorkbookInstance | null>(null);
   const hasLoadedRef = useRef(false);
 
-  const [workbook, setWorkbook] = useState<ExcelWorkbook | null>(() => {
-    if (initialWorkbook !== null) {
-      hasLoadedRef.current = true;
-      return initialWorkbook;
-    }
-    return null;
-  });
-  const [activeSheetIndex, setActiveSheetIndex] = useState(0);
-  const [loading, setLoading] = useState<boolean>(() => initialWorkbook === null);
+  // FortuneSheet data — this is what the Workbook component uses directly
+  const [fortuneSheets, setFortuneSheets] = useState<FortuneSheetCoreSheet[]>([]);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isDirty, setIsDirty] = useState(false);
-  const originalWorkbookJsonRef = useRef<string>(JSON.stringify(initialWorkbook ?? { sheets: [] }));
+  // Track the last saved state for dirty comparison
+  const savedJsonRef = useRef<string>('');
 
-  useEffect(() => {
-    originalWorkbookJsonRef.current = JSON.stringify(workbook ?? { sheets: [] });
-  }, [workbook]);
-
-  const setOpenTabDirty = useSidebarStore((state) => state.setOpenTabDirty);
-  const officeBufferVersion = useEditorStore(s => s.documentContents[filePath]?.office.bufferVersion ?? 0);
-  const setExcelData = useEditorStore((state) => state.setExcelData);
-  const pushNotification = useNotificationStore((state) => state.pushNotification);
+  const setOpenTabDirty = useSidebarStore((s) => s.setOpenTabDirty);
+  const officeBufferVersion = useEditorStore((s) => s.documentContents[filePath]?.office.bufferVersion ?? 0);
+  const setFortuneSheetsToStore = useEditorStore((s) => s.setFortuneSheets);
+  const pushNotification = useNotificationStore((s) => s.pushNotification);
   const excelLastVersionRef = useRef(-1);
 
-  const loadFromDiskRef = useRef<() => Promise<void>>(() => Promise.resolve());
+  // ── Load from disk ─────────────────────────────────────────────────────────
+  const loadFromDisk = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      // Use the structured xlsx command to get full cell/style/merge data
+      const rustWorkbook = await invoke<RustXlsxWorkbook>('read_xlsx_structured', { path: filePath });
+      const sheets = rustWorkbookToFortuneSheets(rustWorkbook);
+      setFortuneSheets(sheets);
+      savedJsonRef.current = JSON.stringify(sheets);
+      setFortuneSheetsToStore(filePath, { sheets });
+      setIsDirty(false);
+      setOpenTabDirty(filePath, false);
+    } catch (err) {
+      const message = reportError('office-excel-load', err);
+      setError(message);
+      pushNotification({ kind: 'error', title: '加载 Excel 文档失败', message });
+    } finally {
+      setLoading(false);
+    }
+  }, [filePath, setFortuneSheetsToStore, setOpenTabDirty, pushNotification]);
 
+  // Persist the load function
+  const loadFromDiskRef = useRef(loadFromDisk);
+  useEffect(() => { loadFromDiskRef.current = loadFromDisk; }, [loadFromDisk]);
+
+  // Initial load
   useEffect(() => {
-    const doLoad = async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        const fileData = await invoke<number[]>('read_office_file', { path: filePath });
-        const buffer = new Uint8Array(fileData);
-        const XLSX = await import('xlsx');
-        const xlsxWorkbook = XLSX.read(buffer, { type: 'array' });
+    if (hasLoadedRef.current) return;
+    hasLoadedRef.current = true;
+    loadFromDiskRef.current();
+  }, [filePath]);
 
-        const sheets: Sheet[] = xlsxWorkbook.SheetNames.map(name => {
-          const sheet = xlsxWorkbook.Sheets[name];
-          const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as (string | number | null)[][];
-          return {
-            name,
-            data: convertSheetToStrings(jsonData),
-          };
-        });
-
-        const newWorkbook: ExcelWorkbook = { sheets };
-        setWorkbook(newWorkbook);
-        setOriginalWorkbook(newWorkbook);
-        setExcelData(filePath, newWorkbook);
-        setIsDirty(false);
-        setOpenTabDirty(filePath, false);
-        setActiveSheetIndex(0);
-      } catch (err) {
-        const message = reportError('office-excel-load', err);
-        setError(message);
-        pushNotification({ kind: 'error', title: '加载 Excel 文档失败', message });
-      } finally {
-        setLoading(false);
-      }
-    };
-    loadFromDiskRef.current = doLoad;
-  }, [filePath, setOpenTabDirty, setExcelData, pushNotification]);
-
-  // Re-read from disk when the backing file version changes.
+  // Re-read when external file version changes
   useEffect(() => {
     if (excelLastVersionRef.current >= officeBufferVersion) return;
     excelLastVersionRef.current = officeBufferVersion;
-
     if (officeBufferVersion > 0) {
+      hasLoadedRef.current = false;
       loadFromDiskRef.current();
-      return;
     }
+  }, [officeBufferVersion]);
 
-    if (initialWorkbook !== null) {
-      setWorkbook(initialWorkbook);
-      setOriginalWorkbook(initialWorkbook);
-      setLoading(false);
-      return;
-    }
-
-    loadFromDiskRef.current();
-  }, [officeBufferVersion, initialWorkbook]);
-
-  // ── Sync dirty state to sidebar ─────────────────────────────────────────
+  // Sync dirty state to sidebar tab
   useEffect(() => {
     if (isActive && isDirty) {
       setOpenTabDirty(filePath, true);
     }
   }, [isActive, isDirty, filePath, setOpenTabDirty]);
 
-  const setOriginalWorkbook = useCallback((wb: ExcelWorkbook) => {
-    originalWorkbookJsonRef.current = JSON.stringify(wb);
-  }, []);
-
-  const handleSheetChange = useCallback((sheetIndex: number, newData: string[][]) => {
-    setWorkbook(prev => {
-      if (!prev) return prev;
-      const updated = {
-        ...prev,
-        sheets: prev.sheets.map((s, i) => i === sheetIndex ? { ...s, data: newData } : s),
-      };
-      const changed = JSON.stringify(updated) !== originalWorkbookJsonRef.current;
+  // ── Data change from FortuneSheet ─────────────────────────────────────────
+  const handleFortuneChange = useCallback(
+    (changedSheets: FortuneSheetCoreSheet[]) => {
+      setFortuneSheets(changedSheets);
+      const changed = JSON.stringify(changedSheets) !== savedJsonRef.current;
       setIsDirty(changed);
-      setOpenTabDirty(filePath, changed);
-      return updated;
-    });
-  }, [filePath, setOpenTabDirty]);
+    },
+    [],
+  );
 
+  // ── Save ─────────────────────────────────────────────────────────────────
   const handleSave = useCallback(async () => {
-    if (!isDirty || !workbook) return;
+    if (!isDirty) return;
     try {
-      const XLSX = await import('xlsx');
-      const xlsxWorkbook = XLSX.utils.book_new();
-      for (const sheet of workbook.sheets) {
-        const worksheet = XLSX.utils.aoa_to_sheet(sheet.data);
-        XLSX.utils.book_append_sheet(xlsxWorkbook, worksheet, sheet.name);
-      }
-      const xlsxData = XLSX.write(xlsxWorkbook, { bookType: 'xlsx', type: 'array' });
-      await invoke('write_office_file', { path: filePath, data: Array.from(xlsxData) });
-      setOriginalWorkbook(workbook);
-      setExcelData(filePath, workbook);
+      const sheets = workbookRef.current?.getAllSheets() ?? fortuneSheets;
+      const rustWorkbook = fortuneSheetsToRustWorkbook(sheets);
+      await invoke('write_xlsx_structured', { path: filePath, workbook: rustWorkbook });
+      savedJsonRef.current = JSON.stringify(sheets);
+      setFortuneSheets(sheets);
+      setFortuneSheetsToStore(filePath, { sheets });
       setIsDirty(false);
       setOpenTabDirty(filePath, false);
     } catch (err) {
       const message = reportError('office-excel-save', err);
       pushNotification({ kind: 'error', title: '保存 Excel 文档失败', message });
     }
-  }, [filePath, workbook, isDirty, setOpenTabDirty, setExcelData, pushNotification, setOriginalWorkbook]);
+  }, [isDirty, filePath, fortuneSheets, setFortuneSheetsToStore, setOpenTabDirty, pushNotification]);
 
   useKeyboardSave({ onSave: handleSave, enabled: isDirty && isActive });
 
-  const activeSheet = workbook?.sheets[activeSheetIndex] ?? null;
-
-  // ── Render
-  // Keep the sheet tabs + ExcelGrid mounted at all times (loading / error /
-  // ready) so that switching states only changes content inside an existing
-  // box. Toggling between the loading spinner and the grid previously caused
-  // the right-hand scrollbar to flicker on first open. Visibility is
-  // controlled by the parent stack container (see OfficeTabRenderer).
-  const showSheetTabs = workbook !== null && workbook.sheets.length > 0;
-  const showGrid = workbook !== null && activeSheet !== null;
-
+  // ── Render ───────────────────────────────────────────────────────────────
   return (
     <div className={styles.officeEditor}>
       <OfficeToolbar
         fileName={fileName}
         isDirty={isDirty}
         onSave={handleSave}
-        canSave={isDirty && !loading && !error && workbook !== null}
+        canSave={isDirty && !loading && !error}
         formatIcon={<Table2 size={16} />}
-        editLabel={loading ? '加载中...' : error ? '加载失败' : workbook === null ? '无数据' : '可编辑'}
+        editLabel={loading ? '加载中...' : error ? '加载失败' : fortuneSheets.length === 0 ? '无数据' : '可编辑'}
       />
-      {showSheetTabs && workbook && (
-        <div className={styles.sheetTabs}>
-          {workbook.sheets.map((sheet, i) => (
-            <button
-              key={sheet.name}
-              className={`${styles.sheetTab} ${i === activeSheetIndex ? styles.active : ''}`}
-              onClick={() => setActiveSheetIndex(i)}
-            >
-              {sheet.name}
-            </button>
-          ))}
-        </div>
-      )}
       <div className={styles.excelContainer}>
-        {showGrid && activeSheet && (
-          <ExcelGrid
-            data={activeSheet.data}
-            onChange={(newData) => handleSheetChange(activeSheetIndex, newData)}
-          />
-        )}
-        {(loading || error || !showGrid) && (
+        {(loading || error) ? (
           <div className={styles.editorOverlay} role="status" aria-live="polite">
             {loading ? (
               <>
                 <div className={styles.loadingSpinner} />
                 <span>正在加载 Excel 文档...</span>
               </>
-            ) : error ? (
-              <span className={styles.editorErrorMessage}>加载失败: {error}</span>
             ) : (
-              <span className={styles.editorErrorMessage}>无法加载文档</span>
+              <span className={styles.editorErrorMessage}>加载失败: {error}</span>
             )}
           </div>
+        ) : (
+          <Workbook
+            data={fortuneSheets}
+            onChange={handleFortuneChange}
+            ref={workbookRef}
+            showToolbar={true}
+            showFormulaBar={true}
+            showSheetTabs={true}
+            allowEdit={true}
+          />
         )}
       </div>
     </div>

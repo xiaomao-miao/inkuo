@@ -14,6 +14,9 @@ pub use xlsx::{
     CellModification, read_xlsx_structured, xlsx_workbook_to_text,
     incremental_write_xlsx, create_xlsx_workbook,
     cell_address, parse_cell_address,
+    // Structured type aliases (recommended over the flat string-grid types)
+    StructuredCell, StructuredCellStyle, StructuredCellValue,
+    StructuredMergedRange, StructuredXlsxSheet, StructuredExcelWorkbook,
 };
 
 use std::path::Path;
