@@ -6,7 +6,7 @@ pub mod shared;
 mod docx;
 mod xlsx;
 
-pub use shared::{OfficeError, TableCell, TableRow, read_all_zip_entries};
+pub use shared::{OfficeError, TableCell, TableRow};
 pub use docx::{WordDocument, WordParagraph, WordTable, FontRun, DocElement, NumberingRef, read_word_document, word_document_to_text, write_word_document_to_path};
 pub use xlsx::{
     ExcelWorkbook, read_excel_workbook, excel_workbook_to_text,
@@ -17,6 +17,11 @@ pub use xlsx::{
     // Structured type aliases (recommended over the flat string-grid types)
     StructuredCell, StructuredCellStyle, StructuredCellValue,
     StructuredMergedRange, StructuredXlsxSheet, StructuredExcelWorkbook,
+    // New sheet/merge/rowcol operations
+    merge_cells_xlsx, MergeModification, MergeOp,
+    resize_rows_cols_xlsx, RowColModification,
+    create_sheet_xlsx, rename_sheet_xlsx,
+    delete_sheet_xlsx, set_sheet_state_xlsx,
 };
 
 use std::path::Path;

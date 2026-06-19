@@ -1157,6 +1157,28 @@ pub struct CellModification {
     pub new_formula: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub new_number_format: Option<String>,
+    // ── Style fields ──────────────────────────────────────────────────────────
+    /// Background fill color as 6-digit hex RGB, e.g. "FFFF00" for yellow.
+    /// Empty string signals "remove background".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_bg_color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_font_bold: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_font_italic: Option<bool>,
+    /// Font color as 6-digit hex RGB, e.g. "FF0000" for red.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_font_color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_font_size: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_font_name: Option<String>,
+    /// Horizontal alignment: "left" | "center" | "right"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_alignment_h: Option<String>,
+    /// Vertical alignment: "top" | "center" | "bottom"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_alignment_v: Option<String>,
 }
 
 impl CellModification {
@@ -1167,6 +1189,14 @@ impl CellModification {
             new_value: None,
             new_formula: None,
             new_number_format: None,
+            new_bg_color: None,
+            new_font_bold: None,
+            new_font_italic: None,
+            new_font_color: None,
+            new_font_size: None,
+            new_font_name: None,
+            new_alignment_h: None,
+            new_alignment_v: None,
         }
     }
 
@@ -1183,6 +1213,17 @@ impl CellModification {
     pub fn with_number_format(mut self, fmt: impl Into<String>) -> Self {
         self.new_number_format = Some(fmt.into());
         self
+    }
+
+    pub fn has_style_change(&self) -> bool {
+        self.new_bg_color.is_some()
+            || self.new_font_bold.is_some()
+            || self.new_font_italic.is_some()
+            || self.new_font_color.is_some()
+            || self.new_font_size.is_some()
+            || self.new_font_name.is_some()
+            || self.new_alignment_h.is_some()
+            || self.new_alignment_v.is_some()
     }
 }
 
@@ -2102,6 +2143,659 @@ fn escape_xml_attr(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
+
+// ─── Merge / Unmerge cells ─────────────────────────────────────────────────────
+
+/// What to do with a merged range.
+#[derive(Debug, Clone)]
+pub enum MergeOp {
+    Merge,
+    Unmerge,
+}
+
+/// A merge/unmerge operation to apply.
+#[derive(Debug, Clone)]
+pub struct MergeModification {
+    pub sheet: String,
+    pub op: MergeOp,
+    pub start_row: usize,
+    pub start_col: usize,
+    pub end_row: usize,
+    pub end_col: usize,
+}
+
+/// Merge or unmerge cell ranges in an xlsx file.
+pub fn merge_cells_xlsx(
+    original_bytes: &[u8],
+    modifications: &[MergeModification],
+    output_path: &std::path::Path,
+) -> Result<(), OfficeError> {
+    use std::io::{Read, Write};
+
+    if modifications.is_empty() {
+        std::fs::write(output_path, original_bytes)?;
+        return Ok(());
+    }
+
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(original_bytes.to_vec()))?;
+    let workbook_xml = read_entry(&mut archive, "xl/workbook.xml")?;
+    let rels_xml = read_entry(&mut archive, "xl/_rels/workbook.xml.rels")
+        .unwrap_or_default();
+    let sheet_name_to_path = parse_sheet_name_to_path(&workbook_xml, &rels_xml)?;
+
+    let mut by_path: HashMap<String, Vec<&MergeModification>> = HashMap::new();
+    for m in modifications {
+        if let Some(path) = sheet_name_to_path.get(&m.sheet) {
+            by_path.entry(path.clone()).or_default().push(m);
+        } else {
+            return Err(OfficeError::Excel(format!("Sheet '{}' not found", m.sheet)));
+        }
+    }
+
+    let mut rewritten: HashMap<String, Vec<u8>> = HashMap::new();
+    for (path, mods) in &by_path {
+        let xml = read_entry(&mut archive, path)?;
+        let new_xml = apply_merge_to_sheet_xml(&xml, mods)?;
+        rewritten.insert(path.clone(), new_xml.into_bytes());
+    }
+
+    let mut out = zip::ZipWriter::new(std::fs::File::create(output_path)?);
+    let opts = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .unix_permissions(0o644);
+
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(original_bytes.to_vec()))?;
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i)?;
+        let name = file.name().to_string();
+        if let Some(new_bytes) = rewritten.get(&name) {
+            out.start_file(&name, opts)?;
+            out.write_all(new_bytes)?;
+        } else {
+            let mut buf = Vec::new();
+            file.read_to_end(&mut buf)?;
+            let file_opts = if file.compression() == zip::CompressionMethod::Deflated {
+                opts
+            } else {
+                zip::write::SimpleFileOptions::default()
+                    .compression_method(zip::CompressionMethod::Stored)
+                    .unix_permissions(0o644)
+            };
+            out.start_file(&name, file_opts)?;
+            out.write_all(&buf)?;
+        }
+    }
+    out.finish()?;
+    Ok(())
+}
+
+fn apply_merge_to_sheet_xml(sheet_xml: &str, mods: &[&MergeModification]) -> Result<String, OfficeError> {
+    // First handle unmerges: remove existing mergeCell entries
+    let mut xml = sheet_xml.to_string();
+    for m in mods {
+        if matches!(m.op, MergeOp::Unmerge) {
+            let ref_str = format!(
+                "ref=\"{}\"",
+                format!("{}:{}",
+                    cell_address(m.start_row, m.start_col),
+                    cell_address(m.end_row, m.end_col)
+                )
+            );
+            if let Some(start) = xml.find(&ref_str) {
+                let before = &xml[..start];
+                if let Some(tag_start) = before.rfind("<mergeCell") {
+                    let after_ref = start + ref_str.len();
+                    let rest = &xml[after_ref..];
+                    let tag_end = rest.find("/>").map(|p| after_ref + p + 2)
+                        .unwrap_or(after_ref + rest.len());
+                    let mut actual_end = tag_end;
+                    while actual_end < xml.len()
+                        && matches!(xml.as_bytes()[actual_end], b' ' | b'\t' | b'\n' | b'\r')
+                    {
+                        actual_end += 1;
+                    }
+                    xml = format!("{}{}", &xml[..tag_start], &xml[actual_end..]);
+                }
+            }
+        }
+    }
+
+    // Now handle merges: add new mergeCell entries
+    let mut merge_inserts: Vec<String> = Vec::new();
+    for m in mods {
+        if matches!(m.op, MergeOp::Merge) {
+            let ref_str = format!(
+                "{}:{}",
+                cell_address(m.start_row, m.start_col),
+                cell_address(m.end_row, m.end_col)
+            );
+            merge_inserts.push(format!(r#"<mergeCell ref="{}"/>"#, ref_str));
+        }
+    }
+
+    if merge_inserts.is_empty() {
+        return Ok(xml);
+    }
+
+    // Find where to insert mergeCell entries
+    if let Some(pos) = xml.find("</mergeCells>") {
+        xml.insert_str(pos, &merge_inserts.join(""));
+    } else if let Some(pos) = xml.find("</sheetData>") {
+        let insert = format!(
+            r#"<mergeCells count="{}">{}</mergeCells>"#,
+            merge_inserts.len(),
+            merge_inserts.join("")
+        );
+        xml.insert_str(pos, &format!("{}{}", insert, "\n"));
+    } else if let Some(pos) = xml.find("</worksheet>") {
+        let insert = format!(
+            r#"<mergeCells count="{}">{}</mergeCells>"#,
+            merge_inserts.len(),
+            merge_inserts.join("")
+        );
+        xml.insert_str(pos, &format!("\n{}{}", insert, "\n"));
+    }
+
+    Ok(xml)
+}
+
+// ─── Row / Column dimensions ────────────────────────────────────────────────────
+
+/// A row or column dimension change.
+#[derive(Debug, Clone)]
+pub struct RowColModification {
+    /// 0-based row or column index.
+    pub index: usize,
+    /// Size: row height in points, or column width in Excel character units.
+    pub size: f64,
+    /// Whether to hide the row/column.
+    pub hidden: bool,
+}
+
+/// Set row heights and column widths in an xlsx file.
+pub fn resize_rows_cols_xlsx(
+    original_bytes: &[u8],
+    sheet_name: &str,
+    row_changes: &[RowColModification],
+    col_changes: &[RowColModification],
+    output_path: &std::path::Path,
+) -> Result<(), OfficeError> {
+    use std::io::{Read, Write};
+
+    if row_changes.is_empty() && col_changes.is_empty() {
+        std::fs::write(output_path, original_bytes)?;
+        return Ok(());
+    }
+
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(original_bytes.to_vec()))?;
+    let workbook_xml = read_entry(&mut archive, "xl/workbook.xml")?;
+    let rels_xml = read_entry(&mut archive, "xl/_rels/workbook.xml.rels")
+        .unwrap_or_default();
+    let sheet_name_to_path = parse_sheet_name_to_path(&workbook_xml, &rels_xml)?;
+
+    let path = sheet_name_to_path.get(sheet_name)
+        .ok_or_else(|| OfficeError::Excel(format!("Sheet '{}' not found", sheet_name)))?
+        .clone();
+
+    let xml = read_entry(&mut archive, &path)?;
+    let new_xml = apply_dimension_changes(&xml, row_changes, col_changes)?;
+
+    let mut out = zip::ZipWriter::new(std::fs::File::create(output_path)?);
+    let opts = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .unix_permissions(0o644);
+
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(original_bytes.to_vec()))?;
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i)?;
+        let name = file.name().to_string();
+        if name == path {
+            out.start_file(&name, opts)?;
+            out.write_all(new_xml.as_bytes())?;
+        } else {
+            let mut buf = Vec::new();
+            file.read_to_end(&mut buf)?;
+            let file_opts = if file.compression() == zip::CompressionMethod::Deflated {
+                opts
+            } else {
+                zip::write::SimpleFileOptions::default()
+                    .compression_method(zip::CompressionMethod::Stored)
+                    .unix_permissions(0o644)
+            };
+            out.start_file(&name, file_opts)?;
+            out.write_all(&buf)?;
+        }
+    }
+    out.finish()?;
+    Ok(())
+}
+
+fn apply_dimension_changes(
+    sheet_xml: &str,
+    row_changes: &[RowColModification],
+    col_changes: &[RowColModification],
+) -> Result<String, OfficeError> {
+    let mut xml = sheet_xml.to_string();
+
+    // Apply row changes
+    for rc in row_changes {
+        let existing_pattern = format!("<row r=\"{}\"", rc.index + 1);
+        if xml.contains(&existing_pattern) {
+            // Find and replace the row tag
+            if let Some(start) = xml.find(&existing_pattern) {
+                let rest = &xml[start..];
+                let tag_end = rest.find("/>").map(|p| start + p + 2)
+                    .or_else(|| rest.find(">").map(|p| start + p + 1))
+                    .unwrap_or(start + rest.len());
+                let attrs = if rc.hidden {
+                    format!(r#"r="{}" hidden="1""#, rc.index + 1)
+                } else {
+                    format!(r#"r="{}" customHeight="1" ht="{}""#, rc.index + 1, rc.size)
+                };
+                xml = format!("{}{}{}", &xml[..start], attrs, &xml[tag_end..]);
+            }
+        } else {
+            // Insert before </sheetData>
+            if let Some(pos) = xml.find("</sheetData>") {
+                let new_row = if rc.hidden {
+                    format!(r#"<row r="{}" hidden="1"/>"#, rc.index + 1)
+                } else {
+                    format!(r#"<row r="{}" customHeight="1" ht="{}"/>"#, rc.index + 1, rc.size)
+                };
+                xml.insert_str(pos, &format!("{}{}", new_row, "\n"));
+            }
+        }
+    }
+
+    // Apply column changes
+    for cc in col_changes {
+        let existing_pattern = format!("<col min=\"{}\"", cc.index + 1);
+        if xml.contains(&existing_pattern) {
+            if let Some(start) = xml.find(&existing_pattern) {
+                let rest = &xml[start..];
+                let tag_end = rest.find("/>").map(|p| start + p + 2)
+                    .or_else(|| rest.find(">").map(|p| start + p + 1))
+                    .unwrap_or(start + rest.len());
+                let attrs = if cc.hidden {
+                    format!(r#"min="{}" max="{}" width="{}" hidden="1""#, cc.index + 1, cc.index + 1, cc.size)
+                } else {
+                    format!(r#"min="{}" max="{}" width="{}" customWidth="1""#, cc.index + 1, cc.index + 1, cc.size)
+                };
+                xml = format!("{}{}{}", &xml[..start], attrs, &xml[tag_end..]);
+            }
+        } else {
+            if let Some(pos) = xml.find("</cols>") {
+                let new_col = if cc.hidden {
+                    format!(r#"<col min="{}" max="{}" width="{}" hidden="1"/>"#, cc.index + 1, cc.index + 1, cc.size)
+                } else {
+                    format!(r#"<col min="{}" max="{}" width="{}" customWidth="1"/>"#, cc.index + 1, cc.index + 1, cc.size)
+                };
+                xml.insert_str(pos, &format!("{}{}", new_col, "\n"));
+            }
+        }
+    }
+
+    Ok(xml)
+}
+
+// ─── Sheet management ──────────────────────────────────────────────────────────
+
+/// Create a new sheet in the workbook.
+pub fn create_sheet_xlsx(
+    original_bytes: &[u8],
+    sheet_name: &str,
+    insert_index: usize,
+    output_path: &std::path::Path,
+) -> Result<(), OfficeError> {
+    use std::io::{Read, Write};
+
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(original_bytes.to_vec()))?;
+    let workbook_xml = read_entry(&mut archive, "xl/workbook.xml")?;
+    let rels_xml = read_entry(&mut archive, "xl/_rels/workbook.xml.rels")
+        .unwrap_or_default();
+
+    let name_to_path = parse_sheet_name_to_path(&workbook_xml, &rels_xml)?;
+    let next_num = name_to_path.len() + 1;
+    let new_sheet_path = format!("xl/worksheets/sheet{}.xml", next_num);
+
+    let new_sheet_xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<sheetViews><sheetView workbookViewId="0"/></sheetViews>
+<sheetFormatPr defaultRowHeight="15"/>
+<sheetData/>
+</worksheet>"#
+    );
+
+    let new_workbook_xml = inject_sheet_into_workbook(&workbook_xml, sheet_name, next_num as u32, insert_index)?;
+    let new_rels_xml = inject_sheet_relationship(&rels_xml, next_num)?;
+    let content_types_xml = read_entry(&mut archive, "[Content_Types].xml")?;
+    let new_content_types = inject_content_type(&content_types_xml, &new_sheet_path)?;
+
+    let mut out = zip::ZipWriter::new(std::fs::File::create(output_path)?);
+    let opts = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .unix_permissions(0o644);
+
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(original_bytes.to_vec()))?;
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i)?;
+        let name = file.name().to_string();
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf)?;
+
+        let (new_name, new_content) = match name.as_str() {
+            "xl/workbook.xml" => (name.clone(), new_workbook_xml.as_bytes().to_vec()),
+            "xl/_rels/workbook.xml.rels" => (name.clone(), new_rels_xml.as_bytes().to_vec()),
+            "[Content_Types].xml" => (name.clone(), new_content_types.as_bytes().to_vec()),
+            _ => (name.clone(), buf),
+        };
+
+        let file_opts = if file.compression() == zip::CompressionMethod::Deflated {
+            opts
+        } else {
+            zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored)
+                .unix_permissions(0o644)
+        };
+        out.start_file(&new_name, file_opts)?;
+        out.write_all(&new_content)?;
+    }
+
+    out.start_file(&new_sheet_path, opts)?;
+    out.write_all(new_sheet_xml.as_bytes())?;
+    out.finish()?;
+    Ok(())
+}
+
+fn inject_sheet_into_workbook(xml: &str, sheet_name: &str, sheet_id: u32, insert_index: usize) -> Result<String, OfficeError> {
+    let escaped_name = xml_escape(sheet_name);
+    let new_tag = format!(
+        r#"<sheet name="{}" sheetId="{}" state="visible" r:id="rId{}"/>"#,
+        escaped_name, sheet_id, sheet_id
+    );
+
+    let mut search_pos = 0;
+    let mut sheet_count = 0;
+    let mut insert_pos: Option<usize> = None;
+    while let Some(start) = xml[search_pos..].find("<sheet ") {
+        let abs_start = search_pos + start;
+        sheet_count += 1;
+        if sheet_count == insert_index {
+            insert_pos = Some(abs_start);
+        }
+        if let Some(end) = xml[abs_start..].find("/>").map(|p| abs_start + p + 2)
+            .or_else(|| xml[abs_start..].find("</sheet>").map(|p| abs_start + p + 8))
+        {
+            search_pos = end;
+        } else {
+            break;
+        }
+    }
+
+    if let Some(pos) = insert_pos {
+        Ok(format!("{}{}{}", &xml[..pos], new_tag, &xml[pos..]))
+    } else if let Some(pos) = xml.find("</sheets>") {
+        Ok(format!("{}{}{}", &xml[..pos], new_tag, &xml[pos..]))
+    } else {
+        Err(OfficeError::Excel("Could not find </sheets> in workbook.xml".to_string()))
+    }
+}
+
+fn inject_sheet_relationship(rels_xml: &str, sheet_num: usize) -> Result<String, OfficeError> {
+    let new_rel = format!(
+        r#"<Relationship Id="rId{}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet{}.xml"/>"#,
+        sheet_num, sheet_num
+    );
+    if let Some(pos) = rels_xml.find("</Relationships>") {
+        Ok(format!("{}{}{}", &rels_xml[..pos], new_rel, &rels_xml[pos..]))
+    } else {
+        Err(OfficeError::Excel("Could not find </Relationships> in workbook.xml.rels".to_string()))
+    }
+}
+
+fn inject_content_type(content_types: &str, sheet_path: &str) -> Result<String, OfficeError> {
+    let entry = format!(
+        r#"<Override PartName="/{}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>"#,
+        sheet_path
+    );
+    if let Some(pos) = content_types.find("</Types>") {
+        Ok(format!("{}{}{}", &content_types[..pos], entry, &content_types[pos..]))
+    } else {
+        Err(OfficeError::Excel("Could not find </Types> in [Content_Types].xml".to_string()))
+    }
+}
+
+fn xml_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// Rename a sheet in the workbook.
+pub fn rename_sheet_xlsx(
+    original_bytes: &[u8],
+    old_name: &str,
+    new_name: &str,
+    output_path: &std::path::Path,
+) -> Result<(), OfficeError> {
+    use std::io::{Read, Write};
+
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(original_bytes.to_vec()))?;
+    let workbook_xml = read_entry(&mut archive, "xl/workbook.xml")?;
+
+    let escaped_old = xml_escape(old_name);
+    let escaped_new = xml_escape(new_name);
+    let new_workbook_xml = workbook_xml.replace(
+        &format!("name=\"{}\"", escaped_old),
+        &format!("name=\"{}\"", escaped_new),
+    );
+
+    let mut out = zip::ZipWriter::new(std::fs::File::create(output_path)?);
+    let opts = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .unix_permissions(0o644);
+
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(original_bytes.to_vec()))?;
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i)?;
+        let name = file.name().to_string();
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf)?;
+
+        let new_content = if name == "xl/workbook.xml" {
+            new_workbook_xml.as_bytes().to_vec()
+        } else {
+            buf
+        };
+
+        let file_opts = if file.compression() == zip::CompressionMethod::Deflated {
+            opts
+        } else {
+            zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored)
+                .unix_permissions(0o644)
+        };
+        out.start_file(&name, file_opts)?;
+        out.write_all(&new_content)?;
+    }
+    out.finish()?;
+    Ok(())
+}
+
+/// Delete a sheet from the workbook.
+pub fn delete_sheet_xlsx(
+    original_bytes: &[u8],
+    sheet_name: &str,
+    output_path: &std::path::Path,
+) -> Result<(), OfficeError> {
+    use std::io::{Read, Write};
+
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(original_bytes.to_vec()))?;
+    let workbook_xml = read_entry(&mut archive, "xl/workbook.xml")?;
+    let rels_xml = read_entry(&mut archive, "xl/_rels/workbook.xml.rels")
+        .unwrap_or_default();
+    let name_to_path = parse_sheet_name_to_path(&workbook_xml, &rels_xml)?;
+
+    let sheet_path = name_to_path.get(sheet_name)
+        .ok_or_else(|| OfficeError::Excel(format!("Sheet '{}' not found", sheet_name)))?
+        .clone();
+
+    let name_attr = xml_escape(sheet_name);
+    let name_attr = format!("name=\"{}\"", name_attr);
+
+    let mut new_workbook_xml = workbook_xml.clone();
+    if let Some(pos) = new_workbook_xml.find(&name_attr) {
+        let before = &new_workbook_xml[..pos];
+        if let Some(tag_start) = before.rfind("<sheet") {
+            let rest = &new_workbook_xml[pos..];
+            let end = rest.find("/>").map(|p| pos + p + 2)
+                .or_else(|| rest.find("</sheet>").map(|p| pos + p + 8))
+                .unwrap_or(pos + name_attr.len());
+            new_workbook_xml = format!("{}{}", &new_workbook_xml[..tag_start], &new_workbook_xml[end..]);
+        }
+    }
+
+    let mut new_rels_xml = rels_xml.to_string();
+    let sheet_file = sheet_path.trim_start_matches("xl/");
+    if let Some(pos) = new_rels_xml.find(sheet_file) {
+        let before = &new_rels_xml[..pos];
+        if let Some(tag_start) = before.rfind("<Relationship") {
+            let rest = &new_rels_xml[pos..];
+            let end = rest.find("/>").map(|p| pos + p + 2)
+                .or_else(|| rest.find("</Relationship>").map(|p| pos + p + 15))
+                .unwrap_or(pos + sheet_file.len());
+            new_rels_xml = format!("{}{}", &new_rels_xml[..tag_start], &new_rels_xml[end..]);
+        }
+    }
+
+    let content_types_xml = read_entry(&mut archive, "[Content_Types].xml")?;
+    let sheet_part = format!("/{}", sheet_path);
+    let mut new_content_types = content_types_xml.clone();
+    if let Some(pos) = new_content_types.find(&sheet_part) {
+        let before = &new_content_types[..pos];
+        if let Some(tag_start) = before.rfind("<Override") {
+            let rest = &new_content_types[pos..];
+            let end = rest.find("/>").map(|p| pos + p + 2)
+                .unwrap_or(pos + sheet_part.len());
+            new_content_types = format!("{}{}", &new_content_types[..tag_start], &new_content_types[end..]);
+        }
+    }
+
+    let mut out = zip::ZipWriter::new(std::fs::File::create(output_path)?);
+    let opts = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .unix_permissions(0o644);
+
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(original_bytes.to_vec()))?;
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i)?;
+        let name = file.name().to_string();
+        if name == sheet_path {
+            continue;
+        }
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf)?;
+
+        let new_content = match name.as_str() {
+            "xl/workbook.xml" => new_workbook_xml.as_bytes().to_vec(),
+            "xl/_rels/workbook.xml.rels" => new_rels_xml.as_bytes().to_vec(),
+            "[Content_Types].xml" => new_content_types.as_bytes().to_vec(),
+            _ => buf,
+        };
+
+        let file_opts = if file.compression() == zip::CompressionMethod::Deflated {
+            opts
+        } else {
+            zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored)
+                .unix_permissions(0o644)
+        };
+        out.start_file(&name, file_opts)?;
+        out.write_all(&new_content)?;
+    }
+    out.finish()?;
+    Ok(())
+}
+
+/// Set a sheet's visibility state (hidden, visible).
+pub fn set_sheet_state_xlsx(
+    original_bytes: &[u8],
+    sheet_name: &str,
+    new_state: &str,
+    output_path: &std::path::Path,
+) -> Result<(), OfficeError> {
+    use std::io::{Read, Write};
+
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(original_bytes.to_vec()))?;
+    let workbook_xml = read_entry(&mut archive, "xl/workbook.xml")?;
+
+    let escaped_name = xml_escape(sheet_name);
+    let mut new_workbook_xml = workbook_xml.clone();
+
+    if let Some(name_pos) = new_workbook_xml.find(&format!("name=\"{}\"", escaped_name)) {
+        let before = &new_workbook_xml[..name_pos];
+        if let Some(tag_start) = before.rfind("<sheet") {
+            let rest = &new_workbook_xml[name_pos..];
+            if let Some(state_pos) = rest.find("state=\"") {
+                let start = name_pos + state_pos + 7;
+                let end = rest[start..].find('"').map(|e| start + e).unwrap_or(start);
+                new_workbook_xml = format!(
+                    "{}{}{}",
+                    &new_workbook_xml[..start],
+                    new_state,
+                    &new_workbook_xml[name_pos + end..]
+                );
+            } else {
+                let rest2 = &new_workbook_xml[name_pos..];
+                let insert_pos = rest2.find("/>").map(|p| name_pos + p)
+                    .or_else(|| rest2.find(">").map(|p| name_pos + p + 1))
+                    .unwrap_or(name_pos + escaped_name.len());
+                new_workbook_xml = format!(
+                    "{} state=\"{}\"{}",
+                    &new_workbook_xml[..insert_pos],
+                    new_state,
+                    &new_workbook_xml[insert_pos..]
+                );
+            }
+        }
+    }
+
+    let mut out = zip::ZipWriter::new(std::fs::File::create(output_path)?);
+    let opts = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .unix_permissions(0o644);
+
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(original_bytes.to_vec()))?;
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i)?;
+        let name = file.name().to_string();
+        let mut buf = Vec::new();
+        file.read_to_end(&mut buf)?;
+
+        let new_content = if name == "xl/workbook.xml" {
+            new_workbook_xml.as_bytes().to_vec()
+        } else {
+            buf
+        };
+
+        let file_opts = if file.compression() == zip::CompressionMethod::Deflated {
+            opts
+        } else {
+            zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored)
+                .unix_permissions(0o644)
+        };
+        out.start_file(&name, file_opts)?;
+        out.write_all(&new_content)?;
+    }
+    out.finish()?;
+    Ok(())
+}
+
+
+
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -2425,6 +3119,12 @@ mod tests {
         let result = create_xlsx_workbook(&workbook, &out_path);
         assert!(result.is_err(), "creating an empty workbook should fail");
     }
+}
+
+// ─── LibreOffice round-trip test (restored) ────────────────────────────────────
+#[cfg(test)]
+mod libreoffice_tests {
+    use super::*;
 
     /// End-to-end smoke test: round-trip the file through LibreOffice's
     /// `soffice --headless --convert-to csv` to verify the workbook is
@@ -2454,7 +3154,6 @@ mod tests {
         let _ = std::fs::remove_file(&out_path);
         create_xlsx_workbook(&workbook, &out_path).expect("create failed");
 
-        // Probe for soffice; skip cleanly if it's not on the host.
         let soffice = std::process::Command::new("which")
             .arg("soffice")
             .output()
@@ -2467,7 +3166,6 @@ mod tests {
             return;
         };
 
-        // Run soffice with a private user profile so concurrent CI runs don't collide.
         let profile = tmpdir.join(format!("inkuo_lo_profile_{}", std::process::id()));
         let out_dir = tmpdir.join(format!("inkuo_lo_out_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&profile);
@@ -2476,7 +3174,7 @@ mod tests {
 
         let status = std::process::Command::new(&soffice)
             .arg("--headless")
-            .arg("-env:UserInstallation=file://".to_string() + profile.to_str().unwrap())
+            .arg("--user-profile").arg(&profile)
             .arg("--convert-to").arg("csv")
             .arg("--outdir").arg(&out_dir)
             .arg(&out_path)
@@ -2486,14 +3184,12 @@ mod tests {
             Ok(s) if s.success() => {
                 let csv_path = out_dir.join("inkuo_test_libreoffice_open.csv");
                 let csv = std::fs::read_to_string(&csv_path).expect("read csv");
-                // LibreOffice emits the cells in row-major order, comma-separated.
                 assert!(csv.contains("Region"), "csv should contain Region: {}", csv);
                 assert!(csv.contains("North"), "csv should contain North: {}", csv);
                 assert!(csv.contains("1200"), "csv should contain 1200: {}", csv);
                 let _ = std::fs::remove_file(&csv_path);
             }
             Ok(s) => {
-                let stderr_path = out_dir.join("stderr.log");
                 let _ = std::fs::remove_file(&out_path);
                 panic!("soffice convert failed with status {}", s);
             }

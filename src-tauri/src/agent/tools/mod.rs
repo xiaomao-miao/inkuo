@@ -259,11 +259,13 @@ impl ToolResult {
 mod file_tools;
 mod search_tools;
 mod office_tools;
+mod excel_tools;
 mod database_tools;
 
 pub use file_tools::{ReadFileTool, WriteFileTool, EditFileTool, CreateDirTool, MoveFileTool};
 pub use search_tools::{ListDirTool, GlobTool, GrepTool};
 pub use office_tools::{ReadOfficeFileTool, CreateWordDocTool, CompareWordDocsTool, GetDocxInfoTool, ModifyExcelTool, GetExcelInfoTool, CreateExcelTool};
+pub use excel_tools::{ReadExcelRangeTool, ReadExcelMetadataTool, WriteExcelRangeTool, FormatExcelCellsTool, MergeExcelCellsTool, ResizeExcelRowsColsTool, ManageExcelSheetsTool};
 pub use database_tools::DatabaseSearchTool;
 
 /// Unified executor enum combining all tool implementations
@@ -283,6 +285,15 @@ pub enum ToolExecutor {
     ModifyExcel(office_tools::ModifyExcelTool),
     GetExcelInfo(office_tools::GetExcelInfoTool),
     CreateExcel(office_tools::CreateExcelTool),
+    // Excel fine-grained tools
+    ReadExcelRange(excel_tools::ReadExcelRangeTool),
+    ReadExcelMetadata(excel_tools::ReadExcelMetadataTool),
+    WriteExcelRange(excel_tools::WriteExcelRangeTool),
+    FormatExcelCells(excel_tools::FormatExcelCellsTool),
+    MergeExcelCells(excel_tools::MergeExcelCellsTool),
+    ResizeExcelRowsCols(excel_tools::ResizeExcelRowsColsTool),
+    ManageExcelSheets(excel_tools::ManageExcelSheetsTool),
+    // End
     DatabaseSearch(database_tools::DatabaseSearchTool),
 }
 
@@ -304,6 +315,13 @@ impl ToolExecutor {
             ToolExecutor::ModifyExcel(_) => "modify_excel",
             ToolExecutor::GetExcelInfo(_) => "get_excel_info",
             ToolExecutor::CreateExcel(_) => "create_excel",
+            ToolExecutor::ReadExcelRange(_) => "read_excel_range",
+            ToolExecutor::ReadExcelMetadata(_) => "read_excel_metadata",
+            ToolExecutor::WriteExcelRange(_) => "write_excel_range",
+            ToolExecutor::FormatExcelCells(_) => "format_excel_cells",
+            ToolExecutor::MergeExcelCells(_) => "merge_excel_cells",
+            ToolExecutor::ResizeExcelRowsCols(_) => "resize_excel_rows_cols",
+            ToolExecutor::ManageExcelSheets(_) => "manage_excel_sheets",
             ToolExecutor::DatabaseSearch(_) => "database_search",
         }
     }
@@ -325,6 +343,13 @@ impl ToolExecutor {
             ToolExecutor::ModifyExcel(t) => t.definition(),
             ToolExecutor::GetExcelInfo(t) => t.definition(),
             ToolExecutor::CreateExcel(t) => t.definition(),
+            ToolExecutor::ReadExcelRange(t) => t.definition(),
+            ToolExecutor::ReadExcelMetadata(t) => t.definition(),
+            ToolExecutor::WriteExcelRange(t) => t.definition(),
+            ToolExecutor::FormatExcelCells(t) => t.definition(),
+            ToolExecutor::MergeExcelCells(t) => t.definition(),
+            ToolExecutor::ResizeExcelRowsCols(t) => t.definition(),
+            ToolExecutor::ManageExcelSheets(t) => t.definition(),
             ToolExecutor::DatabaseSearch(t) => t.definition(),
         }
     }
@@ -346,6 +371,13 @@ impl ToolExecutor {
             ToolExecutor::ModifyExcel(t) => t.execute(arguments, workspace).await,
             ToolExecutor::GetExcelInfo(t) => t.execute(arguments, workspace).await,
             ToolExecutor::CreateExcel(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::ReadExcelRange(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::ReadExcelMetadata(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::WriteExcelRange(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::FormatExcelCells(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::MergeExcelCells(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::ResizeExcelRowsCols(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::ManageExcelSheets(t) => t.execute(arguments, workspace).await,
             ToolExecutor::DatabaseSearch(t) => t.execute(arguments, workspace).await,
         }
     }
@@ -433,6 +465,14 @@ impl ToolRegistry {
             ToolExecutor::ModifyExcel(ModifyExcelTool),
             ToolExecutor::GetExcelInfo(GetExcelInfoTool),
             ToolExecutor::CreateExcel(CreateExcelTool),
+            // Fine-grained Excel tools
+            ToolExecutor::ReadExcelRange(ReadExcelRangeTool),
+            ToolExecutor::ReadExcelMetadata(ReadExcelMetadataTool),
+            ToolExecutor::WriteExcelRange(WriteExcelRangeTool),
+            ToolExecutor::FormatExcelCells(FormatExcelCellsTool),
+            ToolExecutor::MergeExcelCells(MergeExcelCellsTool),
+            ToolExecutor::ResizeExcelRowsCols(ResizeExcelRowsColsTool),
+            ToolExecutor::ManageExcelSheets(ManageExcelSheetsTool),
             // DatabaseSearchTool added lazily via with_app_handle()
         ];
 
@@ -478,7 +518,11 @@ impl ToolRegistry {
 
         let is_file_modification = matches!(
             tool_call.name.as_str(),
-            "write_file" | "edit_file" | "create_word_doc" | "create_dir" | "modify_excel" | "create_excel"
+            "write_file" | "edit_file" | "create_word_doc" | "create_dir"
+            | "modify_excel" | "create_excel"
+            | "write_excel_range" | "format_excel_cells"
+            | "merge_excel_cells" | "resize_excel_rows_cols"
+            | "manage_excel_sheets"
         );
 
         let file_path = is_file_modification

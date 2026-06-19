@@ -11,6 +11,14 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   knowledge_build: '构建知识库',
   move_file: '移动文件',
   database_search: '搜索知识库',
+  // Excel tools
+  read_excel_range: '读取 Excel 区域',
+  read_excel_metadata: '读取 Excel 元数据',
+  write_excel_range: '写入 Excel 区域',
+  format_excel_cells: '格式化 Excel 单元格',
+  merge_excel_cells: '合并 Excel 单元格',
+  resize_excel_rows_cols: '调整 Excel 行高列宽',
+  manage_excel_sheets: '管理 Excel 工作表',
 };
 
 export function getToolDisplayName(name: string): string {
@@ -31,6 +39,11 @@ export const FILE_MODIFICATION_TOOLS = new Set([
   'write_file',
   'edit_file',
   'create_word_doc',
+  'write_excel_range',
+  'format_excel_cells',
+  'merge_excel_cells',
+  'resize_excel_rows_cols',
+  'manage_excel_sheets',
 ]);
 
 export const PREVIEW_STRING_KEYS = new Set([
