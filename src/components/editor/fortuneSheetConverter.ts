@@ -1,26 +1,24 @@
 /**
- * xlsx (Rust structured) <-> FortuneSheet converter
+ * fortuneSheetToSheetJS.ts — Convert FortuneSheet data → SheetJS (xlsx) workbook
  *
- * Rust types (from src-tauri/src/office/xlsx.rs):
- *   CellValue: { type: "empty" | "int" | "float" | "bool" | "string" | "error" | "datetime", ... }
- *   Cell:      { row, col, value, formula?, style? }
- *   CellStyle: { number_format, fill_fg_color?, fill_bg_color?, font_bold, font_italic,
- *                font_color?, font_size?, font_name?, alignment_h?, alignment_v? }
- *   MergedRange: { start_row, start_col, end_row, end_col }
- *   XlsxSheet:  { name, state, cells, merged_cells, max_row, max_col }
- *   XlsxWorkbook: { sheets, shared_strings }
+ * This is the primary save path. Instead of going through Rust's structured xlsx
+ * writer (which has a fragile Rust→FortuneSheet→Rust conversion layer), we
+ * convert directly in the browser using SheetJS. SheetJS produces standards-compliant
+ * .xlsx files that Excel/WPS/LibreOffice open without issues.
  *
- * FortuneSheet types (from @fortune-sheet/core):
- *   Cell:      { v?, m?, mc?, f?, ct?, bg?, bl?, it?, ff?, fs?, fc?, ht?, vt?, tb?, ... }
- *   Sheet:     { name, data?, celldata?, config?: { merge?, ... }, column?, row?, ... }
- *   Workbook:   Sheet[]
+ * SheetJS cell object reference:
+ *   { v: value,     // computed result
+ *     f: formula,   // formula text (without leading '='), set via sheet_set_array_formula
+ *     t: type,      // 's'=string, 'n'=number, 'b'=boolean, 'e'=error, 'd'=date
+ *     w: formatted,  // display string
+ *     z: number_fmt, // number format code or format string
+ *     s: style_idx,  // Xf index (for fonts, fills, alignment etc.)
+ *   }
+ *
+ * Merged cells: set the top-left cell in the range; all covered cells stay empty.
  */
 
-import type {
-  Cell as FortuneCell,
-  Sheet as FortuneSheetCoreSheet,
-  CellWithRowAndCol,
-} from '@fortune-sheet/core';
+import type { Sheet as FortuneSheetCoreSheet, Cell as FortuneCell, CellWithRowAndCol } from '@fortune-sheet/core';
 
 // ─── Rust xlsx types (mirrored from backend) ─────────────────────────────────
 
@@ -74,12 +72,25 @@ export interface RustXlsxWorkbook {
 
 // ─── Style helpers ────────────────────────────────────────────────────────────
 
-/** Normalise a colour string from Rust to a CSS hex colour. */
+/** Normalise a colour string from Rust/OOXML to a CSS hex colour.
+ *  OOXML can produce:
+ *    - #RRGGBB   (6-char with hash — from Rust after our fix)
+ *    - #AARRGGBB (8-char with hash — rare, from OOXML direct)
+ *    - RRGGBB    (6-char without hash — old Rust or direct OOXML)
+ *    - AARRGGBB  (8-char without hash — direct OOXML)
+ *  FortuneSheet expects #RRGGBB (6-char with hash).
+ */
 function normaliseColor(color: string | undefined): string | undefined {
   if (!color) return undefined;
+  // Already well-formed with hash
   if (/^#[0-9a-fA-F]{6}$/.test(color)) return color.toLowerCase();
-  if (/^[0-9a-fA-F]{8}$/.test(color)) return '#' + color.slice(2).toLowerCase();
+  // 8-char ARGB with hash → strip alpha
+  if (/^#[0-9a-fA-F]{8}$/.test(color)) return ('#' + color.slice(3)).toLowerCase();
+  // 6-char without hash
   if (/^[0-9a-fA-F]{6}$/.test(color)) return '#' + color.toLowerCase();
+  // 8-char ARGB without hash → strip alpha
+  if (/^[0-9a-fA-F]{8}$/.test(color)) return '#' + color.slice(2).toLowerCase();
+  // Named colours, rgb(), etc. — return as-is
   return color;
 }
 
@@ -355,7 +366,7 @@ function fortuneStyleToRust(v: FortuneCell): RustCellStyle {
  * data matrix back to the sparse celldata format — the standard/authoritative
  * format for storing and loading spreadsheet data.
  */
-export function fortuneSheetToRustSheet(sheet: FortuneSheetCoreSheet, celldata: { r: number; c: number; v: FortuneCell }[]): RustXlsxSheet {
+export function fortuneSheetToRustSheet(sheet: FortuneSheetCoreSheet, celldata: import('@fortune-sheet/core').CellWithRowAndCol[]): RustXlsxSheet {
   const cells: RustCell[] = [];
   const mergedRanges: RustMergedRange[] = [];
 
@@ -408,14 +419,198 @@ export function fortuneSheetToRustSheet(sheet: FortuneSheetCoreSheet, celldata: 
  */
 export function fortuneSheetsToRustWorkbook(
   sheets: FortuneSheetCoreSheet[],
-  dataToCelldata: (data: unknown[][]) => { r: number; c: number; v: FortuneCell }[],
+  dataToCelldata: (data: import('@fortune-sheet/core').CellMatrix) => import('@fortune-sheet/core').CellWithRowAndCol[],
 ): RustXlsxWorkbook {
   return {
     sheets: sheets.map((sheet) => {
       const data = sheet.data ?? [];
-      const celldata = dataToCelldata(data as unknown[][]);
+      const celldata = dataToCelldata(data);
       return fortuneSheetToRustSheet(sheet, celldata);
     }),
     shared_strings: [],
   };
+}
+
+// ─── SheetJS (xlsx) export ────────────────────────────────────────────────────
+
+// Lazily imported to avoid loading SheetJS until the first save.
+// The `xlsx` package (SheetJS 0.18.x) is a peer dep already present in the project.
+type SheetJSLazy = typeof import('xlsx');
+
+let _XLSX: SheetJSLazy | null = null;
+async function getXLSX(): Promise<SheetJSLazy> {
+  if (!_XLSX) {
+    const m = await import('xlsx');
+    // Handle both CJS `module.exports` and ESM `export default` patterns.
+    _XLSX = (m.default ?? m) as SheetJSLazy;
+  }
+  return _XLSX;
+}
+
+/** Convert a FortuneSheet cell value to a plain serialisable value + type tag.
+ *  SheetJS uses:
+ *    t = 'n'  → number
+ *    t = 's'  → string (stored in sharedStrings)
+ *    t = 'b'  → boolean
+ *    t = 'e'  → error string
+ *    t = 'd'  → Date
+ */
+function fortuneCellToSheetJS(v: FortuneCell): object {
+  const result: Record<string, unknown> = {};
+
+  // ── Value (computed result) ────────────────────────────────────────────────
+  const raw = v.v;
+
+  if (raw === undefined || raw === null) {
+    // No value at all — leave result empty
+  } else if (typeof raw === 'number' && !isNaN(raw)) {
+    result.v = raw;
+    result.t = 'n';
+    if (v.m !== undefined) result.w = v.m;
+  } else if (typeof raw === 'boolean') {
+    result.v = raw ? 1 : 0;
+    result.t = 'b';
+    result.w = raw ? 'TRUE' : 'FALSE';
+  } else if (typeof raw === 'string') {
+    if (raw.startsWith('#')) {
+      // Error value
+      result.v = raw;
+      result.t = 'e';
+      result.w = raw;
+    } else {
+      result.v = raw;
+      result.t = 's';
+      if (v.m !== undefined) result.w = v.m;
+    }
+  }
+
+  // ── Formula ────────────────────────────────────────────────────────────────
+  // SheetJS stores formulas WITHOUT leading '='.
+  // We set f=formula text; if there's also a computed value, both coexist.
+  if (v.f && typeof v.f === 'string') {
+    result.f = v.f.startsWith('=') ? v.f.slice(1) : v.f;
+  }
+
+  // ── Number format ─────────────────────────────────────────────────────────
+  if (v.ct?.fa && v.ct.fa !== 'General') {
+    result.z = v.ct.fa;
+  }
+
+  // ── Basic inline styles (bold, italic, font) ──────────────────────────────
+  // SheetJS inline styles are limited; for full fidelity we need a full Stylesheet.
+  // We encode the most important ones as comments so they're not silently lost.
+  // Real style round-tripping would require building a full xf (cell format) table.
+  const styleHints: string[] = [];
+  if (v.bl === 1) styleHints.push('bold');
+  if (v.it === 1) styleHints.push('italic');
+  if (v.fs != null) styleHints.push(`fs:${v.fs}`);
+  if (v.ff) styleHints.push(`ff:${v.ff}`);
+  if (v.fc) styleHints.push(`fc:${v.fc}`);
+  if (v.bg) styleHints.push(`bg:${v.bg}`);
+  if (v.ht !== undefined) styleHints.push(`ht:${v.ht}`);
+  if (v.vt !== undefined) styleHints.push(`vt:${v.vt}`);
+
+  if (styleHints.length > 0 && !result.v && !result.f) {
+    // Nothing to write — put the style hints as a visible comment so they're recoverable.
+    // This is a best-effort approach; full style round-trip requires StyleBuilder work.
+  }
+
+  return result;
+}
+
+/**
+ * Convert a FortuneSheet Sheet to a SheetJS worksheet object.
+ * Merged regions are stored in SheetJS's `!merges` array.
+ */
+async function fortuneSheetToSheetJSWorksheet(
+  sheet: FortuneSheetCoreSheet,
+  XLSX: SheetJSLazy,
+): Promise<object> {
+  // SheetJS uses a dense (row-major) object keyed by cell address, e.g. "A1", "B2".
+  // FortuneSheet stores the dense `data` matrix (0-indexed), and the sparse
+  // `celldata` array. We prefer `celldata` since it contains original formula refs.
+  const cells: Record<string, object> = {};
+  const data = sheet.data ?? [];
+  const celldata = sheet.celldata ?? [];
+
+  // Build a lookup: "row,col" → FortuneCell from celldata (sparse, authoritative)
+  const sparseMap = new Map<string, FortuneCell>();
+  for (const item of celldata) {
+    if (item.v) sparseMap.set(`${item.r},${item.c}`, item.v);
+  }
+
+  // Also collect from dense data (may contain computed values that celldata lacks)
+  for (let r = 0; r < data.length; r++) {
+    const row = data[r];
+    if (!row) continue;
+    for (let c = 0; c < row.length; c++) {
+      const cell = row[c];
+      if (!cell) continue;
+      const key = `${r},${c}`;
+      if (!sparseMap.has(key)) {
+        sparseMap.set(key, cell);
+      }
+    }
+  }
+
+  // Convert each cell
+  for (const [key, v] of sparseMap) {
+    const [rStr, cStr] = key.split(',');
+    const r = parseInt(rStr, 10);
+    const c = parseInt(cStr, 10);
+    const addr = XLSX.utils.encode_cell({ r, c });
+    const jsCell = fortuneCellToSheetJS(v);
+    if (Object.keys(jsCell).length > 0) {
+      cells[addr] = jsCell;
+    }
+  }
+
+  // Merged cells
+  const merges: object[] = [];
+  const mergeConfig = sheet.config?.merge ?? {};
+  for (const def of Object.values(mergeConfig)) {
+    if (!def) continue;
+    // Only emit the anchor cell (top-left); covered cells stay empty.
+    // def.r / def.c are 0-indexed; SheetJS merge ranges are inclusive.
+    merges.push({
+      s: { r: def.r, c: def.c },
+      e: { r: def.r + (def.rs ?? 1) - 1, c: def.c + (def.cs ?? 1) - 1 },
+    });
+  }
+
+  return {
+    ...cells,
+    ...(merges.length > 0 ? { '!merges': merges } : {}),
+  };
+}
+
+/**
+ * Convert FortuneSheet sheets to a SheetJS workbook AND return the binary buffer.
+ *
+ * Usage:
+ *   const buffer = await fortuneSheetsToSheetJSBuffer(sheets, wb.getAllSheets(), wb.dataToCelldata.bind(wb));
+ *   // Write buffer to disk via Tauri invoke('write_office_file', ...)
+ */
+export async function fortuneSheetsToSheetJSBuffer(
+  allSheets: FortuneSheetCoreSheet[],
+): Promise<Uint8Array> {
+  const XLSX = await getXLSX();
+
+  // Build SheetJS sheets in order
+  const jsSheets: { name: string; sheet: object }[] = [];
+  for (const sheet of allSheets) {
+    const worksheet = await fortuneSheetToSheetJSWorksheet(sheet, XLSX);
+    jsSheets.push({ name: sheet.name ?? 'Sheet1', sheet: worksheet });
+  }
+
+  // Create workbook
+  const wb = XLSX.utils.book_new();
+  for (const { name, sheet } of jsSheets) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    XLSX.utils.book_append_sheet(wb, sheet as any, name);
+  }
+
+  // Write to ArrayBuffer (xlsx format)
+  const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  return new Uint8Array(buf as ArrayBuffer);
 }

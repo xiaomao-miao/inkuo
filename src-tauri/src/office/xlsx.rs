@@ -602,7 +602,7 @@ fn parse_styles(xml: &str) -> StylesInfo {
                 if in_font && name.as_ref() == b"color" {
                     if let Some(v) = attr_value(e, b"rgb") {
                         if let Ok(s) = std::str::from_utf8(&v) {
-                            current_font.color = Some(s.trim_start_matches('#').to_string());
+                            current_font.color = Some(format!("#{}", s.trim_start_matches('#')));
                         }
                     }
                 }
@@ -629,14 +629,14 @@ fn parse_styles(xml: &str) -> StylesInfo {
                 if in_fill && name.as_ref() == b"fgColor" {
                     if let Some(v) = attr_value(e, b"rgb") {
                         if let Ok(s) = std::str::from_utf8(&v) {
-                            current_fill.fg_color = Some(s.trim_start_matches('#').to_string());
+                            current_fill.fg_color = Some(format!("#{}", s.trim_start_matches('#')));
                         }
                     }
                 }
                 if in_fill && name.as_ref() == b"bgColor" {
                     if let Some(v) = attr_value(e, b"rgb") {
                         if let Ok(s) = std::str::from_utf8(&v) {
-                            current_fill.bg_color = Some(s.trim_start_matches('#').to_string());
+                            current_fill.bg_color = Some(format!("#{}", s.trim_start_matches('#')));
                         }
                     }
                 }
@@ -808,13 +808,12 @@ impl StylesInfo {
     }
 }
 
-fn parse_sheet_xml(xml: &str, shared_strings: &[String]) -> (SheetParseResult, Vec<Option<CellStyle>>) {
+fn parse_sheet_xml(xml: &str, shared_strings: &[String], styles_info: Option<&StylesInfo>) -> SheetParseResult {
     let mut reader = XmlReader::from_str(xml);
     reader.config_mut().trim_text(false);
     let mut buf = Vec::new();
 
     let mut cells: Vec<Cell> = Vec::new();
-    let mut cell_styles: Vec<Option<CellStyle>> = Vec::new();
     let mut merged: Vec<MergedRange> = Vec::new();
     let mut max_row: usize = 0;
     let mut max_col: usize = 0;
@@ -910,20 +909,23 @@ fn parse_sheet_xml(xml: &str, shared_strings: &[String]) -> (SheetParseResult, V
                                 }
 
                                 let value = resolve_cell_value(&c, shared_strings);
-                                let style_index = c.style_index;
+                                let style = c.style_index.and_then(|idx| {
+                                    styles_info.and_then(|si| si.resolve_style(idx as usize))
+                                });
                                 if !matches!(value, CellValue::Empty)
-                                    || style_index.is_some()
+                                    || style.is_some()
                                     || c.formula.is_some()
                                 {
+                                    if c.formula.is_some() {
+                                        eprintln!("[xlsx] formula cell found: row={} col={} formula={:?}", row, col, c.formula);
+                                    }
                                     cells.push(Cell {
                                         row,
                                         col,
                                         value,
                                         formula: c.formula,
-                                        style: None, // filled in below
+                                        style,
                                     });
-                                    cell_styles.push(None); // placeholder; resolved at workbook level
-                                    let _ = style_index;
                                 }
                             }
                         }
@@ -938,16 +940,13 @@ fn parse_sheet_xml(xml: &str, shared_strings: &[String]) -> (SheetParseResult, V
         buf.clear();
     }
 
-    (
-        SheetParseResult {
-            cells,
-            merged,
-            state: "visible".to_string(),
-            max_row,
-            max_col,
-        },
-        cell_styles,
-    )
+    SheetParseResult {
+        cells,
+        merged,
+        state: "visible".to_string(),
+        max_row,
+        max_col,
+    }
 }
 
 fn resolve_cell_value(c: &ParsedCell, shared_strings: &[String]) -> CellValue {
@@ -1025,27 +1024,11 @@ pub fn read_xlsx_structured(bytes: &[u8]) -> Result<XlsxWorkbook, OfficeError> {
             Ok(s) => s,
             Err(_) => continue,
         };
-        let (parsed, _styles_placeholders) = parse_sheet_xml(&xml, &shared_strings);
-        // Apply styles now that we have the styles_info available.
-        let styled_cells: Vec<Cell> = parsed
-            .cells
-            .into_iter()
-            .map(|mut cell| {
-                // Re-walk XML to get style index per cell. We already
-                // extracted style_index into ParsedCell but discarded it
-                // when emitting Cell. To keep the API surface simple, we
-                // do a second pass for style resolution by re-parsing.
-                // For brevity, we keep style=None here. (Style info is
-                // available via the workbook's styles_info if needed.)
-                cell.style = None;
-                cell
-            })
-            .collect();
-        let _ = styles_info; // resolved below if needed; keeps API symmetric.
+        let parsed = parse_sheet_xml(&xml, &shared_strings, styles_info.as_ref());
         sheets.push(XlsxSheet {
             name: name.clone(),
             state: parsed.state,
-            cells: styled_cells,
+            cells: parsed.cells,
             merged_cells: parsed.merged,
             max_row: parsed.max_row,
             max_col: parsed.max_col,
@@ -1250,7 +1233,7 @@ pub fn incremental_write_xlsx(
     // Group modifications by sheet path.
     let mut by_path: HashMap<String, Vec<&CellModification>> = HashMap::new();
     for m in modifications {
-        if let Some(path) = sheet_name_to_path.get(&m.sheet) {
+        if let Some((_, path)) = sheet_name_to_path.iter().find(|(n, _)| n == &m.sheet) {
             by_path.entry(path.clone()).or_default().push(m);
         } else {
             return Err(OfficeError::Excel(format!(
@@ -1659,7 +1642,7 @@ fn escape_xml_text(s: &str) -> String {
 fn parse_sheet_name_to_path(
     workbook_xml: &str,
     rels_xml: &str,
-) -> Result<HashMap<String, String>, OfficeError> {
+) -> Result<Vec<(String, String)>, OfficeError> {
     let mut reader = XmlReader::from_str(workbook_xml);
     reader.config_mut().trim_text(false);
     let mut buf = Vec::new();
@@ -1729,7 +1712,7 @@ fn parse_sheet_name_to_path(
         rel_buf.clear();
     }
 
-    let mut out = HashMap::new();
+    let mut out = Vec::new();
     for (name, rid) in sheets {
         if let Some(target) = rid_to_target.get(&rid) {
             let path = if target.starts_with('/') {
@@ -1737,7 +1720,7 @@ fn parse_sheet_name_to_path(
             } else {
                 format!("xl/{}", target)
             };
-            out.insert(name, path);
+            out.push((name, path));
         }
     }
     Ok(out)
@@ -2185,7 +2168,7 @@ pub fn merge_cells_xlsx(
 
     let mut by_path: HashMap<String, Vec<&MergeModification>> = HashMap::new();
     for m in modifications {
-        if let Some(path) = sheet_name_to_path.get(&m.sheet) {
+        if let Some((_, path)) = sheet_name_to_path.iter().find(|(n, _)| n == &m.sheet) {
             by_path.entry(path.clone()).or_default().push(m);
         } else {
             return Err(OfficeError::Excel(format!("Sheet '{}' not found", m.sheet)));
@@ -2333,9 +2316,10 @@ pub fn resize_rows_cols_xlsx(
         .unwrap_or_default();
     let sheet_name_to_path = parse_sheet_name_to_path(&workbook_xml, &rels_xml)?;
 
-    let path = sheet_name_to_path.get(sheet_name)
-        .ok_or_else(|| OfficeError::Excel(format!("Sheet '{}' not found", sheet_name)))?
-        .clone();
+    let path = sheet_name_to_path.iter()
+        .find(|(n, _)| n == sheet_name)
+        .map(|(_, p)| p.clone())
+        .ok_or_else(|| OfficeError::Excel(format!("Sheet '{}' not found", sheet_name)))?;
 
     let xml = read_entry(&mut archive, &path)?;
     let new_xml = apply_dimension_changes(&xml, row_changes, col_changes)?;
@@ -2638,9 +2622,10 @@ pub fn delete_sheet_xlsx(
         .unwrap_or_default();
     let name_to_path = parse_sheet_name_to_path(&workbook_xml, &rels_xml)?;
 
-    let sheet_path = name_to_path.get(sheet_name)
-        .ok_or_else(|| OfficeError::Excel(format!("Sheet '{}' not found", sheet_name)))?
-        .clone();
+    let sheet_path = name_to_path.iter()
+        .find(|(n, _)| n == sheet_name)
+        .map(|(_, p)| p.clone())
+        .ok_or_else(|| OfficeError::Excel(format!("Sheet '{}' not found", sheet_name)))?;
 
     let name_attr = xml_escape(sheet_name);
     let name_attr = format!("name=\"{}\"", name_attr);
@@ -2933,9 +2918,11 @@ mod tests {
 <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
 <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>
 </Relationships>"#;
-        let map = parse_sheet_name_to_path(wb_xml, rels_xml).unwrap();
-        assert_eq!(map.get("Sales"), Some(&"xl/worksheets/sheet1.xml".to_string()));
-        assert_eq!(map.get("Data"), Some(&"xl/worksheets/sheet2.xml".to_string()));
+        let result = parse_sheet_name_to_path(wb_xml, rels_xml).unwrap();
+        assert_eq!(result[0].0, "Sales");
+        assert_eq!(result[0].1, "xl/worksheets/sheet1.xml");
+        assert_eq!(result[1].0, "Data");
+        assert_eq!(result[1].1, "xl/worksheets/sheet2.xml");
     }
 
     #[test]
