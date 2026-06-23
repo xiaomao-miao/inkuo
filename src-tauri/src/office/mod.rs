@@ -9,14 +9,13 @@ mod xlsx;
 pub use shared::{OfficeError, TableCell, TableRow};
 pub use docx::{WordDocument, WordParagraph, WordTable, FontRun, DocElement, NumberingRef, read_word_document, word_document_to_text, write_word_document_to_path};
 pub use xlsx::{
-    ExcelWorkbook, read_excel_workbook, excel_workbook_to_text,
-    XlsxWorkbook, XlsxSheet, Cell, CellValue, CellStyle, MergedRange,
-    CellModification, read_xlsx_structured, xlsx_workbook_to_text,
-    incremental_write_xlsx, create_xlsx_workbook,
+    read_excel_workbook, excel_workbook_to_text,
+    XlsxWorkbook, XlsxSheet, Cell, CellValue, MergedRange,
+    CellModification, read_xlsx_structured,
+    incremental_write_xlsx, create_xlsx_workbook, write_excel_document,
     cell_address, parse_cell_address,
-    // Structured type aliases (recommended over the flat string-grid types)
-    StructuredCell, StructuredCellStyle, StructuredCellValue,
-    StructuredMergedRange, StructuredXlsxSheet, StructuredExcelWorkbook,
+    // Unified operation enum
+    ExcelOperation,
     // New sheet/merge/rowcol operations
     merge_cells_xlsx, MergeModification, MergeOp,
     resize_rows_cols_xlsx, RowColModification,

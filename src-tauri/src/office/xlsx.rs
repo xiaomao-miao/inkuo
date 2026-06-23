@@ -334,6 +334,49 @@ fn default_visible() -> String {
     "visible".to_string()
 }
 
+impl XlsxSheet {
+    /// Create a new blank sheet with the given name.
+    pub fn new(name: String) -> Self {
+        Self {
+            name,
+            state: "visible".to_string(),
+            cells: Vec::new(),
+            merged_cells: Vec::new(),
+            max_row: 0,
+            max_col: 0,
+            row_heights: std::collections::HashMap::new(),
+            col_widths: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Get a mutable reference to a cell, creating it if it doesn't exist.
+    /// Returns a mutable reference to the (possibly newly created) cell.
+    pub fn cell_mut(&mut self, row: usize, col: usize) -> &mut Cell {
+        // Find existing cell
+        if let Some(idx) = self.cells.iter().position(|c| c.row == row && c.col == col) {
+            return &mut self.cells[idx];
+        }
+        // Create new cell
+        let cell = Cell {
+            row,
+            col,
+            value: CellValue::Empty,
+            formula: None,
+            style: None,
+        };
+        self.cells.push(cell);
+        // Update bounds
+        if row + 1 > self.max_row {
+            self.max_row = row + 1;
+        }
+        if col + 1 > self.max_col {
+            self.max_col = col + 1;
+        }
+        // Return mutable reference to the last element
+        self.cells.last_mut().unwrap()
+    }
+}
+
 /// Structured workbook parsed from xlsx. Each sheet carries full cell-level
 /// fidelity (formulas, styles, merged ranges).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -352,6 +395,262 @@ impl XlsxWorkbook {
     }
     pub fn sheet_index(&self, name: &str) -> Option<usize> {
         self.sheets.iter().position(|s| s.name == name)
+    }
+
+    /// Apply a sequence of [`ExcelOperation`]s to the workbook in-place.
+    ///
+    /// Operations are applied sequentially. Later operations can affect the results
+    /// of earlier ones (e.g. writing a range then modifying a cell within it).
+    pub fn apply_operations(&mut self, ops: Vec<ExcelOperation>) -> Result<(), OfficeError> {
+        for op in ops {
+            match op {
+                ExcelOperation::ModifyCell {
+                    sheet,
+                    address,
+                    value,
+                    formula,
+                    number_format,
+                    bg_color,
+                    font_bold,
+                    font_italic,
+                    font_color,
+                    font_size,
+                    font_name,
+                    alignment_h,
+                    alignment_v,
+                } => {
+                    let sheet = self.sheet_mut(&sheet)
+                        .ok_or_else(|| OfficeError::Excel(format!("Sheet not found: {}", sheet)))?;
+                    let (row, col) = parse_cell_address(&address)
+                        .ok_or_else(|| OfficeError::Excel(format!("Invalid address: {}", address)))?;
+
+                    let cell = sheet.cell_mut(row, col);
+                    if let Some(v) = value {
+                        cell.value = v;
+                    }
+                    if let Some(f) = formula {
+                        cell.formula = Some(f);
+                    }
+                    // Style is stored as style_index in XML, but CellStyle is a structured
+                    // representation we expose to the AI. For now, we handle number_format
+                    // and other style fields by rebuilding a new CellStyle.
+                    if number_format.is_some()
+                        || bg_color.is_some()
+                        || font_bold.is_some()
+                        || font_italic.is_some()
+                        || font_color.is_some()
+                        || font_size.is_some()
+                        || font_name.is_some()
+                        || alignment_h.is_some()
+                        || alignment_v.is_some()
+                    {
+                        let style = cell.style.get_or_insert_with(CellStyle::default);
+                        if let Some(nf) = number_format {
+                            style.number_format = nf;
+                        }
+                        if let Some(bc) = bg_color {
+                            if bc.is_empty() {
+                                style.fill_fg_color = None;
+                            } else {
+                                style.fill_fg_color = Some(bc);
+                            }
+                        }
+                        if let Some(b) = font_bold {
+                            style.font_bold = b;
+                        }
+                        if let Some(i) = font_italic {
+                            style.font_italic = i;
+                        }
+                        if let Some(fc) = font_color {
+                            style.font_color = Some(fc);
+                        }
+                        if let Some(sz) = font_size {
+                            style.font_size = Some(sz);
+                        }
+                        if let Some(fn_) = font_name {
+                            style.font_name = Some(fn_);
+                        }
+                        if let Some(ah) = alignment_h {
+                            style.alignment_h = Some(ah);
+                        }
+                        if let Some(av) = alignment_v {
+                            style.alignment_v = Some(av);
+                        }
+                    }
+                }
+                ExcelOperation::WriteRange {
+                    sheet,
+                    start_cell,
+                    values,
+                    number_format,
+                } => {
+                    let sheet = self.sheet_mut(&sheet)
+                        .ok_or_else(|| OfficeError::Excel(format!("Sheet not found: {}", sheet)))?;
+                    let (start_row, start_col) = parse_cell_address(&start_cell)
+                        .ok_or_else(|| OfficeError::Excel(format!("Invalid start_cell: {}", start_cell)))?;
+
+                    for (r_off, row_vals) in values.iter().enumerate() {
+                        for (c_off, val) in row_vals.iter().enumerate() {
+                            let row = start_row + r_off;
+                            let col = start_col + c_off;
+                            let cell = sheet.cell_mut(row, col);
+                            cell.value = json_value_to_cell_value(val);
+                            if let Some(ref fmt) = number_format {
+                                let style = cell.style.get_or_insert_with(CellStyle::default);
+                                style.number_format = fmt.clone();
+                            }
+                        }
+                    }
+                }
+                ExcelOperation::MergeCells {
+                    sheet,
+                    op,
+                    start_cell,
+                    end_cell,
+                } => {
+                    let sheet = self.sheet_mut(&sheet)
+                        .ok_or_else(|| OfficeError::Excel(format!("Sheet not found: {}", sheet)))?;
+                    let (sr, sc) = parse_cell_address(&start_cell)
+                        .ok_or_else(|| OfficeError::Excel(format!("Invalid start_cell: {}", start_cell)))?;
+                    let (er, ec) = parse_cell_address(&end_cell)
+                        .ok_or_else(|| OfficeError::Excel(format!("Invalid end_cell: {}", end_cell)))?;
+                    let range = MergedRange {
+                        start_row: sr,
+                        start_col: sc,
+                        end_row: er,
+                        end_col: ec,
+                    };
+                    match op.as_str() {
+                        "unmerge" => {
+                            sheet.merged_cells.retain(|m| m.address() != range.address());
+                        }
+                        _ => {
+                            // "merge" or default: add if not already present
+                            if !sheet.merged_cells.iter().any(|m| m.address() == range.address()) {
+                                sheet.merged_cells.push(range);
+                            }
+                        }
+                    }
+                }
+                ExcelOperation::ResizeDimension {
+                    sheet,
+                    dimension,
+                    index,
+                    size,
+                    hidden,
+                } => {
+                    let sheet = self.sheet_mut(&sheet)
+                        .ok_or_else(|| OfficeError::Excel(format!("Sheet not found: {}", sheet)))?;
+                    if dimension == "row" {
+                        if hidden {
+                            // Store hidden rows by negative height marker
+                            sheet.row_heights.insert(index, -1.0);
+                        } else if size > 0.0 {
+                            sheet.row_heights.insert(index, size);
+                        } else {
+                            sheet.row_heights.remove(&index);
+                        }
+                    } else {
+                        // "col"
+                        if hidden {
+                            sheet.col_widths.insert(index, -1.0);
+                        } else if size > 0.0 {
+                            sheet.col_widths.insert(index, size);
+                        } else {
+                            sheet.col_widths.remove(&index);
+                        }
+                    }
+                }
+                ExcelOperation::SheetOp {
+                    op,
+                    sheet: target,
+                    new_name,
+                    insert_index,
+                } => {
+                    match op.as_str() {
+                        "create" => {
+                            let name = new_name.unwrap_or_else(|| "Sheet".to_string());
+                            let idx = insert_index.unwrap_or(self.sheets.len());
+                            let new_sheet = XlsxSheet::new(name);
+                            if idx >= self.sheets.len() {
+                                self.sheets.push(new_sheet);
+                            } else {
+                                self.sheets.insert(idx, new_sheet);
+                            }
+                        }
+                        "rename" => {
+                            let new_name = new_name
+                                .ok_or_else(|| OfficeError::Excel("rename requires new_name".into()))?;
+                            if let Some(s) = self.sheet_mut(&target) {
+                                s.name = new_name;
+                            }
+                        }
+                        "delete" => {
+                            if self.sheets.len() <= 1 {
+                                return Err(OfficeError::Excel(
+                                    "Cannot delete the last sheet".into(),
+                                ));
+                            }
+                            let idx = self.sheet_index(&target)
+                                .ok_or_else(|| OfficeError::Excel(format!("Sheet not found: {}", target)))?;
+                            self.sheets.remove(idx);
+                        }
+                        "hide" => {
+                            if let Some(s) = self.sheet_mut(&target) {
+                                s.state = "hidden".to_string();
+                            }
+                        }
+                        "unhide" => {
+                            if let Some(s) = self.sheet_mut(&target) {
+                                s.state = "visible".to_string();
+                            }
+                        }
+                        _ => {
+                            return Err(OfficeError::Excel(format!("Unknown sheet op: {}", op)));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+fn json_value_to_cell_value(v: &serde_json::Value) -> CellValue {
+    match v {
+        serde_json::Value::Null => CellValue::Empty,
+        serde_json::Value::Object(obj)
+            if obj.is_empty() || obj.get("type").and_then(|t| t.as_str()) == Some("empty") =>
+        {
+            CellValue::Empty
+        }
+        serde_json::Value::Object(obj) => {
+            let t = obj.get("type").and_then(|t| t.as_str()).unwrap_or("string");
+            let val = obj.get("value");
+            match t {
+                "int" => CellValue::Int(val.and_then(|v| v.as_i64()).unwrap_or(0)),
+                "float" => CellValue::Float(val.and_then(|v| v.as_f64()).unwrap_or(0.0)),
+                "bool" => CellValue::Bool(val.and_then(|v| v.as_bool()).unwrap_or(false)),
+                "string" => {
+                    CellValue::String(val.and_then(|v| v.as_str()).unwrap_or("").to_string())
+                }
+                "datetime" => CellValue::DateTime(val.and_then(|v| v.as_f64()).unwrap_or(0.0)),
+                "error" => {
+                    CellValue::Error(val.and_then(|v| v.as_str()).unwrap_or("").to_string())
+                }
+                _ => CellValue::Empty,
+            }
+        }
+        serde_json::Value::String(s) => CellValue::String(s.clone()),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                CellValue::Int(i)
+            } else {
+                CellValue::Float(n.as_f64().unwrap_or(0.0))
+            }
+        }
+        serde_json::Value::Bool(b) => CellValue::Bool(*b),
+        _ => CellValue::Empty,
     }
 }
 
@@ -1253,6 +1552,89 @@ pub struct CellModification {
     pub new_alignment_v: Option<String>,
 }
 
+/// Unified operation type for all Excel modifications.
+/// This replaces the older scattered structs (CellModification, MergeModification,
+/// RowColModification) and mirrors the DocElement pattern used in Word.
+/// serde: `{"type": "modify_cell", ...}` / `{"type": "write_range", ...}` / etc.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ExcelOperation {
+    /// Modify a single cell's value, formula, or style.
+    ModifyCell {
+        sheet: String,
+        address: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        value: Option<CellValue>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        formula: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        number_format: Option<String>,
+        /// Background fill color as 6-digit hex RGB (e.g. "FFFF00"). Empty string = remove.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bg_color: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        font_bold: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        font_italic: Option<bool>,
+        /// Font color as 6-digit hex RGB (e.g. "FF0000").
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        font_color: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        font_size: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        font_name: Option<String>,
+        /// Horizontal alignment: "left" | "center" | "right"
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        alignment_h: Option<String>,
+        /// Vertical alignment: "top" | "center" | "bottom"
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        alignment_v: Option<String>,
+    },
+    /// Batch-write a 2-D array of values into a rectangular region.
+    WriteRange {
+        sheet: String,
+        /// Top-left cell address, e.g. "A1"
+        start_cell: String,
+        /// Row-major values array. Inner arrays are rows.
+        values: Vec<Vec<serde_json::Value>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        number_format: Option<String>,
+    },
+    /// Merge or unmerge a rectangular cell region.
+    MergeCells {
+        sheet: String,
+        /// "merge" or "unmerge"
+        op: String,
+        /// Top-left cell address
+        start_cell: String,
+        /// Bottom-right cell address
+        end_cell: String,
+    },
+    /// Set row height or column width.
+    ResizeDimension {
+        sheet: String,
+        /// "row" or "col"
+        dimension: String,
+        /// 0-based row or column index
+        index: usize,
+        /// Height in points (rows) or character units (columns)
+        size: f64,
+        #[serde(default)]
+        hidden: bool,
+    },
+    /// Sheet-level operations (create, rename, delete, hide, unhide).
+    SheetOp {
+        /// "create" | "rename" | "delete" | "hide" | "unhide"
+        op: String,
+        /// Target sheet name (for rename/delete/hide/unhide)
+        sheet: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        new_name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        insert_index: Option<usize>,
+    },
+}
+
 impl CellModification {
     pub fn new(sheet: impl Into<String>, address: impl Into<String>) -> Self {
         Self {
@@ -1304,6 +1686,8 @@ impl CellModification {
 /// the affected `xl/worksheets/sheet*.xml` (and `xl/styles.xml` when formats
 /// change). All other parts of the workbook — including formulas, charts,
 /// defined names — are preserved verbatim.
+///
+/// DEPRECATED: Use `XlsxWorkbook::apply_operations()` + `write_excel_document()` instead.
 pub fn incremental_write_xlsx(
     original_bytes: &[u8],
     modifications: &[CellModification],
@@ -1336,7 +1720,7 @@ pub fn incremental_write_xlsx(
     let mut rewritten: HashMap<String, Vec<u8>> = HashMap::new();
 
     let original_styles_xml = read_entry(&mut archive, "xl/styles.xml").ok();
-    let mut styles_doc = StylesDocument::parse(original_styles_xml.as_deref().unwrap_or(""));
+    let styles_doc = StylesDocument::parse(original_styles_xml.as_deref().unwrap_or(""));
 
     for (path, mods) in &by_path {
         let xml = read_entry(&mut archive, path)?;
@@ -1403,6 +1787,8 @@ fn new_num_fmt_helper() {}
 /// Apply modifications to a sheet XML and return the new XML. The
 /// implementation walks the XML character-by-character to find `<c r="A1"...>`
 /// elements and rewrites only the matched ones; everything else is preserved.
+///
+/// DEPRECATED: Use `XlsxWorkbook::apply_operations()` + `write_excel_document()` instead.
 fn apply_modifications_to_sheet(
     sheet_xml: &str,
     mods: &[&CellModification],
@@ -2186,6 +2572,275 @@ pub fn create_xlsx_workbook(
     Ok(())
 }
 
+/// Write an [`XlsxWorkbook`] to a file, preserving all original ZIP entries that
+/// are not being regenerated.
+///
+/// This is the structured equivalent of the old string-based `incremental_write_xlsx`.
+/// If `original_bytes` is `Some`, we copy every entry from the original zip and
+/// only overwrite `xl/worksheets/sheet*.xml` (and `xl/styles.xml` if modified).
+/// If `original_bytes` is `None`, we fall back to `create_xlsx_workbook` behavior
+/// (generate everything from scratch).
+pub fn write_excel_document(
+    workbook: &XlsxWorkbook,
+    original_bytes: Option<&[u8]>,
+    output_path: &std::path::Path,
+) -> Result<(), OfficeError> {
+    use std::io::{Read, Write as _};
+
+    if workbook.sheets.is_empty() {
+        return Err(OfficeError::Excel("cannot write workbook with zero sheets".to_string()));
+    }
+
+    // If no original bytes, delegate entirely to create_xlsx_workbook.
+    let Some(bytes) = original_bytes else {
+        return create_xlsx_workbook(workbook, output_path);
+    };
+
+    // Collect original ZIP entries we'll copy verbatim (everything except sheet XMLs).
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec()))?;
+    let mut preserved_entries: Vec<(String, Vec<u8>)> = Vec::new();
+
+    // Read workbook.xml + rels to get sheet name -> path mapping.
+    let wb_xml = read_entry(&mut archive, "xl/workbook.xml").unwrap_or_default();
+    let wb_rels = read_entry(&mut archive, "xl/_rels/workbook.xml.rels").unwrap_or_default();
+    let _name_to_path: std::collections::HashMap<String, String> =
+        parse_sheet_name_to_path_map(&wb_xml, &wb_rels)
+            .unwrap_or_default();
+
+    // Collect entries to preserve (everything except xl/worksheets/).
+    for i in 0..archive.len() {
+        let mut entry = archive.by_index(i)?;
+        let name = entry.name().to_string();
+        if !name.starts_with("xl/worksheets/") {
+            let mut buf = Vec::new();
+            entry.read_to_end(&mut buf)?;
+            preserved_entries.push((name, buf));
+        }
+    }
+    drop(archive);
+
+    // Open the output file and write the new ZIP.
+    let file = std::fs::File::create(output_path)?;
+    let mut zip = zip::ZipWriter::new(file);
+    let opts = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated)
+        .unix_permissions(0o644);
+
+    // 1. Copy preserved entries.
+    for (name, buf) in preserved_entries {
+        zip.start_file(&name, opts)?;
+        zip.write_all(&buf)?;
+    }
+
+    // 2. [Content_Types].xml — regenerated to list all sheets.
+    let n_sheets = workbook.sheets.len();
+    let mut content_types = String::from(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+<Override PartName="/xl/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>
+<Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
+<Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>"#,
+    );
+    for i in 1..=n_sheets {
+        content_types.push_str(&format!(
+            "<Override PartName=\"/xl/worksheets/sheet{}.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>",
+            i
+        ));
+    }
+    content_types.push_str("</Types>");
+    zip.start_file("[Content_Types].xml", opts)?;
+    zip.write_all(content_types.as_bytes())?;
+
+    // 3. _rels/.rels
+    let top_rels = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
+<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
+</Relationships>"#;
+    zip.start_file("_rels/.rels", opts)?;
+    zip.write_all(top_rels.as_bytes())?;
+
+    // 4. docProps/core.xml
+    let core_props = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+<dc:creator>inkuo</dc:creator>
+<cp:lastModifiedBy>inkuo</cp:lastModifiedBy>
+<dcterms:created xsi:type="dcterms:W3CDTF">2024-01-01T00:00:00Z</dcterms:created>
+<dcterms:modified xsi:type="dcterms:W3CDTF">2024-01-01T00:00:00Z</dcterms:modified>
+</cp:coreProperties>"#;
+    zip.start_file("docProps/core.xml", opts)?;
+    zip.write_all(core_props.as_bytes())?;
+
+    // 5. docProps/app.xml
+    let app_props = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties">
+<Application>inkuo</Application>
+<DocSecurity>0</DocSecurity>
+<ScaleCrop>false</ScaleCrop>
+<LinksUpToDate>false</LinksUpToDate>
+<SharedDoc>false</SharedDoc>
+<HyperlinksChanged>false</HyperlinksChanged>
+<AppVersion>16.0000</AppVersion>
+</Properties>"#;
+    zip.start_file("docProps/app.xml", opts)?;
+    zip.write_all(app_props.as_bytes())?;
+
+    // 6. xl/workbook.xml — regenerated to match new sheet names/order.
+    let mut workbook_xml = String::from(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<workbookPr/><bookViews><workbookView activeTab="0" firstSheet="0" showHorizontalScroll="1" showVerticalScroll="1" showSheetTabs="1" tabRatio="600" windowHeight="10000" windowWidth="20000"/></bookViews>
+<sheets>"#,
+    );
+    for (i, sheet) in workbook.sheets.iter().enumerate() {
+        let sheet_id = (i + 1) as u32;
+        let rid = format!("rId{}", i + 1);
+        let state = if sheet.state.is_empty() { "visible" } else { &sheet.state };
+        workbook_xml.push_str(&format!(
+            "<sheet name=\"{}\" sheetId=\"{}\" state=\"{}\" r:id=\"{}\"/>",
+            escape_xml_attr(&sheet.name),
+            sheet_id,
+            escape_xml_attr(state),
+            rid
+        ));
+    }
+    workbook_xml.push_str("</sheets><calcPr calcId=\"124519\"/></workbook>");
+    zip.start_file("xl/workbook.xml", opts)?;
+    zip.write_all(workbook_xml.as_bytes())?;
+
+    // 7. xl/_rels/workbook.xml.rels — regenerated.
+    let mut rels_xml = String::from(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#,
+    );
+    for i in 0..n_sheets {
+        rels_xml.push_str(&format!(
+            "<Relationship Id=\"rId{}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet{}.xml\"/>",
+            i + 1,
+            i + 1
+        ));
+    }
+    rels_xml.push_str(&format!(
+        "<Relationship Id=\"rId{}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles\" Target=\"styles.xml\"/>",
+        n_sheets + 1
+    ));
+    rels_xml.push_str(&format!(
+        "<Relationship Id=\"rId{}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme\" Target=\"theme/theme1.xml\"/>",
+        n_sheets + 2
+    ));
+    rels_xml.push_str("</Relationships>");
+    zip.start_file("xl/_rels/workbook.xml.rels", opts)?;
+    zip.write_all(rels_xml.as_bytes())?;
+
+    // 8. xl/styles.xml — copy from original if available.
+    let mut archive2 = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec()))?;
+    if let Ok(styles_xml) = read_entry(&mut archive2, "xl/styles.xml") {
+        zip.start_file("xl/styles.xml", opts)?;
+        zip.write_all(styles_xml.as_bytes())?;
+    } else {
+        zip.start_file("xl/styles.xml", opts)?;
+        zip.write_all(MINIMAL_STYLES_XML.as_bytes())?;
+    }
+    drop(archive2);
+
+    // 9. xl/theme/theme1.xml
+    zip.start_file("xl/theme/theme1.xml", opts)?;
+    zip.write_all(MINIMAL_THEME_XML.as_bytes())?;
+
+    // 10. xl/worksheets/sheetN.xml — write each sheet's structured XML.
+    for (i, sheet) in workbook.sheets.iter().enumerate() {
+        let sheet_xml = build_sheet_xml(sheet);
+        let path = format!("xl/worksheets/sheet{}.xml", i + 1);
+        zip.start_file(&path, opts)?;
+        zip.write_all(sheet_xml.as_bytes())?;
+    }
+
+    zip.finish()?;
+    Ok(())
+}
+
+/// Parse sheet names to file paths from workbook.xml and its relationships.
+/// Returns a HashMap for O(1) lookup.
+fn parse_sheet_name_to_path_map(
+    workbook_xml: &str,
+    rels_xml: &str,
+) -> Result<std::collections::HashMap<String, String>, OfficeError> {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+
+    let mut name_to_path = std::collections::HashMap::new();
+
+    // Parse rels: rId -> target path
+    let mut rid_to_path = std::collections::HashMap::new();
+    let mut rels_reader = Reader::from_str(rels_xml);
+    rels_reader.config_mut().trim_text(true);
+    let mut rels_buf = Vec::new();
+    loop {
+        match rels_reader.read_event_into(&mut rels_buf) {
+            Ok(Event::Empty(ref e)) | Ok(Event::Start(ref e)) => {
+                if e.local_name().as_ref() == b"Relationship" {
+                    let mut rid = None;
+                    let mut target = None;
+                    for attr in e.attributes().flatten() {
+                        match attr.key.as_ref() {
+                            b"Id" => rid = Some(String::from_utf8_lossy(&attr.value).to_string()),
+                            b"Target" => {
+                                target = Some(String::from_utf8_lossy(&attr.value).to_string())
+                            }
+                            _ => {}
+                        }
+                    }
+                    if let (Some(r), Some(t)) = (rid, target) {
+                        rid_to_path.insert(r, t);
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            _ => {}
+        }
+        rels_buf.clear();
+    }
+
+    // Parse workbook: sheet name -> rId
+    let mut wb_reader = Reader::from_str(workbook_xml);
+    wb_reader.config_mut().trim_text(true);
+    let mut wb_buf = Vec::new();
+    loop {
+        match wb_reader.read_event_into(&mut wb_buf) {
+            Ok(Event::Empty(ref e)) | Ok(Event::Start(ref e)) => {
+                if e.local_name().as_ref() == b"sheet" {
+                    let mut name = None;
+                    let mut rid = None;
+                    for attr in e.attributes().flatten() {
+                        match attr.key.as_ref() {
+                            b"name" => {
+                                name = Some(String::from_utf8_lossy(&attr.value).to_string())
+                            }
+                            b"r:id" => rid = Some(String::from_utf8_lossy(&attr.value).to_string()),
+                            _ => {}
+                        }
+                    }
+                    if let (Some(n), Some(r)) = (name, rid) {
+                        if let Some(path) = rid_to_path.get(&r) {
+                            name_to_path.insert(n, format!("xl/{}", path));
+                        }
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            _ => {}
+        }
+        rels_buf.clear();
+    }
+
+    Ok(name_to_path)
+}
+
 const MINIMAL_THEME_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Office Theme"><a:themeElements><a:clrScheme name="Office"><a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1><a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1><a:dk2><a:srgbClr val="1F497D"/></a:dk2><a:lt2><a:srgbClr val="EEECE1"/></a:lt2><a:accent1><a:srgbClr val="4F81BD"/></a:accent1><a:accent2><a:srgbClr val="C0504D"/></a:accent2><a:accent3><a:srgbClr val="9BBB59"/></a:accent3><a:accent4><a:srgbClr val="8064A2"/></a:accent4><a:accent5><a:srgbClr val="4BACC6"/></a:accent5><a:accent6><a:srgbClr val="F79646"/></a:accent6><a:hlink><a:srgbClr val="0000FF"/></a:hlink><a:folHlink><a:srgbClr val="800080"/></a:folHlink></a:clrScheme><a:fontScheme name="Office"><a:majorFont><a:latin typeface="Cambria"/><a:ea typeface=""/><a:cs typeface=""/></a:majorFont><a:minorFont><a:latin typeface="Calibri"/><a:ea typeface=""/><a:cs typeface=""/></a:minorFont></a:fontScheme><a:fmtScheme name="Office"><a:fillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:gradFill rotWithShape="1"><a:gsLst><a:gs pos="0"><a:schemeClr val="phClr"><a:tint val="50000"/><a:satMod val="300000"/></a:schemeClr></a:gs><a:gs pos="35000"><a:schemeClr val="phClr"><a:tint val="37000"/><a:satMod val="300000"/></a:schemeClr></a:gs><a:gs pos="100000"><a:schemeClr val="phClr"><a:tint val="15000"/><a:satMod val="350000"/></a:schemeClr></a:gs></a:gsLst><a:lin ang="16200000" scaled="1"/></a:gradFill><a:gradFill rotWithShape="1"><a:gsLst><a:gs pos="0"><a:schemeClr val="phClr"><a:shade val="51000"/><a:satMod val="130000"/></a:schemeClr></a:gs><a:gs pos="80000"><a:schemeClr val="phClr"><a:shade val="93000"/><a:satMod val="130000"/></a:schemeClr></a:gs><a:gs pos="100000"><a:schemeClr val="phClr"><a:shade val="94000"/><a:satMod val="135000"/></a:schemeClr></a:gs></a:gsLst><a:lin ang="16200000" scaled="0"/></a:gradFill></a:fillStyleLst><a:lnStyleLst><a:ln w="9525" cap="flat" cmpd="sng" algn="ctr"><a:solidFill><a:schemeClr val="phClr"><a:shade val="95000"/><a:satMod val="105000"/></a:schemeClr></a:solidFill><a:prstDash val="solid"/></a:ln><a:ln w="25400" cap="flat" cmpd="sng" algn="ctr"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:prstDash val="solid"/></a:ln><a:ln w="38100" cap="flat" cmpd="sng" algn="ctr"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:prstDash val="solid"/></a:ln></a:lnStyleLst><a:effectStyleLst><a:effectStyle><a:effectLst><a:outerShdw blurRad="40000" dist="20000" dir="5400000" rotWithShape="0"><a:srgbClr val="000000"><a:alpha val="38000"/></a:srgbClr></a:outerShdw></a:effectLst></a:effectStyle><a:effectStyle><a:effectLst><a:outerShdw blurRad="40000" dist="23000" dir="5400000" rotWithShape="0"><a:srgbClr val="000000"><a:alpha val="35000"/></a:srgbClr></a:outerShdw></a:effectLst></a:effectStyle><a:effectStyle><a:effectLst><a:outerShdw blurRad="40000" dist="23000" dir="5400000" rotWithShape="0"><a:srgbClr val="000000"><a:alpha val="35000"/></a:srgbClr></a:outerShdw></a:effectLst><a:scene3d><a:camera prst="orthographicFront"><a:rot lat="0" lon="0" rev="0"/></a:camera><a:lightRig rig="threePt" dir="t"><a:rot lat="0" lon="0" rev="1200000"/></a:lightRig></a:scene3d><a:sp3d><a:bevelT w="63500" h="25400"/></a:sp3d></a:effectStyle></a:effectStyleLst><a:bgFillStyleLst><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:gradFill rotWithShape="1"><a:gsLst><a:gs pos="0"><a:schemeClr val="phClr"><a:tint val="40000"/><a:satMod val="350000"/></a:schemeClr></a:gs><a:gs pos="40000"><a:schemeClr val="phClr"><a:tint val="45000"/><a:shade val="99000"/><a:satMod val="350000"/></a:schemeClr></a:gs><a:gs pos="100000"><a:schemeClr val="phClr"><a:shade val="20000"/><a:satMod val="255000"/></a:schemeClr></a:gs></a:gsLst><a:path path="circle"><a:fillToRect l="50000" t="-80000" r="50000" b="180000"/></a:path></a:gradFill><a:gradFill rotWithShape="1"><a:gsLst><a:gs pos="0"><a:schemeClr val="phClr"><a:tint val="80000"/><a:satMod val="300000"/></a:schemeClr></a:gs><a:gs pos="100000"><a:schemeClr val="phClr"><a:shade val="30000"/><a:satMod val="200000"/></a:schemeClr></a:gs></a:gsLst><a:path path="circle"><a:fillToRect l="50000" t="50000" r="50000" b="50000"/></a:path></a:gradFill></a:bgFillStyleLst></a:fmtScheme></a:themeElements><a:objectDefaults/><a:extraClrSchemeLst/></a:theme>"#;
 
@@ -2383,6 +3038,8 @@ pub struct MergeModification {
 }
 
 /// Merge or unmerge cell ranges in an xlsx file.
+///
+/// DEPRECATED: Use `XlsxWorkbook::apply_operations()` + `write_excel_document()` instead.
 pub fn merge_cells_xlsx(
     original_bytes: &[u8],
     modifications: &[MergeModification],
@@ -2447,6 +3104,8 @@ pub fn merge_cells_xlsx(
     Ok(())
 }
 
+/// Legacy string-based merge/unmerge operation. DEPRECATED: use
+/// `XlsxWorkbook::apply_operations()` + `write_excel_document()` instead.
 fn apply_merge_to_sheet_xml(sheet_xml: &str, mods: &[&MergeModification]) -> Result<String, OfficeError> {
     // First handle unmerges: remove existing mergeCell entries
     let mut xml = sheet_xml.to_string();
@@ -2531,6 +3190,8 @@ pub struct RowColModification {
 }
 
 /// Set row heights and column widths in an xlsx file.
+///
+/// DEPRECATED: Use `XlsxWorkbook::apply_operations()` + `write_excel_document()` instead.
 pub fn resize_rows_cols_xlsx(
     original_bytes: &[u8],
     sheet_name: &str,
@@ -2589,6 +3250,8 @@ pub fn resize_rows_cols_xlsx(
     Ok(())
 }
 
+/// Legacy string-based dimension changes. DEPRECATED: use
+/// `XlsxWorkbook::apply_operations()` + `write_excel_document()` instead.
 fn apply_dimension_changes(
     sheet_xml: &str,
     row_changes: &[RowColModification],
@@ -2983,9 +3646,7 @@ pub fn set_sheet_state_xlsx(
     let name_attr = format!("name=\"{}\"", escaped_name);
     if let Some(name_pos) = new_workbook_xml.find(&name_attr) {
         let before = &new_workbook_xml[..name_pos];
-        if let Some(tag_start) = before.rfind("<sheet") {
-            // Find the end of this sheet tag
-            let tag_start_pos = tag_start;
+        if let Some(_tag_start) = before.rfind("<sheet") {
             let after_name = &new_workbook_xml[name_pos..];
 
             // Try to find existing state attribute within this sheet tag

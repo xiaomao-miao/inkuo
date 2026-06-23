@@ -855,79 +855,9 @@ impl Default for GetDocxInfoTool {
 
 // ─── modify_excel ─────────────────────────────────────────────────────────────
 
-/// Cell-level modification accepted by [`ModifyExcelTool`].
-#[derive(Debug, Clone, Deserialize)]
-struct ExcelCellInput {
-    /// Sheet name (case-sensitive).
-    sheet: String,
-    /// Cell address in A1 form, e.g. "B3".
-    address: String,
-    /// New value. JSON shape:
-    ///   {"type":"int","value":100}
-    ///   {"type":"float","value":3.14}
-    ///   {"type":"bool","value":true}
-    ///   {"type":"string","value":"hello"}
-    ///   {"type":"empty"}
-    #[serde(default)]
-    value: Option<serde_json::Value>,
-    /// New formula (without leading "="), e.g. "SUM(A1:A10)".
-    #[serde(default)]
-    formula: Option<String>,
-    /// Optional new number format, e.g. "0.00%" or "yyyy-mm-dd".
-    #[serde(default)]
-    number_format: Option<String>,
-}
-
-impl ExcelCellInput {
-    fn into_modification(self) -> Result<crate::office::CellModification, String> {
-        let mut m = crate::office::CellModification::new(self.sheet, self.address);
-        if let Some(v) = self.value {
-            m.new_value = Some(parse_cell_value_json(v)?);
-        }
-        m.new_formula = self.formula;
-        m.new_number_format = self.number_format;
-        Ok(m)
-    }
-}
-
-fn parse_cell_value_json(v: serde_json::Value) -> Result<crate::office::CellValue, String> {
-    use crate::office::CellValue;
-    let obj = v.as_object().ok_or_else(|| "value must be an object {type, value}".to_string())?;
-    let kind = obj.get("type").and_then(|t| t.as_str()).ok_or_else(|| "value missing 'type'".to_string())?;
-    match kind {
-        "empty" => Ok(CellValue::Empty),
-        "int" => {
-            let n = obj.get("value").and_then(|x| x.as_i64()).ok_or_else(|| "int.value missing".to_string())?;
-            Ok(CellValue::Int(n))
-        }
-        "float" => {
-            let n = obj.get("value").and_then(|x| x.as_f64()).ok_or_else(|| "float.value missing".to_string())?;
-            Ok(CellValue::Float(n))
-        }
-        "bool" => {
-            let b = obj.get("value").and_then(|x| x.as_bool()).ok_or_else(|| "bool.value missing".to_string())?;
-            Ok(CellValue::Bool(b))
-        }
-        "string" => {
-            let s = obj.get("value").and_then(|x| x.as_str()).ok_or_else(|| "string.value missing".to_string())?;
-            Ok(CellValue::String(s.to_string()))
-        }
-        "datetime" => {
-            let n = obj.get("value").and_then(|x| x.as_f64()).ok_or_else(|| "datetime.value missing".to_string())?;
-            Ok(CellValue::DateTime(n))
-        }
-        "error" => {
-            let s = obj.get("value").and_then(|x| x.as_str()).ok_or_else(|| "error.value missing".to_string())?;
-            Ok(CellValue::Error(s.to_string()))
-        }
-        other => Err(format!("unknown value type '{}'", other)),
-    }
-}
-
-/// Surgical cell-level editor for Excel workbooks. Unlike rewriting the entire
-/// workbook, this tool only changes the listed cells and leaves every other
-/// part of the file (formulas, styles, charts, defined names, themes, etc.)
-/// intact.
+/// Surgical cell-level editor for Excel workbooks. The workbook is parsed into memory,
+/// a sequence of structured operations is applied, and the result is written back.
+/// All unmodified content (formulas, styles, charts, images) is preserved.
 pub struct ModifyExcelTool;
 
 impl ModifyExcelTool {
@@ -936,19 +866,23 @@ impl ModifyExcelTool {
         ToolDefinition::new_with_label(
             "modify_excel",
             "修改 Excel 单元格",
-            "Modify specific cells in an Excel (.xlsx) file by surgically rewriting only the changed cells. All other workbook content (formulas, styles, charts) is preserved. Use read_office_file first to confirm sheet names and current values.",
+            "Modify an Excel (.xlsx) file by applying a sequence of structured operations. The workbook is parsed into memory, operations are applied, and the result is written back preserving all unmodified content (formulas, styles, charts, images). Use read_office_file first to confirm sheet names and current values.",
             ToolParameters::new(
-                vec!["path", "modifications"],
+                vec!["path", "operations"],
                 vec![
                     ("path", "string", Some("Absolute path to the .xlsx file to modify")),
-                    ("modifications", "array", Some(
-                        "Array of cell modifications. Each entry: {sheet, address, value?, formula?, number_format?}.\n\
-                         - sheet: sheet name (e.g. \"Sales\")\n\
-                         - address: cell address in A1 form (e.g. \"B3\")\n\
-                         - value: {type, value} where type is one of: empty|int|float|bool|string|datetime|error\n\
-                         - formula: formula text without leading '=' (e.g. \"SUM(A1:A10)\"). Setting a formula replaces any existing value.\n\
-                         - number_format: optional Excel number format string (e.g. \"0.00%\", \"yyyy-mm-dd\")\n\
-                         At least one of value/formula must be provided."
+                    ("operations", "array", Some(
+                        "Array of operation objects. Each entry has a 'type' field distinguishing the variant:\n\
+                         - {type: \"modify_cell\", sheet, address, value?, formula?, number_format?, bg_color?, font_bold?, font_italic?, font_color?, font_size?, font_name?, alignment_h?, alignment_v?}\n\
+                           Modify a single cell's value, formula, or style. address is A1 form (e.g. \"B3\").\n\
+                         - {type: \"write_range\", sheet, start_cell, values: [[...], ...], number_format?}\n\
+                           Batch-write a 2-D array of values starting at start_cell (e.g. \"A1\").\n\
+                         - {type: \"merge_cells\", sheet, op: \"merge\"|\"unmerge\", start_cell, end_cell}\n\
+                           Merge or unmerge a rectangular region (e.g. start_cell=\"A1\", end_cell=\"C3\").\n\
+                         - {type: \"resize_dimension\", sheet, dimension: \"row\"|\"col\", index: 0-based, size, hidden?}\n\
+                           Set row height (points) or column width (character units), or hide/show.\n\
+                         - {type: \"sheet_op\", op: \"create\"|\"rename\"|\"delete\"|\"hide\"|\"unhide\", sheet, new_name?, insert_index?}\n\
+                           Manage sheets. create requires new_name; rename requires new_name; delete requires sheet to exist."
                     )),
                 ],
             ),
@@ -962,9 +896,6 @@ impl ModifyExcelTool {
             .to_string();
         validate_workspace_path(&path, &workspace)?;
 
-        let mods_json = arguments["modifications"].as_array()
-            .ok_or_else(|| ToolError::InvalidArguments("modify_excel".to_string(), "modifications must be an array".into()))?;
-
         let path_obj = std::path::Path::new(&path);
         if path_obj.extension().and_then(|e| e.to_str()).unwrap_or("") != "xlsx" {
             return Err(ToolError::InvalidArguments(
@@ -973,54 +904,37 @@ impl ModifyExcelTool {
             ));
         }
 
-        let mut inputs: Vec<ExcelCellInput> = Vec::new();
-        for v in mods_json {
-            let parsed: ExcelCellInput = serde_json::from_value(v.clone())
-                .map_err(|e| ToolError::InvalidArguments("modify_excel".to_string(), format!("Invalid modification entry: {}", e)))?;
-            inputs.push(parsed);
-        }
-        let modifications: Vec<crate::office::CellModification> = inputs
-            .into_iter()
-            .map(|i| i.into_modification().map_err(|e| ToolError::InvalidArguments("modify_excel".to_string(), e)))
-            .collect::<Result<Vec<_>, _>>()?;
+        let ops_json = arguments["operations"].as_array()
+            .ok_or_else(|| ToolError::InvalidArguments("modify_excel".to_string(), "operations must be an array".into()))?;
 
-        if modifications.is_empty() {
+        if ops_json.is_empty() {
             return Err(ToolError::InvalidArguments(
                 "modify_excel".to_string(),
-                "modifications array is empty".into(),
+                "operations array is empty".into(),
             ));
         }
+
+        let operations: Vec<crate::office::ExcelOperation> = ops_json
+            .iter()
+            .map(|v| serde_json::from_value(v.clone())
+                .map_err(|e| ToolError::InvalidArguments("modify_excel".to_string(), format!("Invalid operation: {}", e))))
+            .collect::<Result<Vec<_>, _>>()?;
 
         let bytes = tokio::fs::read(&path).await
             .map_err(|e| ToolError::IoError(format!("Failed to read {}: {}", path, e)))?;
 
-        // Write to a sibling .tmp first, then atomically replace the original.
         let tmp_path = path_obj.with_extension("xlsx.tmp");
-        crate::office::incremental_write_xlsx(&bytes, &modifications, &tmp_path)
-            .map_err(|e| ToolError::ExecutionError(format!("Failed to modify xlsx: {}", e)))?;
+        let mut workbook = crate::office::read_xlsx_structured(&bytes)
+            .map_err(|e| ToolError::ExecutionError(format!("Failed to parse xlsx: {}", e)))?;
+        workbook.apply_operations(operations)
+            .map_err(|e| ToolError::ExecutionError(format!("Failed to apply operations: {}", e)))?;
+        crate::office::write_excel_document(&workbook, Some(&bytes), &tmp_path)
+            .map_err(|e| ToolError::ExecutionError(format!("Failed to write xlsx: {}", e)))?;
         tokio::fs::rename(&tmp_path, &path).await
             .map_err(|e| ToolError::IoError(format!("Failed to replace original file: {}", e)))?;
 
-        let summary: Vec<String> = modifications.iter().map(|m| {
-            let mut parts = vec![format!("{}!{}", m.sheet, m.address)];
-            if let Some(v) = &m.new_value {
-                parts.push(format!("value={}", v.as_string_for_display()));
-            }
-            if let Some(f) = &m.new_formula {
-                parts.push(format!("formula={}", f));
-            }
-            if let Some(fmt) = &m.new_number_format {
-                parts.push(format!("format={}", fmt));
-            }
-            parts.join(" ")
-        }).collect();
-
-        Ok(format!(
-            "Successfully modified {} cell(s) in {}: {}",
-            modifications.len(),
-            path,
-            summary.join("; ")
-        ))
+        let count = ops_json.len();
+        Ok(format!("Successfully applied {} operation(s) to: {}", count, path))
     }
 }
 

@@ -304,40 +304,74 @@ create_excel with
 ```
 
 ### modify_excel
-Surgically modify specific cells in an existing Excel (.xlsx) file. Only the listed cells are rewritten — every other part of the workbook (formulas, styles, charts, defined names) is preserved verbatim. The file is rewritten atomically via a `.xlsx.tmp` sibling.
+Apply a sequence of structured operations to an Excel (.xlsx) file. The workbook is parsed into memory, all operations are applied, and the result is written back. All unmodified content (formulas, styles, charts, images) is preserved. The file is written atomically via a `.xlsx.tmp` sibling.
+
 - **Parameters**:
   - `path` (string, required): Absolute path to the .xlsx file to modify
-  - `modifications` (array, required): At least one entry, each:
-    - `sheet` (string, required): Sheet name (case-sensitive, must match a sheet in the workbook)
-    - `address` (string, required): Cell address in A1 form, e.g. `"B3"`
-    - `value` (object, optional): Same shape as in `create_excel`
-    - `formula` (string, optional): Formula text without leading `=`. Setting a formula replaces any existing value with the cached value you provide in `value`.
-    - `number_format` (string, optional): Excel number format string, e.g. `"0.00%"`, `"yyyy-mm-dd"`, `"#,##0"`
+  - `operations` (array, required): At least one entry, each with a `type` field:
 
-**Before calling `modify_excel`**, you almost always want to call `read_office_file` (or `get_excel_info`) first to confirm:
-1. The exact sheet names (case-sensitive)
-2. The current value at the target cell address
+    **`type: "modify_cell"`** — modify a single cell:
+    - `sheet` (string, required): Sheet name (case-sensitive)
+    - `address` (string, required): Cell address in A1 form, e.g. `"B3"`
+    - `value` (object, optional): `{"type": "string"|"int"|"float"|"bool"|"datetime"|"error"|"empty", "value": ...}`
+    - `formula` (string, optional): Formula without leading `=`, e.g. `"SUM(A1:A10)"`
+    - `number_format` (string, optional): e.g. `"0.00%"`, `"yyyy-mm-dd"`
+    - `bg_color` (string, optional): 6-digit hex RGB, e.g. `"FFFF00"`
+    - `font_bold`, `font_italic` (boolean, optional)
+    - `font_color` (string, optional): 6-digit hex RGB
+    - `font_size` (number, optional): point size
+    - `font_name` (string, optional): e.g. `"Calibri"`
+    - `alignment_h` (string, optional): `"left"` | `"center"` | `"right"`
+    - `alignment_v` (string, optional): `"top"` | `"center"` | `"bottom"`
+
+    **`type: "write_range"`** — batch-write a 2-D array:
+    - `sheet` (string, required)
+    - `start_cell` (string, required): Top-left cell, e.g. `"A1"`
+    - `values` (array, required): 2-D array of value objects
+    - `number_format` (string, optional)
+
+    **`type: "merge_cells"`** — merge or unmerge:
+    - `sheet` (string, required)
+    - `op` (string, required): `"merge"` or `"unmerge"`
+    - `start_cell` (string, required): Top-left, e.g. `"A1"`
+    - `end_cell` (string, required): Bottom-right, e.g. `"C3"`
+
+    **`type: "resize_dimension"`** — set row height or column width:
+    - `sheet` (string, required)
+    - `dimension` (string, required): `"row"` or `"col"`
+    - `index` (number, required): 0-based row/column index
+    - `size` (number, required): Height in points (rows) or character units (cols)
+    - `hidden` (boolean, optional, default: false)
+
+    **`type: "sheet_op"`** — manage sheets:
+    - `op` (string, required): `"create"` | `"rename"` | `"delete"` | `"hide"` | `"unhide"`
+    - `sheet` (string, required for rename/delete/hide/unhide)
+    - `new_name` (string, optional): For `create` or `rename`
+    - `insert_index` (number, optional): 0-based insertion index for `create`
+
+**Before calling `modify_excel`**, you almost always want to call `read_office_file` (or `get_excel_info`) first to confirm the exact sheet names (case-sensitive).
 
 **Common workflows**:
-- **Fix a single number**: `[{sheet: "Sales", address: "B5", value: {type: "int", value: 1500}}]`
-- **Update several cells at once**: pass them all in a single `modifications` array
-- **Change a formula**: `[{sheet: "Totals", address: "C10", formula: "SUM(C2:C9)"}]`
-- **Set a percentage format**: `[{sheet: "Ratios", address: "B2", value: {type: "float", value: 0.85}, number_format: "0.00%"}]`
-- **Clear a cell**: `[{sheet: "Sheet1", address: "A1", value: {type: "empty"}}]`
+- **Fix a single number**: `[{type: "modify_cell", sheet: "Sales", address: "B5", value: {type: "int", value: 1500}}]`
+- **Update several cells at once**: pass them all in a single `operations` array
+- **Change a formula**: `[{type: "modify_cell", sheet: "Totals", address: "C10", formula: "SUM(C2:C9)"}]`
+- **Batch write a table**: `[{type: "write_range", sheet: "Data", start_cell: "A1", values: [[{type: "string", value: "Name"}, {type: "int", value: "Age"}], [{type: "string", value: "Alice"}, {type: "int", value: 30}]]}]`
+- **Merge header cells**: `[{type: "merge_cells", sheet: "Summary", op: "merge", start_cell: "A1", end_cell: "D1"}]`
+- **Create a new sheet**: `[{type: "sheet_op", op: "create", new_name: "Summary", insert_index: 0}]`
 
-**Example** — update two cells and apply a percentage format:
+**Example** — update two cells and merge a range:
 ```
 modify_excel with
   path="/workspace/budget.xlsx",
-  modifications=[
-    {sheet: "2024", address: "B5", value: {type: "float", value: 0.92}, number_format: "0.00%"},
-    {sheet: "2024", address: "C5", value: {type: "float", value: 1.15}, number_format: "0.00%"}
+  operations=[
+    {type: "modify_cell", sheet: "2024", address: "B5", value: {type: "float", value: 0.92}, number_format: "0.00%"},
+    {type: "modify_cell", sheet: "2024", address: "C5", value: {type: "float", value: 1.15}, number_format: "0.00%"},
+    {type: "merge_cells", sheet: "2024", op: "merge", start_cell: "A1", end_cell: "D1"}
   ]
 ```
 
 **Key guarantees**:
-- All cells you do NOT mention in `modifications` are kept exactly as-is, including their formulas, styles, and number formats.
-- New cells (addresses that did not exist in the original file) are inserted as the last row in their target sheet.
+- All cells you do NOT mention are kept exactly as-is, including formulas, styles, and number formats.
 - The operation is atomic: a `.xlsx.tmp` sibling is written and then renamed onto the target path.
 
 ### read_excel_range
@@ -372,129 +406,13 @@ read_excel_metadata with
   path="/workspace/report.xlsx"
 ```
 
-### write_excel_range
-Write a 2D array of values into a rectangular range of an Excel sheet. Values are written row by row starting from `start_cell`. Much more efficient than calling `modify_excel` for each cell individually.
-- **Parameters**:
-  - `path` (string, required): Absolute path to the .xlsx file to modify
-  - `sheet` (string, required): Sheet name (case-sensitive)
-  - `start_cell` (string, required): Top-left cell of the target range in A1 form, e.g. `"A1"` or `"C5"`
-  - `values` (array, required): 2D array of rows. Each row is an array of cell objects: `[{type: "string", value: "Name"}, {type: "int", value: 30}]`. Column positions in each row are written to consecutive columns starting from `start_cell`.
-  - `number_format` (string, optional): Excel number format to apply to all written cells, e.g. `"0.00"` or `"yyyy-mm-dd"`.
-
-**Example** — write a 2x2 table starting at A1:
-```
-write_excel_range with
-  path="/workspace/sales.xlsx",
-  sheet="Data",
-  start_cell="A1",
-  values=[
-    [{type: "string", value: "Region"}, {type: "string", value: "Revenue"}],
-    [{type: "string", value: "North"}, {type: "int", value: 1200}],
-    [{type: "string", value: "South"}, {type: "int", value: 800}]
-  ]
-```
-
-### format_excel_cells
-Apply cell formatting (background color, font styles, alignment, number format) to specific cells in an Excel sheet. All other cells and content are preserved.
-- **Parameters**:
-  - `path` (string, required): Absolute path to the .xlsx file to modify
-  - `sheet` (string, required): Sheet name (case-sensitive)
-  - `cells` (array, required): Array of cell formatting specs, each:
-    - `address` (string, required): A1-style cell address, e.g. `"B3"`
-    - `bg_color` (string, optional): Background fill color as 6-digit hex RGB without `#`, e.g. `"FFFF00"` for yellow. `"none"` removes background.
-    - `font_color` (string, optional): Font color as 6-digit hex RGB, e.g. `"FF0000"` for red.
-    - `bold` (boolean, optional): `true` or `false` for bold font
-    - `italic` (boolean, optional): `true` or `false` for italic font
-    - `font_size` (number, optional): Font size in points, e.g. `12`
-    - `font_name` (string, optional): Font family, e.g. `"Calibri"`
-    - `alignment_h` (string, optional): `"left"`, `"center"`, or `"right"`
-    - `alignment_v` (string, optional): `"top"`, `"center"`, or `"bottom"`
-    - `number_format` (string, optional): Excel format string, e.g. `"0.00%"`, `"yyyy-mm-dd"`, `"#,##0"`
-
-**Example** — highlight a header row with yellow background and bold text:
-```
-format_excel_cells with
-  path="/workspace/report.xlsx",
-  sheet="Summary",
-  cells=[
-    {address: "A1", bg_color: "FFFF00", bold: true},
-    {address: "B1", bg_color: "FFFF00", bold: true},
-    {address: "C1", bg_color: "FFFF00", bold: true}
-  ]
-```
-
-### merge_excel_cells
-Merge or unmerge a range of cells in an Excel sheet. Merging combines multiple cells into one (the top-left cell holds the value). Unmerging splits a merged region back into individual cells.
-- **Parameters**:
-  - `path` (string, required): Absolute path to the .xlsx file to modify
-  - `sheet` (string, required): Sheet name (case-sensitive)
-  - `operations` (array, required): Array of merge operations. Each entry:
-    - `type` (string, required): `"merge"` or `"unmerge"`
-    - `range` (string, required): Cell range in A1 form, e.g. `"A1:D1"`
-
-**Example** — merge header cells and unmerge a previously merged range:
-```
-merge_excel_cells with
-  path="/workspace/report.xlsx",
-  sheet="Summary",
-  operations=[
-    {type: "merge", range: "A1:D1"},
-    {type: "unmerge", range: "B3:C3"}
-  ]
-```
-
-### resize_excel_rows_cols
-Set row heights and column widths in an Excel sheet. Can also hide/show rows and columns.
-- **Parameters**:
-  - `path` (string, required): Absolute path to the .xlsx file to modify
-  - `sheet` (string, required): Sheet name (case-sensitive)
-  - `changes` (array, required): Array of dimension changes. Each entry:
-    - `type` (string, required): `"row"` or `"col"`
-    - `index` (string, required): For rows, 1-based row number (e.g. `"1"`, `"5"`); for columns, letter(s) or range (e.g. `"A"`, `"C:F"`)
-    - `size` (number, required): For rows: height in points (e.g. `20.0`); for columns: width in Excel character units (e.g. `15.0`)
-    - `hidden` (boolean, optional): Set to `true` to hide the row/column
-
-**Example** — set row 1 height and columns A-C width, hide row 5:
-```
-resize_excel_rows_cols with
-  path="/workspace/report.xlsx",
-  sheet="Data",
-  changes=[
-    {type: "row", index: "1", size: 30},
-    {type: "col", index: "A:C", size: 20},
-    {type: "row", index: "5", size: 0, hidden: true}
-  ]
-```
-
-### manage_excel_sheets
-Create, rename, delete, hide, or unhide worksheets in an Excel workbook. Operations are applied in order — you can rename a sheet and then operate on the new name in a single call.
-- **Parameters**:
-  - `path` (string, required): Absolute path to the .xlsx file to modify
-  - `operations` (array, required): Array of sheet operations. Each entry:
-    - `type` (string, required): `"create"`, `"rename"`, `"delete"`, `"hide"`, or `"unhide"`
-    - `sheet` (string, optional): Existing sheet name (for `rename`, `delete`, `hide`, `unhide`)
-    - `name` (string, optional): New name (for `rename` or `create`)
-    - `index` (number, optional): 0-based insertion index for new sheet (default: at end)
-
-**Example** — create a summary sheet at position 0, then rename Sheet1:
-```
-manage_excel_sheets with
-  path="/workspace/report.xlsx",
-  operations=[
-    {type: "create", name: "Summary", index: 0},
-    {type: "rename", sheet: "Sheet1", name: "Data"}
-  ]
-```
-
 ### Excel editing strategy
 When the user asks you to "edit", "fix", "update", or "change" something in an .xlsx file:
 1. **Quick overview**: Call `read_excel_metadata` (cheapest — no cell values) to see sheet names, merged cells, and formulas. This is the best first step for large files.
 2. **Read specific ranges**: Call `read_excel_range` to get values/formulas/styles for just the area you need.
-3. **Modify**: Use `modify_excel` for individual cell changes, or `write_excel_range` for batch value writes.
-4. **Format**: Use `format_excel_cells` to change styles, `merge_excel_cells` to merge/unmerge, `resize_excel_rows_cols` to adjust dimensions.
-5. **Structure**: Use `manage_excel_sheets` to create/rename/delete sheets.
-6. **New file**: Use `create_excel` to build a workbook from scratch.
-7. **Avoid `write_file` for .xlsx**: xlsx is a binary zip package — always use the dedicated Excel tools above.
+3. **Modify**: Use `modify_excel` with `operations[]` for all changes — cells, ranges, merges, dimensions, sheets. It is the unified entry point for all Excel modifications.
+4. **New file**: Use `create_excel` to build a workbook from scratch.
+5. **Avoid `write_file` for .xlsx**: xlsx is a binary zip package — always use the dedicated Excel tools above.
 
 ### compare_word_docs
 Compare two Word (.docx) files and return a structured diff identifying which paragraphs/tables were added, removed, or modified. Useful for reviewing what changed between a backup and the current version, or between two AI-generated revisions.
