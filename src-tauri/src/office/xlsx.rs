@@ -2185,17 +2185,40 @@ fn build_sheet_xml(sheet: &XlsxSheet) -> String {
     );
     xml.push_str(&format!("<dimension ref=\"{}\"/>", dim_ref));
     xml.push_str("<sheetViews><sheetView workbookViewId=\"0\"><selection activeCell=\"A1\" sqref=\"A1\"/></sheetView></sheetViews>");
-    xml.push_str("<sheetFormatPr baseColWidth=\"8\" defaultRowHeight=\"15\"/>");
+
+    // Add column definitions if we have custom widths
+    if !sheet.col_widths.is_empty() {
+        xml.push_str("<cols>");
+        for (col_idx, width) in &sheet.col_widths {
+            xml.push_str(&format!("<col min=\"{}\" max=\"{}\" width=\"{}\" customWidth=\"1\"/>",
+                col_idx + 1, col_idx + 1, width));
+        }
+        xml.push_str("</cols>");
+    } else {
+        xml.push_str("<sheetFormatPr baseColWidth=\"8\" defaultRowHeight=\"15\"/>");
+    }
+
     xml.push_str("<sheetData>");
 
     for row in &row_indices {
         let mut cells = by_row.remove(row).unwrap_or_default();
         cells.sort_by_key(|c| c.col);
-        xml.push_str(&format!("<row r=\"{}\">", row + 1));
+
+        // Check if this row has a custom height
+        let row_height = sheet.row_heights.get(row);
+        if row_height.is_some() || !cells.is_empty() {
+            let ht_attr = row_height.map(|h| format!(" ht=\"{}\"", h)).unwrap_or_default();
+            let custom_attr = if row_height.is_some() { " customHeight=\"1\"" } else { "" };
+            xml.push_str(&format!("<row r=\"{}\"{}{}>", row + 1, ht_attr, custom_attr));
+        }
+
         for cell in &cells {
             xml.push_str(&build_cell_xml(cell));
         }
-        xml.push_str("</row>");
+
+        if row_height.is_some() || !cells.is_empty() {
+            xml.push_str("</row>");
+        }
     }
     xml.push_str("</sheetData>");
 

@@ -552,7 +552,7 @@ function fortuneCellToSheetJS(v: FortuneCell): object {
 
 /**
  * Convert a FortuneSheet Sheet to a SheetJS worksheet object.
- * Merged regions are stored in SheetJS's `!merges` array.
+ * Merged regions, row heights, and column widths are stored in SheetJS's worksheet properties.
  */
 async function fortuneSheetToSheetJSWorksheet(
   sheet: FortuneSheetCoreSheet,
@@ -600,6 +600,24 @@ async function fortuneSheetToSheetJSWorksheet(
     });
   }
 
+  // Build row heights (!rows) - FortuneSheet uses pixels, SheetJS uses hpx
+  const rows: { hpx?: number }[] = [];
+  const rowlen = sheet.config?.rowlen ?? {};
+  for (const [key, heightPx] of Object.entries(rowlen)) {
+    const rowIdx = parseInt(key, 10);
+    while (rows.length <= rowIdx) rows.push({});
+    rows[rowIdx] = { hpx: Math.round(heightPx) };
+  }
+
+  // Build column widths (!cols) - FortuneSheet uses pixels, SheetJS uses wpx
+  const cols: { wpx?: number }[] = [];
+  const columnlen = sheet.config?.columnlen ?? {};
+  for (const [key, widthPx] of Object.entries(columnlen)) {
+    const colIdx = parseInt(key, 10);
+    while (cols.length <= colIdx) cols.push({});
+    cols[colIdx] = { wpx: Math.round(widthPx) };
+  }
+
   let minRow = Infinity, maxRow = 0, minCol = Infinity, maxCol = 0;
   for (const key of sparseMap.keys()) {
     const [rStr, cStr] = key.split(',');
@@ -619,6 +637,8 @@ async function fortuneSheetToSheetJSWorksheet(
     ...cells,
     '!ref': rangeRef,
     ...(merges.length > 0 ? { '!merges': merges } : {}),
+    ...(rows.length > 0 ? { '!rows': rows } : {}),
+    ...(cols.length > 0 ? { '!cols': cols } : {}),
   };
 }
 
