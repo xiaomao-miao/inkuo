@@ -1015,7 +1015,7 @@ impl ManageExcelSheetsTool {
         }
 
         let path_obj = std::path::Path::new(path);
-        let mut current_bytes = std::fs::read(&path)
+        let mut current_bytes = tokio::fs::read(&path).await
             .map_err(|e| ToolError::IoError(format!("Failed to read {}: {}", path, e)))?;
 
         for (i, op) in ops.iter().enumerate() {
@@ -1066,9 +1066,9 @@ impl ManageExcelSheetsTool {
                 _ => unreachable!(),
             }
 
-            std::fs::rename(&tmp_path, &path)
+            tokio::fs::rename(&tmp_path, &path).await
                 .map_err(|e| ToolError::IoError(format!("Failed to apply operation[{}]: {}", i, e)))?;
-            current_bytes = std::fs::read(&path)
+            current_bytes = tokio::fs::read(&path).await
                 .map_err(|e| ToolError::IoError(format!("Failed to re-read after operation[{}]: {}", i, e)))?;
         }
 

@@ -2626,6 +2626,7 @@ pub fn create_sheet_xlsx(
         .compression_method(zip::CompressionMethod::Deflated)
         .unix_permissions(0o644);
 
+    // Re-open archive for iteration (can't reuse mutable borrow)
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(original_bytes.to_vec()))?;
     for i in 0..archive.len() {
         let mut file = archive.by_index(i)?;
@@ -2884,30 +2885,50 @@ pub fn set_sheet_state_xlsx(
     let escaped_name = xml_escape(sheet_name);
     let mut new_workbook_xml = workbook_xml.clone();
 
-    if let Some(name_pos) = new_workbook_xml.find(&format!("name=\"{}\"", escaped_name)) {
+    // Find the sheet element by name
+    let name_attr = format!("name=\"{}\"", escaped_name);
+    if let Some(name_pos) = new_workbook_xml.find(&name_attr) {
         let before = &new_workbook_xml[..name_pos];
         if let Some(tag_start) = before.rfind("<sheet") {
-            let rest = &new_workbook_xml[name_pos..];
-            if let Some(state_pos) = rest.find("state=\"") {
-                let start = name_pos + state_pos + 7;
-                let end = rest[start..].find('"').map(|e| start + e).unwrap_or(start);
-                new_workbook_xml = format!(
-                    "{}{}{}",
-                    &new_workbook_xml[..start],
-                    new_state,
-                    &new_workbook_xml[name_pos + end..]
-                );
-            } else {
-                let rest2 = &new_workbook_xml[name_pos..];
-                let insert_pos = rest2.find("/>").map(|p| name_pos + p)
-                    .or_else(|| rest2.find(">").map(|p| name_pos + p + 1))
-                    .unwrap_or(name_pos + escaped_name.len());
-                new_workbook_xml = format!(
-                    "{} state=\"{}\"{}",
-                    &new_workbook_xml[..insert_pos],
-                    new_state,
-                    &new_workbook_xml[insert_pos..]
-                );
+            // Find the end of this sheet tag
+            let tag_start_pos = tag_start;
+            let after_name = &new_workbook_xml[name_pos..];
+
+            // Try to find existing state attribute within this sheet tag
+            let tag_end_candidates = ["/>", ">"];
+            let mut tag_end_pos = None;
+            for candidate in &tag_end_candidates {
+                if let Some(pos) = after_name.find(candidate) {
+                    tag_end_pos = Some(name_pos + pos + candidate.len());
+                    break;
+                }
+            }
+
+            if let Some(tag_end) = tag_end_pos {
+                // Check if state attribute exists
+                let between_name_and_end = &new_workbook_xml[name_pos..tag_end];
+                if let Some(state_start) = between_name_and_end.find("state=\"") {
+                    // Modify existing state attribute
+                    let state_value_start = name_pos + state_start + 7; // after 'state="'
+                    let after_state_value = &new_workbook_xml[state_value_start..];
+                    if let Some(quote_pos) = after_state_value.find('"') {
+                        let state_value_end = state_value_start + quote_pos;
+                        new_workbook_xml = format!(
+                            "{}{}{}",
+                            &new_workbook_xml[..state_value_start],
+                            new_state,
+                            &new_workbook_xml[state_value_end..]
+                        );
+                    }
+                } else {
+                    // Insert state attribute before the end of the tag
+                    new_workbook_xml = format!(
+                        "{} state=\"{}\"{}",
+                        &new_workbook_xml[..tag_end],
+                        new_state,
+                        &new_workbook_xml[tag_end..]
+                    );
+                }
             }
         }
     }

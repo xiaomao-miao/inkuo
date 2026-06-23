@@ -201,8 +201,6 @@ pub async fn ai_agent_stream(
     tracing::info!("[DEBUG] Setting up callback for session: {}, message: {}", session_id_clone, message_id_clone);
 
     let callback = move |payload: StreamPayload| {
-        tracing::info!("[DEBUG] Callback fired - event_type: {}, session_id: {}, message_id: {}",
-            payload.event_type, payload.session_id, payload.message_id);
         let mut p = payload.clone();
         p.session_id = session_id_clone.clone();
         p.message_id = message_id_clone.clone();
