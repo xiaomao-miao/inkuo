@@ -1203,6 +1203,7 @@ impl CellModification {
             || self.new_font_name.is_some()
             || self.new_alignment_h.is_some()
             || self.new_alignment_v.is_some()
+            || self.new_number_format.is_some()
     }
 }
 
@@ -1587,57 +1588,12 @@ fn build_preserving_replacement_cell_xml(
     let orig_s_attr = extract_attr(original_elem, "s");
 
     // Extract content inside the cell element (formula, value, etc.)
-    // Look for content between the closing > of opening tag and </
+    // We need to preserve the entire inner content as-is
     let content = if let Some(open_end) = original_elem.find('>') {
         if let Some(close_start) = original_elem.find("</c>") {
             let inner = &original_elem[open_end + 1..close_start];
-            // Extract formula and cached value
-            let mut formula = String::new();
-            let mut value = String::new();
-
-            // Parse <f>...</f> and <v>...</v>
-            let mut i = 0;
-            let bytes = inner.as_bytes();
-            while i < bytes.len() {
-                if i + 2 < bytes.len() && bytes[i] == b'<' {
-                    if bytes[i + 1] == b'f' && (i + 2 >= bytes.len() || bytes[i + 2] == b'>' || bytes[i + 2] == b' ') {
-                        // Found <f>
-                        if let Some(end) = find_tag_end(&inner[i..]) {
-                            let tag = &inner[i..i + end];
-                            if let Some(f_content) = extract_tag_content(tag, "f") {
-                                formula = f_content;
-                            }
-                            i += end;
-                            continue;
-                        }
-                    } else if bytes[i + 1] == b'v' && (i + 2 >= bytes.len() || bytes[i + 2] == b'>' || bytes[i + 2] == b' ') {
-                        // Found <v>
-                        if let Some(end) = find_tag_end(&inner[i..]) {
-                            let tag = &inner[i..i + end];
-                            if let Some(v_content) = extract_tag_content(tag, "v") {
-                                value = v_content;
-                            }
-                            i += end;
-                            continue;
-                        }
-                    } else if bytes[i + 1] == b'i' && bytes[i + 2] == b's' {
-                        // Found <is> (inline string), preserve it
-                        if let Some(end) = find_tag_end(&inner[i..]) {
-                            let tag = &inner[i..i + end];
-                            // Find <t> content inside <is>
-                            if let Some(t_content) = extract_tag_content(tag, "t") {
-                                value = format!("<is><t>{}</t></is>", t_content);
-                            }
-                            i += end;
-                            continue;
-                        }
-                    }
-                }
-                i += 1;
-            }
-
-            if !formula.is_empty() || !value.is_empty() {
-                Some((formula, value))
+            if !inner.is_empty() {
+                Some(inner.to_string())
             } else {
                 None
             }
@@ -1656,26 +1612,18 @@ fn build_preserving_replacement_cell_xml(
         attrs.push_str(&format!(" s=\"{}\"", s));
     }
 
-    // For type attribute, only set if it's a type that should be preserved
-    // (b=boolean, e=error, inlineStr) - don't set for numbers
+    // For type attribute, preserve it for all cell types that need it
+    // (s=shared string, b=boolean, e=error, inlineStr)
     if let Some(ref t) = orig_t_attr {
-        if t == "b" || t == "e" || t == "inlineStr" {
+        if t == "s" || t == "b" || t == "e" || t == "inlineStr" {
             attrs.push_str(&format!(" t=\"{}\"", t));
         }
     }
 
     // Build body with preserved content
-    let body = if let Some((formula, value)) = content {
-        if !formula.is_empty() && !value.is_empty() {
-            format!("<f>{}</f><v>{}</v>", escape_xml_text(&formula), value)
-        } else if !formula.is_empty() {
-            format!("<f>{}</f>", escape_xml_text(&formula))
-        } else if !value.is_empty() {
-            // Value was present, keep it
-            format!("<v>{}</v>", value)
-        } else {
-            String::new()
-        }
+    let body = if let Some(inner) = content {
+        // Preserve the entire inner content as-is
+        inner
     } else {
         String::new()
     };
@@ -3415,6 +3363,136 @@ mod tests {
         let out_path = std::env::temp_dir().join("inkuo_test_empty.xlsx");
         let result = create_xlsx_workbook(&workbook, &out_path);
         assert!(result.is_err(), "creating an empty workbook should fail");
+    }
+
+    #[test]
+    fn build_preserving_replacement_preserves_shared_strings() {
+        // Test the build_preserving_replacement_cell_xml function directly
+        // with a shared string cell
+        let original = r#"<c r="A1" t="s"><v>0</v></c>"#;
+        let m = CellModification::new("Sheet1", "A1");
+        let result = build_preserving_replacement_cell_xml(0, 0, &m, original).unwrap();
+
+        // Should preserve t="s" and <v>0</v>
+        assert!(result.contains("t=\"s\""), "t=\"s\" should be preserved");
+        assert!(result.contains("<v>0</v>"), "<v>0</v> should be preserved");
+    }
+
+    #[test]
+    fn build_preserving_replacement_preserves_formulas() {
+        // Test the build_preserving_replacement_cell_xml function directly
+        // with a formula cell
+        let original = r#"<c r="C1"><f>SUM(A1:B1)</f><v>30</v></c>"#;
+        let m = CellModification::new("Sheet1", "C1");
+        let result = build_preserving_replacement_cell_xml(0, 2, &m, original).unwrap();
+
+        // Should preserve <f>SUM(A1:B1)</f> and <v>30</v>
+        assert!(result.contains("<f>SUM(A1:B1)</f>"), "<f> should be preserved");
+        assert!(result.contains("<v>30</v>"), "<v>30</v> should be preserved");
+    }
+
+    #[test]
+    fn style_only_modification_preserves_all_cell_data() {
+        use std::io::Write;
+        // Test that applying ONLY style changes (no value/formula changes)
+        // preserves ALL cell data including shared strings, formulas, and values
+        let sheet_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<sheetData>
+<row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c><c r="C1"><f>SUM(A1:B1)</f><v>30</v></c></row>
+<row r="2"><c r="A2"><v>100</v></c><c r="B2"><f>A2*2</f><v>200</v></c><c r="C2" t="s"><v>2</v></c></row>
+</sheetData>
+</worksheet>"#;
+        let workbook_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets>
+</workbook>"#;
+        let rels_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>"#;
+        let shared_strings_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<si><t>Header1</t></si>
+<si><t>Header2</t></si>
+<si><t>Total</t></si>
+</sst>"#;
+        let content_types = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+</Types>"#;
+
+        let mut buf: Vec<u8> = Vec::new();
+        {
+            let cursor = std::io::Cursor::new(&mut buf);
+            let mut zip = zip::ZipWriter::new(cursor);
+            let opts = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored)
+                .unix_permissions(0o644);
+            zip.start_file("[Content_Types].xml", opts).unwrap();
+            zip.write_all(content_types.as_bytes()).unwrap();
+            zip.start_file("xl/workbook.xml", opts).unwrap();
+            zip.write_all(workbook_xml.as_bytes()).unwrap();
+            zip.start_file("xl/_rels/workbook.xml.rels", opts).unwrap();
+            zip.write_all(rels_xml.as_bytes()).unwrap();
+            zip.start_file("xl/sharedStrings.xml", opts).unwrap();
+            zip.write_all(shared_strings_xml.as_bytes()).unwrap();
+            zip.start_file("xl/worksheets/sheet1.xml", opts).unwrap();
+            zip.write_all(sheet_xml.as_bytes()).unwrap();
+            zip.finish().unwrap();
+        }
+
+        // Apply style-only modifications (bg_color, bold, etc.) - NO value/formula changes
+        let tmpdir = std::env::temp_dir();
+        let out_path = tmpdir.join("inkuo_test_style_only.xlsx");
+        let mods = vec![
+            CellModification::new("Sheet1", "A1").with_number_format("0"),
+            CellModification::new("Sheet1", "B1").with_number_format("0"),
+            CellModification::new("Sheet1", "C1").with_number_format("0"),
+        ];
+        incremental_write_xlsx(&buf, &mods, &out_path).expect("write failed");
+
+        // Re-parse and verify ALL data is preserved
+        let written = std::fs::read(&out_path).expect("read back");
+        let workbook = read_xlsx_structured(&written).expect("reparse");
+        let sheet = &workbook.sheets[0];
+
+        // Verify shared string cells
+        let a1 = sheet.cells.iter().find(|c| c.address() == "A1").expect("A1 cell");
+        assert!(matches!(a1.value, CellValue::String(ref s) if s == "Header1"),
+            "A1 shared string should be preserved, got: {:?}", a1.value);
+
+        let b1 = sheet.cells.iter().find(|c| c.address() == "B1").expect("B1 cell");
+        assert!(matches!(b1.value, CellValue::String(ref s) if s == "Header2"),
+            "B1 shared string should be preserved, got: {:?}", b1.value);
+
+        let c2 = sheet.cells.iter().find(|c| c.address() == "C2").expect("C2 cell");
+        assert!(matches!(c2.value, CellValue::String(ref s) if s == "Total"),
+            "C2 shared string should be preserved, got: {:?}", c2.value);
+
+        // Verify formula cells
+        let c1 = sheet.cells.iter().find(|c| c.address() == "C1").expect("C1 cell");
+        assert!(c1.formula.as_ref().map(|f| f == "SUM(A1:B1)").unwrap_or(false),
+            "C1 formula should be preserved, got: {:?}", c1.formula);
+        // Value should be preserved (30 as Int or Float)
+        let c1_value_ok = match &c1.value {
+            CellValue::Int(30) => true,
+            CellValue::Float(f) => *f == 30.0,
+            _ => false,
+        };
+        assert!(c1_value_ok, "C1 value should be 30, got: {:?}", c1.value);
+
+        let b2 = sheet.cells.iter().find(|c| c.address() == "B2").expect("B2 cell");
+        assert!(b2.formula.as_ref().map(|f| f == "A2*2").unwrap_or(false),
+            "B2 formula should be preserved, got: {:?}", b2.formula);
+
+        // Verify numeric cells
+        let a2 = sheet.cells.iter().find(|c| c.address() == "A2").expect("A2 cell");
+        assert_eq!(a2.value, CellValue::Int(100));
+
+        let _ = std::fs::remove_file(&out_path);
     }
 }
 
