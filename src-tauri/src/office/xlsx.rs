@@ -2599,19 +2599,43 @@ fn apply_dimension_changes(
     // Apply row changes
     for rc in row_changes {
         let existing_pattern = format!("<row r=\"{}\"", rc.index + 1);
-        if xml.contains(&existing_pattern) {
-            // Find and replace the row tag
-            if let Some(start) = xml.find(&existing_pattern) {
-                let rest = &xml[start..];
-                let tag_end = rest.find("/>").map(|p| start + p + 2)
-                    .or_else(|| rest.find(">").map(|p| start + p + 1))
-                    .unwrap_or(start + rest.len());
-                let attrs = if rc.hidden {
+        if let Some(start) = xml.find(&existing_pattern) {
+            // Find the end of the opening tag
+            let after_tag_start = start + existing_pattern.len();
+            let tag_open_end = xml[after_tag_start..].find('>')
+                .map(|p| after_tag_start + p + 1)
+                .unwrap_or(after_tag_start);
+
+            // Check if it's self-closing
+            let is_self_closing = xml[start..tag_open_end].ends_with("/>");
+
+            if is_self_closing {
+                // Self-closing: replace the whole tag
+                let new_attrs = if rc.hidden {
                     format!(r#"r="{}" hidden="1""#, rc.index + 1)
                 } else {
                     format!(r#"r="{}" customHeight="1" ht="{}""#, rc.index + 1, rc.size)
                 };
-                xml = format!("{}{}{}", &xml[..start], attrs, &xml[tag_end..]);
+                xml = format!("{}{}/>", &xml[..start], new_attrs);
+            } else {
+                // Not self-closing: find the closing </row> tag and preserve content
+                let close_pattern = format!("</row>");
+                let content_start = tag_open_end;
+                let content_end = xml[content_start..].find(&close_pattern)
+                    .map(|p| content_start + p)
+                    .unwrap_or(content_start);
+                let content = &xml[content_start..content_end];
+
+                let new_attrs = if rc.hidden {
+                    format!(r#"r="{}" hidden="1""#, rc.index + 1)
+                } else {
+                    format!(r#"r="{}" customHeight="1" ht="{}""#, rc.index + 1, rc.size)
+                };
+                xml = format!("{}{}>{}{}</row>", &xml[..start], new_attrs, content, &close_pattern);
+                // Remove the original row
+                let original_start = start;
+                let original_end = content_end + close_pattern.len();
+                xml = format!("{}{}", &xml[..original_start], &xml[original_end..]);
             }
         } else {
             // Insert before </sheetData>
