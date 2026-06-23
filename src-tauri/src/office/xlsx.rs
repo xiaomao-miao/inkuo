@@ -1386,18 +1386,18 @@ pub fn read_xlsx_structured(bytes: &[u8]) -> Result<XlsxWorkbook, OfficeError> {
     let rels_xml = read_entry(&mut archive, "xl/_rels/workbook.xml.rels")
         .unwrap_or_default();
 
-    let sheet_paths = parse_sheet_name_to_path(&workbook_xml, &rels_xml)?;
+    let sheet_entries = parse_sheet_entries(&workbook_xml, &rels_xml)?;
 
     let mut sheets = Vec::new();
-    for (name, path) in &sheet_paths {
-        let xml = match read_entry(&mut archive, path) {
+    for entry in &sheet_entries {
+        let xml = match read_entry(&mut archive, &entry.path) {
             Ok(s) => s,
             Err(_) => continue,
         };
         let parsed = parse_sheet_xml(&xml, &shared_strings, styles_info.as_ref());
         sheets.push(XlsxSheet {
-            name: name.clone(),
-            state: parsed.state,
+            name: entry.name.clone(),
+            state: entry.state.clone(),
             cells: parsed.cells,
             merged_cells: parsed.merged,
             max_row: parsed.max_row,
@@ -1610,7 +1610,8 @@ pub enum ExcelOperation {
     SheetOp {
         /// "create" | "rename" | "delete" | "hide" | "unhide"
         op: String,
-        /// Target sheet name (for rename/delete/hide/unhide)
+        /// Target sheet name (for rename/delete/hide/unhide); not required for "create".
+        #[serde(default)]
         sheet: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         new_name: Option<String>,
@@ -2213,23 +2214,33 @@ fn escape_xml_text(s: &str) -> String {
 
 // ─── Sheet discovery helpers ─────────────────────────────────────────────────
 
+/// Information about a sheet parsed from workbook.xml.
+#[derive(Debug)]
+struct SheetEntry {
+    name: String,
+    path: String,
+    state: String,
+}
+
 /// Parse `xl/workbook.xml` + `xl/_rels/workbook.xml.rels` to map sheet name
-/// to the path of its `xl/worksheets/sheetN.xml` file.
-fn parse_sheet_name_to_path(
+/// to the path of its `xl/worksheets/sheetN.xml` file. Also reads the `state`
+/// attribute from each `<sheet>` element so hidden sheets are tracked.
+fn parse_sheet_entries(
     workbook_xml: &str,
     rels_xml: &str,
-) -> Result<Vec<(String, String)>, OfficeError> {
+) -> Result<Vec<SheetEntry>, OfficeError> {
     let mut reader = XmlReader::from_str(workbook_xml);
     reader.config_mut().trim_text(false);
     let mut buf = Vec::new();
 
-    let mut sheets: Vec<(String, String)> = Vec::new();
+    let mut raw_sheets: Vec<(String, String, String)> = Vec::new();
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e)) => {
                 if e.local_name().as_ref() == b"sheet" {
                     let mut name = String::new();
                     let mut rid = String::new();
+                    let mut state = "visible".to_string();
                     for attr in e.attributes().with_checks(false).flatten() {
                         let v = match std::str::from_utf8(&attr.value) {
                             Ok(s) => s,
@@ -2239,11 +2250,12 @@ fn parse_sheet_name_to_path(
                         match local {
                             b"name" => name = v.to_string(),
                             b"id" => rid = v.to_string(),
+                            b"state" => state = v.to_string(),
                             _ => {}
                         }
                     }
                     if !name.is_empty() && !rid.is_empty() {
-                        sheets.push((name, rid));
+                        raw_sheets.push((name, rid, state));
                     }
                 }
             }
@@ -2289,17 +2301,27 @@ fn parse_sheet_name_to_path(
     }
 
     let mut out = Vec::new();
-    for (name, rid) in sheets {
+    for (name, rid, state) in raw_sheets {
         if let Some(target) = rid_to_target.get(&rid) {
             let path = if target.starts_with('/') {
                 target.trim_start_matches('/').to_string()
             } else {
                 format!("xl/{}", target)
             };
-            out.push((name, path));
+            out.push(SheetEntry { name, path, state });
         }
     }
     Ok(out)
+}
+
+/// Backward-compatible wrapper: returns (name, path) pairs only.
+/// All callers that don't need `state` use this to avoid massive churn.
+fn parse_sheet_name_to_path(
+    workbook_xml: &str,
+    rels_xml: &str,
+) -> Result<Vec<(String, String)>, OfficeError> {
+    parse_sheet_entries(workbook_xml, rels_xml)
+        .map(|entries| entries.into_iter().map(|e| (e.name, e.path)).collect())
 }
 
 // ─── Styles document (lightweight; conservative) ─────────────────────────────
