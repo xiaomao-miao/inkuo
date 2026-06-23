@@ -63,6 +63,10 @@ export interface RustXlsxSheet {
   merged_cells: RustMergedRange[];
   max_row: number;
   max_col: number;
+  /** Row heights: map of row index (0-based) to height in points. */
+  row_heights?: Record<string, number>;
+  /** Column widths: map of column index (0-based) to width in Excel character units. */
+  col_widths?: Record<string, number>;
 }
 
 export interface RustXlsxWorkbook {
@@ -207,6 +211,30 @@ export function rustSheetToFortuneSheet(sheet: RustXlsxSheet): FortuneSheetCoreS
     mergeConfig[key] = { r: mr.start_row, c: mr.start_col, rs, cs };
   }
 
+  // Build row heights map: key = row index string, value = height in pixels
+  // Rust sends height in points; FortuneSheet uses pixels (approx 1.333px per point)
+  const rowlen: Record<string, number> = {};
+  if (sheet.row_heights) {
+    for (const [key, value] of Object.entries(sheet.row_heights)) {
+      rowlen[key] = Math.round(value * 1.333);
+    }
+  }
+
+  // Build column widths map: key = column index string, value = width in pixels
+  // Rust sends width in Excel character units; FortuneSheet uses pixels (approx 7px per char)
+  const columnlen: Record<string, number> = {};
+  if (sheet.col_widths) {
+    for (const [key, value] of Object.entries(sheet.col_widths)) {
+      columnlen[key] = Math.round(value * 7);
+    }
+  }
+
+  // Build the config object
+  const config: Record<string, unknown> = {};
+  if (Object.keys(mergeConfig).length > 0) config.merge = mergeConfig;
+  if (Object.keys(rowlen).length > 0) config.rowlen = rowlen;
+  if (Object.keys(columnlen).length > 0) config.columnlen = columnlen;
+
   const celldata: CellWithRowAndCol[] = [];
 
   for (const cell of sheet.cells) {
@@ -241,7 +269,7 @@ export function rustSheetToFortuneSheet(sheet: RustXlsxSheet): FortuneSheetCoreS
     column: Math.max(sheet.max_col || 26, 26),
     row:    Math.max(sheet.max_row || 100, 100),
     celldata,
-    config: Object.keys(mergeConfig).length > 0 ? { merge: mergeConfig } : undefined,
+    config: Object.keys(config).length > 0 ? config : undefined,
     // Omit calcChain so FortuneSheet rebuilds it from celldata.
     // calcChain becomes stale after loading external data and causes cross-sheet
     // formula references to stop working. calculateFormula() will regenerate it.

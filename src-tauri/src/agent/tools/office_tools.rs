@@ -1305,6 +1305,8 @@ impl CreateExcelTool {
                 merged_cells,
                 max_row,
                 max_col,
+                row_heights: std::collections::HashMap::new(),
+                col_widths: std::collections::HashMap::new(),
             });
         }
 

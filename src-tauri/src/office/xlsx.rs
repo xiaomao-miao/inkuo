@@ -319,6 +319,12 @@ pub struct XlsxSheet {
     pub max_row: usize,
     #[serde(default)]
     pub max_col: usize,
+    /// Row heights: map of row index (0-based) to height in points.
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub row_heights: std::collections::HashMap<usize, f64>,
+    /// Column widths: map of column index (0-based) to width in Excel character units.
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub col_widths: std::collections::HashMap<usize, f64>,
 }
 
 fn default_visible() -> String {
@@ -416,6 +422,8 @@ struct SheetParseResult {
     state: String,
     max_row: usize,
     max_col: usize,
+    row_heights: std::collections::HashMap<usize, f64>,
+    col_widths: std::collections::HashMap<usize, f64>,
 }
 
 /// Read the shared string pool from `xl/sharedStrings.xml`.
@@ -817,8 +825,11 @@ fn parse_sheet_xml(xml: &str, shared_strings: &[String], styles_info: Option<&St
     let mut merged: Vec<MergedRange> = Vec::new();
     let mut max_row: usize = 0;
     let mut max_col: usize = 0;
+    let mut row_heights: std::collections::HashMap<usize, f64> = std::collections::HashMap::new();
+    let mut col_widths: std::collections::HashMap<usize, f64> = std::collections::HashMap::new();
 
     let mut in_sheet_data = false;
+    let mut in_cols = false;
     let mut current_cell: Option<ParsedCell> = None;
     let mut in_formula = false;
     let mut in_value = false;
@@ -830,6 +841,7 @@ fn parse_sheet_xml(xml: &str, shared_strings: &[String], styles_info: Option<&St
                 let name = e.local_name();
                 match name.as_ref() {
                     b"sheetData" => in_sheet_data = true,
+                    b"cols" => in_cols = true,
                     b"c" if in_sheet_data => {
                         let mut c = ParsedCell::default();
                         for attr in e.attributes().with_checks(false).flatten() {
@@ -865,6 +877,35 @@ fn parse_sheet_xml(xml: &str, shared_strings: &[String], styles_info: Option<&St
                             }
                         }
                     }
+                } else if name.as_ref() == b"col" && in_cols {
+                    // Parse column attributes for width
+                    let mut col_min: Option<usize> = None;
+                    let mut col_max: Option<usize> = None;
+                    let mut width: Option<f64> = None;
+
+                    for attr in e.attributes().with_checks(false).flatten() {
+                        let v = attr.value.as_ref();
+                        if let Ok(s) = std::str::from_utf8(v) {
+                            let key = attr.key.as_ref();
+                            let local = strip_xml_ns(key);
+                            match local {
+                                b"min" => col_min = s.parse().ok(),
+                                b"max" => col_max = s.parse().ok(),
+                                b"width" => width = s.parse().ok(),
+                                _ => {}
+                            }
+                        }
+                    }
+
+                    // Apply width to all columns in the range
+                    if let Some(min_idx) = col_min {
+                        let max_idx = col_max.unwrap_or(min_idx);
+                        for i in min_idx..=max_idx {
+                            if let Some(w) = width {
+                                col_widths.insert(i - 1, w); // Convert to 0-based
+                            }
+                        }
+                    }
                 }
             }
             Ok(Event::Text(ref t)) => {
@@ -893,6 +934,7 @@ fn parse_sheet_xml(xml: &str, shared_strings: &[String], styles_info: Option<&St
                 let name = e.local_name();
                 match name.as_ref() {
                     b"sheetData" => in_sheet_data = false,
+                    b"cols" => in_cols = false,
                     b"v" => in_value = false,
                     b"f" => in_formula = false,
                     b"is" => in_inline_string = false,
@@ -941,6 +983,8 @@ fn parse_sheet_xml(xml: &str, shared_strings: &[String], styles_info: Option<&St
         state: "visible".to_string(),
         max_row,
         max_col,
+        row_heights,
+        col_widths,
     }
 }
 
@@ -1028,6 +1072,8 @@ pub fn read_xlsx_structured(bytes: &[u8]) -> Result<XlsxWorkbook, OfficeError> {
             merged_cells: parsed.merged,
             max_row: parsed.max_row,
             max_col: parsed.max_col,
+            row_heights: parsed.row_heights,
+            col_widths: parsed.col_widths,
         });
     }
 
@@ -3276,6 +3322,8 @@ mod tests {
             merged_cells: vec![],
             max_row: 4,
             max_col: 2,
+            row_heights: std::collections::HashMap::new(),
+            col_widths: std::collections::HashMap::new(),
         };
         let workbook = XlsxWorkbook {
             sheets: vec![sheet],
@@ -3326,6 +3374,8 @@ mod tests {
             merged_cells: vec![MergedRange { start_row: 0, start_col: 0, end_row: 0, end_col: 1 }],
             max_row: 1,
             max_col: 2,
+            row_heights: std::collections::HashMap::new(),
+            col_widths: std::collections::HashMap::new(),
         };
         let notes = XlsxSheet {
             name: "Notes".to_string(),
@@ -3336,6 +3386,8 @@ mod tests {
             merged_cells: vec![],
             max_row: 1,
             max_col: 1,
+            row_heights: std::collections::HashMap::new(),
+            col_widths: std::collections::HashMap::new(),
         };
         let workbook = XlsxWorkbook {
             sheets: vec![summary, notes],
@@ -3521,6 +3573,8 @@ mod libreoffice_tests {
             merged_cells: vec![],
             max_row: 3,
             max_col: 2,
+            row_heights: std::collections::HashMap::new(),
+            col_widths: std::collections::HashMap::new(),
         };
         let workbook = XlsxWorkbook { sheets: vec![sheet], shared_strings: vec![] };
 
