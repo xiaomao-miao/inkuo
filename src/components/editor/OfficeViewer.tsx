@@ -370,44 +370,16 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
       loadedSheetsRef.current = changedSheets;
       setIsDirty(true);
 
-      // Formula calculation: FortuneSheet does NOT compute formula results on initial
-      // data load. Triggering calculation here (on first onChange) is the only
-      // reliable hook after initSheetData has populated the data matrices.
-      console.log('[formula] onChange called, formulaInitDone:', formulaInitDoneRef.current, 'workbook:', !!workbookRef.current);
-      if (!formulaInitDoneRef.current && workbookRef.current) {
-        formulaInitDoneRef.current = true;
-        const wb = workbookRef.current;
-        const allCtx = wb.getAllSheets ? wb.getAllSheets() : [];
-        console.log('[formula] ctx sheets:', allCtx.length, allCtx.map((s: any) => `${s.name}(${s.id}): data=${!!s.data} celldata=${!!s.celldata}`));
-        for (const sheet of allCtx) {
-          const formulaCellsBefore = [];
-          if (sheet.data) {
-            for (let r = 0; r < Math.min(sheet.data.length, 20); r++) {
-              for (let c = 0; c < (sheet.data[r]?.length ?? 0); c++) {
-                const cell = sheet.data[r]?.[c];
-                if (cell?.f) formulaCellsBefore.push(`(${r},${c}): f=${cell.f.slice(0,30)} v=${cell.v}`);
-              }
-            }
-          }
-          console.log('[formula] sheet:', sheet.name, 'id:', sheet.id, 'formulas found:', formulaCellsBefore.length, formulaCellsBefore.slice(0, 3));
-          wb.calculateFormula(sheet.id);
-          const afterData = sheet.data;
-          let calculated = 0;
-          const calculatedExamples = [];
-          if (afterData) {
-            for (let r = 0; r < Math.min(afterData.length, 20); r++) {
-              for (let c = 0; c < (afterData[r]?.length ?? 0); c++) {
-                const cell = afterData[r]?.[c];
-                if (cell?.f && cell?.v !== undefined && cell?.v !== null) {
-                  calculated++;
-                  if (calculatedExamples.length < 3) calculatedExamples.push(`(${r},${c}): v=${JSON.stringify(cell.v)}`);
-                }
-              }
-            }
-          }
-          console.log('[formula] after calculate:', sheet.name, 'calculatedCells:', calculated, calculatedExamples);
-        }
-      }
+  // Formula calculation: FortuneSheet does NOT compute formula results on initial
+  // data load. Triggering calculation here (on first onChange) is the only
+  // reliable hook after initSheetData has populated the data matrices.
+  if (!formulaInitDoneRef.current && workbookRef.current) {
+    formulaInitDoneRef.current = true;
+    const wb = workbookRef.current;
+    for (const sheet of wb.getAllSheets()) {
+      wb.calculateFormula(sheet.id);
+    }
+  }
     },
     [],
   );
@@ -485,12 +457,7 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
     try {
       recalcAllSheetsRef.current();
       const latestSheets = wb.getAllSheets();
-      if (!latestSheets?.length) return;
-
-      // Use SheetJS (xlsx) to export directly from the browser.
-      // This bypasses the fragile Rust→FortuneSheet→Rust conversion layer.
-      // The Rust backend only needs to receive raw bytes to write to disk.
-      const buffer = await fortuneSheetsToSheetJSBuffer(latestSheets);
+      const buffer = await fortuneSheetsToSheetJSBuffer(latestSheets, wb.dataToCelldata.bind(wb));
       const bufferArray = Array.from(buffer);
       await invoke('write_office_file', { path: filePath, data: bufferArray });
 
@@ -501,7 +468,6 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
     } catch (err) {
       const message = reportError('office-excel-save', err);
       pushNotification({ kind: 'error', title: '保存 Excel 文档失败', message });
-      console.error('[Excel Save] Error:', err);
     }
   }, [filePath, setFortuneSheetsToStore, setOpenTabDirty, pushNotification]);
 

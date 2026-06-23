@@ -849,9 +849,7 @@ fn parse_sheet_xml(xml: &str, shared_strings: &[String], styles_info: Option<&St
                         in_value = false;
                         in_inline_string = false;
                     }
-                    b"f" if current_cell.is_some() => {
-                        in_formula = true;
-                    }
+                    b"f" if current_cell.is_some() => in_formula = true,
                     b"v" if current_cell.is_some() => in_value = true,
                     b"is" if current_cell.is_some() => in_inline_string = true,
                     _ => {}
@@ -916,9 +914,6 @@ fn parse_sheet_xml(xml: &str, shared_strings: &[String], styles_info: Option<&St
                                     || style.is_some()
                                     || c.formula.is_some()
                                 {
-                                    if c.formula.is_some() {
-                                        eprintln!("[xlsx] formula cell found: row={} col={} formula={:?}", row, col, c.formula);
-                                    }
                                     cells.push(Cell {
                                         row,
                                         col,
@@ -1016,6 +1011,7 @@ pub fn read_xlsx_structured(bytes: &[u8]) -> Result<XlsxWorkbook, OfficeError> {
     let workbook_xml = read_entry(&mut archive, "xl/workbook.xml")?;
     let rels_xml = read_entry(&mut archive, "xl/_rels/workbook.xml.rels")
         .unwrap_or_default();
+
     let sheet_paths = parse_sheet_name_to_path(&workbook_xml, &rels_xml)?;
 
     let mut sheets = Vec::new();
@@ -1265,22 +1261,31 @@ pub fn incremental_write_xlsx(
 
     // Write output: copy original archive, replace rewritten entries.
     let mut out = zip::ZipWriter::new(std::fs::File::create(output_path)?);
-    let opts = zip::write::SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Deflated)
-        .unix_permissions(0o644);
 
     let mut archive = zip::ZipArchive::new(Cursor::new(original_bytes.to_vec()))?;
     for i in 0..archive.len() {
         let mut file = archive.by_index(i)?;
         let name = file.name().to_string();
         if let Some(new_bytes) = rewritten.get(&name) {
-            out.start_file(&name, opts)?;
+            // Use the same compression method as the original file
+            let file_opts = if file.compression() == zip::CompressionMethod::Deflated {
+                zip::write::SimpleFileOptions::default()
+                    .compression_method(zip::CompressionMethod::Deflated)
+                    .unix_permissions(0o644)
+            } else {
+                zip::write::SimpleFileOptions::default()
+                    .compression_method(zip::CompressionMethod::Stored)
+                    .unix_permissions(0o644)
+            };
+            out.start_file(&name, file_opts)?;
             out.write_all(new_bytes)?;
         } else {
             let mut buf = Vec::new();
             file.read_to_end(&mut buf)?;
             let file_opts = if file.compression() == zip::CompressionMethod::Deflated {
-                opts
+                zip::write::SimpleFileOptions::default()
+                    .compression_method(zip::CompressionMethod::Deflated)
+                    .unix_permissions(0o644)
             } else {
                 zip::write::SimpleFileOptions::default()
                     .compression_method(zip::CompressionMethod::Stored)
@@ -1334,11 +1339,20 @@ fn apply_modifications_to_sheet(
                 if let Some(addr) = extract_attr(elem_text, "r") {
                     let upper = addr.to_ascii_uppercase();
                     if let Some(m) = by_addr.get(&upper) {
-                        // Generate the replacement element.
+                        // If this modification only changes styles (no value/formula change),
+                        // we need to preserve the original cell content (value and formula).
                         let (row, col) = parse_cell_address(&upper).ok_or_else(|| {
                             OfficeError::Excel(format!("invalid cell address: {}", m.address))
                         })?;
-                        let replacement = build_replacement_cell_xml(row, col, m)?;
+                        let replacement = if m.has_style_change()
+                            && m.new_value.is_none()
+                            && m.new_formula.is_none()
+                        {
+                            // Extract original content and build replacement that preserves it
+                            build_preserving_replacement_cell_xml(row, col, m, elem_text)?
+                        } else {
+                            build_replacement_cell_xml(row, col, m)?
+                        };
                         out.push_str(&replacement);
                         i = end_of_elem;
                         continue;
@@ -1554,6 +1568,157 @@ fn build_replacement_cell_xml(
     } else {
         Ok(format!("<c {}>{}</c>", attrs, body))
     }
+}
+
+/// Build replacement cell XML that preserves the original cell's value and formula,
+/// but applies the new style. Used when only style properties are being changed.
+fn build_preserving_replacement_cell_xml(
+    row: usize,
+    col: usize,
+    _m: &CellModification,
+    original_elem: &str,
+) -> Result<String, OfficeError> {
+    let addr = cell_address(row, col);
+
+    // Extract the original t attribute (cell type) if present
+    let orig_t_attr = extract_attr(original_elem, "t");
+
+    // Extract original style index (s attribute) if present
+    let orig_s_attr = extract_attr(original_elem, "s");
+
+    // Extract content inside the cell element (formula, value, etc.)
+    // Look for content between the closing > of opening tag and </
+    let content = if let Some(open_end) = original_elem.find('>') {
+        if let Some(close_start) = original_elem.find("</c>") {
+            let inner = &original_elem[open_end + 1..close_start];
+            // Extract formula and cached value
+            let mut formula = String::new();
+            let mut value = String::new();
+
+            // Parse <f>...</f> and <v>...</v>
+            let mut i = 0;
+            let bytes = inner.as_bytes();
+            while i < bytes.len() {
+                if i + 2 < bytes.len() && bytes[i] == b'<' {
+                    if bytes[i + 1] == b'f' && (i + 2 >= bytes.len() || bytes[i + 2] == b'>' || bytes[i + 2] == b' ') {
+                        // Found <f>
+                        if let Some(end) = find_tag_end(&inner[i..]) {
+                            let tag = &inner[i..i + end];
+                            if let Some(f_content) = extract_tag_content(tag, "f") {
+                                formula = f_content;
+                            }
+                            i += end;
+                            continue;
+                        }
+                    } else if bytes[i + 1] == b'v' && (i + 2 >= bytes.len() || bytes[i + 2] == b'>' || bytes[i + 2] == b' ') {
+                        // Found <v>
+                        if let Some(end) = find_tag_end(&inner[i..]) {
+                            let tag = &inner[i..i + end];
+                            if let Some(v_content) = extract_tag_content(tag, "v") {
+                                value = v_content;
+                            }
+                            i += end;
+                            continue;
+                        }
+                    } else if bytes[i + 1] == b'i' && bytes[i + 2] == b's' {
+                        // Found <is> (inline string), preserve it
+                        if let Some(end) = find_tag_end(&inner[i..]) {
+                            let tag = &inner[i..i + end];
+                            // Find <t> content inside <is>
+                            if let Some(t_content) = extract_tag_content(tag, "t") {
+                                value = format!("<is><t>{}</t></is>", t_content);
+                            }
+                            i += end;
+                            continue;
+                        }
+                    }
+                }
+                i += 1;
+            }
+
+            if !formula.is_empty() || !value.is_empty() {
+                Some((formula, value))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // Build attributes
+    let mut attrs = format!("r=\"{}\"", addr);
+
+    // Use style index if available
+    if let Some(ref s) = orig_s_attr {
+        attrs.push_str(&format!(" s=\"{}\"", s));
+    }
+
+    // For type attribute, only set if it's a type that should be preserved
+    // (b=boolean, e=error, inlineStr) - don't set for numbers
+    if let Some(ref t) = orig_t_attr {
+        if t == "b" || t == "e" || t == "inlineStr" {
+            attrs.push_str(&format!(" t=\"{}\"", t));
+        }
+    }
+
+    // Build body with preserved content
+    let body = if let Some((formula, value)) = content {
+        if !formula.is_empty() && !value.is_empty() {
+            format!("<f>{}</f><v>{}</v>", escape_xml_text(&formula), value)
+        } else if !formula.is_empty() {
+            format!("<f>{}</f>", escape_xml_text(&formula))
+        } else if !value.is_empty() {
+            // Value was present, keep it
+            format!("<v>{}</v>", value)
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    };
+
+    if body.is_empty() {
+        Ok(format!("<c {}/>", attrs))
+    } else {
+        Ok(format!("<c {}>{}</c>", attrs, body))
+    }
+}
+
+/// Find the end position of an XML tag (position of >)
+fn find_tag_end(slice: &str) -> Option<usize> {
+    let bytes = slice.as_bytes();
+    let mut i = 0;
+    let mut in_attr = false;
+    while i < bytes.len() {
+        if bytes[i] == b'"' {
+            in_attr = !in_attr;
+        } else if bytes[i] == b'>' && !in_attr {
+            return Some(i + 1);
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Extract content between opening and closing tags
+fn extract_tag_content(tag: &str, tag_name: &str) -> Option<String> {
+    let start_tag = format!("<{}", tag_name);
+    let end_tag = format!("</{}>", tag_name);
+
+    if let Some(content_start) = tag.find(&start_tag) {
+        let after_open = content_start + start_tag.len();
+        // Skip to after >
+        if let Some(gt_pos) = tag[after_open..].find('>') {
+            let content_start_pos = after_open + gt_pos + 1;
+            if let Some(end_pos) = tag[content_start_pos..].find(&end_tag) {
+                return Some(tag[content_start_pos..content_start_pos + end_pos].to_string());
+            }
+        }
+    }
+    None
 }
 
 fn value_to_xml_body(value: &CellValue) -> (String, String) {
@@ -2876,6 +3041,41 @@ mod tests {
     }
 
     #[test]
+    fn apply_modifications_preserves_formulas_and_other_cells() {
+        // Test that modifying one cell preserves formulas and other cell data
+        let sheet_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<sheetData>
+<row r="1"><c r="A1"><v>10</v></c><c r="B1"><v>20</v></c><c r="C1"><f>SUM(A1:B1)</f><v>30</v></c></row>
+<row r="2"><c r="A2"><v>100</v></c><c r="B2"><f>A2*2</f><v>200</v></c></row>
+</sheetData>
+</worksheet>"#;
+        // Modify B1's value
+        let m = CellModification::new("Sheet1", "B1")
+            .with_value(CellValue::Int(50));
+        let result = apply_modifications_to_sheet(sheet_xml, &[&m]).unwrap();
+
+        // B1 should have new value
+        assert!(result.contains("r=\"B1\""), "B1 should exist");
+        assert!(result.contains("<v>50</v>"), "B1 new value missing; got: {}", result);
+
+        // A1 should still exist with original value
+        assert!(result.contains("r=\"A1\""), "A1 should exist");
+        assert!(result.contains("<v>10</v>"), "A1 value missing; got: {}", result);
+
+        // C1 with formula should still exist
+        assert!(result.contains("r=\"C1\""), "C1 should exist");
+        assert!(result.contains("<f>SUM(A1:B1)</f>"), "C1 formula missing; got: {}", result);
+        assert!(result.contains("<v>30</v>"), "C1 cached value missing; got: {}", result);
+
+        // A2 and B2 should still exist
+        assert!(result.contains("r=\"A2\""), "A2 should exist");
+        assert!(result.contains("<v>100</v>"), "A2 value missing; got: {}", result);
+        assert!(result.contains("r=\"B2\""), "B2 should exist");
+        assert!(result.contains("<f>A2*2</f>"), "B2 formula missing; got: {}", result);
+    }
+
+    #[test]
     fn apply_modifications_inserts_new_cell() {
         let sheet_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
@@ -2996,6 +3196,95 @@ mod tests {
         assert_eq!(a2.value, CellValue::String("hello".into()));
         let b2 = sheet.cells.iter().find(|c| c.address() == "B2").expect("B2 cell");
         assert_eq!(b2.value, CellValue::Int(200));
+
+        let _ = std::fs::remove_file(&out_path);
+    }
+
+    #[test]
+    fn incremental_write_preserves_formulas_when_modifying_other_cells() {
+        use std::io::Write;
+        // Build a workbook with formulas to test that modifying one cell
+        // preserves all other cells including formulas
+        let sheet_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<sheetData>
+<row r="1"><c r="A1"><v>10</v></c><c r="B1"><v>20</v></c><c r="C1"><f>SUM(A1:B1)</f><v>30</v></c></row>
+<row r="2"><c r="A2"><v>100</v></c><c r="B2"><f>A2*2</f><v>200</v></c><c r="C2"><f>SUM(A2:B2)</f><v>300</v></c></row>
+</sheetData>
+</worksheet>"#;
+        let workbook_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets>
+</workbook>"#;
+        let rels_xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>"#;
+        let content_types = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+</Types>"#;
+
+        let mut buf: Vec<u8> = Vec::new();
+        {
+            let cursor = std::io::Cursor::new(&mut buf);
+            let mut zip = zip::ZipWriter::new(cursor);
+            let opts = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored)
+                .unix_permissions(0o644);
+            zip.start_file("[Content_Types].xml", opts).unwrap();
+            zip.write_all(content_types.as_bytes()).unwrap();
+            zip.start_file("xl/workbook.xml", opts).unwrap();
+            zip.write_all(workbook_xml.as_bytes()).unwrap();
+            zip.start_file("xl/_rels/workbook.xml.rels", opts).unwrap();
+            zip.write_all(rels_xml.as_bytes()).unwrap();
+            zip.start_file("xl/worksheets/sheet1.xml", opts).unwrap();
+            zip.write_all(sheet_xml.as_bytes()).unwrap();
+            zip.finish().unwrap();
+        }
+
+        // Modify A1 value only
+        let tmpdir = std::env::temp_dir();
+        let out_path = tmpdir.join("inkuo_test_formula_preserve.xlsx");
+        let mods = vec![
+            CellModification::new("Sheet1", "A1")
+                .with_value(CellValue::Int(999)),
+        ];
+        incremental_write_xlsx(&buf, &mods, &out_path).expect("write failed");
+
+        // Re-parse and verify
+        let written = std::fs::read(&out_path).expect("read back");
+        let workbook = read_xlsx_structured(&written).expect("reparse");
+        let sheet = &workbook.sheets[0];
+
+        // A1 should have new value
+        let a1 = sheet.cells.iter().find(|c| c.address() == "A1").expect("A1 cell");
+        assert_eq!(a1.value, CellValue::Int(999), "A1 should have new value 999");
+
+        // B1 should be preserved
+        let b1 = sheet.cells.iter().find(|c| c.address() == "B1").expect("B1 cell");
+        assert_eq!(b1.value, CellValue::Int(20), "B1 should be preserved");
+
+        // C1 formula should be preserved
+        let c1 = sheet.cells.iter().find(|c| c.address() == "C1").expect("C1 cell");
+        assert!(c1.formula.is_some(), "C1 should have formula");
+        assert_eq!(c1.formula.as_ref().unwrap(), "SUM(A1:B1)", "C1 formula should be preserved");
+
+        // A2 should be preserved
+        let a2 = sheet.cells.iter().find(|c| c.address() == "A2").expect("A2 cell");
+        assert_eq!(a2.value, CellValue::Int(100), "A2 should be preserved");
+
+        // B2 formula should be preserved
+        let b2 = sheet.cells.iter().find(|c| c.address() == "B2").expect("B2 cell");
+        assert!(b2.formula.is_some(), "B2 should have formula");
+        assert_eq!(b2.formula.as_ref().unwrap(), "A2*2", "B2 formula should be preserved");
+
+        // C2 formula should be preserved
+        let c2 = sheet.cells.iter().find(|c| c.address() == "C2").expect("C2 cell");
+        assert!(c2.formula.is_some(), "C2 should have formula");
+        assert_eq!(c2.formula.as_ref().unwrap(), "SUM(A2:B2)", "C2 formula should be preserved");
 
         let _ = std::fs::remove_file(&out_path);
     }

@@ -522,7 +522,8 @@ pub async fn read_office_file(path: String) -> Result<Vec<u8>, AppCommandError> 
 #[tauri::command]
 pub async fn write_office_file(path: String, data: Vec<u8>) -> Result<(), AppCommandError> {
     tracing::info!("Writing office file: {}", path);
-    std::fs::write(&path, &data).map_err(|e| AppCommandError::WriteOfficeFile(e.to_string()))
+    std::fs::write(&path, &data).map_err(|e| AppCommandError::WriteOfficeFile(e.to_string()))?;
+    Ok(())
 }
 
 #[tauri::command]

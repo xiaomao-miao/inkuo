@@ -454,6 +454,9 @@ async function getXLSX(): Promise<SheetJSLazy> {
  *    t = 'b'  → boolean
  *    t = 'e'  → error string
  *    t = 'd'  → Date
+ *    t = 'str' → inline string (formula result or inline string)
+ *
+ *  For string values, we use 'str' type to avoid needing a sharedStrings array.
  */
 function fortuneCellToSheetJS(v: FortuneCell): object {
   const result: Record<string, unknown> = {};
@@ -478,8 +481,9 @@ function fortuneCellToSheetJS(v: FortuneCell): object {
       result.t = 'e';
       result.w = raw;
     } else {
+      // Use 'str' type for inline strings to avoid needing a sharedStrings array
       result.v = raw;
-      result.t = 's';
+      result.t = 'str';
       if (v.m !== undefined) result.w = v.m;
     }
   }
@@ -525,35 +529,28 @@ function fortuneCellToSheetJS(v: FortuneCell): object {
 async function fortuneSheetToSheetJSWorksheet(
   sheet: FortuneSheetCoreSheet,
   XLSX: SheetJSLazy,
+  dataToCelldata: (data: import('@fortune-sheet/core').CellMatrix) => import('@fortune-sheet/core').CellWithRowAndCol[],
 ): Promise<object> {
-  // SheetJS uses a dense (row-major) object keyed by cell address, e.g. "A1", "B2".
-  // FortuneSheet stores the dense `data` matrix (0-indexed), and the sparse
-  // `celldata` array. We prefer `celldata` since it contains original formula refs.
   const cells: Record<string, object> = {};
   const data = sheet.data ?? [];
-  const celldata = sheet.celldata ?? [];
 
-  // Build a lookup: "row,col" → FortuneCell from celldata (sparse, authoritative)
+  let celldata = sheet.celldata ?? [];
+  try {
+    if (data.length > 0) {
+      const convertedCelldata = dataToCelldata(data);
+      if (convertedCelldata && convertedCelldata.length > 0) {
+        celldata = convertedCelldata;
+      }
+    }
+  } catch {
+    // Fall back to existing celldata
+  }
+
   const sparseMap = new Map<string, FortuneCell>();
   for (const item of celldata) {
     if (item.v) sparseMap.set(`${item.r},${item.c}`, item.v);
   }
 
-  // Also collect from dense data (may contain computed values that celldata lacks)
-  for (let r = 0; r < data.length; r++) {
-    const row = data[r];
-    if (!row) continue;
-    for (let c = 0; c < row.length; c++) {
-      const cell = row[c];
-      if (!cell) continue;
-      const key = `${r},${c}`;
-      if (!sparseMap.has(key)) {
-        sparseMap.set(key, cell);
-      }
-    }
-  }
-
-  // Convert each cell
   for (const [key, v] of sparseMap) {
     const [rStr, cStr] = key.split(',');
     const r = parseInt(rStr, 10);
@@ -565,21 +562,34 @@ async function fortuneSheetToSheetJSWorksheet(
     }
   }
 
-  // Merged cells
   const merges: object[] = [];
   const mergeConfig = sheet.config?.merge ?? {};
   for (const def of Object.values(mergeConfig)) {
     if (!def) continue;
-    // Only emit the anchor cell (top-left); covered cells stay empty.
-    // def.r / def.c are 0-indexed; SheetJS merge ranges are inclusive.
     merges.push({
       s: { r: def.r, c: def.c },
       e: { r: def.r + (def.rs ?? 1) - 1, c: def.c + (def.cs ?? 1) - 1 },
     });
   }
 
+  let minRow = Infinity, maxRow = 0, minCol = Infinity, maxCol = 0;
+  for (const key of sparseMap.keys()) {
+    const [rStr, cStr] = key.split(',');
+    const r = parseInt(rStr, 10);
+    const c = parseInt(cStr, 10);
+    minRow = Math.min(minRow, r);
+    maxRow = Math.max(maxRow, r);
+    minCol = Math.min(minCol, c);
+    maxCol = Math.max(maxCol, c);
+  }
+
+  const rangeRef = minRow <= maxRow
+    ? `${XLSX.utils.encode_cell({ r: minRow, c: minCol })}:${XLSX.utils.encode_cell({ r: maxRow, c: maxCol })}`
+    : 'A1';
+
   return {
     ...cells,
+    '!ref': rangeRef,
     ...(merges.length > 0 ? { '!merges': merges } : {}),
   };
 }
@@ -588,29 +598,27 @@ async function fortuneSheetToSheetJSWorksheet(
  * Convert FortuneSheet sheets to a SheetJS workbook AND return the binary buffer.
  *
  * Usage:
- *   const buffer = await fortuneSheetsToSheetJSBuffer(sheets, wb.getAllSheets(), wb.dataToCelldata.bind(wb));
+ *   const buffer = await fortuneSheetsToSheetJSBuffer(sheets, wb.dataToCelldata.bind(wb));
  *   // Write buffer to disk via Tauri invoke('write_office_file', ...)
  */
 export async function fortuneSheetsToSheetJSBuffer(
   allSheets: FortuneSheetCoreSheet[],
+  dataToCelldata: (data: import('@fortune-sheet/core').CellMatrix) => import('@fortune-sheet/core').CellWithRowAndCol[],
 ): Promise<Uint8Array> {
   const XLSX = await getXLSX();
 
-  // Build SheetJS sheets in order
   const jsSheets: { name: string; sheet: object }[] = [];
   for (const sheet of allSheets) {
-    const worksheet = await fortuneSheetToSheetJSWorksheet(sheet, XLSX);
+    const worksheet = await fortuneSheetToSheetJSWorksheet(sheet, XLSX, dataToCelldata);
     jsSheets.push({ name: sheet.name ?? 'Sheet1', sheet: worksheet });
   }
 
-  // Create workbook
   const wb = XLSX.utils.book_new();
   for (const { name, sheet } of jsSheets) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     XLSX.utils.book_append_sheet(wb, sheet as any, name);
   }
 
-  // Write to ArrayBuffer (xlsx format)
   const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
   return new Uint8Array(buf as ArrayBuffer);
 }
