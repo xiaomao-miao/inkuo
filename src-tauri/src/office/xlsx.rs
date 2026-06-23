@@ -16,6 +16,9 @@ use quick_xml::reader::Reader as XmlReader;
 
 use super::shared::OfficeError;
 
+// DEBUG: Enable verbose logging
+const DEBUG_XLSX: bool = true;
+
 // ─── Legacy flat API (kept for backward compatibility) ────────────────────────
 
 /// Deprecated: use StructuredExcelWorkbook instead.
@@ -828,6 +831,10 @@ fn parse_sheet_xml(xml: &str, shared_strings: &[String], styles_info: Option<&St
     let mut row_heights: std::collections::HashMap<usize, f64> = std::collections::HashMap::new();
     let mut col_widths: std::collections::HashMap<usize, f64> = std::collections::HashMap::new();
 
+    if DEBUG_XLSX {
+        eprintln!("[xlsx] parse_sheet_xml: starting, xml len = {}", xml.len());
+    }
+
     let mut in_sheet_data = false;
     let mut in_cols = false;
     let mut current_cell: Option<ParsedCell> = None;
@@ -842,6 +849,33 @@ fn parse_sheet_xml(xml: &str, shared_strings: &[String], styles_info: Option<&St
                 match name.as_ref() {
                     b"sheetData" => in_sheet_data = true,
                     b"cols" => in_cols = true,
+                    b"row" if in_sheet_data => {
+                        // Parse row attributes for height
+                        let mut row_index: Option<usize> = None;
+                        let mut ht: Option<f64> = None;
+
+                        for attr in e.attributes().with_checks(false).flatten() {
+                            let v = attr.value.as_ref();
+                            if let Ok(s) = std::str::from_utf8(v) {
+                                let key = attr.key.as_ref();
+                                let local = strip_xml_ns(key);
+                                match local {
+                                    b"r" => row_index = s.parse().ok(),
+                                    b"ht" => ht = s.parse().ok(),
+                                    _ => {}
+                                }
+                            }
+                        }
+
+                        if let Some(idx) = row_index {
+                            if let Some(h) = ht {
+                                if DEBUG_XLSX {
+                                    eprintln!("[xlsx] row {}: ht={}", idx, h);
+                                }
+                                row_heights.insert(idx - 1, h); // Convert to 0-based
+                            }
+                        }
+                    }
                     b"c" if in_sheet_data => {
                         let mut c = ParsedCell::default();
                         for attr in e.attributes().with_checks(false).flatten() {
@@ -897,11 +931,18 @@ fn parse_sheet_xml(xml: &str, shared_strings: &[String], styles_info: Option<&St
                         }
                     }
 
+                    if DEBUG_XLSX {
+                        eprintln!("[xlsx] col tag: min={:?}, max={:?}, width={:?}, in_cols={}", col_min, col_max, width, in_cols);
+                    }
+
                     // Apply width to all columns in the range
                     if let Some(min_idx) = col_min {
                         let max_idx = col_max.unwrap_or(min_idx);
                         for i in min_idx..=max_idx {
                             if let Some(w) = width {
+                                if DEBUG_XLSX {
+                                    eprintln!("[xlsx]   -> col_widths[{}] = {}", i - 1, w);
+                                }
                                 col_widths.insert(i - 1, w); // Convert to 0-based
                             }
                         }
@@ -975,6 +1016,12 @@ fn parse_sheet_xml(xml: &str, shared_strings: &[String], styles_info: Option<&St
             _ => {}
         }
         buf.clear();
+    }
+
+    if DEBUG_XLSX {
+        eprintln!("[xlsx] parse_sheet_xml: done - cells={}, merged={}, max_row={}, max_col={}", cells.len(), merged.len(), max_row, max_col);
+        eprintln!("[xlsx] parse_sheet_xml: row_heights={:?}", row_heights);
+        eprintln!("[xlsx] parse_sheet_xml: col_widths={:?}", col_widths);
     }
 
     SheetParseResult {
@@ -2178,6 +2225,12 @@ fn build_sheet_xml(sheet: &XlsxSheet) -> String {
     } else {
         format!("A1:{}", cell_address(max_row.saturating_sub(1), max_col.saturating_sub(1)))
     };
+
+    if DEBUG_XLSX {
+        eprintln!("[xlsx] create_xlsx_workbook: sheet={}, cells={}, merged={}", sheet.name, sheet.cells.len(), sheet.merged_cells.len());
+        eprintln!("[xlsx] create_xlsx_workbook: row_heights={:?}", sheet.row_heights);
+        eprintln!("[xlsx] create_xlsx_workbook: col_widths={:?}", sheet.col_widths);
+    }
 
     let mut xml = String::from(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>

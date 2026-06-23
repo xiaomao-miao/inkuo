@@ -202,6 +202,14 @@ function rustCellToFortune(cell: RustCell): FortuneCell {
  * to a FortuneSheet Sheet. Uses the `celldata` (sparse) format.
  */
 export function rustSheetToFortuneSheet(sheet: RustXlsxSheet): FortuneSheetCoreSheet {
+  console.log('[converter] rustSheetToFortuneSheet: input sheet =', {
+    name: sheet.name,
+    cells: sheet.cells.length,
+    merged_cells: sheet.merged_cells.length,
+    row_heights: sheet.row_heights,
+    col_widths: sheet.col_widths,
+  });
+
   // Build merged-cell config map: key = "anchorRow_anchorCol"
   const mergeConfig: Record<string, { r: number; c: number; rs: number; cs: number }> = {};
   for (const mr of sheet.merged_cells) {
@@ -219,6 +227,7 @@ export function rustSheetToFortuneSheet(sheet: RustXlsxSheet): FortuneSheetCoreS
       rowlen[key] = Math.round(value * 1.333);
     }
   }
+  console.log('[converter] row heights: Rust =', sheet.row_heights, '-> FortuneSheet =', rowlen);
 
   // Build column widths map: key = column index string, value = width in pixels
   // Rust sends width in Excel character units; FortuneSheet uses pixels (approx 7px per char)
@@ -228,6 +237,7 @@ export function rustSheetToFortuneSheet(sheet: RustXlsxSheet): FortuneSheetCoreS
       columnlen[key] = Math.round(value * 7);
     }
   }
+  console.log('[converter] col widths: Rust =', sheet.col_widths, '-> FortuneSheet =', columnlen);
 
   // Build the config object
   const config: Record<string, unknown> = {};
@@ -600,23 +610,29 @@ async function fortuneSheetToSheetJSWorksheet(
     });
   }
 
+  console.log('[converter] fortuneSheetToSheetJSWorksheet: input sheet config =', sheet.config);
+
   // Build row heights (!rows) - FortuneSheet uses pixels, SheetJS uses hpx
   const rows: { hpx?: number }[] = [];
   const rowlen = sheet.config?.rowlen ?? {};
+  console.log('[converter] rowlen =', rowlen);
   for (const [key, heightPx] of Object.entries(rowlen)) {
     const rowIdx = parseInt(key, 10);
     while (rows.length <= rowIdx) rows.push({});
     rows[rowIdx] = { hpx: Math.round(heightPx) };
   }
+  console.log('[converter] !rows =', rows);
 
   // Build column widths (!cols) - FortuneSheet uses pixels, SheetJS uses wpx
   const cols: { wpx?: number }[] = [];
   const columnlen = sheet.config?.columnlen ?? {};
+  console.log('[converter] columnlen =', columnlen);
   for (const [key, widthPx] of Object.entries(columnlen)) {
     const colIdx = parseInt(key, 10);
     while (cols.length <= colIdx) cols.push({});
     cols[colIdx] = { wpx: Math.round(widthPx) };
   }
+  console.log('[converter] !cols =', cols);
 
   let minRow = Infinity, maxRow = 0, minCol = Infinity, maxCol = 0;
   for (const key of sparseMap.keys()) {
