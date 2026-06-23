@@ -132,22 +132,6 @@ pub fn excel_workbook_to_text(workbook: &ExcelWorkbook) -> String {
                 })
                 .collect();
 
-            if !sheet.headers.is_empty() {
-                let header_row: Vec<String> = sheet
-                    .headers
-                    .iter()
-                    .enumerate()
-                    .map(|(i, h)| {
-                        let w = col_widths.get(i).copied().unwrap_or(8);
-                        format!("{:w$}", h, w = w)
-                    })
-                    .collect();
-                output.push_str(&header_row.join(" | "));
-                output.push('\n');
-                output.push_str(&col_widths.iter().map(|w| "-".repeat(*w)).collect::<Vec<_>>().join("-+-"));
-                output.push('\n');
-            }
-
             for row in sheet.rows.iter().take(100) {
                 let row_text: Vec<String> = row
                     .iter()
@@ -2607,11 +2591,25 @@ pub fn write_excel_document(
         parse_sheet_name_to_path_map(&wb_xml, &wb_rels)
             .unwrap_or_default();
 
-    // Collect entries to preserve (everything except xl/worksheets/).
+    // Collect entries to preserve (everything except xl/worksheets/ and entries we'll regenerate below).
+    // Skip: [Content_Types].xml, _rels/.rels, docProps/*.xml, xl/workbook.xml,
+    // xl/_rels/workbook.xml.rels, xl/styles.xml, xl/theme/theme1.xml
+    // (those are regenerated in steps 2-9 below to reflect new state).
+    let regenerated: std::collections::HashSet<&'static str> = [
+        "[Content_Types].xml",
+        "_rels/.rels",
+        "docProps/core.xml",
+        "docProps/app.xml",
+        "xl/workbook.xml",
+        "xl/_rels/workbook.xml.rels",
+        "xl/styles.xml",
+        "xl/theme/theme1.xml",
+    ].into_iter().collect();
+
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i)?;
         let name = entry.name().to_string();
-        if !name.starts_with("xl/worksheets/") {
+        if !name.starts_with("xl/worksheets/") && !regenerated.contains(name.as_str()) {
             let mut buf = Vec::new();
             entry.read_to_end(&mut buf)?;
             preserved_entries.push((name, buf));

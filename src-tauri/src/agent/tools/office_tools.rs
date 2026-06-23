@@ -99,8 +99,12 @@ impl ReadOfficeFileTool {
                         sw.sheets
                             .iter()
                             .map(|s| {
-                                let mut grid: Vec<Vec<String>> =
-                                    vec![vec![String::new(); s.max_col.max(1)]; s.max_row.max(1)];
+                            let mut grid: Vec<Vec<String>> =
+                                if s.max_row == 0 || s.max_col == 0 {
+                                    vec![]
+                                } else {
+                                    vec![vec![String::new(); s.max_col]; s.max_row]
+                                };
                                 for c in &s.cells {
                                     if c.row < grid.len() && c.col < (grid.get(0).map(|r| r.len()).unwrap_or(0)) {
                                         grid[c.row][c.col] = if let Some(f) = &c.formula {
@@ -924,6 +928,16 @@ impl ModifyExcelTool {
             .map_err(|e| ToolError::IoError(format!("Failed to read {}: {}", path, e)))?;
 
         let tmp_path = path_obj.with_extension("xlsx.tmp");
+
+        // RAII guard: delete tmp_path on function exit (success or failure).
+        struct TempGuard(std::path::PathBuf);
+        impl Drop for TempGuard {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+        let _guard = TempGuard(tmp_path.clone());
+
         let mut workbook = crate::office::read_xlsx_structured(&bytes)
             .map_err(|e| ToolError::ExecutionError(format!("Failed to parse xlsx: {}", e)))?;
         workbook.apply_operations(operations)
