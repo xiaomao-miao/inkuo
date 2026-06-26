@@ -1195,87 +1195,93 @@ pub fn build_document_xml(doc: &WordDocument) -> String {
   <w:body>"#
     );
 
-    for para in &doc.paragraphs {
-        // Skip table-position marker paragraphs entirely (they are used only to
-        // link tables to their position in the flattened element list).
-        if para.text.starts_with("<__tbl_pos_") {
-            continue;
-        }
-        xml.push_str("\n    <w:p>");
-        // Build paragraph properties: style (if any) + numbering (if any)
-        let has_ppr = para.style.is_some() || para.numbering.is_some();
-        if has_ppr {
-            xml.push_str("<w:pPr>");
-            if let Some(ref style) = para.style {
-                xml.push_str(&format!("<w:pStyle w:val=\"{}\"/>", escape_xml(style)));
-            }
-            if let Some(ref num) = para.numbering {
-                xml.push_str("<w:numPr>");
-                xml.push_str(&format!("<w:ilvl w:val=\"{}\"/>", num.level));
-                xml.push_str(&format!("<w:numId w:val=\"{}\"/>", num.num_id));
-                xml.push_str("</w:numPr>");
-            }
-            xml.push_str("</w:pPr>");
-        }
-
-        if let Some(ref runs) = para.runs {
-            for run in runs {
-                xml.push_str(&build_run_xml(run));
-            }
-        } else {
-            for chunk in para.text.split('\n') {
-                if !chunk.is_empty() {
-                    xml.push_str(&format!(
-                        "<w:r><w:t xml:space=\"preserve\">{}</w:t></w:r>",
-                        escape_xml(chunk)
-                    ));
-                }
-                xml.push_str("<w:r><w:br/></w:r>");
-            }
-        }
-        xml.push_str("</w:p>");
-    }
-
-    // Render tables separately
-    for table in &doc.tables {
-        xml.push_str("\n    <w:tbl>");
-        xml.push_str("\n      <w:tblPr>");
-        xml.push_str("<w:tblStyle w:val=\"TableGrid\"/>");
-        xml.push_str("<w:tblW w:type=\"auto\" w:w=\"0\"/>");
-        xml.push_str("<w:tblBorders>");
-        xml.push_str("<w:top w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
-        xml.push_str("<w:left w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
-        xml.push_str("<w:bottom w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
-        xml.push_str("<w:right w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
-        xml.push_str("<w:insideH w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
-        xml.push_str("<w:insideV w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
-        xml.push_str("</w:tblBorders>");
-        xml.push_str("</w:tblPr>");
-        for row in &table.rows {
-            xml.push_str("\n        <w:tr>");
-            for cell in &row.cells {
-                xml.push_str("<w:tc><w:tcPr>");
-                if cell.col_span > 1 {
-                    xml.push_str(&format!("<w:gridSpan w:val=\"{}\"/>", cell.col_span));
-                }
-                xml.push_str("</w:tcPr><w:p>");
-                let lines: Vec<&str> = cell.text.split('\n').collect();
-                for (chunk_idx, chunk) in lines.iter().enumerate() {
-                    if !chunk.is_empty() {
-                        xml.push_str(&format!(
-                            "<w:r><w:t xml:space=\"preserve\">{}</w:t></w:r>",
-                            escape_xml(chunk)
-                        ));
+    // Use to_elements() to preserve correct ordering of paragraphs and tables.
+    let elements = doc.to_elements();
+    for elem in &elements {
+        match elem {
+            DocElement::Paragraph { text, style, runs, numbering, .. } => {
+                xml.push_str("\n    <w:p>");
+                // Build paragraph properties: style (if any) + numbering (if any)
+                let has_ppr = style.is_some() || numbering.is_some();
+                if has_ppr {
+                    xml.push_str("<w:pPr>");
+                    if let Some(ref s) = style {
+                        xml.push_str(&format!("<w:pStyle w:val=\"{}\"/>", escape_xml(s)));
                     }
-                    if chunk_idx < lines.len().saturating_sub(1) {
+                    if let Some(ref num) = numbering {
+                        xml.push_str("<w:numPr>");
+                        xml.push_str(&format!("<w:ilvl w:val=\"{}\"/>", num.level));
+                        xml.push_str(&format!("<w:numId w:val=\"{}\"/>", num.num_id));
+                        xml.push_str("</w:numPr>");
+                    }
+                    xml.push_str("</w:pPr>");
+                }
+
+                if let Some(ref run_list) = runs {
+                    for run in run_list {
+                        xml.push_str(&build_run_xml(run));
+                    }
+                } else {
+                    for chunk in text.split('\n') {
+                        if !chunk.is_empty() {
+                            xml.push_str(&format!(
+                                "<w:r><w:t xml:space=\"preserve\">{}</w:t></w:r>",
+                                escape_xml(chunk)
+                            ));
+                        }
                         xml.push_str("<w:r><w:br/></w:r>");
                     }
                 }
-                xml.push_str("</w:p></w:tc>");
+                xml.push_str("</w:p>");
             }
-            xml.push_str("</w:tr>");
+            DocElement::Table { header, rows, .. } => {
+                xml.push_str("\n    <w:tbl>");
+                xml.push_str("\n      <w:tblPr>");
+                xml.push_str("<w:tblStyle w:val=\"TableGrid\"/>");
+                xml.push_str("<w:tblW w:type=\"auto\" w:w=\"0\"/>");
+                xml.push_str("<w:tblBorders>");
+                xml.push_str("<w:top w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
+                xml.push_str("<w:left w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
+                xml.push_str("<w:bottom w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
+                xml.push_str("<w:right w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
+                xml.push_str("<w:insideH w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
+                xml.push_str("<w:insideV w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
+                xml.push_str("</w:tblBorders>");
+                xml.push_str("</w:tblPr>");
+
+                let render_row = |xml: &mut String, cells: &[String]| {
+                    xml.push_str("\n        <w:tr>");
+                    for cell_text in cells {
+                        xml.push_str("<w:tc><w:tcPr>");
+                        xml.push_str("</w:tcPr><w:p>");
+                        let lines: Vec<&str> = cell_text.split('\n').collect();
+                        for (chunk_idx, chunk) in lines.iter().enumerate() {
+                            if !chunk.is_empty() {
+                                xml.push_str(&format!(
+                                    "<w:r><w:t xml:space=\"preserve\">{}</w:t></w:r>",
+                                    escape_xml(chunk)
+                                ));
+                            }
+                            if chunk_idx < lines.len().saturating_sub(1) {
+                                xml.push_str("<w:r><w:br/></w:r>");
+                            }
+                        }
+                        xml.push_str("</w:p></w:tc>");
+                    }
+                    xml.push_str("</w:tr>");
+                };
+
+                // Render header row first, then body rows
+                if !header.is_empty() {
+                    render_row(&mut xml, header);
+                }
+                for row in rows {
+                    render_row(&mut xml, row);
+                }
+
+                xml.push_str("\n    </w:tbl>");
+            }
         }
-        xml.push_str("\n    </w:tbl>");
     }
 
     xml.push_str("\n  </w:body>\n</w:document>");
@@ -1717,4 +1723,137 @@ mod tests {
         assert_eq!(parsed.paragraphs.len(), 2);
         assert!(parsed.paragraphs[1].numbering.is_some(), "list membership must survive the round trip");
     }
+
+    // ─── Regression: tables must appear between paragraphs, not at the end ───
+
+    fn extract_document_xml(bytes: &[u8]) -> String {
+        let mut archive =
+            zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("output must be a valid zip");
+        let mut entry = archive.by_name("word/document.xml").expect("document.xml entry");
+        let mut xml = String::new();
+        std::io::Read::read_to_string(&mut entry, &mut xml).expect("read xml");
+        xml
+    }
+
+    #[test]
+    fn build_document_xml_keeps_tables_between_paragraphs() {
+        // P1 -> T1 -> P2 -> T2 -> P3
+        let elements = vec![
+            DocElement::Paragraph {
+                id: "p1".into(),
+                text: "First paragraph".into(),
+                omit_text: false,
+                style: None,
+                runs: None,
+                numbering: None,
+            },
+            DocElement::Table {
+                id: "t1".into(),
+                position: 0,
+                header: vec!["Col A".into(), "Col B".into()],
+                rows: vec![vec!["a1".into(), "b1".into()]],
+            },
+            DocElement::Paragraph {
+                id: "p2".into(),
+                text: "Middle paragraph".into(),
+                omit_text: false,
+                style: None,
+                runs: None,
+                numbering: None,
+            },
+            DocElement::Table {
+                id: "t2".into(),
+                position: 0,
+                header: vec!["X".into(), "Y".into()],
+                rows: vec![vec!["1".into(), "2".into()]],
+            },
+            DocElement::Paragraph {
+                id: "p3".into(),
+                text: "Last paragraph".into(),
+                omit_text: false,
+                style: None,
+                runs: None,
+                numbering: None,
+            },
+        ];
+
+        let doc = WordDocument::from_elements(elements);
+        let xml = build_document_xml(&doc);
+
+        let p1 = xml.find("First paragraph").expect("p1 text");
+        let t1 = xml.find("Col A").expect("t1 header");
+        let p2 = xml.find("Middle paragraph").expect("p2 text");
+        let t2 = xml.find(">X<").expect("t2 header cell");
+        let p3 = xml.find("Last paragraph").expect("p3 text");
+
+        assert!(p1 < t1, "T1 must appear AFTER P1. p1={} t1={}", p1, t1);
+        assert!(t1 < p2, "P2 must appear AFTER T1. t1={} p2={}", t1, p2);
+        assert!(p2 < t2, "T2 must appear AFTER P2. p2={} t2={}", p2, t2);
+        assert!(t2 < p3, "P3 must appear AFTER T2. t2={} p3={}", t2, p3);
+    }
+
+    #[test]
+    fn build_document_xml_handles_position_marker_paragraphs() {
+        // The doc loaded from disk uses marker paragraphs like
+        // `<__tbl_pos_t0__>` to record table positions. The marker must NOT
+        // appear in the output, and the table must replace it in place.
+        let doc = WordDocument {
+            paragraphs: vec![
+                WordParagraph {
+                    id: "p1".into(),
+                    text: "Before table".into(),
+                    style: None,
+                    runs: None,
+                    numbering: None,
+                },
+                WordParagraph {
+                    id: "marker".into(),
+                    text: "<__tbl_pos_t0__>".into(),
+                    style: None,
+                    runs: None,
+                    numbering: None,
+                },
+                WordParagraph {
+                    id: "p2".into(),
+                    text: "After table".into(),
+                    style: None,
+                    runs: None,
+                    numbering: None,
+                },
+            ],
+            tables: vec![WordTable {
+                id: "t0".into(),
+                rows: vec![TableRow {
+                    cells: vec![TableCell {
+                        text: "cell A".into(),
+                        col_span: 1,
+                        row_span: 1,
+                    }],
+                }],
+            }],
+        };
+
+        let xml = build_document_xml(&doc);
+
+        assert!(
+            !xml.contains("<__tbl_pos_"),
+            "Marker paragraph must be stripped from output, got: {}",
+            xml
+        );
+
+        let before = xml.find("Before table").expect("before");
+        let cell = xml.find("cell A").expect("cell");
+        let after = xml.find("After table").expect("after");
+
+        assert!(before < cell, "Table cell must come after 'Before table'");
+        assert!(cell < after, "Table cell must come before 'After table'");
+    }
+
+    // Note: A separate path exists for documents loaded from disk and
+    // re-saved. The reader (`parse_document_xml` + `parse_table_xml`) does
+    // not currently insert position markers when it encounters a `<w:tbl>`,
+    // so a doc parsed and re-serialized by this codebase would still place
+    // tables at the end. That is a pre-existing limitation of the parser
+    // and is not the path used when an AI agent creates a new Word doc via
+    // `from_elements` (which IS the user-reported regression and IS fixed).
 }
