@@ -202,13 +202,7 @@ function rustCellToFortune(cell: RustCell): FortuneCell {
  * to a FortuneSheet Sheet. Uses the `celldata` (sparse) format.
  */
 export function rustSheetToFortuneSheet(sheet: RustXlsxSheet): FortuneSheetCoreSheet {
-  console.log('[converter] rustSheetToFortuneSheet: input sheet =', {
-    name: sheet.name,
-    cells: sheet.cells.length,
-    merged_cells: sheet.merged_cells.length,
-    row_heights: sheet.row_heights,
-    col_widths: sheet.col_widths,
-  });
+  // Build merged-cell config map: key = "anchorRow_anchorCol"
 
   // Build merged-cell config map: key = "anchorRow_anchorCol"
   const mergeConfig: Record<string, { r: number; c: number; rs: number; cs: number }> = {};
@@ -485,6 +479,158 @@ async function getXLSX(): Promise<SheetJSLazy> {
   return _XLSX;
 }
 
+/**
+ * Build a stylesheet XML string from a list of unique style keys.
+ * This replaces xl/styles.xml in the generated xlsx zip.
+ * Style key format: number_format|fill_fg|fill_bg|bold|italic|font_color|font_size|font_name|h_align|v_align
+ */
+function buildStylesXml(uniqueStyleKeys: string[]): string {
+  function parseKey(key: string) {
+    const parts = key.split('|');
+    return {
+      numberFormat: parts[0] || '',
+      fillFg: parts[1] || '',
+      bold: parts[3] === '1',
+      italic: parts[4] === '1',
+      fontColor: parts[5] || '',
+      fontSize: parts[6] ? parseInt(parts[6], 10) : null,
+      fontName: parts[7] || '',
+    };
+  }
+
+  // Build unique fonts list (index 0 = default Calibri 11pt black).
+  const fontSet = new Map<string, number>();
+  fontSet.set('default', 0);
+  const fontList: { name: string; sz: number; color: string; bold: boolean; italic: boolean }[] = [
+    { name: 'Calibri', sz: 11, color: '000000', bold: false, italic: false },
+  ];
+  for (const key of uniqueStyleKeys) {
+    const s = parseKey(key);
+    // FIX: Include bold/italic in fontKey to properly deduplicate fonts with different styles
+    const fontKey = `${s.fontName || 'Calibri'}|${s.fontSize ?? 11}|${s.fontColor || '000000'}|${s.bold ? '1' : '0'}|${s.italic ? '1' : '0'}`;
+    if (!fontSet.has(fontKey)) {
+      fontSet.set(fontKey, fontList.length);
+      fontList.push({
+        name: s.fontName || 'Calibri',
+        sz: s.fontSize ?? 11,
+        color: s.fontColor || '000000',
+        bold: s.bold,
+        italic: s.italic,
+      });
+    }
+  }
+
+  // Build unique fills list (index 0 = none, index 1 = gray125).
+  const fillSet = new Map<string, number>();
+  fillSet.set('none', 0);
+  fillSet.set('gray125', 1);
+  const fillList: { patternType: string; fgColor: string }[] = [
+    { patternType: '', fgColor: '' },
+    { patternType: 'gray125', fgColor: '' },
+  ];
+  for (const key of uniqueStyleKeys) {
+    const s = parseKey(key);
+    if (s.fillFg) {
+      const fillKey = s.fillFg;
+      if (!fillSet.has(fillKey)) {
+        fillSet.set(fillKey, fillList.length);
+        fillList.push({ patternType: 'solid', fgColor: s.fillFg });
+      }
+    }
+  }
+
+  // Build numFmts.
+  const numFmtMap = new Map<string, number>();
+  let nextNumFmtId = 164;
+  for (const key of uniqueStyleKeys) {
+    const s = parseKey(key);
+    if (s.numberFormat && !numFmtMap.has(s.numberFormat)) {
+      numFmtMap.set(s.numberFormat, nextNumFmtId++);
+    }
+  }
+
+  // Build cellXfs (index 0 = default, then one per style).
+  const cellXfs: { fontId: number; fillId: number; numFmtId: number; bold: boolean; italic: boolean }[] = [
+    { fontId: 0, fillId: 0, numFmtId: 0, bold: false, italic: false },
+  ];
+  for (const key of uniqueStyleKeys) {
+    const s = parseKey(key);
+    // FIX: Include bold/italic in fontKey to properly deduplicate fonts with different styles
+    const fontKey = `${s.fontName || 'Calibri'}|${s.fontSize ?? 11}|${s.fontColor || '000000'}|${s.bold ? '1' : '0'}|${s.italic ? '1' : '0'}`;
+    const fillKey = s.fillFg || 'none';
+    const numFmtId = s.numberFormat ? (numFmtMap.get(s.numberFormat) ?? 0) : 0;
+    cellXfs.push({
+      fontId: fontSet.get(fontKey) ?? 0,
+      fillId: fillSet.get(fillKey) ?? 0,
+      numFmtId,
+      bold: s.bold,
+      italic: s.italic,
+    });
+  }
+
+  const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+  // Build <fonts>.
+  let fontsXml = `<fonts count="${fontList.length}">`;
+  fontsXml += '<font><name val="Calibri"/><family val="2"/><color theme="1"/><sz val="11"/><scheme val="minor"/></font>';
+  for (const f of fontList.slice(1)) {
+    fontsXml += '<font>';
+    fontsXml += `<name val="${esc(f.name)}"/><family val="2"/>`;
+    fontsXml += f.color ? `<color rgb="${esc(f.color)}"/>` : '<color theme="1"/>';
+    fontsXml += `<sz val="${f.sz}"/>`;
+    if (f.bold) fontsXml += '<b/>';
+    if (f.italic) fontsXml += '<i/>';
+    fontsXml += '<scheme val="minor"/></font>';
+  }
+  fontsXml += '</fonts>';
+
+  // Build <fills>.
+  let fillsXml = `<fills count="${fillList.length}">`;
+  for (const fl of fillList) {
+    if (!fl.patternType) {
+      fillsXml += '<fill><patternFill/></fill>';
+    } else {
+      fillsXml += `<fill><patternFill patternType="${fl.patternType}">`;
+      if (fl.fgColor) fillsXml += `<fgColor rgb="${esc(fl.fgColor)}"/>`;
+      fillsXml += '</patternFill></fill>';
+    }
+  }
+  fillsXml += '</fills>';
+
+  // Build <numFmts>.
+  let numFmtsXml = `<numFmts count="${numFmtMap.size}">`;
+  for (const [fmt, id] of numFmtMap) {
+    numFmtsXml += `<numFmt numFmtId="${id}" formatCode="${esc(fmt)}"/>`;
+  }
+  numFmtsXml += '</numFmts>';
+
+  // Build <cellXfs>.
+  let cellXfsXml = `<cellXfs count="${cellXfs.length}">`;
+  for (const xf of cellXfs) {
+    let attrs = `numFmtId="${xf.numFmtId}" fontId="${xf.fontId}" fillId="${xf.fillId}" borderId="0" xfId="0"`;
+    if (xf.bold || xf.italic) attrs += ' applyFont="1"';
+    if (xf.fillId > 1) attrs += ' applyFill="1"';
+    if (xf.numFmtId > 0) attrs += ' applyNumberFormat="1"';
+    cellXfsXml += `<xf ${attrs}/>`;
+  }
+  cellXfsXml += '</cellXfs>';
+
+  return [
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+    `<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">`,
+    numFmtsXml,
+    fontsXml,
+    fillsXml,
+    '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>',
+    '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>',
+    cellXfsXml,
+    '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0" hidden="0"/></cellStyles>',
+    '<dxfs count="0"/>',
+    '<tableStyles count="0" defaultTableStyle="TableStyleMedium9" defaultPivotStyle="PivotStyleLight16"/>',
+    '</styleSheet>',
+  ].join('');
+}
+
 /** Convert a FortuneSheet cell value to a plain serialisable value + type tag.
  *  SheetJS uses:
  *    t = 'n'  → number
@@ -498,6 +644,9 @@ async function getXLSX(): Promise<SheetJSLazy> {
  */
 function fortuneCellToSheetJS(v: FortuneCell): object {
   const result: Record<string, unknown> = {};
+
+  // DEBUG: Log style fields
+  console.log('[converter] fortuneCellToSheetJS: v.bg =', v.bg, ', v.bl =', v.bl, ', v.fc =', v.fc);
 
   // ── Value (computed result) ────────────────────────────────────────────────
   const raw = v.v;
@@ -538,23 +687,23 @@ function fortuneCellToSheetJS(v: FortuneCell): object {
     result.z = v.ct.fa;
   }
 
-  // ── Basic inline styles (bold, italic, font) ──────────────────────────────
-  // SheetJS inline styles are limited; for full fidelity we need a full Stylesheet.
-  // We encode the most important ones as comments so they're not silently lost.
-  // Real style round-tripping would require building a full xf (cell format) table.
-  const styleHints: string[] = [];
-  if (v.bl === 1) styleHints.push('bold');
-  if (v.it === 1) styleHints.push('italic');
-  if (v.fs != null) styleHints.push(`fs:${v.fs}`);
-  if (v.ff) styleHints.push(`ff:${v.ff}`);
-  if (v.fc) styleHints.push(`fc:${v.fc}`);
-  if (v.bg) styleHints.push(`bg:${v.bg}`);
-  if (v.ht !== undefined) styleHints.push(`ht:${v.ht}`);
-  if (v.vt !== undefined) styleHints.push(`vt:${v.vt}`);
+  // ── Style ────────────────────────────────────────────────────────────────
+  // Style key for deduplication. Match the fields used by Rust's SheetStyleKey.
+  const styleKey = [
+    v.ct?.fa ?? '',
+    v.bg ?? '',
+    '',  // fill_bg_color not in FortuneCell — placeholder
+    v.bl === 1 ? '1' : '0',
+    v.it === 1 ? '1' : '0',
+    v.fc ?? '',
+    v.fs != null ? String(v.fs) : '',
+    v.ff ?? '',
+    v.ht !== undefined ? String(v.ht) : '',
+    v.vt !== undefined ? String(v.vt) : '',
+  ].join('|');
 
-  if (styleHints.length > 0 && !result.v && !result.f) {
-    // Nothing to write — put the style hints as a visible comment so they're recoverable.
-    // This is a best-effort approach; full style round-trip requires StyleBuilder work.
+  if (styleKey !== '||||||||') {
+    result._styleKey = styleKey;
   }
 
   return result;
@@ -568,8 +717,9 @@ async function fortuneSheetToSheetJSWorksheet(
   sheet: FortuneSheetCoreSheet,
   XLSX: SheetJSLazy,
   dataToCelldata: (data: import('@fortune-sheet/core').CellMatrix) => import('@fortune-sheet/core').CellWithRowAndCol[],
-): Promise<object> {
+): Promise<{ worksheet: object; styleKeys: string[] }> {
   const cells: Record<string, object> = {};
+  const styleKeys: string[] = [];
   const data = sheet.data ?? [];
 
   let celldata = sheet.celldata ?? [];
@@ -585,6 +735,7 @@ async function fortuneSheetToSheetJSWorksheet(
   }
 
   const sparseMap = new Map<string, FortuneCell>();
+
   for (const item of celldata) {
     if (item.v) sparseMap.set(`${item.r},${item.c}`, item.v);
   }
@@ -594,9 +745,12 @@ async function fortuneSheetToSheetJSWorksheet(
     const r = parseInt(rStr, 10);
     const c = parseInt(cStr, 10);
     const addr = XLSX.utils.encode_cell({ r, c });
-    const jsCell = fortuneCellToSheetJS(v);
+    const jsCell = fortuneCellToSheetJS(v) as Record<string, unknown>;
     if (Object.keys(jsCell).length > 0) {
       cells[addr] = jsCell;
+      if (typeof jsCell._styleKey === 'string' && jsCell._styleKey !== '||||||||') {
+        styleKeys.push(jsCell._styleKey);
+      }
     }
   }
 
@@ -650,16 +804,20 @@ async function fortuneSheetToSheetJSWorksheet(
     : 'A1';
 
   return {
-    ...cells,
-    '!ref': rangeRef,
-    ...(merges.length > 0 ? { '!merges': merges } : {}),
-    ...(rows.length > 0 ? { '!rows': rows } : {}),
-    ...(cols.length > 0 ? { '!cols': cols } : {}),
+    worksheet: {
+      ...cells,
+      '!ref': rangeRef,
+      ...(merges.length > 0 ? { '!merges': merges } : {}),
+      ...(rows.length > 0 ? { '!rows': rows } : {}),
+      ...(cols.length > 0 ? { '!cols': cols } : {}),
+    },
+    styleKeys,
   };
 }
 
 /**
  * Convert FortuneSheet sheets to a SheetJS workbook AND return the binary buffer.
+ * Styles are preserved by injecting a custom stylesheet via JSZip post-processing.
  *
  * Usage:
  *   const buffer = await fortuneSheetsToSheetJSBuffer(sheets, wb.dataToCelldata.bind(wb));
@@ -671,18 +829,230 @@ export async function fortuneSheetsToSheetJSBuffer(
 ): Promise<Uint8Array> {
   const XLSX = await getXLSX();
 
-  const jsSheets: { name: string; sheet: object }[] = [];
+  // First pass: collect all style keys across all sheets.
+  const allStyleKeys: string[] = [];
+  const sheetRawData: { name: string; worksheet: object }[] = [];
+
   for (const sheet of allSheets) {
-    const worksheet = await fortuneSheetToSheetJSWorksheet(sheet, XLSX, dataToCelldata);
-    jsSheets.push({ name: sheet.name ?? 'Sheet1', sheet: worksheet });
+    const { worksheet, styleKeys } = await fortuneSheetToSheetJSWorksheet(sheet, XLSX, dataToCelldata);
+    allStyleKeys.push(...styleKeys);
+    sheetRawData.push({ name: sheet.name ?? 'Sheet1', worksheet });
   }
 
-  const wb = XLSX.utils.book_new();
-  for (const { name, sheet } of jsSheets) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    XLSX.utils.book_append_sheet(wb, sheet as any, name);
+  // Deduplicate style keys.
+  const uniqueStyleKeys = [...new Set(allStyleKeys)];
+  const styleIndexMap: Map<string, number> = new Map();
+  uniqueStyleKeys.forEach((key, idx) => styleIndexMap.set(key, idx + 1)); // 0 = default
+
+  // Generate xlsx with custom worksheet XML (not SheetJS cell writing).
+  // SheetJS re-processes cells and ignores our s values, so we build
+  // the worksheet XML directly to ensure correct style references.
+  const stylesXml = uniqueStyleKeys.length > 0 ? buildStylesXml(uniqueStyleKeys) : null;
+  const jszipMod = await import('jszip');
+  const JSZip = jszipMod.default;
+
+  const zip = new JSZip();
+  zip.file('[Content_Types].xml', buildContentTypesXml());
+  zip.file('_rels/.rels', buildRelsXml());
+  zip.file('xl/_rels/workbook.xml.rels', buildWorkbookRelsXml(sheetRawData.length));
+  zip.file('xl/workbook.xml', buildWorkbookXml(sheetRawData.map(s => s.name)));
+  if (stylesXml) {
+    zip.file('xl/styles.xml', stylesXml);
   }
 
-  const buf = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
-  return new Uint8Array(buf as ArrayBuffer);
+  for (let i = 0; i < sheetRawData.length; i++) {
+    const { worksheet } = sheetRawData[i];
+    const worksheetXml = buildWorksheetXml(worksheet, styleIndexMap);
+    zip.file(`xl/worksheets/sheet${i + 1}.xml`, worksheetXml);
+  }
+
+  const modified = await zip.generateAsync({ type: 'uint8array', compression: 'DEFLATE' });
+  return modified;
+}
+
+// --- Helper XML builders ---
+
+function buildContentTypesXml(): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+</Types>`;
+}
+
+function buildRelsXml(): string {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>`;
+}
+
+function buildWorkbookRelsXml(sheetCount: number): string {
+  let sheets = '';
+  for (let i = 1; i <= sheetCount; i++) {
+    sheets += `  <Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${i}.xml"/>\n`;
+  }
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+${sheets}</Relationships>`;
+}
+
+function buildWorkbookXml(sheetNames: string[]): string {
+  let sheets = '';
+  sheetNames.forEach((name, i) => {
+    const sheetName = escapeXml(name);
+    sheets += `    <sheet name="${sheetName}" sheetId="${i + 1}" r:id="rId${i + 2}"/>\n`;
+  });
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+  xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+${sheets}  </sheets>
+</workbook>`;
+}
+
+function buildWorksheetXml(
+  worksheet: Record<string, unknown>,
+  styleIndexMap: Map<string, number>,
+): string {
+  const ref = worksheet['!ref'] as string || 'A1';
+  const merges = worksheet['!merges'] as Array<{ r: number; c: number; rs: number; cs: number }> || [];
+  const rows = worksheet['!rows'] as Array<{ hpx?: number }> || [];
+  const cols = worksheet['!cols'] as Array<{ wpx?: number }> || [];
+
+  let xml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+  xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheetViews><sheetView workbookViewId="0"/></sheetViews>`;
+
+  // Column widths
+  if (cols.length > 0) {
+    xml += '<cols>';
+    cols.forEach((col, i) => {
+      if (col.wpx) {
+        const w = Math.round(col.wpx * 256 / 7);
+        xml += `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`;
+      }
+    });
+    xml += '</cols>';
+  }
+
+  xml += `<sheetData>`;
+
+  // Group cells by row
+  const rowGroups: Record<number, Record<string, unknown>> = {};
+  for (const [addr, cell] of Object.entries(worksheet)) {
+    if (addr.startsWith('!')) continue;
+    const match = addr.match(/^([A-Z]+)(\d+)$/);
+    if (!match) continue;
+    const row = parseInt(match[2], 10);
+    if (!rowGroups[row]) rowGroups[row] = {};
+    rowGroups[row][addr] = cell;
+  }
+
+  const sortedRows = Object.keys(rowGroups).map(Number).sort((a, b) => a - b);
+
+  for (const rowNum of sortedRows) {
+    const rowCells = rowGroups[rowNum];
+    xml += `<row r="${rowNum}"`;
+    if (rows[rowNum - 1]?.hpx) {
+      xml += ` ht="${rows[rowNum - 1].hpx}" customHeight="1"`;
+    }
+    xml += '>';
+
+    // Sort cells by column
+    const sortedAddrs = Object.keys(rowCells).sort((a, b) => {
+      const colA = a.match(/^([A-Z]+)/)?.[1] || '';
+      const colB = b.match(/^([A-Z]+)/)?.[1] || '';
+      return colA.localeCompare(colB);
+    });
+
+    for (const addr of sortedAddrs) {
+      const cell = rowCells[addr] as Record<string, unknown>;
+      xml += cellToXml(addr, cell, styleIndexMap);
+    }
+
+    xml += '</row>';
+  }
+
+  xml += '</sheetData>';
+
+  // Merges
+  if (merges.length > 0) {
+    xml += '<mergeCells count="' + merges.length + '">';
+    for (const mc of merges) {
+      const ref = `${colLetter(mc.c)}${mc.r + 1}:${colLetter(mc.c + mc.cs - 1)}${mc.r + mc.rs}`;
+      xml += `<mergeCell ref="${ref}"/>`;
+    }
+    xml += '</mergeCells>';
+  }
+
+  xml += '</worksheet>';
+  return xml;
+}
+
+function cellToXml(
+  addr: string,
+  cell: Record<string, unknown>,
+  styleIndexMap: Map<string, number>,
+): string {
+  const styleKey = cell._styleKey as string | undefined;
+  const s = styleKey ? styleIndexMap.get(styleKey) : undefined;
+
+  let xml = `<c r="${addr}"`;
+  if (s !== undefined) xml += ` s="${s}"`;
+
+  const t = cell.t as string | undefined;
+  if (t === 's') xml += ` t="s"`;
+  else if (t === 'str') xml += ` t="inlineStr"`;
+  else if (t === 'b') xml += ` t="b"`;
+  else if (t === 'e') xml += ` t="e"`;
+
+  xml += '>';
+
+  if (cell.f) {
+    // Strip leading = from formula
+    const f = escapeXml(String(cell.f).replace(/^=/, ''));
+    xml += `<f>${f}</f>`;
+    if (cell.v !== undefined) {
+      xml += `<v>${escapeXml(String(cell.v))}</v>`;
+    }
+  } else if (cell.v !== undefined) {
+    if (t === 's') {
+      xml += `<v>${cell.v}</v>`;
+    } else if (t === 'str' || t === 'e') {
+      xml += `<is><t>${escapeXml(String(cell.v))}</t></is>`;
+    } else if (t === 'b') {
+      xml += `<v>${cell.v ? 1 : 0}</v>`;
+    } else {
+      xml += `<v>${cell.v}</v>`;
+    }
+  }
+
+  xml += '</c>';
+  return xml;
+}
+
+function colLetter(col: number): string {
+  let result = '';
+  col++;
+  while (col > 0) {
+    col--;
+    result = String.fromCharCode(65 + (col % 26)) + result;
+    col = Math.floor(col / 26);
+  }
+  return result;
+}
+
+function escapeXml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
 }

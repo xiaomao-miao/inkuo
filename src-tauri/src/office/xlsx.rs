@@ -274,6 +274,181 @@ impl Cell {
     }
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default, PartialEq, Eq, Hash)]
+pub struct SheetStyleKey {
+    pub number_format: String,
+    pub fill_fg_color: Option<String>,
+    pub fill_bg_color: Option<String>,
+    pub font_bold: bool,
+    pub font_italic: bool,
+    pub font_color: Option<String>,
+    pub font_size: Option<u32>,
+    pub font_name: Option<String>,
+    pub alignment_h: Option<String>,
+    pub alignment_v: Option<String>,
+}
+
+impl From<&CellStyle> for SheetStyleKey {
+    fn from(value: &CellStyle) -> Self {
+        Self {
+            number_format: value.number_format.clone(),
+            fill_fg_color: value.fill_fg_color.clone(),
+            fill_bg_color: value.fill_bg_color.clone(),
+            font_bold: value.font_bold,
+            font_italic: value.font_italic,
+            font_color: value.font_color.clone(),
+            font_size: value.font_size,
+            font_name: value.font_name.clone(),
+            alignment_h: value.alignment_h.clone(),
+            alignment_v: value.alignment_v.clone(),
+        }
+    }
+}
+
+fn build_styles_xml(used_styles: &std::collections::HashMap<SheetStyleKey, usize>) -> String {
+    let mut num_fmts: std::collections::BTreeMap<String, u32> = std::collections::BTreeMap::new();
+    let mut next_num_fmt = 164u32;
+    let mut fonts: Vec<(SheetStyleKey, usize)> = Vec::new();
+    // FIX: Use tuple key to properly deduplicate fonts with different bold/italic
+    let mut font_index: std::collections::HashMap<(Option<String>, Option<u32>, Option<String>, bool, bool), usize> = std::collections::HashMap::new();
+    let mut fills: Vec<(Option<String>, Option<String>, usize)> = Vec::new();
+    let mut fill_index: std::collections::HashMap<(Option<String>, Option<String>), usize> = std::collections::HashMap::new();
+
+    let _default_font_idx = *font_index.entry((None, None, None, false, false)).or_insert_with(|| {
+        let idx = fonts.len();
+        fonts.push((SheetStyleKey::default(), idx));
+        idx
+    });
+    let _default_fill_idx = *fill_index.entry((None, None)).or_insert_with(|| {
+        let idx = fills.len();
+        fills.push((None, None, idx));
+        idx
+    });
+    let default_num_fmt_idx = *num_fmts.entry(String::new()).or_insert(0);
+
+    // FIX: Add numFmtId to xfs tuple
+    let mut xfs: Vec<(usize, usize, u32, bool, bool)> = Vec::new();
+
+    for (key, _) in used_styles.iter() {
+        // FIX: Use full font info tuple as key instead of just font_name
+        let font_key = (key.font_name.clone(), key.font_size, key.font_color.clone(), key.font_bold, key.font_italic);
+        let font_idx = *font_index.entry(font_key).or_insert_with(|| {
+            let idx = fonts.len();
+            fonts.push((key.clone(), idx));
+            idx
+        });
+        let fill_idx = *fill_index.entry((key.fill_fg_color.clone(), key.fill_bg_color.clone())).or_insert_with(|| {
+            let idx = fills.len();
+            fills.push((key.fill_fg_color.clone(), key.fill_bg_color.clone(), idx));
+            idx
+        });
+        if !key.number_format.is_empty() {
+            num_fmts.entry(key.number_format.clone()).or_insert_with(|| {
+                let id = next_num_fmt;
+                next_num_fmt += 1;
+                id
+            });
+        }
+        // FIX: Calculate numFmtId properly
+        let num_fmt_id = if key.number_format.is_empty() {
+            0
+        } else {
+            *num_fmts.get(&key.number_format).unwrap_or(&0)
+        };
+        xfs.push((font_idx, fill_idx, num_fmt_id, key.font_bold, key.font_italic));
+    }
+
+    let mut xml = String::from(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#);
+    xml.push_str("\n<styleSheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n");
+    if !num_fmts.is_empty() {
+        xml.push_str("<numFmts count=\"");
+        xml.push_str(&num_fmts.len().to_string());
+        xml.push_str("\">");
+        for (fmt, id) in &num_fmts {
+            xml.push_str("<numFmt numFmtId=\"");
+            xml.push_str(&id.to_string());
+            xml.push_str("\" formatCode=\"");
+            xml.push_str(&escape_xml_attr(fmt));
+            xml.push_str("\"/>");
+        }
+        xml.push_str("</numFmts>\n");
+    } else {
+        xml.push_str("<numFmts count=\"0\"/>\n");
+    }
+
+    xml.push_str("<fonts count=\"");
+    xml.push_str(&(fonts.len() + 1).to_string());
+    xml.push_str("\">");
+    xml.push_str("<font><name val=\"Calibri\"/><family val=\"2\"/><color theme=\"1\"/><sz val=\"11\"/><scheme val=\"minor\"/></font>");
+    for (style, _) in &fonts {
+        xml.push_str("<font>");
+        xml.push_str("<name val=\"");
+        xml.push_str(&escape_xml_attr(style.font_name.as_deref().unwrap_or("Calibri")));
+        xml.push_str("\"/>");
+        xml.push_str("<family val=\"2\"/>");
+        if let Some(color) = &style.font_color {
+            xml.push_str("<color rgb=\"");
+            xml.push_str(&escape_xml_attr(color));
+            xml.push_str("\"/>");
+        } else {
+            xml.push_str("<color theme=\"1\"/>");
+        }
+        xml.push_str("<sz val=\"");
+        xml.push_str(&style.font_size.unwrap_or(11).to_string());
+        xml.push_str("\"/>");
+        if style.font_bold { xml.push_str("<b/>"); }
+        if style.font_italic { xml.push_str("<i/>"); }
+        xml.push_str("<scheme val=\"minor\"/>");
+        xml.push_str("</font>");
+    }
+    xml.push_str("</fonts>\n");
+
+    xml.push_str("<fills count=\"");
+    xml.push_str(&(fills.len() + 2).to_string());
+    xml.push_str("\">");
+    xml.push_str("<fill><patternFill/></fill>");
+    xml.push_str("<fill><patternFill patternType=\"gray125\"/></fill>");
+    for (fg, bg, _) in &fills {
+        xml.push_str("<fill><patternFill patternType=\"solid\">");
+        if let Some(color) = fg {
+            xml.push_str("<fgColor rgb=\"");
+            xml.push_str(&escape_xml_attr(color));
+            xml.push_str("\"/>");
+        }
+        if let Some(color) = bg {
+            xml.push_str("<bgColor rgb=\"");
+            xml.push_str(&escape_xml_attr(color));
+            xml.push_str("\"/>");
+        }
+        xml.push_str("</patternFill></fill>");
+    }
+    xml.push_str("</fills>\n");
+
+    xml.push_str("<borders count=\"1\"><border><left/><right/><top/><bottom/><diagonal/></border></borders>\n");
+    xml.push_str("<cellStyleXfs count=\"1\"><xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\"/></cellStyleXfs>\n");
+    xml.push_str("<cellXfs count=\"");
+    xml.push_str(&(xfs.len() + 1).to_string());
+    xml.push_str("\">");
+    xml.push_str("<xf numFmtId=\"0\" fontId=\"0\" fillId=\"0\" borderId=\"0\" pivotButton=\"0\" quotePrefix=\"0\" xfId=\"0\"/>");
+    for (font_idx, fill_idx, num_fmt_id, bold, italic) in &xfs {
+        // FIX: Use actual numFmtId instead of hardcoded 0
+        let mut attrs = format!("numFmtId=\"{}\" fontId=\"{}\" fillId=\"{}\" borderId=\"0\" xfId=\"0\"", num_fmt_id, font_idx + 1, fill_idx + 2);
+        if *bold || *italic { attrs.push_str(" applyFont=\"1\""); }
+        // FIX: Apply fill whenever a non-default fill is in use
+        if *fill_idx > 0 { attrs.push_str(" applyFill=\"1\""); }
+        attrs.push_str(" applyBorder=\"0\" applyNumberFormat=\"1\"");
+        xml.push_str("<xf ");
+        xml.push_str(&attrs);
+        xml.push_str("/>");
+    }
+    xml.push_str("</cellXfs>\n");
+    xml.push_str("<cellStyles count=\"1\"><cellStyle name=\"Normal\" xfId=\"0\" builtinId=\"0\" hidden=\"0\"/></cellStyles>\n");
+    xml.push_str("<dxfs count=\"0\"/>\n");
+    xml.push_str(r#"<tableStyles count="0" defaultTableStyle="TableStyleMedium9" defaultPivotStyle="PivotStyleLight16"/>"#);
+    xml.push_str("\n</styleSheet>");
+    xml
+}
+
 /// Merged cell range in 0-indexed (row, col) coordinates, inclusive on both ends.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MergedRange {
@@ -935,6 +1110,155 @@ fn parse_styles(xml: &str) -> StylesInfo {
                     }
                 }
             }
+            // FIX: Handle Empty events (self-closing tags like <b/>, <i/>, <sz val="11"/>)
+            Ok(Event::Empty(ref e)) => {
+                let name = e.local_name();
+                // Container elements - set flags
+                match name.as_ref() {
+                    b"numFmts" => in_num_fmts = true,
+                    b"cellXfs" => in_cell_xfs = true,
+                    b"fonts" => in_fonts = true,
+                    b"fills" => in_fills = true,
+                    _ => {}
+                }
+                // numFmt within numFmts
+                if in_num_fmts && name.as_ref() == b"numFmt" {
+                    let mut id: u32 = 0;
+                    let mut code = String::new();
+                    for attr in e.attributes().with_checks(false).flatten() {
+                        let v = attr.value.as_ref();
+                        if let Ok(s) = std::str::from_utf8(v) {
+                            let key = attr.key.as_ref();
+                            let local = strip_xml_ns(key);
+                            match local {
+                                b"numFmtId" => { id = s.parse().unwrap_or(0); }
+                                b"formatCode" => { code = s.to_string(); }
+                                _ => {}
+                            }
+                        }
+                    }
+                    num_formats.insert(id, code);
+                }
+                // xf within cellXfs
+                if in_cell_xfs && name.as_ref() == b"xf" {
+                    current_cell_xf = CellXf::default();
+                    for attr in e.attributes().with_checks(false).flatten() {
+                        let v = attr.value.as_ref();
+                        if let Ok(s) = std::str::from_utf8(v) {
+                            let key = attr.key.as_ref();
+                            let local = strip_xml_ns(key);
+                            match local {
+                                b"numFmtId" => current_cell_xf.num_fmt_id = s.parse().unwrap_or(0),
+                                b"fontId" => current_cell_xf.font_id = s.parse().unwrap_or(0),
+                                b"fillId" => current_cell_xf.fill_id = s.parse().unwrap_or(0),
+                                b"borderId" => current_cell_xf.border_id = s.parse().unwrap_or(0),
+                                b"applyNumberFormat" => {
+                                    let bytes = s.as_bytes();
+                                    if bytes == b"0" || bytes == b"false" {
+                                        current_cell_xf.apply_number_format = false;
+                                    }
+                                }
+                                b"applyFont" => {
+                                    let bytes = s.as_bytes();
+                                    if bytes == b"0" || bytes == b"false" {
+                                        current_cell_xf.apply_font = false;
+                                    }
+                                }
+                                b"applyFill" => {
+                                    let bytes = s.as_bytes();
+                                    if bytes == b"0" || bytes == b"false" {
+                                        current_cell_xf.apply_fill = false;
+                                    }
+                                }
+                                b"applyBorder" => {
+                                    let bytes = s.as_bytes();
+                                    if bytes == b"0" || bytes == b"false" {
+                                        current_cell_xf.apply_border = false;
+                                    }
+                                }
+                                b"applyAlignment" => {
+                                    let bytes = s.as_bytes();
+                                    if bytes == b"0" || bytes == b"false" {
+                                        current_cell_xf.apply_alignment = false;
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    // For Empty xf, immediately push
+                    if let Some(a) = current_align.take() {
+                        current_cell_xf.alignment = Some(a);
+                    }
+                    cell_xfs.push(current_cell_xf.clone());
+                }
+                // Font child elements within a font
+                if in_font {
+                    match name.as_ref() {
+                        b"sz" => {
+                            if let Some(v) = attr_value(e, b"val") {
+                                if let Ok(s) = std::str::from_utf8(&v) {
+                                    current_font.size = s.parse().ok();
+                                }
+                            }
+                        }
+                        b"color" => {
+                            if let Some(v) = attr_value(e, b"rgb") {
+                                if let Ok(s) = std::str::from_utf8(&v) {
+                                    current_font.color = Some(format!("#{}", s.trim_start_matches('#')));
+                                }
+                            }
+                        }
+                        b"name" => {
+                            if let Some(v) = attr_value(e, b"val") {
+                                if let Ok(s) = std::str::from_utf8(&v) {
+                                    current_font.name = Some(s.to_string());
+                                }
+                            }
+                        }
+                        b"b" => { current_font.bold = true; }
+                        b"i" => { current_font.italic = true; }
+                        _ => {}
+                    }
+                }
+                // Fill child elements within a fill
+                if in_fill {
+                    match name.as_ref() {
+                        b"patternFill" => {
+                            if let Some(v) = attr_value(e, b"patternType") {
+                                if let Ok(s) = std::str::from_utf8(&v) {
+                                    current_fill.pattern_type = Some(s.to_string());
+                                }
+                            }
+                        }
+                        b"fgColor" => {
+                            if let Some(v) = attr_value(e, b"rgb") {
+                                if let Ok(s) = std::str::from_utf8(&v) {
+                                    current_fill.fg_color = Some(format!("#{}", s.trim_start_matches('#')));
+                                }
+                            }
+                        }
+                        b"bgColor" => {
+                            if let Some(v) = attr_value(e, b"rgb") {
+                                if let Ok(s) = std::str::from_utf8(&v) {
+                                    current_fill.bg_color = Some(format!("#{}", s.trim_start_matches('#')));
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                // For Empty font element, immediately push
+                if name.as_ref() == b"font" && in_fonts {
+                    fonts.push(current_font.clone());
+                    current_font = FontXf::default();
+                }
+                // For Empty fill element, immediately push
+                if name.as_ref() == b"fill" && in_fills {
+                    fills.push(current_fill.clone());
+                    current_fill = FillXf::default();
+                }
+            }
             Ok(Event::End(ref e)) => {
                 let name = e.local_name();
                 match name.as_ref() {
@@ -1061,13 +1385,20 @@ impl StylesInfo {
         let xf = self.cell_xfs.get(xf_index)?;
         let mut style = CellStyle::default();
 
+        // FIX: Per Excel spec, apply* attributes default to true when absent.
+        // We invert the logic: if the attribute is explicitly "0" or "false",
+        // skip that aspect; otherwise apply it.
+        // Since we only set apply* to false when explicitly parsed as such,
+        // and the parser leaves them true by default for non-trivial xfs,
+        // we treat apply_*=true as the expected case.
         if xf.apply_number_format {
             style.number_format = resolve_number_format(xf.num_fmt_id, &self.num_formats);
         } else {
             style.number_format = "General".to_string();
         }
 
-        if xf.apply_font {
+        // Apply font whenever font_id points to a valid font
+        if xf.font_id < self.fonts.len() as u32 {
             if let Some(font) = self.fonts.get(xf.font_id as usize) {
                 style.font_bold = font.bold;
                 style.font_italic = font.italic;
@@ -1077,12 +1408,13 @@ impl StylesInfo {
             }
         }
 
-        if xf.apply_fill {
+        // Apply fill whenever fill_id points to a non-trivial fill
+        if xf.fill_id < self.fills.len() as u32 {
             if let Some(fill) = self.fills.get(xf.fill_id as usize) {
                 let has_pattern = fill
                     .pattern_type
                     .as_ref()
-                    .map(|p| p != "none")
+                    .map(|p| p != "none" && !p.is_empty())
                     .unwrap_or(false);
                 if has_pattern {
                     style.fill_fg_color = fill.fg_color.clone();
@@ -1091,11 +1423,9 @@ impl StylesInfo {
             }
         }
 
-        if xf.apply_alignment {
-            if let Some(ref a) = xf.alignment {
-                style.alignment_h = a.horizontal.clone();
-                style.alignment_v = a.vertical.clone();
-            }
+        if let Some(ref a) = xf.alignment {
+            style.alignment_h = a.horizontal.clone();
+            style.alignment_v = a.vertical.clone();
         }
 
         Some(style)
@@ -2556,9 +2886,10 @@ pub fn create_xlsx_workbook(
     zip.start_file("xl/_rels/workbook.xml.rels", opts)?;
     zip.write_all(rels_xml.as_bytes())?;
 
-    // 7. xl/styles.xml — minimal but with the attributes Excel expects.
+    // 7. xl/styles.xml — rebuilt from actual used styles.
+    let (styles_xml, all_style_map) = build_workbook_styles(workbook);
     zip.start_file("xl/styles.xml", opts)?;
-    zip.write_all(MINIMAL_STYLES_XML.as_bytes())?;
+    zip.write_all(styles_xml.as_bytes())?;
 
     // 8. xl/theme/theme1.xml — a minimal Office theme. Excel doesn't strictly
     //    require this, but readers that load the relationship from workbook.xml
@@ -2568,7 +2899,7 @@ pub fn create_xlsx_workbook(
 
     // 9. xl/worksheets/sheetN.xml — one per sheet.
     for (i, sheet) in workbook.sheets.iter().enumerate() {
-        let sheet_xml = build_sheet_xml(sheet);
+        let sheet_xml = build_sheet_xml(sheet, &all_style_map[i]);
         let path = format!("xl/worksheets/sheet{}.xml", i + 1);
         zip.start_file(&path, opts)?;
         zip.write_all(sheet_xml.as_bytes())?;
@@ -2757,16 +3088,10 @@ pub fn write_excel_document(
     zip.start_file("xl/_rels/workbook.xml.rels", opts)?;
     zip.write_all(rels_xml.as_bytes())?;
 
-    // 8. xl/styles.xml — copy from original if available.
-    let mut archive2 = zip::ZipArchive::new(std::io::Cursor::new(bytes.to_vec()))?;
-    if let Ok(styles_xml) = read_entry(&mut archive2, "xl/styles.xml") {
-        zip.start_file("xl/styles.xml", opts)?;
-        zip.write_all(styles_xml.as_bytes())?;
-    } else {
-        zip.start_file("xl/styles.xml", opts)?;
-        zip.write_all(MINIMAL_STYLES_XML.as_bytes())?;
-    }
-    drop(archive2);
+    // 8. xl/styles.xml — rebuilt from actual used styles.
+    let (styles_xml, all_style_map) = build_workbook_styles(workbook);
+    zip.start_file("xl/styles.xml", opts)?;
+    zip.write_all(styles_xml.as_bytes())?;
 
     // 9. xl/theme/theme1.xml
     zip.start_file("xl/theme/theme1.xml", opts)?;
@@ -2774,7 +3099,7 @@ pub fn write_excel_document(
 
     // 10. xl/worksheets/sheetN.xml — write each sheet's structured XML.
     for (i, sheet) in workbook.sheets.iter().enumerate() {
-        let sheet_xml = build_sheet_xml(sheet);
+        let sheet_xml = build_sheet_xml(sheet, &all_style_map[i]);
         let path = format!("xl/worksheets/sheet{}.xml", i + 1);
         zip.start_file(&path, opts)?;
         zip.write_all(sheet_xml.as_bytes())?;
@@ -2881,7 +3206,32 @@ const MINIMAL_STYLES_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standal
 /// Serialize a single sheet to its worksheet XML. Cells are written inline
 /// (numeric as `<v>`, strings as `<is><t>`), and rows are emitted in row-order
 /// so the file is consumable by every spreadsheet application.
-fn build_sheet_xml(sheet: &XlsxSheet) -> String {
+fn build_workbook_styles(workbook: &XlsxWorkbook) -> (String, Vec<std::collections::HashMap<(usize, usize), usize>>) {
+    let mut all_used: std::collections::HashMap<SheetStyleKey, usize> = std::collections::HashMap::new();
+    let mut next_idx: usize = 1;
+
+    let mut per_sheet: Vec<std::collections::HashMap<(usize, usize), usize>> = Vec::new();
+    for sheet in &workbook.sheets {
+        let mut sheet_map: std::collections::HashMap<(usize, usize), usize> = std::collections::HashMap::new();
+        for cell in &sheet.cells {
+            if let Some(style) = &cell.style {
+                let key = SheetStyleKey::from(style);
+                let idx = *all_used.entry(key).or_insert_with(|| {
+                    let cur = next_idx;
+                    next_idx += 1;
+                    cur
+                });
+                sheet_map.insert((cell.row, cell.col), idx);
+            }
+        }
+        per_sheet.push(sheet_map);
+    }
+
+    let styles_xml = build_styles_xml(&all_used);
+    (styles_xml, per_sheet)
+}
+
+fn build_sheet_xml(sheet: &XlsxSheet, style_map: &std::collections::HashMap<(usize, usize), usize>) -> String {
     // Group cells by row for the row-major layout that xlsx requires.
     let mut by_row: HashMap<usize, Vec<&Cell>> = HashMap::new();
     for cell in &sheet.cells {
@@ -2941,7 +3291,8 @@ fn build_sheet_xml(sheet: &XlsxSheet) -> String {
         }
 
         for cell in &cells {
-            xml.push_str(&build_cell_xml(cell));
+            let style_index = style_map.get(&(cell.row, cell.col)).copied().unwrap_or(0);
+            xml.push_str(&build_cell_xml(cell, style_index));
         }
 
         if row_height.is_some() || !cells.is_empty() {
@@ -2965,12 +3316,14 @@ fn build_sheet_xml(sheet: &XlsxSheet) -> String {
     xml
 }
 
-fn build_cell_xml(cell: &Cell) -> String {
+fn build_cell_xml(cell: &Cell, style_index: usize) -> String {
     let addr = cell.address();
     let mut attrs = format!("r=\"{}\"", addr);
 
-    // Style index (default 0).
-    attrs.push_str(" s=\"0\"");
+    // Style index.
+    attrs.push_str(" s=\"");
+    attrs.push_str(&style_index.to_string());
+    attrs.push('"');
 
     // Build the inner body (everything between <c ...> and </c>). The body
     // may be empty for a self-closing <c .../> placeholder.
