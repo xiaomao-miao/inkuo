@@ -224,11 +224,12 @@ export function rustSheetToFortuneSheet(sheet: RustXlsxSheet): FortuneSheetCoreS
   console.log('[converter] row heights: Rust =', sheet.row_heights, '-> FortuneSheet =', rowlen);
 
   // Build column widths map: key = column index string, value = width in pixels
-  // Rust sends width in Excel character units; FortuneSheet uses pixels (approx 7px per char)
+  // Excel stores width in character units; pixel display = Truncate(charWidth * MDW) + 5px padding
+  // (MDW = Maximum Digit Width = 7 for Calibri 11pt default font).
   const columnlen: Record<string, number> = {};
   if (sheet.col_widths) {
     for (const [key, value] of Object.entries(sheet.col_widths)) {
-      columnlen[key] = Math.round(value * 7);
+      columnlen[key] = Math.round(value * 7) + 5;
     }
   }
   console.log('[converter] col widths: Rust =', sheet.col_widths, '-> FortuneSheet =', columnlen);
@@ -934,7 +935,10 @@ function buildWorksheetXml(
     xml += '<cols>';
     cols.forEach((col, i) => {
       if (col.wpx) {
-        const w = Math.round(col.wpx * 256 / 7);
+        // Excel stores width in character units (1/256 precision); pixel
+        // display = round(charWidth * MDW) + 5px padding. Reverse:
+        // charWidth = (pixel - 5) / MDW, with MDW = 7 for Calibri 11pt.
+        const w = Math.round(((col.wpx - 5) / 7) * 256) / 256;
         xml += `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`;
       }
     });

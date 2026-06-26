@@ -20,6 +20,71 @@ import styles from './OfficeViewer.module.css';
 import '@eigenpal/docx-editor-react/styles.css';
 import '@fortune-sheet/react/dist/index.css';
 
+interface FortuneSheetCellLike {
+  v?: unknown;
+  m?: unknown;
+  f?: unknown;
+  ct?: unknown;
+}
+
+interface FortuneSheetRowLike {
+  [col: number]: FortuneSheetCellLike | null;
+}
+
+interface FortuneSheetDataMatrix {
+  [row: number]: FortuneSheetRowLike;
+}
+
+interface FortuneSheetForFingerprint {
+  id?: string;
+  name?: string;
+  status?: number;
+  order?: number;
+  hide?: number;
+  data?: FortuneSheetDataMatrix | null;
+  celldata?: Array<{ r?: number; c?: number; v?: unknown }> | null;
+}
+
+// Build a fingerprint of user-visible content (cell values, formulas,
+// statuses, names). Workbook's internal context rebuilds (e.g. when
+// ensureSheetIndex patches sheet ids, or when immer produce reconstructs
+// the sheet array) can produce new object references but leave this
+// fingerprint unchanged — those rebuilds correspond to non-user-driven
+// emissions. Real user edits change a cell's `v`, `f`, `m`, or the sheet's
+// name/status, so they DO change this fingerprint.
+function fingerprintSheets(sheets: FortuneSheetCoreSheet[]): string {
+  const parts: string[] = [];
+  for (const sheet of sheets as unknown as FortuneSheetForFingerprint[]) {
+    parts.push(`#${sheet.id ?? ''}|${sheet.name ?? ''}|${sheet.status ?? ''}|${sheet.order ?? ''}|${sheet.hide ?? ''}`);
+    const data = sheet.data;
+    if (data && typeof data === 'object') {
+      const rowKeys = Object.keys(data).map(Number).sort((a, b) => a - b);
+      for (const r of rowKeys) {
+        const row = data[r];
+        if (!row) continue;
+        const colKeys = Object.keys(row).map(Number).sort((a, b) => a - b);
+        for (const c of colKeys) {
+          const cell = row[c];
+          if (cell == null) continue;
+          const v = cell.v;
+          const m = cell.m;
+          const f = cell.f;
+          if (v !== undefined || m !== undefined || f !== undefined) {
+            parts.push(`${r},${c}:v=${JSON.stringify(v ?? null)};m=${JSON.stringify(m ?? null)};f=${JSON.stringify(f ?? null)};`);
+          }
+        }
+      }
+    } else if (Array.isArray(sheet.celldata)) {
+      const sorted = [...sheet.celldata].sort((a, b) => (a.r ?? 0) - (b.r ?? 0) || (a.c ?? 0) - (b.c ?? 0));
+      for (const cell of sorted) {
+        parts.push(`${cell.r ?? ''},${cell.c ?? ''}:${JSON.stringify(cell.v ?? null)};`);
+      }
+    }
+    parts.push('|');
+  }
+  return parts.join('\n');
+}
+
 export interface Paragraph {
   text: string;
   style: string;
@@ -355,6 +420,21 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
   const recalcAllSheetsRef = useRef<() => void>(() => {});
   const loadedSheetsRef = useRef<FortuneSheetCoreSheet[]>([]);
   const formulaInitDoneRef = useRef(false);
+  // Snapshot of the most recently set sheets data. Workbook echoes this back
+  // through onChange whenever its internal context is rebuilt from the data
+  // prop (file open, settings change). When the echo equals the snapshot, no
+  // user edit has occurred — don't flip isDirty.
+  const lastLoadedSheetsRef = useRef<FortuneSheetCoreSheet[] | null>(null);
+  // Cached fingerprint of lastLoadedSheetsRef, used as a cheap structural
+  // comparison key to distinguish Workbook's internal context rebuilds from
+  // genuine user edits.
+  const lastLoadedFingerprintRef = useRef<string | null>(null);
+  // Tracks the most recent onOp we observed from Workbook. Workbook's onOp
+  // fires only for real operations (user edits, undo/redo, paste, etc.) —
+  // it does NOT fire for internal context rebuilds (which is why it doesn't
+  // fire for file open). We only flip isDirty when onOp fires with an op
+  // that touches a user-visible field.
+  const userEditSeenRef = useRef(false);
 
   // ── Hooks — empty. Formula recalculation is handled by FortuneSheet internally.
   const hooks = useMemo((): import('@fortune-sheet/core').Hooks => ({}), []);
@@ -368,6 +448,26 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
       // loadedSheetsRef is kept for backward compatibility, but save now reads
       // directly from workbookRef.getAllSheets() which is always current.
       loadedSheetsRef.current = changedSheets;
+      // Dirty rule: only mark dirty when onOp has fired since the last load
+      // or save. Workbook's onChange echoes its internal context on every
+      // rebuild (file open, settings change, selection, etc.) and does not
+      // by itself indicate user input. onOp, in contrast, fires only for
+      // genuine operations (cell edits, format changes, sheet operations)
+      // and never for the post-load context rebuild — so we gate dirty on
+      // that signal.
+      if (!userEditSeenRef.current) {
+        // Workbook-internal rebuild echo — refresh the snapshot but don't
+        // mark dirty.
+        lastLoadedSheetsRef.current = changedSheets;
+        if (lastLoadedFingerprintRef.current !== null) {
+          lastLoadedFingerprintRef.current = fingerprintSheets(changedSheets);
+        }
+        return;
+      }
+      // User-driven change confirmed by onOp. Update the snapshot so future
+      // Workbook rebuilds don't re-flip the dirty state.
+      lastLoadedSheetsRef.current = changedSheets;
+      lastLoadedFingerprintRef.current = fingerprintSheets(changedSheets);
       setIsDirty(true);
 
   // Formula calculation: FortuneSheet does NOT compute formula results on initial
@@ -383,6 +483,14 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
     },
     [],
   );
+
+  // ── onOp handler: tracks genuine user-driven operations. Workbook's
+  //    onOp fires for cell edits, format changes, sheet ops, undo/redo, and
+  //    paste actions — never for the post-load context rebuild. We use it as
+  //    the gating signal that allows handleFortuneChange to flip isDirty.
+  const handleFortuneOp = useCallback(() => {
+    userEditSeenRef.current = true;
+  }, []);
 
   // ── Recalculate all sheets for save ───────────────────────────────────────────
   recalcAllSheetsRef.current = () => {
@@ -403,6 +511,15 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
       loadedSheetsRef.current = sheets;
       setFortuneSheets(sheets);
       setFortuneSheetsToStore(filePath, { sheets });
+      // Record the array reference and a structural fingerprint so
+      // handleFortuneChange can ignore Workbook's post-load onChange echoes.
+      // Reset the user-edit gate: only after onOp fires (i.e. the user
+      // performs an actual operation) do subsequent onChange calls flip
+      // isDirty. Without this guard, opening a file would flip isDirty=true
+      // even though no user edit has occurred.
+      lastLoadedSheetsRef.current = sheets;
+      lastLoadedFingerprintRef.current = fingerprintSheets(sheets);
+      userEditSeenRef.current = false;
       setIsDirty(false);
       setOpenTabDirty(filePath, false);
     } catch (err) {
@@ -463,6 +580,12 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
 
       loadedSheetsRef.current = latestSheets;
       setFortuneSheetsToStore(filePath, { sheets: latestSheets });
+      // Reset the dirty filter snapshot and user-edit gate to the just-saved
+      // state. Future echoes from the Workbook are recognized as non-user-
+      // driven until onOp fires again.
+      lastLoadedSheetsRef.current = latestSheets;
+      lastLoadedFingerprintRef.current = fingerprintSheets(latestSheets);
+      userEditSeenRef.current = false;
       setIsDirty(false);
       setOpenTabDirty(filePath, false);
     } catch (err) {
@@ -500,6 +623,7 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
           <Workbook
             data={fortuneSheets}
             onChange={handleFortuneChange}
+            onOp={handleFortuneOp}
             ref={workbookRef}
             showToolbar={true}
             showFormulaBar={true}
