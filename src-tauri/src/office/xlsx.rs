@@ -305,7 +305,7 @@ impl From<&CellStyle> for SheetStyleKey {
     }
 }
 
-fn build_styles_xml(used_styles: &std::collections::HashMap<SheetStyleKey, usize>) -> String {
+fn build_styles_xml(used_styles: &[(SheetStyleKey, usize)]) -> String {
     let mut num_fmts: std::collections::BTreeMap<String, u32> = std::collections::BTreeMap::new();
     let mut next_num_fmt = 164u32;
     let mut fonts: Vec<(SheetStyleKey, usize)> = Vec::new();
@@ -324,7 +324,9 @@ fn build_styles_xml(used_styles: &std::collections::HashMap<SheetStyleKey, usize
         fills.push((None, None, idx));
         idx
     });
-    let default_num_fmt_idx = *num_fmts.entry(String::new()).or_insert(0);
+    // Don't pre-seed numFmts with an empty key: numFmtId 0 is reserved by the
+    // spec and writing `<numFmt numFmtId="0" formatCode=""/>` confuses readers.
+    // The default ("General") numFmtId is always 0 and never needs declaring.
 
     // FIX: Add numFmtId to xfs tuple
     let mut xfs: Vec<(usize, usize, u32, bool, bool)> = Vec::new();
@@ -603,38 +605,59 @@ impl XlsxWorkbook {
                         || alignment_h.is_some()
                         || alignment_v.is_some()
                     {
-                        let style = cell.style.get_or_insert_with(CellStyle::default);
+                        /// Normalise a hex RGB colour string so that the round-trip through
+                        /// `modify_excel` → file → `read_excel` is stable regardless of which
+                        /// casing/prefix the caller used. The internal canonical form is the
+                        /// 6-digit uppercase hex with no `#`, matching the convention the read
+                        /// path emits (after it strips its own `#` prefix).
+                        fn normalise_hex_color(s: &str) -> String {
+                            let hex = s.trim().trim_start_matches('#');
+                            hex.to_ascii_uppercase()
+                        }
+
+                        // Take ownership of the existing style so we can decide
+                        // field-by-field whether to keep, replace, or clear it.
+                        // Empty string from the caller means "clear", None means
+                        // "leave alone".
+                        let mut style = cell.style.take();
                         if let Some(nf) = number_format {
-                            style.number_format = nf;
+                            style.get_or_insert_with(CellStyle::default).number_format = nf;
                         }
                         if let Some(bc) = bg_color {
+                            let s = style.get_or_insert_with(CellStyle::default);
                             if bc.is_empty() {
-                                style.fill_fg_color = None;
+                                s.fill_fg_color = None;
                             } else {
-                                style.fill_fg_color = Some(bc);
+                                s.fill_fg_color = Some(normalise_hex_color(&bc));
                             }
                         }
                         if let Some(b) = font_bold {
-                            style.font_bold = b;
+                            style.get_or_insert_with(CellStyle::default).font_bold = b;
                         }
                         if let Some(i) = font_italic {
-                            style.font_italic = i;
+                            style.get_or_insert_with(CellStyle::default).font_italic = i;
                         }
                         if let Some(fc) = font_color {
-                            style.font_color = Some(fc);
+                            let s = style.get_or_insert_with(CellStyle::default);
+                            if fc.is_empty() {
+                                s.font_color = None;
+                            } else {
+                                s.font_color = Some(normalise_hex_color(&fc));
+                            }
                         }
                         if let Some(sz) = font_size {
-                            style.font_size = Some(sz);
+                            style.get_or_insert_with(CellStyle::default).font_size = Some(sz);
                         }
                         if let Some(fn_) = font_name {
-                            style.font_name = Some(fn_);
+                            style.get_or_insert_with(CellStyle::default).font_name = Some(fn_);
                         }
                         if let Some(ah) = alignment_h {
-                            style.alignment_h = Some(ah);
+                            style.get_or_insert_with(CellStyle::default).alignment_h = Some(ah);
                         }
                         if let Some(av) = alignment_v {
-                            style.alignment_v = Some(av);
+                            style.get_or_insert_with(CellStyle::default).alignment_v = Some(av);
                         }
+                        cell.style = style;
                     }
                 }
                 ExcelOperation::WriteRange {
@@ -1071,7 +1094,7 @@ fn parse_styles(xml: &str) -> StylesInfo {
                 if in_font && name.as_ref() == b"color" {
                     if let Some(v) = attr_value(e, b"rgb") {
                         if let Ok(s) = std::str::from_utf8(&v) {
-                            current_font.color = Some(format!("#{}", s.trim_start_matches('#')));
+                            current_font.color = Some(s.trim_start_matches('#').to_ascii_uppercase());
                         }
                     }
                 }
@@ -1098,14 +1121,14 @@ fn parse_styles(xml: &str) -> StylesInfo {
                 if in_fill && name.as_ref() == b"fgColor" {
                     if let Some(v) = attr_value(e, b"rgb") {
                         if let Ok(s) = std::str::from_utf8(&v) {
-                            current_fill.fg_color = Some(format!("#{}", s.trim_start_matches('#')));
+                            current_fill.fg_color = Some(s.trim_start_matches('#').to_ascii_uppercase());
                         }
                     }
                 }
                 if in_fill && name.as_ref() == b"bgColor" {
                     if let Some(v) = attr_value(e, b"rgb") {
                         if let Ok(s) = std::str::from_utf8(&v) {
-                            current_fill.bg_color = Some(format!("#{}", s.trim_start_matches('#')));
+                            current_fill.bg_color = Some(s.trim_start_matches('#').to_ascii_uppercase());
                         }
                     }
                 }
@@ -1205,7 +1228,7 @@ fn parse_styles(xml: &str) -> StylesInfo {
                         b"color" => {
                             if let Some(v) = attr_value(e, b"rgb") {
                                 if let Ok(s) = std::str::from_utf8(&v) {
-                                    current_font.color = Some(format!("#{}", s.trim_start_matches('#')));
+                                    current_font.color = Some(s.trim_start_matches('#').to_ascii_uppercase());
                                 }
                             }
                         }
@@ -1234,14 +1257,14 @@ fn parse_styles(xml: &str) -> StylesInfo {
                         b"fgColor" => {
                             if let Some(v) = attr_value(e, b"rgb") {
                                 if let Ok(s) = std::str::from_utf8(&v) {
-                                    current_fill.fg_color = Some(format!("#{}", s.trim_start_matches('#')));
+                                    current_fill.fg_color = Some(s.trim_start_matches('#').to_ascii_uppercase());
                                 }
                             }
                         }
                         b"bgColor" => {
                             if let Some(v) = attr_value(e, b"rgb") {
                                 if let Ok(s) = std::str::from_utf8(&v) {
-                                    current_fill.bg_color = Some(format!("#{}", s.trim_start_matches('#')));
+                                    current_fill.bg_color = Some(s.trim_start_matches('#').to_ascii_uppercase());
                                 }
                             }
                         }
@@ -1455,6 +1478,57 @@ fn parse_sheet_xml(xml: &str, shared_strings: &[String], styles_info: Option<&St
     let mut in_value = false;
     let mut in_inline_string = false;
 
+    /// Parse the attributes of a `<c ...>` tag into a fresh `ParsedCell`. Shared by
+    /// both `Event::Start` (paired with `</c>`) and `Event::Empty` (self-closing
+    /// `<c .../>`, which is what `build_cell_xml` emits for empty cells).
+    let parse_c_attrs = |e: &quick_xml::events::BytesStart| -> ParsedCell {
+        let mut c = ParsedCell::default();
+        for attr in e.attributes().with_checks(false).flatten() {
+            let v = attr.value.as_ref();
+            if let Ok(s) = std::str::from_utf8(v) {
+                let key = attr.key.as_ref();
+                let local = strip_xml_ns(key);
+                match local {
+                    b"r" => c.ref_addr = s.to_string(),
+                    b"t" => c.cell_type = Some(s.to_string()),
+                    b"s" => c.style_index = s.parse().ok(),
+                    _ => {}
+                }
+            }
+        }
+        c
+    };
+
+    /// Push a parsed cell into the result. Empty cells without style are dropped
+    /// to match Excel's "missing cell" semantics; cells with style only are kept
+    /// so that style-only edits survive a round-trip.
+    let mut push_cell = |c: ParsedCell| {
+        if let Some((row, col)) = parse_cell_address(&c.ref_addr) {
+            if row + 1 > max_row {
+                max_row = row + 1;
+            }
+            if col + 1 > max_col {
+                max_col = col + 1;
+            }
+            let value = resolve_cell_value(&c, shared_strings);
+            let style = c.style_index.and_then(|idx| {
+                styles_info.and_then(|si| si.resolve_style(idx as usize))
+            });
+            if !matches!(value, CellValue::Empty)
+                || style.is_some()
+                || c.formula.is_some()
+            {
+                cells.push(Cell {
+                    row,
+                    col,
+                    value,
+                    formula: c.formula,
+                    style,
+                });
+            }
+        }
+    };
+
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => {
@@ -1490,21 +1564,7 @@ fn parse_sheet_xml(xml: &str, shared_strings: &[String], styles_info: Option<&St
                         }
                     }
                     b"c" if in_sheet_data => {
-                        let mut c = ParsedCell::default();
-                        for attr in e.attributes().with_checks(false).flatten() {
-                            let v = attr.value.as_ref();
-                            if let Ok(s) = std::str::from_utf8(v) {
-                                let key = attr.key.as_ref();
-                                let local = strip_xml_ns(key);
-                                match local {
-                                    b"r" => c.ref_addr = s.to_string(),
-                                    b"t" => c.cell_type = Some(s.to_string()),
-                                    b"s" => c.style_index = s.parse().ok(),
-                                    _ => {}
-                                }
-                            }
-                        }
-                        current_cell = Some(c);
+                        current_cell = Some(parse_c_attrs(e));
                         in_value = false;
                         in_inline_string = false;
                     }
@@ -1524,6 +1584,11 @@ fn parse_sheet_xml(xml: &str, shared_strings: &[String], styles_info: Option<&St
                             }
                         }
                     }
+                } else if name.as_ref() == b"c" && in_sheet_data {
+                    // Self-closing cell — must be parsed in the same way as the
+                    // <c ...>...</c> branch so style-only cells (no value, no
+                    // formula) survive a write→read round-trip.
+                    push_cell(parse_c_attrs(e));
                 } else if name.as_ref() == b"col" && in_cols {
                     // Parse column attributes for width
                     let mut col_min: Option<usize> = None;
@@ -1594,31 +1659,7 @@ fn parse_sheet_xml(xml: &str, shared_strings: &[String], styles_info: Option<&St
                     b"is" => in_inline_string = false,
                     b"c" => {
                         if let Some(c) = current_cell.take() {
-                            if let Some((row, col)) = parse_cell_address(&c.ref_addr) {
-                                if row + 1 > max_row {
-                                    max_row = row + 1;
-                                }
-                                if col + 1 > max_col {
-                                    max_col = col + 1;
-                                }
-
-                                let value = resolve_cell_value(&c, shared_strings);
-                                let style = c.style_index.and_then(|idx| {
-                                    styles_info.and_then(|si| si.resolve_style(idx as usize))
-                                });
-                                if !matches!(value, CellValue::Empty)
-                                    || style.is_some()
-                                    || c.formula.is_some()
-                                {
-                                    cells.push(Cell {
-                                        row,
-                                        col,
-                                        value,
-                                        formula: c.formula,
-                                        style,
-                                    });
-                                }
-                            }
+                            push_cell(c);
                         }
                     }
                     _ => {}
@@ -3207,7 +3248,15 @@ const MINIMAL_STYLES_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standal
 /// (numeric as `<v>`, strings as `<is><t>`), and rows are emitted in row-order
 /// so the file is consumable by every spreadsheet application.
 fn build_workbook_styles(workbook: &XlsxWorkbook) -> (String, Vec<std::collections::HashMap<(usize, usize), usize>>) {
-    let mut all_used: std::collections::HashMap<SheetStyleKey, usize> = std::collections::HashMap::new();
+    // CRITICAL: `used_styles` MUST be ordered by `idx` (the cellXfs index).
+    // The write path writes cellXfs[1..] in `used_styles` iteration order, and
+    // the sheet XML references each cell's style by that same `idx`. If we used
+    // a HashMap here the cellXfs order would be randomised and cell styles
+    // would land on the wrong cells (e.g. A7 written as #1F3864 read back as
+    // the #548235 written to B3). Use an ordered vec with linear lookup for
+    // dedup; the style count is small (hundreds at most) so this is fine.
+    let mut used_styles: Vec<(SheetStyleKey, usize)> = Vec::new();
+    let mut key_to_idx: std::collections::HashMap<SheetStyleKey, usize> = std::collections::HashMap::new();
     let mut next_idx: usize = 1;
 
     let mut per_sheet: Vec<std::collections::HashMap<(usize, usize), usize>> = Vec::new();
@@ -3216,18 +3265,24 @@ fn build_workbook_styles(workbook: &XlsxWorkbook) -> (String, Vec<std::collectio
         for cell in &sheet.cells {
             if let Some(style) = &cell.style {
                 let key = SheetStyleKey::from(style);
-                let idx = *all_used.entry(key).or_insert_with(|| {
-                    let cur = next_idx;
+                let idx = if let Some(&i) = key_to_idx.get(&key) {
+                    i
+                } else {
+                    let i = next_idx;
                     next_idx += 1;
-                    cur
-                });
+                    key_to_idx.insert(key.clone(), i);
+                    used_styles.push((key, i));
+                    i
+                };
                 sheet_map.insert((cell.row, cell.col), idx);
             }
         }
         per_sheet.push(sheet_map);
     }
 
-    let styles_xml = build_styles_xml(&all_used);
+    // `used_styles` is appended in the same order `idx` is assigned, so its
+    // iteration order matches the cellXfs order the serializer produces.
+    let styles_xml = build_styles_xml(&used_styles);
     (styles_xml, per_sheet)
 }
 
@@ -4132,6 +4187,345 @@ mod tests {
         assert_eq!(m.new_value, Some(CellValue::Int(100)));
         assert_eq!(m.new_number_format.as_deref(), Some("0%"));
         assert!(m.new_formula.is_none());
+    }
+
+    /// Repro for the style write/read mismatch reported by AI tools.
+    /// Sets A7 to bg_color=#1F3864, font_color=#FFFFFF on a brand-new file,
+    /// writes the workbook, reads it back, and asserts the style survived.
+    /// Prints the resulting styles.xml / sheet1.xml so the actual mapping
+    /// can be inspected if the assertion fails.
+    #[test]
+    fn style_repro_a7_round_trip() {
+        let out_dir = std::env::temp_dir().join("inkuo_repro");
+        std::fs::create_dir_all(&out_dir).unwrap();
+
+        let mut wb = XlsxWorkbook { sheets: vec![], shared_strings: vec![] };
+        wb.sheets.push(XlsxSheet::new("Sheet1".to_string()));
+        let initial_path = out_dir.join("repro_initial.xlsx");
+        create_xlsx_workbook(&wb, &initial_path).unwrap();
+
+        let bytes = std::fs::read(&initial_path).unwrap();
+        let mut wb = read_xlsx_structured(&bytes).unwrap();
+        let ops = vec![
+            ExcelOperation::ModifyCell {
+                sheet: "Sheet1".to_string(),
+                address: "A7".to_string(),
+                value: Some(CellValue::String("seven".to_string())),
+                formula: None,
+                number_format: None,
+                bg_color: Some("1F3864".to_string()),
+                font_bold: None,
+                font_italic: None,
+                font_color: Some("FFFFFF".to_string()),
+                font_size: None,
+                font_name: None,
+                alignment_h: None,
+                alignment_v: None,
+            },
+            ExcelOperation::ModifyCell {
+                sheet: "Sheet1".to_string(),
+                address: "B3".to_string(),
+                value: Some(CellValue::String("three".to_string())),
+                formula: None,
+                number_format: None,
+                bg_color: Some("548235".to_string()),
+                font_bold: None,
+                font_italic: None,
+                font_color: Some("FF0000".to_string()),
+                font_size: None,
+                font_name: None,
+                alignment_h: None,
+                alignment_v: None,
+            },
+            ExcelOperation::ModifyCell {
+                sheet: "Sheet1".to_string(),
+                address: "C5".to_string(),
+                // style-only edit (no value). The write path emits a self-closing
+                // <c .../> for empty cells; the read path must still recognise it.
+                value: None,
+                formula: None,
+                number_format: None,
+                bg_color: Some("A9D08E".to_string()),
+                font_bold: Some(true),
+                font_italic: None,
+                font_color: None,
+                font_size: None,
+                font_name: None,
+                alignment_h: None,
+                alignment_v: None,
+            },
+        ];
+        wb.apply_operations(ops).unwrap();
+
+        let out_path = out_dir.join("repro.xlsx");
+        let original = std::fs::read(&initial_path).unwrap();
+        write_excel_document(&wb, Some(&original), &out_path).unwrap();
+
+        let file_bytes = std::fs::read(&out_path).unwrap();
+        let cursor = std::io::Cursor::new(file_bytes);
+        let mut archive = zip::ZipArchive::new(cursor).unwrap();
+        for name in ["xl/styles.xml", "xl/worksheets/sheet1.xml"] {
+            let mut entry = archive.by_name(name).unwrap();
+            let mut s = String::new();
+            std::io::Read::read_to_string(&mut entry, &mut s).unwrap();
+            eprintln!("\n========== {} ==========\n{}", name, s);
+        }
+
+        let bytes = std::fs::read(&out_path).unwrap();
+        let wb = read_xlsx_structured(&bytes).unwrap();
+        let sheet = &wb.sheets[0];
+        let a7 = sheet.cells.iter().find(|c| c.row == 6 && c.col == 0)
+            .expect("A7 cell missing after write");
+        let b3 = sheet.cells.iter().find(|c| c.row == 2 && c.col == 1)
+            .expect("B3 cell missing after write");
+        let c5 = sheet.cells.iter().find(|c| c.row == 4 && c.col == 2)
+            .expect("C5 cell missing after write (style-only edit was lost)");
+        eprintln!("\nA7 cell: {:?}", a7);
+        eprintln!("\nB3 cell: {:?}", b3);
+        eprintln!("\nC5 cell: {:?}", c5);
+        let a7_style = a7.style.as_ref().expect("A7 has no style");
+        let b3_style = b3.style.as_ref().expect("B3 has no style");
+        let c5_style = c5.style.as_ref().expect("C5 has no style");
+        // Compare normalised hex (strip leading #) since the read path adds # prefix
+        // but the write path does not strip it. This is a real bug; the round-trip
+        // is lossy in formatting even when the color value is correct.
+        let norm = |s: &str| s.trim_start_matches('#').to_ascii_uppercase();
+        assert_eq!(norm(a7_style.fill_fg_color.as_deref().unwrap_or("")), "1F3864",
+            "A7 bg_color mismatch");
+        assert_eq!(norm(a7_style.font_color.as_deref().unwrap_or("")), "FFFFFF",
+            "A7 font_color mismatch");
+        assert_eq!(norm(b3_style.fill_fg_color.as_deref().unwrap_or("")), "548235",
+            "B3 bg_color mismatch");
+        assert_eq!(norm(b3_style.font_color.as_deref().unwrap_or("")), "FF0000",
+            "B3 font_color mismatch");
+        assert_eq!(norm(c5_style.fill_fg_color.as_deref().unwrap_or("")), "A9D08E",
+            "C5 bg_color mismatch");
+        assert!(c5_style.font_bold, "C5 font_bold not preserved");
+    }
+
+    /// Regression for the merged-cell "top-left style disappears" report.
+    /// After writing a fill+font style to the anchor cell of a merge region
+    /// and saving, reading back must keep that style on the anchor cell.
+    #[test]
+    fn style_merged_anchor_preserved() {
+        let out_dir = std::env::temp_dir().join("inkuo_repro");
+        std::fs::create_dir_all(&out_dir).unwrap();
+        let mut wb = XlsxWorkbook { sheets: vec![], shared_strings: vec![] };
+        wb.sheets.push(XlsxSheet::new("Sheet1".to_string()));
+        let initial_path = out_dir.join("repro_merge_initial.xlsx");
+        create_xlsx_workbook(&wb, &initial_path).unwrap();
+
+        let bytes = std::fs::read(&initial_path).unwrap();
+        let mut wb = read_xlsx_structured(&bytes).unwrap();
+        let ops = vec![
+            ExcelOperation::MergeCells {
+                sheet: "Sheet1".to_string(),
+                op: "merge".to_string(),
+                start_cell: "A1".to_string(),
+                end_cell: "G1".to_string(),
+            },
+            ExcelOperation::ModifyCell {
+                sheet: "Sheet1".to_string(),
+                address: "A1".to_string(),
+                value: Some(CellValue::String("merged header".to_string())),
+                formula: None,
+                number_format: None,
+                bg_color: Some("1F3864".to_string()),
+                font_bold: Some(true),
+                font_italic: None,
+                font_color: Some("FFFFFF".to_string()),
+                font_size: None,
+                font_name: None,
+                alignment_h: None,
+                alignment_v: None,
+            },
+        ];
+        wb.apply_operations(ops).unwrap();
+        let out_path = out_dir.join("repro_merge.xlsx");
+        let original = std::fs::read(&initial_path).unwrap();
+        write_excel_document(&wb, Some(&original), &out_path).unwrap();
+
+        let bytes = std::fs::read(&out_path).unwrap();
+        let wb = read_xlsx_structured(&bytes).unwrap();
+        let sheet = &wb.sheets[0];
+        let a1 = sheet.cells.iter().find(|c| c.row == 0 && c.col == 0)
+            .expect("merged anchor A1 missing after write");
+        eprintln!("\nA1 (merged anchor): {:?}", a1);
+        let style = a1.style.as_ref().expect("merged anchor has no style");
+        let norm = |s: &str| s.trim_start_matches('#').to_ascii_uppercase();
+        assert_eq!(norm(style.fill_fg_color.as_deref().unwrap_or("")), "1F3864",
+            "merged A1 bg_color mismatch");
+        assert_eq!(norm(style.font_color.as_deref().unwrap_or("")), "FFFFFF",
+            "merged A1 font_color mismatch");
+        assert!(style.font_bold, "merged A1 font_bold not preserved");
+    }
+
+    /// Stress test: 50 cells each with a unique (background, font) colour pair
+    /// are styled in a single call, then read back. Every cell must come back
+    /// with exactly the colours that were requested. This is the user's "50
+    /// operations, 10 wrong" failure mode and exercises the cellXfs ordering
+    /// fix at scale.
+    #[test]
+    fn style_50_cells_unique_colors() {
+        let out_dir = std::env::temp_dir().join("inkuo_repro");
+        std::fs::create_dir_all(&out_dir).unwrap();
+        let mut wb = XlsxWorkbook { sheets: vec![], shared_strings: vec![] };
+        wb.sheets.push(XlsxSheet::new("Sheet1".to_string()));
+        let file = out_dir.join("repro_50.xlsx");
+        create_xlsx_workbook(&wb, &file).unwrap();
+
+        // Generate 50 (row, col) targets with deterministic distinct colours.
+        let mut targets: Vec<(usize, usize, String, String)> = Vec::new();
+        for i in 0..50 {
+            let row = i;
+            let col = 0;
+            // Pseudo-random hex from row index — distinct values per row.
+            let fg = format!("{:06X}", (i * 0x020202) & 0xFFFFFF);
+            let fc = format!("{:06X}", ((i * 0x010101 + 0x808080) & 0xFFFFFF));
+            targets.push((row, col, fg, fc));
+        }
+
+        let ops: Vec<ExcelOperation> = targets.iter().map(|(r, c, fg, fc)| {
+            let addr = cell_address(*r, *c);
+            ExcelOperation::ModifyCell {
+                sheet: "Sheet1".to_string(),
+                address: addr,
+                value: Some(CellValue::String(format!("v{}", r))),
+                formula: None,
+                number_format: None,
+                bg_color: Some(fg.clone()),
+                font_bold: None,
+                font_italic: None,
+                font_color: Some(fc.clone()),
+                font_size: None,
+                font_name: None,
+                alignment_h: None,
+                alignment_v: None,
+            }
+        }).collect();
+
+        let bytes = std::fs::read(&file).unwrap();
+        let mut wb = read_xlsx_structured(&bytes).unwrap();
+        wb.apply_operations(ops).unwrap();
+        let original = std::fs::read(&file).unwrap();
+        write_excel_document(&wb, Some(&original), &file).unwrap();
+
+        let bytes = std::fs::read(&file).unwrap();
+        let wb = read_xlsx_structured(&bytes).unwrap();
+        let sheet = &wb.sheets[0];
+        let norm = |s: &str| s.trim_start_matches('#').to_ascii_uppercase();
+        for (r, c, fg, fc) in &targets {
+            let cell = sheet.cells.iter()
+                .find(|cell| cell.row == *r && cell.col == *c)
+                .unwrap_or_else(|| panic!("({},{}) missing after write", r, c));
+            let style = cell.style.as_ref()
+                .unwrap_or_else(|| panic!("({},{}) has no style", r, c));
+            let actual_fg = norm(style.fill_fg_color.as_deref().unwrap_or(""));
+            let actual_fc = norm(style.font_color.as_deref().unwrap_or(""));
+            assert_eq!(actual_fg, fg.to_ascii_uppercase(),
+                "({},{}) bg: expected {}, got {}", r, c, fg, actual_fg);
+            assert_eq!(actual_fc, fc.to_ascii_uppercase(),
+                "({},{}) font: expected {}, got {}", r, c, fc, actual_fc);
+        }
+    }
+
+    /// Regression: colour strings are normalised so that callers can pass
+    /// "#1F3864", "1f3864", "  1F3864  ", or "1F3864" and always see the same
+    /// value come back. Without normalisation the round-trip is lossy because
+    /// the read path adds a leading "#" while the write path doesn't strip it.
+    #[test]
+    fn style_hex_colour_normalised() {
+        let out_dir = std::env::temp_dir().join("inkuo_repro");
+        std::fs::create_dir_all(&out_dir).unwrap();
+        let mut wb = XlsxWorkbook { sheets: vec![], shared_strings: vec![] };
+        wb.sheets.push(XlsxSheet::new("Sheet1".to_string()));
+        let file = out_dir.join("repro_norm.xlsx");
+        create_xlsx_workbook(&wb, &file).unwrap();
+
+        // First call: caller uses "#1f3864" (lowercase, with hash).
+        let bytes = std::fs::read(&file).unwrap();
+        let mut wb = read_xlsx_structured(&bytes).unwrap();
+        wb.apply_operations(vec![ExcelOperation::ModifyCell {
+            sheet: "Sheet1".to_string(),
+            address: "A1".to_string(),
+            value: Some(CellValue::String("v1".to_string())),
+            formula: None,
+            number_format: None,
+            bg_color: Some("#1f3864".to_string()),
+            font_bold: None,
+            font_italic: None,
+            font_color: Some("  #ffffff  ".to_string()),
+            font_size: None,
+            font_name: None,
+            alignment_h: None,
+            alignment_v: None,
+        }]).unwrap();
+        let original = std::fs::read(&file).unwrap();
+        write_excel_document(&wb, Some(&original), &file).unwrap();
+
+        // Second call uses the canonical form and asserts the file's stored
+        // value (which AI can read back) matches what was actually written.
+        let bytes = std::fs::read(&file).unwrap();
+        let wb = read_xlsx_structured(&bytes).unwrap();
+        let a1 = wb.sheets[0].cells.iter().find(|c| c.row == 0 && c.col == 0)
+            .expect("A1 missing");
+        let style = a1.style.as_ref().expect("A1 has no style");
+        assert_eq!(style.fill_fg_color.as_deref(), Some("1F3864"),
+            "bg_color should be normalised to upper 6-hex, got {:?}", style.fill_fg_color);
+        assert_eq!(style.font_color.as_deref(), Some("FFFFFF"),
+            "font_color should be normalised, got {:?}", style.font_color);
+    }
+
+    /// Three modify_excel calls in sequence must NOT corrupt earlier cells. This
+    /// is the read-modify-write lifecycle: call 1 sets A1, call 2 sets B2, call 3
+    /// sets C3, and reading back must see all three styles intact and isolated.
+    #[test]
+    fn style_multi_call_isolation() {
+        let out_dir = std::env::temp_dir().join("inkuo_repro");
+        std::fs::create_dir_all(&out_dir).unwrap();
+        let mut wb = XlsxWorkbook { sheets: vec![], shared_strings: vec![] };
+        wb.sheets.push(XlsxSheet::new("Sheet1".to_string()));
+        let file = out_dir.join("repro_multi.xlsx");
+        create_xlsx_workbook(&wb, &file).unwrap();
+
+        let make_op = |addr: &str, fg: &str, fc: &str| ExcelOperation::ModifyCell {
+            sheet: "Sheet1".to_string(),
+            address: addr.to_string(),
+            value: Some(CellValue::String(addr.to_string())),
+            formula: None,
+            number_format: None,
+            bg_color: Some(fg.to_string()),
+            font_bold: None,
+            font_italic: None,
+            font_color: Some(fc.to_string()),
+            font_size: None,
+            font_name: None,
+            alignment_h: None,
+            alignment_v: None,
+        };
+
+        for (addr, fg, fc) in [("A1", "111111", "AAAAAA"), ("B2", "222222", "BBBBBB"), ("C3", "333333", "CCCCCC")] {
+            let bytes = std::fs::read(&file).unwrap();
+            let mut wb = read_xlsx_structured(&bytes).unwrap();
+            wb.apply_operations(vec![make_op(addr, fg, fc)]).unwrap();
+            let original = std::fs::read(&file).unwrap();
+            write_excel_document(&wb, Some(&original), &file).unwrap();
+        }
+
+        let bytes = std::fs::read(&file).unwrap();
+        let wb = read_xlsx_structured(&bytes).unwrap();
+        let sheet = &wb.sheets[0];
+        let norm = |s: &str| s.trim_start_matches('#').to_ascii_uppercase();
+        for (addr, fg, fc) in [("A1", "111111", "AAAAAA"), ("B2", "222222", "BBBBBB"), ("C3", "333333", "CCCCCC")] {
+            let (row, col) = parse_cell_address(addr).unwrap();
+            let cell = sheet.cells.iter().find(|c| c.row == row && c.col == col)
+                .unwrap_or_else(|| panic!("{} missing after multi-call sequence", addr));
+            let style = cell.style.as_ref().expect(&format!("{} has no style", addr));
+            assert_eq!(norm(style.fill_fg_color.as_deref().unwrap_or("")), fg,
+                "{} bg_color wrong", addr);
+            assert_eq!(norm(style.font_color.as_deref().unwrap_or("")), fc,
+                "{} font_color wrong", addr);
+        }
     }
 
     #[test]
