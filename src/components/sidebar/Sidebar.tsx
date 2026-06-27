@@ -18,6 +18,8 @@ import { useWorkspaceSearch } from '../../hooks/useWorkspaceSearch';
 import { useWorkspaceTree } from '../../hooks/useWorkspaceTree';
 import { useSidebarStore } from '../../store/sidebarStore';
 import { FileTree } from './FileTree';
+import { ContextMenu } from './ContextMenu';
+import { ConfirmDialog } from './ConfirmDialog';
 import type { FileEntry } from '../../types';
 import styles from './Sidebar.module.css';
 
@@ -279,6 +281,9 @@ export const Sidebar = () => {
           </div>
         </>
       )}
+
+      <ContextMenu />
+      <ConfirmDialog />
     </aside>
   );
 };

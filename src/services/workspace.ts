@@ -1,7 +1,12 @@
 import { open } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { useSidebarStore } from '../store';
-import type { FileEntry } from '../types';
+import type {
+  CreateEntryResult,
+  FileEntry,
+  NewEntryPayload,
+  RenamePathResult,
+} from '../types';
 
 /**
  * Load children entries for a directory from the backend.
@@ -46,4 +51,70 @@ export async function openWorkspaceDirectory(): Promise<string | null> {
   });
 
   return selected ?? null;
+}
+
+/**
+ * Create a new file or directory under `parent`. The backend applies the
+ * extension (if missing) and the optional template content, then emits a
+ * `Created` file-change event so the tree refreshes itself.
+ */
+export async function createFileEntry(
+  parent: string,
+  name: string,
+  payload: NewEntryPayload,
+): Promise<CreateEntryResult> {
+  return invoke<CreateEntryResult>('create_file_entry', { parent, name, payload });
+}
+
+/**
+ * Atomically rename/move a file or directory on disk. Emits `Deleted` for the
+ * old path and `Created` for the new path so both parent caches refresh.
+ */
+export async function renamePath(from: string, to: string): Promise<RenamePathResult> {
+  return invoke<RenamePathResult>('rename_path', { from, to });
+}
+
+/**
+ * Delete a file, or a directory when `recursive` is true. Idempotent: deleting
+ * a missing path is treated as success.
+ */
+export async function deletePath(path: string, recursive: boolean): Promise<void> {
+  await invoke('delete_path', { path, recursive });
+}
+
+/**
+ * Copy a file or directory tree.
+ */
+export async function copyPath(from: string, to: string): Promise<void> {
+  await invoke('copy_path', { from, to });
+}
+
+/**
+ * Move a file or directory (atomic on the same filesystem).
+ */
+export async function movePath(from: string, to: string): Promise<void> {
+  await invoke('move_path', { from, to });
+}
+
+/**
+ * Lightweight existence check used to disambiguate paste collisions and
+ * confirm dialog wording before triggering a backend mutation.
+ */
+export async function pathExists(path: string): Promise<boolean> {
+  return invoke<boolean>('path_exists', { path });
+}
+
+/**
+ * Open a path with the OS's default associated application.
+ */
+export async function openWithDefaultApp(path: string): Promise<void> {
+  await invoke('open_with_default_app', { path });
+}
+
+/**
+ * Reveal a path in the platform file manager (Finder / Explorer / xdg-open).
+ * Selects the item when the platform supports it.
+ */
+export async function revealInFileManager(path: string): Promise<void> {
+  await invoke('reveal_in_file_manager', { path });
 }

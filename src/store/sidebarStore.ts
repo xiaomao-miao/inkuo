@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { FileEntry, ActiveToolCall, KnowledgeBase, BuildProgress } from '../types';
+import type { FileEntry, ActiveToolCall, KnowledgeBase, BuildProgress, NewEntryPayload } from '../types';
 
 export interface OpenTab {
   id: string;
@@ -55,6 +55,29 @@ function updateOpenTabDirtyState(openTabs: OpenTab[], path: string, isDirty: boo
 
 export const SETTINGS_TAB_ID = '__settings__';
 
+/**
+ * Transient UI state for the context menu's "New file / New folder / Rename"
+ * flow. The FileTree reads this to swap the affected row for an
+ * `<InlineRenameInput />`; `commit` and `cancel` clear it.
+ *
+ * Not persisted (cleared on reload by design — half-typed names from a
+ * previous session would be surprising).
+ */
+export interface InlineEditState {
+  /** Absolute path the edited row will live at once committed. */
+  parentPath: string;
+  /** Original full path (for `rename`); empty when creating a new entry. */
+  originalPath: string | null;
+  /** Pre-filled value (existing name for rename; empty for create). */
+  initialValue: string;
+  /** Whether to apply the `.md` / `.docx` extension automatically. */
+  extension?: string;
+  /** What we're creating; undefined means rename. */
+  createPayload?: NewEntryPayload;
+  /** Discriminates `create` vs `rename` so the input can branch its UX. */
+  mode: 'create' | 'rename';
+}
+
 interface SidebarState {
   workspacePath: string | null;
   directoryCache: Map<string, FileEntry[]>;
@@ -71,6 +94,9 @@ interface SidebarState {
 
   knowledgeSelectMode: boolean;
   knowledgeCheckedPaths: Set<string>;
+
+  /** Inline-rename / new-entry state; null when no row is being edited. */
+  inlineEdit: InlineEditState | null;
 
   hasRestoredFromPersist: boolean;
 
@@ -89,8 +115,13 @@ interface SidebarState {
   isDirLoading: (path: string) => boolean;
 
   openTab: (tab: OpenTab) => void;
-  openWorkspaceFile: (path: string, options?: { name?: string }) => void;
+  openWorkspaceFile: (path: string, options?: { name?: string; forceNew?: boolean }) => void;
   closeTab: (tabId: string) => void;
+  /**
+   * Close a tab by path. If the tab is dirty, returns `false` so the caller
+   * can show a confirmation dialog instead of force-closing.
+   */
+  requestCloseTab: (path: string) => boolean;
   setActiveTab: (tabId: string) => void;
   setOpenTabDirty: (path: string, isDirty: boolean) => void;
 
@@ -104,6 +135,9 @@ interface SidebarState {
   setKnowledgeChecked: (path: string, checked: boolean) => void;
   checkAllKnowledgePaths: (paths: string[]) => void;
   clearKnowledgeChecked: () => void;
+
+  startInlineEdit: (state: InlineEditState) => void;
+  cancelInlineEdit: () => void;
 }
 
 export const useSidebarStore = create<SidebarState>()(
@@ -124,6 +158,8 @@ export const useSidebarStore = create<SidebarState>()(
 
       knowledgeSelectMode: false,
       knowledgeCheckedPaths: new Set(),
+
+      inlineEdit: null,
 
       hasRestoredFromPersist: false,
 
@@ -204,9 +240,15 @@ export const useSidebarStore = create<SidebarState>()(
           const resolvedPath = resolvedEntry?.path ?? path;
           const existing = state.openTabs.find((t) => t.path === resolvedPath);
 
-          if (existing) {
+          if (existing && !options?.forceNew) {
             return { activeTabId: existing.id, selectedFile: resolvedPath };
           }
+
+          // When forcing a new tab we reuse the same path as the tab id but
+          // disambiguate with a suffix so React keys remain unique.
+          const newTabId = existing && options?.forceNew
+            ? `${resolvedPath}::${Date.now()}`
+            : resolvedPath;
 
           const tabName =
             options?.name ??
@@ -214,7 +256,7 @@ export const useSidebarStore = create<SidebarState>()(
             resolvedPath.split('/').pop() ??
             '未命名文档';
           const newTab: OpenTab = {
-            id: resolvedPath,
+            id: newTabId,
             path: resolvedPath,
             name: tabName,
             isDirty: false,
@@ -247,6 +289,15 @@ export const useSidebarStore = create<SidebarState>()(
               : null,
           };
         }),
+
+      requestCloseTab: (path) => {
+        const state = get();
+        const tab = state.openTabs.find((t) => t.path === path && !t.isSettings);
+        if (!tab) return true;
+        if (tab.isDirty) return false;
+        state.closeTab(tab.id);
+        return true;
+      },
 
       setActiveTab: (tabId) =>
         set((state) => {
@@ -312,6 +363,9 @@ export const useSidebarStore = create<SidebarState>()(
 
       clearKnowledgeChecked: () =>
         set({ knowledgeCheckedPaths: new Set() }),
+
+      startInlineEdit: (state) => set({ inlineEdit: state }),
+      cancelInlineEdit: () => set({ inlineEdit: null }),
     }),
     {
       name: 'inkuo-sidebar',
@@ -333,6 +387,8 @@ export const useSidebarStore = create<SidebarState>()(
           ...persistedState,
           expandedDirs: new Set(persistedState?.expandedDirs ?? []),
           directoryCache: new Map(cacheEntries),
+          // Transient UI state must not survive a reload.
+          inlineEdit: null,
           hasRestoredFromPersist: true,
         };
       },

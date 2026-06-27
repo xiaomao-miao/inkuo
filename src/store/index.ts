@@ -5,6 +5,7 @@ export {
   type OpenTab,
   type KnowledgeBase as SidebarKnowledgeBase,
   type BuildProgress as SidebarBuildProgress,
+  type InlineEditState,
 } from './sidebarStore';
 export { useAIPanelStore } from './aiPanelStore';
 export { useLayoutStore } from './layoutStore';
@@ -12,6 +13,13 @@ export { useSettingsStore } from './settingsStore';
 export { useCmdKStore } from './cmdKStore';
 export { useInlineCompleteStore } from './inlineCompleteStore';
 export { useNotificationStore } from './notificationStore';
+export { useClipboardStore, type ClipboardMode, type ClipboardState } from './clipboardStore';
+export {
+  useContextMenuStore,
+  type ContextMenuTarget,
+  type ContextMenuKind,
+} from './contextMenuStore';
+export { useConfirmDialogStore, type ConfirmRequest } from './confirmDialogStore';
 
 export type {
   ActiveToolCall,

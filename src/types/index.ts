@@ -366,6 +366,35 @@ export interface FileEntry {
   is_markdown: boolean;
 }
 
+/** Payload for the `create_file_entry` Rust command. */
+export type NewEntryPayload =
+  | { kind: 'file'; extension: string; template?: string }
+  | { kind: 'directory' };
+
+export interface CreateEntryResult {
+  path: string;
+}
+
+export interface RenamePathResult {
+  from: string;
+  to: string;
+}
+
+/** Built-in template presets for new-file creation in the context menu. */
+export interface NewFileTemplate {
+  id: string;
+  label: string;
+  extension: string;
+  template: string;
+}
+
+export const NEW_FILE_TEMPLATES: readonly NewFileTemplate[] = [
+  { id: 'md', label: 'Markdown', extension: 'md', template: '# 无标题\n\n开始书写…\n' },
+  { id: 'txt', label: '纯文本', extension: 'txt', template: '' },
+  { id: 'docx', label: 'Word 文档', extension: 'docx', template: '' },
+  { id: 'xlsx', label: 'Excel 工作簿', extension: 'xlsx', template: '' },
+] as const;
+
 // ============================================================================
 // Settings types
 // ============================================================================

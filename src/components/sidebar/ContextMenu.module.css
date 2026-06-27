@@ -1,0 +1,158 @@
+.contextMenu {
+  position: fixed;
+  z-index: var(--z-popover);
+  min-width: 220px;
+  padding: 4px;
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  font-size: var(--font-size-sm);
+  color: var(--fg-primary);
+  user-select: none;
+  animation: contextMenuIn 80ms ease-out;
+}
+
+@keyframes contextMenuIn {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  border: none;
+  color: inherit;
+  font-size: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--transition-fast), color var(--transition-fast);
+  position: relative;
+}
+
+.item:hover:not(.disabled) {
+  background-color: var(--accent-primary);
+  color: white;
+}
+
+.item.disabled {
+  color: var(--fg-disabled);
+  cursor: not-allowed;
+}
+
+.itemIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  color: var(--fg-secondary);
+  flex-shrink: 0;
+}
+
+.item:hover:not(.disabled) .itemIcon {
+  color: white;
+}
+
+.itemLabel {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.itemShortcut {
+  margin-left: 16px;
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  flex-shrink: 0;
+}
+
+.item:hover:not(.disabled) .itemShortcut {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.itemChevron {
+  margin-left: 4px;
+  color: var(--fg-muted);
+  flex-shrink: 0;
+}
+
+.item:hover:not(.disabled) .itemChevron {
+  color: white;
+}
+
+.divider {
+  height: 1px;
+  margin: 4px 6px;
+  background-color: var(--border-color);
+}
+
+.submenu {
+  position: absolute;
+  left: 100%;
+  top: 0;
+  margin-left: 2px;
+  /* Reuse .contextMenu styles via class composition */
+}
+
+.submenuHost {
+  position: relative;
+}
+
+.submenuHost > .submenu {
+  visibility: hidden;
+  pointer-events: none;
+  opacity: 0;
+}
+
+.submenuHost:hover > .submenu,
+.submenuHost:focus-within > .submenu {
+  visibility: visible;
+  pointer-events: auto;
+  opacity: 1;
+}
+
+.danger {
+  color: var(--error);
+}
+
+.danger .itemIcon {
+  color: var(--error);
+}
+
+.danger:hover:not(.disabled) {
+  background-color: var(--error);
+  color: white;
+}
+
+.danger:hover:not(.disabled) .itemIcon {
+  color: white;
+}
+
+.checked {
+  color: var(--accent-primary);
+}
+
+.checked .itemIcon {
+  color: var(--accent-primary);
+}
+
+.checked:hover:not(.disabled) {
+  color: white;
+}
+
+.checked:hover:not(.disabled) .itemIcon {
+  color: white;
+}

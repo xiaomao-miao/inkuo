@@ -103,6 +103,14 @@ pub fn run() {
             knowledge::commands::knowledge_get_members,
             knowledge::commands::check_available_models,
             knowledge::commands::download_model_files,
+            commands::create_file_entry,
+            commands::rename_path,
+            commands::delete_path,
+            commands::copy_path,
+            commands::move_path,
+            commands::path_exists,
+            commands::open_with_default_app,
+            commands::reveal_in_file_manager,
         ])
         .run(tauri::generate_context!())
         .expect("error while running inkuo application");
