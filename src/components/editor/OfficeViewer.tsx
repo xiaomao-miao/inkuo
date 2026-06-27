@@ -448,6 +448,23 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
       // loadedSheetsRef is kept for backward compatibility, but save now reads
       // directly from workbookRef.getAllSheets() which is always current.
       loadedSheetsRef.current = changedSheets;
+
+      // Formula calculation: FortuneSheet does NOT compute formula results on
+      // initial data load — `setFormulaCellInfoMap` only builds the dependency
+      // graph. Trigger `calculateFormula` for every sheet the first time the
+      // Workbook reports its data is ready (workbookRef + a populated sheet).
+      // This MUST run regardless of `userEditSeenRef`, because that flag only
+      // fires after the user's first real op — by then the user has already
+      // observed the uncalculated cells. So the calc block is intentionally
+      // outside the dirty-gate early return below.
+      if (!formulaInitDoneRef.current && workbookRef.current) {
+        formulaInitDoneRef.current = true;
+        const wb = workbookRef.current;
+        for (const sheet of wb.getAllSheets()) {
+          wb.calculateFormula(sheet.id);
+        }
+      }
+
       // Dirty rule: only mark dirty when onOp has fired since the last load
       // or save. Workbook's onChange echoes its internal context on every
       // rebuild (file open, settings change, selection, etc.) and does not
@@ -469,17 +486,6 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
       lastLoadedSheetsRef.current = changedSheets;
       lastLoadedFingerprintRef.current = fingerprintSheets(changedSheets);
       setIsDirty(true);
-
-  // Formula calculation: FortuneSheet does NOT compute formula results on initial
-  // data load. Triggering calculation here (on first onChange) is the only
-  // reliable hook after initSheetData has populated the data matrices.
-  if (!formulaInitDoneRef.current && workbookRef.current) {
-    formulaInitDoneRef.current = true;
-    const wb = workbookRef.current;
-    for (const sheet of wb.getAllSheets()) {
-      wb.calculateFormula(sheet.id);
-    }
-  }
     },
     [],
   );

@@ -6,9 +6,10 @@ import {
   Copy,
   Settings
 } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
 import { useSidebarStore, useEditorStore, useNotificationStore } from '../../store';
 import { getCurrentWindow } from '@tauri-apps/api/window';
-import { applyWorkspaceDirectoryLoad, openWorkspaceDirectory } from '../../services/workspace';
+import { applyWorkspaceDirectoryLoad, openWorkspaceDirectory, switchWorkspace } from '../../services/workspace';
 import { persistDocument } from '../../services/documentSave';
 import { reportError } from '../../utils/errors';
 import { openSettingsTab } from '../../utils/openSettingsTab';
@@ -35,7 +36,7 @@ export const TitleBar = () => {
   const isTauri = isTauriRuntime();
 
   const selectedFile = useSidebarStore((state) => state.selectedFile);
-  const setWorkspacePath = useSidebarStore((state) => state.setWorkspacePath);
+  const workspacePath = useSidebarStore((state) => state.workspacePath);
   const pushNotification = useNotificationStore((state) => state.pushNotification);
   const currentMetadata = useEditorStore((state) => (
     selectedFile ? state.documentContents[selectedFile]?.metadata : null
@@ -139,11 +140,30 @@ export const TitleBar = () => {
     try {
       const selected = await openWorkspaceDirectory();
       if (selected) {
-        setWorkspacePath(selected);
+        switchWorkspace(selected);
         await applyWorkspaceDirectoryLoad(selected, { mergeWithExisting: false });
       }
     } catch (err) {
       reportError('titlebar-open-folder', err);
+    }
+    setActiveMenu(null);
+  };
+
+  const handleNewWindow = async () => {
+    try {
+      await invoke('create_new_window');
+      pushNotification({
+        kind: 'info',
+        title: '新窗口已创建',
+        message: '正在打开新窗口...',
+      });
+    } catch (err) {
+      reportError('titlebar-new-window', err);
+      pushNotification({
+        kind: 'error',
+        title: '创建新窗口失败',
+        message: String(err),
+      });
     }
     setActiveMenu(null);
   };
@@ -184,8 +204,17 @@ export const TitleBar = () => {
     {
       label: '文件',
       items: [
+        { label: '新建窗口', shortcut: 'Ctrl+Shift+N', action: handleNewWindow },
         { label: '新建文件', shortcut: 'Ctrl+N', action: () => setActiveMenu(null), disabled: true },
-        { label: '打开文件夹...', shortcut: 'Ctrl+O', action: handleOpenFolder },
+        // Same-window "Open folder" is disabled once a workspace is loaded:
+// a window is tied to a single workspace for its lifetime. To switch
+// workspaces the user opens a new window from the welcome page.
+        {
+          label: '打开文件夹...',
+          shortcut: 'Ctrl+O',
+          action: handleOpenFolder,
+          disabled: Boolean(workspacePath),
+        },
         { divider: true, label: '' },
         { label: '保存', shortcut: 'Ctrl+S', action: handleSave, disabled: !isDirty },
         { label: '另存为...', shortcut: 'Ctrl+Shift+S', disabled: true },

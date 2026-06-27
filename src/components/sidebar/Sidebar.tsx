@@ -1,5 +1,4 @@
 import {
-  FolderOpen,
   RefreshCw,
   PanelLeftClose,
   PanelLeft,
@@ -72,7 +71,6 @@ export const Sidebar = () => {
     openTabs,
     isCollapsed,
     setIsCollapsed,
-    openWorkspace,
     refreshWorkspace,
     handleFileClick,
     getChildren,
@@ -141,13 +139,6 @@ export const Sidebar = () => {
         >
           <PanelLeft size={18} />
         </button>
-        <button
-          className={styles.iconButton}
-          onClick={() => void openWorkspace()}
-          title="打开工作区"
-        >
-          <FolderOpen size={18} />
-        </button>
       </div>
     );
   }
@@ -199,13 +190,6 @@ export const Sidebar = () => {
           onCancel={() => setKnowledgeSelectMode(false)}
         />
       )}
-
-      <div className={styles.workspaceBar}>
-        <button className={styles.openWorkspace} onClick={() => void openWorkspace()}>
-          <FolderOpen size={14} />
-          <span>{workspacePath ? '更改工作区' : '打开文件夹'}</span>
-        </button>
-      </div>
 
       {workspacePath && (
         <>

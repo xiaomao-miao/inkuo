@@ -6,6 +6,7 @@ import { useDebouncedCallback } from './useDebouncedCallback';
 import {
   loadDirectoryChildren,
   openWorkspaceDirectory,
+  switchWorkspace,
 } from '../services/workspace';
 import { reportError } from '../utils/errors';
 
@@ -61,7 +62,6 @@ export function useWorkspaceTree(): UseWorkspaceTreeResult {
   const isLoading = useSidebarStore((state) => state.isLoading);
   const loadingDirs = useSidebarStore((state) => state.loadingDirs);
   const openTabs = useSidebarStore((state) => state.openTabs);
-  const setWorkspacePath = useSidebarStore((state) => state.setWorkspacePath);
   const toggleDir = useSidebarStore((state) => state.toggleDir);
   const setIsLoading = useSidebarStore((state) => state.setIsLoading);
   const setDirLoading = useSidebarStore((state) => state.setDirLoading);
@@ -227,13 +227,13 @@ export function useWorkspaceTree(): UseWorkspaceTreeResult {
       const selected = await openWorkspaceDirectory();
       if (!selected) return;
 
-      setWorkspacePath(selected);
+      switchWorkspace(selected);
       clearCache();
       await loadChildren(selected);
     } catch (err) {
       reportError('workspace-tree-open-workspace', err);
     }
-  }, [loadChildren, clearCache, setWorkspacePath]);
+  }, [loadChildren, clearCache]);
 
   /**
    * Handle file/folder click.
