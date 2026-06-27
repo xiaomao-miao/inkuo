@@ -83,20 +83,25 @@ export function useWorkspaceTree(): UseWorkspaceTreeResult {
   const refreshLockRef = useRef<Set<string>>(new Set());
 
   /**
-   * Refresh a specific directory's cache and reload if expanded.
+   * Refresh a specific directory's cache and reload.
+   *
+   * We always re-read the directory contents (debounced upstream) so that:
+   * - expanded directories show fresh children immediately,
+   * - collapsed directories have fresh cache for when the user expands them,
+   *   avoiding a "stale until manual refresh" UX.
    */
   const triggerFileRefresh = useCallback(
     async (parentPath: string) => {
       invalidateCache(parentPath);
 
-      if (isDirExpanded(parentPath)) {
-        await loadDirectoryChildren(parentPath).then(
-          (children) => setCachedChildren(parentPath, children),
-          () => reportError('workspace-tree-refresh-children', 'Failed to refresh'),
-        );
+      try {
+        const children = await loadDirectoryChildren(parentPath);
+        setCachedChildren(parentPath, children);
+      } catch (err) {
+        reportError('workspace-tree-refresh-children', err);
       }
     },
-    [invalidateCache, isDirExpanded, setCachedChildren],
+    [invalidateCache, setCachedChildren],
   );
 
   /**

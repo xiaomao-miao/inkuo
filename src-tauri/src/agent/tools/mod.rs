@@ -495,7 +495,7 @@ impl ToolRegistry {
         let is_file_modification = matches!(
             tool_call.name.as_str(),
             "write_file" | "edit_file" | "create_word_doc" | "create_dir"
-            | "modify_excel" | "create_excel"
+            | "modify_excel" | "create_excel" | "move_file"
         );
 
         let file_path = is_file_modification
@@ -524,6 +524,19 @@ impl ToolRegistry {
         match executor.execute(tool_call.arguments.clone(), workspace).await {
             Ok(output) => {
                 if is_file_modification {
+                    // Emit file-change so the file tree refreshes even when the
+                    // in-process inotify watcher misses the write.
+                    if let (Some(app), Some(path)) = (self.app_handle.as_ref(), file_path) {
+                        use crate::file_watcher::{emit_file_change, FileChangeEvent};
+                        let existed = std::path::Path::new(path).exists();
+                        let event = if existed {
+                            FileChangeEvent::Modified { path: path.to_string() }
+                        } else {
+                            FileChangeEvent::Created { path: path.to_string() }
+                        };
+                        emit_file_change(app, event);
+                    }
+
                     // Don't read file again - reuse original_content for diff
                     // The file has been written, we don't need to read it again
                     ToolResult {

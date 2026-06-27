@@ -12,6 +12,7 @@ use tauri::{AppHandle, State};
 use thiserror::Error;
 
 use crate::backup::{create_backup_path, get_backup_dir, request_backup_cleanup};
+use crate::file_watcher::{emit_file_change, FileChangeEvent};
 use crate::office;
 use crate::{ai, ai_config::{self, AITestResult, AIProviderKind, TestApiConfigRequest}, diff, document, file_watcher};
 
@@ -99,7 +100,11 @@ pub async fn read_document(path: String) -> Result<ReadDocumentResult, AppComman
 }
 
 #[tauri::command]
-pub async fn write_document(path: String, content: String) -> Result<(), AppCommandError> {
+pub async fn write_document(
+    path: String,
+    content: String,
+    app_handle: AppHandle,
+) -> Result<(), AppCommandError> {
     tracing::info!("Writing document: {}", path);
 
     if std::path::Path::new(&path).exists() {
@@ -130,6 +135,11 @@ pub async fn write_document(path: String, content: String) -> Result<(), AppComm
     std::fs::rename(&temp_path, &path)
         .map_err(|e| AppCommandError::WriteDocument(e.to_string()))?;
 
+    // Inotify inside the same process is not always reliable for in-process
+    // writes (atomic rename, kernel delivery timing). Emit explicitly so the
+    // file tree always refreshes.
+    emit_file_change(&app_handle, FileChangeEvent::Modified { path });
+
     Ok(())
 }
 
@@ -143,7 +153,7 @@ pub struct FileEntry {
 
 #[tauri::command]
 pub async fn list_directory(path: String) -> Result<Vec<FileEntry>, AppCommandError> {
-    tracing::info!("Listing directory: {}", path);
+    tracing::trace!("Listing directory: {}", path);
 
     let entries = std::fs::read_dir(&path)
         .map_err(|e| AppCommandError::ListDirectory(e.to_string()))?;
@@ -520,9 +530,14 @@ pub async fn read_office_file(path: String) -> Result<Vec<u8>, AppCommandError> 
 }
 
 #[tauri::command]
-pub async fn write_office_file(path: String, data: Vec<u8>) -> Result<(), AppCommandError> {
+pub async fn write_office_file(
+    path: String,
+    data: Vec<u8>,
+    app_handle: AppHandle,
+) -> Result<(), AppCommandError> {
     tracing::info!("Writing office file: {}", path);
     std::fs::write(&path, &data).map_err(|e| AppCommandError::WriteOfficeFile(e.to_string()))?;
+    emit_file_change(&app_handle, FileChangeEvent::Modified { path });
     Ok(())
 }
 
@@ -572,11 +587,14 @@ pub async fn read_xlsx_structured(path: String) -> Result<office::XlsxWorkbook, 
 pub async fn write_xlsx_structured(
     path: String,
     workbook: office::XlsxWorkbook,
+    app_handle: AppHandle,
 ) -> Result<(), AppCommandError> {
     tracing::info!("Writing structured xlsx workbook: {}", path);
     let path_obj = std::path::Path::new(&path);
     office::create_xlsx_workbook(&workbook, path_obj)
-        .map_err(|e| AppCommandError::WriteOfficeFile(e.to_string()))
+        .map_err(|e| AppCommandError::WriteOfficeFile(e.to_string()))?;
+    emit_file_change(&app_handle, FileChangeEvent::Modified { path });
+    Ok(())
 }
 
 #[tauri::command]
@@ -584,11 +602,14 @@ pub async fn write_office_text(
     path: String,
     json_content: String,
     format: String,
+    app_handle: AppHandle,
 ) -> Result<(), AppCommandError> {
     tracing::info!("Writing office file: {} ({})", path, format);
 
     let path_obj = std::path::Path::new(&path);
 
     office::write_office_file(path_obj, &json_content)
-        .map_err(|e| AppCommandError::WriteOfficeFile(e.to_string()))
+        .map_err(|e| AppCommandError::WriteOfficeFile(e.to_string()))?;
+    emit_file_change(&app_handle, FileChangeEvent::Modified { path });
+    Ok(())
 }

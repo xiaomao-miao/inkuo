@@ -1,11 +1,16 @@
 //! File system watcher for detecting file changes in the workspace
-//! 
-//! This module uses the `notify` crate to watch for file system changes
-//! and emits events to the frontend when files are created, modified, or deleted.
+//!
+//! This module uses the `notify` crate's `PollWatcher` to watch for file system
+//! changes and emits events to the frontend when files are created, modified,
+//! or deleted. `PollWatcher` is used instead of `RecommendedWatcher` (inotify
+//! on Linux) because inotify is unreliable for in-process writes and can miss
+//! events on some filesystems / Docker / overlay setups. Polling is slower but
+//! reliably catches every change.
 
-use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{poll::PollWatcher, Config, Event, EventKind, RecursiveMode, Watcher};
 use serde::Serialize;
 use std::path::PathBuf;
+use std::time::Duration;
 use thiserror::Error;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, oneshot};
@@ -22,6 +27,18 @@ pub enum FileChangeEvent {
     Deleted { path: String },
 }
 
+/// Emit a file-change event to the frontend.
+///
+/// Use this from write paths (editor save, AI tools, office writes) so that
+/// the file tree refreshes even when the in-process inotify watcher doesn't
+/// observe the change (a known limitation on some Linux setups / same-process
+/// writes).
+pub fn emit_file_change(app_handle: &AppHandle, event: FileChangeEvent) {
+    if let Err(error) = app_handle.emit("file-change", event) {
+        tracing::warn!("Failed to emit file-change event: {}", error);
+    }
+}
+
 /// File watcher state shared across the application
 #[derive(Debug, Error)]
 pub enum FileWatcherError {
@@ -35,12 +52,16 @@ pub enum FileWatcherError {
 type WatcherAbortHandle = oneshot::Sender<()>;
 
 pub struct FileWatcherState {
+    /// Serialize watch()/stop() so concurrent StrictMode-driven invokes
+    /// can't race on `watcher` / `abort_handle` (which would orphan the
+    /// inotify fd and silently drop all subsequent events).
+    lock: parking_lot::Mutex<()>,
     /// The currently watched directory path
     watched_path: parking_lot::Mutex<Option<PathBuf>>,
     /// The Tauri app handle for emitting events
     app_handle: parking_lot::Mutex<Option<AppHandle>>,
     /// The active watcher instance (must drop to truly stop watching)
-    watcher: parking_lot::Mutex<Option<RecommendedWatcher>>,
+    watcher: parking_lot::Mutex<Option<PollWatcher>>,
     /// Abort handle for the event-handling task
     abort_handle: parking_lot::Mutex<Option<WatcherAbortHandle>>,
 }
@@ -48,6 +69,7 @@ pub struct FileWatcherState {
 impl FileWatcherState {
     pub fn new() -> Self {
         Self {
+            lock: parking_lot::Mutex::new(()),
             watched_path: parking_lot::Mutex::new(None),
             app_handle: parking_lot::Mutex::new(None),
             watcher: parking_lot::Mutex::new(None),
@@ -57,8 +79,12 @@ impl FileWatcherState {
 
     /// Start watching a directory for file changes
     pub fn watch(&self, path: PathBuf, app_handle: AppHandle) -> Result<(), FileWatcherError> {
+        // Serialize with stop() so StrictMode-driven double-invokes
+        // can't race on watcher/abort_handle.
+        let _guard = self.lock.lock();
+
         // Stop any existing watcher first (drops old watcher + aborts old task)
-        self.stop();
+        self.stop_locked();
 
         // Store the app handle for emitting events
         *self.app_handle.lock() = Some(app_handle.clone());
@@ -74,7 +100,11 @@ impl FileWatcherState {
         let (abort_tx, abort_rx) = oneshot::channel::<()>();
 
         // Create the watcher
-        let mut watcher = RecommendedWatcher::new(
+        // PollWatcher is used instead of RecommendedWatcher (inotify on Linux)
+        // because inotify has known reliability issues for in-process writes
+        // and on some filesystems (overlayfs, Docker bind mounts). Polling
+        // catches every change reliably at the cost of higher CPU/IO.
+        let mut watcher = PollWatcher::new(
             move |res: Result<Event, notify::Error>| {
                 if let Ok(event) = res {
                     if let Err(error) = tx.blocking_send(event) {
@@ -82,7 +112,7 @@ impl FileWatcherState {
                     }
                 }
             },
-            Config::default(),
+            Config::default().with_poll_interval(Duration::from_secs(2)),
         )
         .map_err(|e| FileWatcherError::CreateWatcher(e.to_string()))?;
 
@@ -116,11 +146,18 @@ impl FileWatcherState {
         *self.abort_handle.lock() = Some(abort_tx);
 
         tracing::info!("Started watching directory: {:?}", path);
+
         Ok(())
     }
 
     /// Stop watching the current directory and release all resources
     pub fn stop(&self) {
+        let _guard = self.lock.lock();
+        self.stop_locked();
+    }
+
+    /// Internal: caller must hold `self.lock`.
+    fn stop_locked(&self) {
         // Abort the event-handling task first
         if let Some(abort) = self.abort_handle.lock().take() {
             let _ = abort.send(());
@@ -153,9 +190,7 @@ impl FileWatcherState {
             };
 
             if let Some(change_event) = change_event {
-                if let Err(error) = app_handle.emit("file-change", change_event) {
-                    tracing::warn!("Failed to emit file-change event: {}", error);
-                }
+                emit_file_change(app_handle, change_event);
             }
         }
     }
