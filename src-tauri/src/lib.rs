@@ -51,10 +51,15 @@ pub fn run() {
     tauri::Builder::default()
         .manage(commands::AppState::default())
         .manage(file_watcher::FileWatcherState::new())
-        .setup(|_app| {
+        .setup(|app| {
             tauri::async_runtime::spawn(async {
                 crate::backup::init_backup_cleanup_task();
             });
+
+            // Load the shared workspace-snapshot store from disk once at
+            // startup. All subsequent reads/writes happen in-memory; the
+            // disk file is updated atomically whenever a snapshot changes.
+            commands::init_workspace_snapshots(&app.handle());
 
             // Register shared vector store cache so both KB commands and agent tools
             // use the same cache, avoiding WAL lock conflicts.
@@ -111,6 +116,11 @@ pub fn run() {
             commands::path_exists,
             commands::open_with_default_app,
             commands::reveal_in_file_manager,
+            commands::create_new_window,
+            commands::save_workspace_snapshot,
+            commands::load_workspace_snapshot,
+            commands::list_workspace_snapshots,
+            commands::delete_workspace_snapshot,
         ])
         .run(tauri::generate_context!())
         .expect("error while running inkuo application");

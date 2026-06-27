@@ -1,6 +1,13 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { FileEntry, ActiveToolCall, KnowledgeBase, BuildProgress, NewEntryPayload } from '../types';
+import type {
+  FileEntry,
+  ActiveToolCall,
+  ChatSession,
+  KnowledgeBase,
+  BuildProgress,
+  NewEntryPayload,
+} from '../types';
 
 export interface OpenTab {
   id: string;
@@ -11,6 +18,25 @@ export interface OpenTab {
 }
 
 export type { KnowledgeBase, BuildProgress };
+
+/**
+ * Per-workspace snapshot of state that the user expects to "come back" when
+ * reopening the same workspace from a new window. Open tabs and AI chat
+ * sessions are the headline items; everything else (document content cache,
+ * directory cache, file selection, expanded dirs) is transient and rebuilt on
+ * demand from disk.
+ *
+ * Stored in a Rust-side JSON file (`workspace_snapshots.json`) that is shared
+ * across all webview windows. The sidebarStore keeps a memory cache (`snapshots`)
+ * and synchronizes it with the backend via `syncSnapshotFromBackend` /
+ * `syncSnapshotToBackend`.
+ */
+export interface WorkspaceSnapshot {
+  openTabs: OpenTab[];
+  activeTabId: string | null;
+  aiSessions: ChatSession[];
+  activeSessionId: string | null;
+}
 
 interface PersistedSidebarState {
   workspacePath: string | null;
@@ -124,6 +150,7 @@ interface SidebarState {
   requestCloseTab: (path: string) => boolean;
   setActiveTab: (tabId: string) => void;
   setOpenTabDirty: (path: string, isDirty: boolean) => void;
+  replaceTabs: (openTabs: OpenTab[], activeTabId: string | null) => void;
 
   setKnowledgeBase: (kb: KnowledgeBase | undefined) => void;
   setBuildProgress: (progress: BuildProgress | undefined) => void;
@@ -310,6 +337,19 @@ export const useSidebarStore = create<SidebarState>()(
             selectedFile: newSelectedFile,
           };
         }),
+
+      /**
+       * Replace the entire `openTabs` array and active tab id. Used when
+       * restoring a per-workspace snapshot so we don't go through individual
+       * `openTab`/`closeTab` actions (which would generate many persisted
+       * snapshots of their own).
+       */
+      replaceTabs: (openTabs, activeTabId) =>
+        set((state) => ({
+          openTabs,
+          activeTabId,
+          selectedFile: openTabs.find((t) => t.id === activeTabId)?.path ?? state.selectedFile,
+        })),
 
       setOpenTabDirty: (path, isDirty) =>
         set((state) => {

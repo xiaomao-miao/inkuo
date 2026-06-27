@@ -73,6 +73,14 @@ pub enum AppCommandError {
     RevealInFileManager(String),
     #[error("Target already exists")]
     TargetExists,
+    #[error("Failed to read workspace snapshots: {0}")]
+    ReadWorkspaceSnapshots(String),
+    #[error("Failed to write workspace snapshots: {0}")]
+    WriteWorkspaceSnapshots(String),
+    #[error("Failed to parse workspace snapshots: {0}")]
+    ParseWorkspaceSnapshots(String),
+    #[error("Invalid workspace snapshots path: {0}")]
+    InvalidWorkspaceSnapshotsPath(String),
 }
 
 pub struct AppState {
@@ -863,6 +871,33 @@ pub async fn reveal_in_file_manager(
         .map_err(|e| AppCommandError::RevealInFileManager(e.to_string()))
 }
 
+#[tauri::command]
+pub async fn create_new_window(app_handle: AppHandle) -> Result<(), AppCommandError> {
+    tracing::info!("Creating new window");
+
+    use tauri::WebviewWindowBuilder;
+    use tauri::WebviewUrl;
+
+    WebviewWindowBuilder::new(
+        &app_handle,
+        &format!("main-{}", uuid::Uuid::new_v4()),
+        WebviewUrl::App("index.html".into()),
+    )
+    .title("inkuo")
+    .inner_size(1200.0, 800.0)
+    .min_inner_size(800.0, 600.0)
+    // Mark this window as a "fresh" window via a global JS variable so the
+    // frontend can clear the previously persisted workspace and show the
+    // welcome page. We use initialization_script (a global set before the
+    // page scripts run) because Tauri 2's WebviewUrl::App is a PathBuf and
+    // does not propagate query strings to the webview in dev mode.
+    .initialization_script("window.__INKUO_FRESH_WINDOW__ = true;")
+    .build()
+    .map_err(|e| AppCommandError::CreateEntry(e.to_string()))?;
+
+    Ok(())
+}
+
 fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dst)?;
     for entry in std::fs::read_dir(src)? {
@@ -889,3 +924,157 @@ fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::
     }
     Ok(())
 }
+
+// =============================================================================
+// Per-workspace snapshot commands (cross-window shared state)
+// =============================================================================
+//
+// Snapshots are kept in an in-memory `HashMap` guarded by a `Mutex`, which is
+// the single source of truth at runtime. The disk file is loaded once at
+// startup and written back atomically (write-to-tmp + rename) whenever a
+// mutation happens. All read-modify-write operations take the same lock so
+// concurrent webview windows never lose updates.
+
+use std::collections::HashMap;
+
+use parking_lot::Mutex as PlMutex;
+use tauri::{AppHandle as TauriAppHandle, Manager};
+
+use AppCommandError::InvalidWorkspaceSnapshotsPath;
+
+/// Global in-memory map of workspace path → JSON snapshot. Initialised from
+/// disk in `init_workspace_snapshots` during the app's `setup` phase.
+pub static WORKSPACE_SNAPSHOTS: Lazy<PlMutex<HashMap<String, serde_json::Value>>> =
+    Lazy::new(|| PlMutex::new(HashMap::new()));
+
+/// Path to the on-disk JSON file. Resolved at runtime via Tauri's path API so
+/// it lands in the platform-correct config directory for the running app.
+pub static WORKSPACE_SNAPSHOTS_PATH: once_cell::sync::Lazy<PlMutex<Option<std::path::PathBuf>>> =
+    once_cell::sync::Lazy::new(|| PlMutex::new(None));
+
+/// Compute and cache the absolute path to the workspace snapshots file using
+/// Tauri's app config dir. Falls back to `dirs::config_dir()` only if the
+/// Tauri resolver is unavailable (which should not happen in production).
+fn resolve_snapshots_path(app_handle: &TauriAppHandle) -> Result<std::path::PathBuf, AppCommandError> {
+    if let Some(cached) = WORKSPACE_SNAPSHOTS_PATH.lock().clone() {
+        return Ok(cached);
+    }
+    let resolved = app_handle
+        .path()
+        .app_config_dir()
+        .map_err(|e| InvalidWorkspaceSnapshotsPath(e.to_string()))?
+        .join("workspace_snapshots.json");
+    *WORKSPACE_SNAPSHOTS_PATH.lock() = Some(resolved.clone());
+    Ok(resolved)
+}
+
+/// Load the snapshot file from disk into the in-memory map. Idempotent; safe
+/// to call multiple times.
+pub fn init_workspace_snapshots(app_handle: &TauriAppHandle) {
+    let path = match resolve_snapshots_path(app_handle) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(
+                "Could not resolve workspace snapshots path ({}); snapshots will not persist",
+                e
+            );
+            return;
+        }
+    };
+
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+        Err(e) => {
+            tracing::warn!("Failed to read workspace snapshots ({}): {}", path.display(), e);
+            return;
+        }
+    };
+
+    let parsed: HashMap<String, serde_json::Value> = match serde_json::from_str(&content) {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!(
+                "Invalid workspace snapshots JSON at {} ({}); starting fresh",
+                path.display(),
+                e
+            );
+            return;
+        }
+    };
+
+    *WORKSPACE_SNAPSHOTS.lock() = parsed;
+}
+
+/// Persist the in-memory map to disk atomically (write to a sibling `.tmp`
+/// file then rename). Returns `Ok(())` even when there is no path yet so
+/// tests / preview builds don't crash when the config dir is unavailable.
+fn flush_snapshots_to_disk(app_handle: &TauriAppHandle) -> Result<(), AppCommandError> {
+    let path = match resolve_snapshots_path(app_handle) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!("Skipping workspace snapshots flush: {}", e);
+            return Ok(());
+        }
+    };
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| AppCommandError::CreateBackupDirectory(e.to_string()))?;
+    }
+
+    let snapshot = WORKSPACE_SNAPSHOTS.lock().clone();
+    let content = serde_json::to_string_pretty(&snapshot)
+        .map_err(|e| AppCommandError::WriteWorkspaceSnapshots(format!("serialize: {}", e)))?;
+
+    // Atomic write: tmp + rename. Avoids partially-written files if the
+    // process is killed mid-write.
+    let tmp_path = path.with_extension("json.tmp");
+    std::fs::write(&tmp_path, &content)
+        .map_err(|e| AppCommandError::WriteWorkspaceSnapshots(format!("write tmp: {}", e)))?;
+    std::fs::rename(&tmp_path, &path)
+        .map_err(|e| AppCommandError::WriteWorkspaceSnapshots(format!("rename: {}", e)))?;
+    Ok(())
+}
+
+/// Save (insert or overwrite) a workspace snapshot under `path`. Triggers an
+/// atomic flush to disk.
+#[tauri::command]
+pub async fn save_workspace_snapshot(
+    app_handle: TauriAppHandle,
+    path: String,
+    snapshot: serde_json::Value,
+) -> Result<(), AppCommandError> {
+    {
+        let mut map = WORKSPACE_SNAPSHOTS.lock();
+        map.insert(path, snapshot);
+    }
+    flush_snapshots_to_disk(&app_handle)
+}
+
+/// Load the snapshot for `path`, or `None` if none has been saved.
+#[tauri::command]
+pub async fn load_workspace_snapshot(
+    path: String,
+) -> Result<Option<serde_json::Value>, AppCommandError> {
+    Ok(WORKSPACE_SNAPSHOTS.lock().get(&path).cloned())
+}
+
+/// List all workspace paths that currently have a saved snapshot.
+#[tauri::command]
+pub async fn list_workspace_snapshots() -> Result<Vec<String>, AppCommandError> {
+    Ok(WORKSPACE_SNAPSHOTS.lock().keys().cloned().collect())
+}
+
+/// Delete the snapshot for `path` (no-op if it doesn't exist).
+#[tauri::command]
+pub async fn delete_workspace_snapshot(
+    app_handle: TauriAppHandle,
+    path: String,
+) -> Result<(), AppCommandError> {
+    {
+        let mut map = WORKSPACE_SNAPSHOTS.lock();
+        map.remove(&path);
+    }
+    flush_snapshots_to_disk(&app_handle)
+}
+
