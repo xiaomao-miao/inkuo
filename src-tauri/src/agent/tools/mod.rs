@@ -312,7 +312,6 @@ impl ToolExecutor {
             ToolExecutor::CreateExcel(_) => "create_excel",
             ToolExecutor::ReadExcelRange(_) => "read_excel_range",
             ToolExecutor::ReadExcelMetadata(_) => "read_excel_metadata",
-            ToolExecutor::ReadExcelMetadata(_) => "read_excel_metadata",
             ToolExecutor::DatabaseSearch(_) => "database_search",
         }
     }
