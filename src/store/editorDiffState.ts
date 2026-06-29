@@ -26,19 +26,22 @@ function applyHunkToText(originalText: string, hunk: DiffHunk): string {
     .map((change) => change.content)
     .join('');
 
-  const oldIndex = originalText.indexOf(oldContent, hunk.old_offset);
-  if (oldIndex === -1 || oldIndex !== hunk.old_offset) {
-    return (
-      originalText.slice(0, hunk.old_offset) +
-      newContent +
-      originalText.slice(hunk.old_offset + oldContent.length)
-    );
+  const oldLength = oldContent.length;
+  // Prefer the hunk's declared offset, but fall back to the location where
+  // `oldContent` was actually found. This guards against offset drift when
+  // surrounding text has changed (e.g. after applying a previous hunk),
+  // which would otherwise slice the wrong region and corrupt the result.
+  const declaredOffsetMatch = originalText.indexOf(oldContent, hunk.old_offset) === hunk.old_offset;
+  const matchOffset = declaredOffsetMatch ? hunk.old_offset : originalText.indexOf(oldContent, hunk.old_offset);
+
+  if (matchOffset === -1) {
+    return originalText.slice(0, hunk.old_offset) + newContent + originalText.slice(hunk.old_offset + oldLength);
   }
 
   return (
-    originalText.slice(0, hunk.old_offset) +
+    originalText.slice(0, matchOffset) +
     newContent +
-    originalText.slice(hunk.old_offset + oldContent.length)
+    originalText.slice(matchOffset + oldLength)
   );
 }
 
