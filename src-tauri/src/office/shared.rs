@@ -21,11 +21,67 @@ pub enum OfficeError {
     UnsupportedFileType(String),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A single cell in a word/Excel-style table. When round-tripping through
+/// the JSON wire format (e.g. `DocElement::Table`), the cell may be either a
+/// bare string (the common case for a 1×1 cell) or an object with explicit
+/// `col_span`/`row_span` for merged cells. `Deserialize` accepts both forms.
+#[derive(Debug, Clone, Serialize)]
 pub struct TableCell {
     pub text: String,
     pub col_span: usize,
     pub row_span: usize,
+}
+
+impl TableCell {
+    pub fn plain(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            col_span: 1,
+            row_span: 1,
+        }
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for TableCell {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Either {
+            Str(String),
+            Full {
+                #[serde(default)]
+                text: String,
+                #[serde(default = "default_one")]
+                col_span: usize,
+                #[serde(default = "default_one")]
+                row_span: usize,
+            },
+        }
+
+        fn default_one() -> usize {
+            1
+        }
+
+        match Either::deserialize(deserializer)? {
+            Either::Str(text) => Ok(TableCell {
+                text,
+                col_span: 1,
+                row_span: 1,
+            }),
+            Either::Full {
+                text,
+                col_span,
+                row_span,
+            } => Ok(TableCell {
+                text,
+                col_span: col_span.max(1),
+                row_span: row_span.max(1),
+            }),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

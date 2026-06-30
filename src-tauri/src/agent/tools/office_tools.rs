@@ -393,15 +393,29 @@ impl CreateWordDocTool {
         }
 
         let id = v["id"].as_str().map(|s| s.to_string());
-        let header: Vec<String> = v["header"].as_array()
-            .map(|arr| arr.iter().filter_map(|c| c.as_str().map(|s| s.to_string())).collect())
-            .unwrap_or_default();
-        let rows: Vec<Vec<String>> = v["rows"].as_array()
-            .map(|arr| arr.iter().filter_map(|r| {
-                r.as_array().map(|cells| {
-                    cells.iter().filter_map(|c| c.as_str().map(|s| s.to_string())).collect()
+
+        // Header / rows are arrays of cells. For backwards compatibility we
+        // accept both bare strings ("A") and objects with span info
+        // ({"text": "A", "col_span": 2, "row_span": 1}). The custom
+        // `Deserialize` impl on `TableCell` handles both shapes uniformly.
+        let parse_cells = |arr: &serde_json::Value| -> Vec<crate::office::TableCell> {
+            arr.as_array()
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|c| serde_json::from_value::<crate::office::TableCell>(c.clone()).ok())
+                        .collect()
                 })
-            }).collect())
+                .unwrap_or_default()
+        };
+        let header = parse_cells(&v["header"]);
+        let rows: Vec<Vec<crate::office::TableCell>> = v["rows"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .map(|r| parse_cells(r))
+                    .collect()
+            })
             .unwrap_or_default();
 
         Ok(Some(crate::office::DocElement::Table {
@@ -494,11 +508,21 @@ impl CreateWordDocTool {
                         deletes.push(id.clone());
                     }
                 } else {
+                    let header: Vec<crate::office::TableCell> = t
+                        .header
+                        .iter()
+                        .map(|s| crate::office::TableCell::plain(s.clone()))
+                        .collect();
+                    let rows: Vec<Vec<crate::office::TableCell>> = t
+                        .rows
+                        .iter()
+                        .map(|r| r.iter().map(|s| crate::office::TableCell::plain(s.clone())).collect())
+                        .collect();
                     let elem = crate::office::DocElement::Table {
                         id: t.id.clone().unwrap_or_else(|| format!("__new_t{}", uuid_simple())),
                         position: 0,
-                        header: t.header.clone(),
-                        rows: t.rows.clone(),
+                        header,
+                        rows,
                     };
                     if t.id.is_some() {
                         modifies.push(elem);
@@ -535,18 +559,12 @@ impl CreateWordDocTool {
                         crate::office::DocElement::Table { id, position: _, header, rows } => {
                             let mut table_rows = vec![];
                             if !header.is_empty() {
-                                table_rows.push(crate::office::TableRow {
-                                    cells: header.into_iter()
-                                        .map(|text| crate::office::TableCell { text, col_span: 1, row_span: 1 })
-                                        .collect()
-                                });
+                                table_rows.push(crate::office::TableRow { cells: header });
                             }
                             for row in rows {
-                                table_rows.push(crate::office::TableRow {
-                                    cells: row.into_iter()
-                                        .map(|text| crate::office::TableCell { text, col_span: 1, row_span: 1 })
-                                        .collect()
-                                });
+                                if !row.is_empty() {
+                                    table_rows.push(crate::office::TableRow { cells: row });
+                                }
                             }
                             new_tables.push(crate::office::WordTable { id, rows: table_rows });
                         }

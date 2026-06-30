@@ -93,8 +93,8 @@ pub enum DocElement {
         /// Zero-based position among all document elements (0 = before p0).
         #[serde(default)]
         position: usize,
-        header: Vec<String>,
-        rows: Vec<Vec<String>>,
+        header: Vec<TableCell>,
+        rows: Vec<Vec<TableCell>>,
     },
 }
 
@@ -107,6 +107,11 @@ impl WordDocument {
         let table_map: std::collections::HashMap<&str, &WordTable> =
             self.tables.iter().map(|t| (t.id.as_str(), t)).collect();
 
+        // Tables already emitted via a marker paragraph (see loop below) are
+        // recorded here so the final "append remaining tables" pass doesn't
+        // double-count them.
+        let mut tables_emitted: std::collections::HashSet<String> = std::collections::HashSet::new();
+
         let mut elements: Vec<DocElement> = Vec::with_capacity(self.paragraphs.len() + self.tables.len());
 
         for p in &self.paragraphs {
@@ -114,21 +119,14 @@ impl WordDocument {
                 if let Some(end) = rest.find("__>") {
                     let tbl_id = &rest[..end];
                     if let Some(tbl) = table_map.get(tbl_id) {
-                        let (header, rows) = if tbl.rows.is_empty() {
-                            (vec![], vec![])
-                        } else {
-                            let h = tbl.rows[0].cells.iter().map(|c| c.text.clone()).collect();
-                            let r: Vec<Vec<String>> = tbl.rows[1..].iter()
-                                .map(|r| r.cells.iter().map(|c| c.text.clone()).collect())
-                                .collect();
-                            (h, r)
-                        };
+                        let (header, rows) = split_table(tbl);
                         elements.push(DocElement::Table {
                             id: tbl.id.clone(),
                             position: elements.len(),
                             header,
                             rows,
                         });
+                        tables_emitted.insert(tbl.id.clone());
                     }
                     continue;
                 }
@@ -142,18 +140,12 @@ impl WordDocument {
                 numbering: p.numbering.clone(),
             });
         }
-        // Tables without preceding markers (e.g. added via append mode) go at the end.
+        // Tables without preceding markers (e.g. freshly parsed documents
+        // that have no position marker paragraphs yet) are appended at the
+        // end so callers like the agent's round-trip logic still see them.
         for tbl in &self.tables {
-            if !table_map.contains_key(tbl.id.as_str()) {
-                let (header, rows) = if tbl.rows.is_empty() {
-                    (vec![], vec![])
-                } else {
-                    let h = tbl.rows[0].cells.iter().map(|c| c.text.clone()).collect();
-                    let r: Vec<Vec<String>> = tbl.rows[1..].iter()
-                        .map(|r| r.cells.iter().map(|c| c.text.clone()).collect())
-                        .collect();
-                    (h, r)
-                };
+            if !tables_emitted.contains(tbl.id.as_str()) {
+                let (header, rows) = split_table(tbl);
                 elements.push(DocElement::Table {
                     id: tbl.id.clone(),
                     position: elements.len(),
@@ -182,7 +174,25 @@ impl WordDocument {
         }
         map
     }
+}
 
+/// Split a `WordTable` into `(header, rows)` for `DocElement::Table`, carrying
+/// merge information (col_span / row_span) all the way through. Used by
+/// `WordDocument::to_elements` so that round-tripping a parsed document
+/// preserves merged-cell layout.
+fn split_table(tbl: &WordTable) -> (Vec<TableCell>, Vec<Vec<TableCell>>) {
+    if tbl.rows.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+    let header: Vec<TableCell> = tbl.rows[0].cells.clone();
+    let rows: Vec<Vec<TableCell>> = tbl.rows[1..]
+        .iter()
+        .map(|r| r.cells.clone())
+        .collect();
+    (header, rows)
+}
+
+impl WordDocument {
     /// Build a WordDocument from a list of elements.
     /// Each table is preceded by a marker paragraph whose ID encodes the table's own ID
     /// (e.g. table id "t0" → marker id "__tbl_pos_t0__"), so deletions of the table
@@ -209,18 +219,12 @@ impl WordDocument {
 
                     let mut table_rows = vec![];
                     if !header.is_empty() {
-                        table_rows.push(crate::office::TableRow {
-                            cells: header.into_iter()
-                                .map(|text| crate::office::TableCell { text, col_span: 1, row_span: 1 })
-                                .collect()
-                        });
+                        table_rows.push(TableRow { cells: header });
                     }
                     for row in rows {
-                        table_rows.push(crate::office::TableRow {
-                            cells: row.into_iter()
-                                .map(|text| crate::office::TableCell { text, col_span: 1, row_span: 1 })
-                                .collect()
-                        });
+                        if !row.is_empty() {
+                            table_rows.push(TableRow { cells: row });
+                        }
                     }
                     tables.push(WordTable { id, rows: table_rows });
                 }
@@ -855,17 +859,39 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
     Ok(paragraphs)
 }
 
+/// Raw cell as captured during streaming XML parsing. vMerge is held as the
+/// raw "restart"/"continue" flag so the row_span can be computed per-column
+/// after all rows for the table are known.
+#[derive(Debug, Clone)]
+struct RawCell {
+    text: String,
+    col_span: usize,
+    vmerge: Option<VMergeKind>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VMergeKind {
+    Restart,
+    Continue,
+}
+
+/// Raw table that holds un-merged cells until vMerge resolution finishes.
+struct RawTable {
+    id: String,
+    rows: Vec<Vec<RawCell>>,
+}
+
 fn parse_table_xml(content: &str) -> Result<Vec<WordTable>, OfficeError> {
-    let mut tables = Vec::new();
+    let mut raw_tables: Vec<RawTable> = Vec::new();
     let mut reader = quick_xml::Reader::from_str(content);
     reader.config_mut().trim_text(false);
 
     let mut buf = Vec::new();
-    let mut current_table: Option<WordTable> = None;
-    let mut current_row: Option<Vec<TableCell>> = None;
+    let mut current_table: Option<RawTable> = None;
+    let mut current_row: Option<Vec<RawCell>> = None;
     let mut current_cell_text = String::new();
     let mut cell_col_span: usize = 1;
-    let mut cell_row_span: usize = 1;
+    let mut cell_vmerge: Option<VMergeKind> = None;
     let mut table_depth = 0;
     let mut row_depth = 0;
     let mut cell_depth = 0;
@@ -878,7 +904,7 @@ fn parse_table_xml(content: &str) -> Result<Vec<WordTable>, OfficeError> {
                 match name.as_ref() {
                     b"tbl" => {
                         table_depth += 1;
-                        current_table = Some(WordTable {
+                        current_table = Some(RawTable {
                             id: format!("t{}", table_counter),
                             rows: Vec::new(),
                         });
@@ -892,29 +918,34 @@ fn parse_table_xml(content: &str) -> Result<Vec<WordTable>, OfficeError> {
                         cell_depth += 1;
                         current_cell_text.clear();
                         cell_col_span = 1;
-                        cell_row_span = 1;
+                        cell_vmerge = None;
                     }
                     b"t" if cell_depth > 0 => {
                         if let Ok(quick_xml::events::Event::Text(t)) = reader.read_event_into(&mut buf) {
                             current_cell_text.push_str(&t.unescape().unwrap_or_default());
                         }
                     }
-                    b"gridSpan" => {
-                        if let Ok(quick_xml::events::Event::Text(t)) = reader.read_event_into(&mut buf) {
-                            if let Ok(n) = t.unescape().unwrap_or_default().parse::<usize>() {
-                                cell_col_span = n;
+                    b"vMerge" if cell_depth > 0 => {
+                        let mut val: Option<String> = None;
+                        for attr in e.attributes().with_checks(false).flatten() {
+                            if attr.key.local_name().as_ref() == b"val" {
+                                val = Some(std::str::from_utf8(&attr.value).unwrap_or("").to_string());
                             }
                         }
+                        cell_vmerge = Some(match val.as_deref() {
+                            Some("restart") => VMergeKind::Restart,
+                            _ => VMergeKind::Continue,
+                        });
                     }
                     _ => {}
                 }
             }
             Ok(quick_xml::events::Event::Empty(ref e)) => {
                 let name = e.local_name();
-                if name.as_ref() == b"gridSpan" {
-                    for attr in e.attributes().with_checks(false) {
-                        if let Ok(attr) = attr {
-                            if attr.key.as_ref() == b"val" {
+                match name.as_ref() {
+                    b"gridSpan" if cell_depth > 0 => {
+                        for attr in e.attributes().with_checks(false).flatten() {
+                            if attr.key.local_name().as_ref() == b"val" {
                                 let val = std::str::from_utf8(&attr.value).unwrap_or("1");
                                 if let Ok(n) = val.parse::<usize>() {
                                     cell_col_span = n;
@@ -922,6 +953,19 @@ fn parse_table_xml(content: &str) -> Result<Vec<WordTable>, OfficeError> {
                             }
                         }
                     }
+                    b"vMerge" if cell_depth > 0 => {
+                        let mut val: Option<String> = None;
+                        for attr in e.attributes().with_checks(false).flatten() {
+                            if attr.key.local_name().as_ref() == b"val" {
+                                val = Some(std::str::from_utf8(&attr.value).unwrap_or("").to_string());
+                            }
+                        }
+                        cell_vmerge = Some(match val.as_deref() {
+                            Some("restart") => VMergeKind::Restart,
+                            _ => VMergeKind::Continue,
+                        });
+                    }
+                    _ => {}
                 }
             }
             Ok(quick_xml::events::Event::End(ref e)) => {
@@ -931,10 +975,10 @@ fn parse_table_xml(content: &str) -> Result<Vec<WordTable>, OfficeError> {
                         cell_depth -= 1;
                         if cell_depth == 0 {
                             if let Some(ref mut row) = current_row {
-                                row.push(TableCell {
+                                row.push(RawCell {
                                     text: current_cell_text.trim().to_string(),
                                     col_span: cell_col_span,
-                                    row_span: cell_row_span,
+                                    vmerge: cell_vmerge,
                                 });
                             }
                         }
@@ -944,7 +988,7 @@ fn parse_table_xml(content: &str) -> Result<Vec<WordTable>, OfficeError> {
                         if row_depth == 0 {
                             if let Some(row) = current_row.take() {
                                 if let Some(ref mut tbl) = current_table {
-                                    tbl.rows.push(TableRow { cells: row });
+                                    tbl.rows.push(row);
                                 }
                             }
                         }
@@ -954,7 +998,7 @@ fn parse_table_xml(content: &str) -> Result<Vec<WordTable>, OfficeError> {
                         if table_depth == 0 {
                             if let Some(table) = current_table.take() {
                                 if !table.rows.is_empty() {
-                                    tables.push(table);
+                                    raw_tables.push(table);
                                 }
                             }
                         }
@@ -969,7 +1013,102 @@ fn parse_table_xml(content: &str) -> Result<Vec<WordTable>, OfficeError> {
         buf.clear();
     }
 
-    Ok(tables)
+    // Resolve vMerge restart/continue markers into concrete row_span values
+    // and convert into the public TableCell type.
+    Ok(resolve_vmerge(raw_tables))
+}
+
+/// Resolve each table's vMerge restart/continue markers into concrete
+/// `row_span` values and convert into the public `TableCell` type.
+///
+/// `gridSpan` (col_span) is taken straight from the parser. `row_span` is
+/// computed by walking each column and counting how many following rows in
+/// the same column are `vMerge="continue"` before the next non-merged cell.
+/// Per the OOXML spec the first cell of each merge group uses
+/// `vMerge="restart"` and the span is the total height of the region.
+fn resolve_vmerge(raw_tables: Vec<RawTable>) -> Vec<WordTable> {
+    let mut out = Vec::with_capacity(raw_tables.len());
+    for raw in raw_tables {
+        let max_col = {
+            let mut m = 0usize;
+            for row in &raw.rows {
+                let mut c = 0;
+                for cell in row {
+                    c += cell.col_span.max(1);
+                }
+                m = m.max(c);
+            }
+            m
+        };
+
+        let mut row_spans: Vec<Vec<usize>> =
+            vec![vec![1; raw.rows.len()]; max_col];
+        for col in 0..max_col {
+            let mut i = 0;
+            while i < raw.rows.len() {
+                let Some(start_cell) = cell_at(&raw.rows[i], col) else {
+                    i += 1;
+                    continue;
+                };
+                if start_cell.vmerge == Some(VMergeKind::Restart) {
+                    let mut span = 1usize;
+                    let mut j = i + 1;
+                    while j < raw.rows.len() {
+                        match cell_at(&raw.rows[j], col) {
+                            Some(c) if c.vmerge == Some(VMergeKind::Continue) => {
+                                span += 1;
+                                j += 1;
+                            }
+                            _ => break,
+                        }
+                    }
+                    row_spans[col][i] = span;
+                    i = j;
+                } else {
+                    i += 1;
+                }
+            }
+        }
+
+        let mut rows = Vec::with_capacity(raw.rows.len());
+        for (row_idx, row) in raw.rows.into_iter().enumerate() {
+            let mut col_cursor = 0usize;
+            let cells = row
+                .into_iter()
+                .map(|c| {
+                    let span = c.col_span.max(1);
+                    let row_span = if c.vmerge == Some(VMergeKind::Restart) {
+                        row_spans[col_cursor][row_idx]
+                    } else {
+                        1
+                    };
+                    col_cursor += span;
+                    TableCell {
+                        text: c.text,
+                        col_span: c.col_span,
+                        row_span,
+                    }
+                })
+                .collect();
+            rows.push(TableRow { cells });
+        }
+        out.push(WordTable { id: raw.id, rows });
+    }
+    out
+}
+
+/// Locate the raw cell at a given column index within a row, accounting for
+/// col_span. Returns `None` if the row is shorter than `col`.
+fn cell_at(cells: &[RawCell], col: usize) -> Option<&RawCell> {
+    let mut cursor = 0usize;
+    for c in cells {
+        let span = c.col_span.max(1);
+        if col >= cursor && col < cursor + span {
+            return Some(c);
+        }
+        cursor += span;
+    }
+    None
 }
 
 // ─── Write Functions ──────────────────────────────────────────────────────────
@@ -1249,12 +1388,20 @@ pub fn build_document_xml(doc: &WordDocument) -> String {
                 xml.push_str("</w:tblBorders>");
                 xml.push_str("</w:tblPr>");
 
-                let render_row = |xml: &mut String, cells: &[String]| {
+                let render_row = |xml: &mut String, cells: &[TableCell]| {
                     xml.push_str("\n        <w:tr>");
-                    for cell_text in cells {
+                    for cell in cells {
+                        let col_span = cell.col_span.max(1);
+                        let row_span = cell.row_span.max(1);
                         xml.push_str("<w:tc><w:tcPr>");
+                        if col_span > 1 {
+                            xml.push_str(&format!("<w:gridSpan w:val=\"{}\"/>", col_span));
+                        }
+                        if row_span > 1 {
+                            xml.push_str("<w:vMerge w:val=\"restart\"/>");
+                        }
                         xml.push_str("</w:tcPr><w:p>");
-                        let lines: Vec<&str> = cell_text.split('\n').collect();
+                        let lines: Vec<&str> = cell.text.split('\n').collect();
                         for (chunk_idx, chunk) in lines.iter().enumerate() {
                             if !chunk.is_empty() {
                                 xml.push_str(&format!(
@@ -1276,7 +1423,9 @@ pub fn build_document_xml(doc: &WordDocument) -> String {
                     render_row(&mut xml, header);
                 }
                 for row in rows {
-                    render_row(&mut xml, row);
+                    if !row.is_empty() {
+                        render_row(&mut xml, row);
+                    }
                 }
 
                 xml.push_str("\n    </w:tbl>");
@@ -1750,8 +1899,8 @@ mod tests {
             DocElement::Table {
                 id: "t1".into(),
                 position: 0,
-                header: vec!["Col A".into(), "Col B".into()],
-                rows: vec![vec!["a1".into(), "b1".into()]],
+                header: vec![TableCell::plain("Col A"), TableCell::plain("Col B")],
+                rows: vec![vec![TableCell::plain("a1"), TableCell::plain("b1")]],
             },
             DocElement::Paragraph {
                 id: "p2".into(),
@@ -1764,8 +1913,8 @@ mod tests {
             DocElement::Table {
                 id: "t2".into(),
                 position: 0,
-                header: vec!["X".into(), "Y".into()],
-                rows: vec![vec!["1".into(), "2".into()]],
+                header: vec![TableCell::plain("X"), TableCell::plain("Y")],
+                rows: vec![vec![TableCell::plain("1"), TableCell::plain("2")]],
             },
             DocElement::Paragraph {
                 id: "p3".into(),
@@ -1856,4 +2005,152 @@ mod tests {
     // tables at the end. That is a pre-existing limitation of the parser
     // and is not the path used when an AI agent creates a new Word doc via
     // `from_elements` (which IS the user-reported regression and IS fixed).
+
+    #[test]
+    fn parse_table_xml_extracts_grid_span() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:tbl>
+      <w:tr>
+        <w:tc>
+          <w:tcPr><w:gridSpan w:val="3"/></w:tcPr>
+          <w:p><w:r><w:t>A B C</w:t></w:r></w:p>
+        </w:tc>
+      </w:tr>
+    </w:tbl>
+  </w:body>
+</w:document>"#;
+        let tables = parse_table_xml(xml).expect("parse");
+        assert_eq!(tables.len(), 1);
+        assert_eq!(tables[0].rows.len(), 1);
+        assert_eq!(tables[0].rows[0].cells.len(), 1);
+        assert_eq!(tables[0].rows[0].cells[0].col_span, 3);
+    }
+
+    #[test]
+    fn parse_table_xml_resolves_vmerge_row_span() {
+        // Two columns:
+        //   col 0: "Header" (not merged)
+        //   col 1: 3-row vertical merge ("Span")
+        // Plus a non-merged cell at the end to make the structure realistic.
+        let xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:tbl>
+      <w:tr>
+        <w:tc><w:p><w:r><w:t>Header</w:t></w:r></w:p></w:tc>
+        <w:tc>
+          <w:tcPr><w:vMerge w:val="restart"/></w:tcPr>
+          <w:p><w:r><w:t>Span</w:t></w:r></w:p>
+        </w:tc>
+      </w:tr>
+      <w:tr>
+        <w:tc><w:p><w:r><w:t>Row 2</w:t></w:r></w:p></w:tc>
+        <w:tc>
+          <w:tcPr><w:vMerge/></w:tcPr>
+          <w:p/>
+        </w:tc>
+      </w:tr>
+      <w:tr>
+        <w:tc><w:p><w:r><w:t>Row 3</w:t></w:r></w:p></w:tc>
+        <w:tc>
+          <w:tcPr><w:vMerge w:val="continue"/></w:tcPr>
+          <w:p/>
+        </w:tc>
+      </w:tr>
+    </w:tbl>
+  </w:body>
+</w:document>"#;
+        let tables = parse_table_xml(xml).expect("parse");
+        assert_eq!(tables.len(), 1);
+        assert_eq!(tables[0].rows.len(), 3);
+
+        // Column 0 ("Header") never merges.
+        for (row_idx, expected) in ["Header", "Row 2", "Row 3"].iter().enumerate() {
+            assert_eq!(tables[0].rows[row_idx].cells[0].text, *expected);
+            assert_eq!(tables[0].rows[row_idx].cells[0].row_span, 1);
+        }
+
+        // Column 1: first cell is "Span" with row_span=3, the other two are
+        // continue-cells with row_span=1.
+        assert_eq!(tables[0].rows[0].cells[1].text, "Span");
+        assert_eq!(tables[0].rows[0].cells[1].row_span, 3);
+        assert_eq!(tables[0].rows[1].cells[1].text, "");
+        assert_eq!(tables[0].rows[1].cells[1].row_span, 1);
+        assert_eq!(tables[0].rows[2].cells[1].text, "");
+        assert_eq!(tables[0].rows[2].cells[1].row_span, 1);
+    }
+
+    #[test]
+    fn table_round_trip_preserves_grid_span_and_vmerge() {
+        // Parse the vMerge XML, push the table through to_elements / from_elements,
+        // then build the document XML and verify the write path emits
+        // <w:gridSpan> and <w:vMerge> for the merged cells.
+        let xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:tbl>
+      <w:tr>
+        <w:tc><w:p><w:r><w:t>A</w:t></w:r></w:p></w:tc>
+        <w:tc>
+          <w:tcPr><w:gridSpan w:val="2"/></w:tcPr>
+          <w:p><w:r><w:t>BC</w:t></w:r></w:p>
+        </w:tc>
+      </w:tr>
+      <w:tr>
+        <w:tc>
+          <w:tcPr><w:vMerge w:val="restart"/></w:tcPr>
+          <w:p><w:r><w:t>VM</w:t></w:r></w:p>
+        </w:tc>
+        <w:tc><w:p><w:r><w:t>X</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>Y</w:t></w:r></w:p></w:tc>
+      </w:tr>
+      <w:tr>
+        <w:tc>
+          <w:tcPr><w:vMerge/></w:tcPr>
+          <w:p/>
+        </w:tc>
+        <w:tc><w:p><w:r><w:t>X2</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>Y2</w:t></w:r></w:p></w:tc>
+      </w:tr>
+    </w:tbl>
+  </w:body>
+</w:document>"#;
+        let tables = parse_table_xml(xml).expect("parse");
+        let mut paragraphs = Vec::new();
+        let mut tbls = Vec::new();
+        for t in tables {
+            tbls.push(t);
+        }
+        let doc = WordDocument { paragraphs, tables: tbls };
+        let elements = doc.to_elements();
+
+        // The re-built document must round-trip without losing span info.
+        let rebuilt = WordDocument::from_elements(elements);
+        assert_eq!(rebuilt.tables.len(), 1);
+        assert_eq!(rebuilt.tables[0].rows.len(), 3);
+
+        // First row: BC has col_span=2.
+        assert_eq!(rebuilt.tables[0].rows[0].cells[1].text, "BC");
+        assert_eq!(rebuilt.tables[0].rows[0].cells[1].col_span, 2);
+
+        // Vertical merge: first cell of column 0 starts a 2-row merge.
+        assert_eq!(rebuilt.tables[0].rows[1].cells[0].text, "VM");
+        assert_eq!(rebuilt.tables[0].rows[1].cells[0].row_span, 2);
+
+        // Render to XML and assert the merge attributes appear.
+        let rebuilt_doc = WordDocument { paragraphs: vec![], tables: vec![rebuilt.tables.into_iter().next().unwrap()] };
+        let xml = build_document_xml(&rebuilt_doc);
+        assert!(
+            xml.contains("<w:gridSpan w:val=\"2\"/>"),
+            "expected gridSpan to survive round-trip; got:\n{}",
+            xml
+        );
+        assert!(
+            xml.contains("<w:vMerge w:val=\"restart\"/>"),
+            "expected vMerge restart to survive round-trip; got:\n{}",
+            xml
+        );
+    }
 }
