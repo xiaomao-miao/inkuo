@@ -127,7 +127,9 @@ static INLINE_CANCEL_GUARD: once_cell::sync::Lazy<Arc<Mutex<()>>> = once_cell::s
 
 /// Extract context around cursor position
 fn extract_context(document: &str, cursor_pos: usize, context_lines: usize) -> (String, usize) {
-    // Convert character offset to byte offset
+    // Convert character offset to byte offset. If `cursor_pos` exceeds the
+    // document length we clamp to the end, matching what the editor will
+    // see when the caret is parked past the last character.
     let cursor_byte = document
         .char_indices()
         .nth(cursor_pos)
@@ -135,19 +137,25 @@ fn extract_context(document: &str, cursor_pos: usize, context_lines: usize) -> (
         .unwrap_or_else(|| document.len());
 
     let lines: Vec<&str> = document.lines().collect();
-    let mut byte_count = 0usize;
-    let mut line_index = 0;
 
-    // Find which line the cursor is on (using byte offset)
-    for (i, line) in lines.iter().enumerate() {
-        let line_end = byte_count + line.len() + 1; // +1 for newline
-        if byte_count + line.len() >= cursor_byte {
-            line_index = i;
-            break;
+    // Find the index of the line containing the cursor by walking byte
+    // offsets once. If the document is empty we treat the caret as being
+    // on a virtual "line 0".
+    let line_index = {
+        let mut acc = 0usize;
+        let mut idx = lines.len(); // sentinel: cursor is on a trailing empty line
+        for (i, line) in lines.iter().enumerate() {
+            let line_len = line.len();
+            // The caret is on this line if it falls anywhere within
+            // [acc, acc + line_len], inclusive of the end-of-line position.
+            if cursor_byte <= acc + line_len {
+                idx = i;
+                break;
+            }
+            acc += line_len + 1; // +1 for the newline byte
         }
-        byte_count = line_end;
-        line_index = i + 1;
-    }
+        idx.min(lines.len().saturating_sub(1).max(0))
+    };
 
     // Calculate start/end line indices
     let start_line = line_index.saturating_sub(context_lines);
@@ -249,30 +257,40 @@ async fn get_completion(
 
     // Retry logic for transient errors
     let max_retries = 2;
-    let mut last_error = String::new();
+    let mut last_error: Option<AIError> = None;
 
     for attempt in 0..=max_retries {
         match adapter.completion(system_prompt, prompt).await {
             Ok(result) => return Ok(result),
-            Err(AIError::ModelError(msg)) if msg.contains("503") || msg.contains("Service Unavailable") => {
-                last_error = msg.clone();
+            Err(error) if error.is_transient() => {
+                last_error = Some(error);
 
                 if attempt < max_retries {
-                    tracing::warn!("Service unavailable, retrying in {}ms (attempt {}/{})",
-                        500 * (attempt + 1), attempt + 1, max_retries);
-                    tokio::time::sleep(tokio::time::Duration::from_millis(500 * (attempt + 1) as u64)).await;
+                    let backoff_ms = 500 * (attempt + 1) as u64;
+                    tracing::warn!(
+                        "Transient completion error ({}), retrying in {}ms (attempt {}/{})",
+                        last_error.as_ref().map(|e| e.to_string()).unwrap_or_default(),
+                        backoff_ms,
+                        attempt + 1,
+                        max_retries,
+                    );
+                    tokio::time::sleep(tokio::time::Duration::from_millis(backoff_ms)).await;
                     continue;
                 }
 
                 break;
             }
-            Err(e) => return Err(e),
+            Err(error) => return Err(error),
         }
     }
 
     Err(AIError::ModelError(format!(
         "Service unavailable after {} retries. Last error: {}",
-        max_retries, last_error
+        max_retries,
+        last_error
+            .as_ref()
+            .map(|e| e.to_string())
+            .unwrap_or_else(|| "unknown".into())
     )))
 }
 

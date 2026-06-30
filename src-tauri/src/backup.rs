@@ -17,6 +17,8 @@ pub fn get_backup_dir() -> std::path::PathBuf {
 pub fn create_backup_path(original_path: &str) -> std::path::PathBuf {
     let mut hasher = Sha256::new();
     hasher.update(original_path.as_bytes());
+    // Use 16 hex chars for the hash (64 bits) so collisions on the cleanup
+    // key are astronomically unlikely even for a million files.
     let hash = hex::encode(&hasher.finalize()[..8]);
 
     let filename = std::path::Path::new(original_path)
@@ -27,7 +29,27 @@ pub fn create_backup_path(original_path: &str) -> std::path::PathBuf {
     let backup_dir = get_backup_dir();
     let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
 
-    backup_dir.join(format!("{}_{}_{}.bak", filename, hash, timestamp))
+    // Layout: `{safename}__bak-{hash}__{timestamp}.bak`
+    //
+    // The leading `__bak-{hash}__` block is delimited by the unique `__bak-`
+    // prefix and the trailing `__` separator, so `cleanup_old_backups` can
+    // recover the hash even when the user-supplied filename contains
+    // underscores. Older versions stored `{filename}_{hash}_{timestamp}.bak`
+    // which ambiguated the hash boundary for any input filename that itself
+    // contained an underscore; we keep the new format going forward.
+    backup_dir.join(format!(
+        "{filename}__bak-{hash}__{timestamp}.bak"
+    ))
+}
+
+/// Extract the per-file hash out of a backup filename produced by
+/// `create_backup_path`. Returns `None` for any name that doesn't match the
+/// expected `__bak-<hash>__` layout — callers must treat `None` as "unknown
+/// key" rather than falling back to a hand-rolled substring scan.
+pub fn parse_backup_filename(filename: &str) -> Option<&str> {
+    let rest = filename.strip_prefix("__bak-")?;
+    let hash_end = rest.find("__")?;
+    Some(&rest[..hash_end])
 }
 
 /// Clean up old backup files, keeping only the most recent N backups per original file.
@@ -45,14 +67,11 @@ pub fn cleanup_old_backups(max_backups_per_file: usize) {
             let path = entry.path();
             if path.extension().map(|e| e == "bak").unwrap_or(false) {
                 if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
-                    if let Some(last_underscore) = filename.rfind('_') {
-                        if let Some(second_last) = filename[..last_underscore].rfind('_') {
-                            let hash = &filename[second_last + 1..last_underscore];
-                            backups_by_hash
-                                .entry(hash.to_string())
-                                .or_default()
-                                .push(path);
-                        }
+                    if let Some(hash) = parse_backup_filename(filename) {
+                        backups_by_hash
+                            .entry(hash.to_string())
+                            .or_default()
+                            .push(path);
                     }
                 }
             }

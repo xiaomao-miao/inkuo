@@ -121,7 +121,7 @@ fn map_search_results(results: &[knowledge::SearchResult]) -> Vec<KnowledgeSearc
 #[tauri::command]
 pub async fn ai_stream_cancel(session_id: String) -> Result<(), StreamCommandError> {
     tracing::info!("Stream cancel requested for session: {}", session_id);
-    crate::commands::STREAM_CANCELLED.lock().insert(session_id);
+    crate::commands::mark_stream_cancelled(&session_id);
     Ok(())
 }
 
@@ -176,7 +176,7 @@ pub async fn ai_chat_stream(
 
     let result = adapter
         .chat_stream(mode.clone(), instruction, original_text, |delta| {
-            if crate::commands::STREAM_CANCELLED.lock().contains(&session_id_for_cb) {
+            if crate::commands::is_stream_cancelled(&session_id_for_cb) {
                 return;
             }
             emit(&app, StreamPayload::text(&session_id_for_cb, &message_id_for_cb, &delta));
@@ -198,19 +198,27 @@ pub async fn ai_chat_stream(
         return Err(StreamCommandError::AIRequest(error.to_string()));
     }
 
-    if crate::commands::STREAM_CANCELLED.lock().remove(&session_id) {
+    if crate::commands::clear_stream_cancelled(&session_id) {
         emit(&app, StreamPayload::cancelled(&session_id, &message_id));
         return Ok(());
     }
 
-    let final_result = match result {
-        Ok(value) => value,
-        Err(_) => unreachable!("result error already returned above"),
-    };
-    let final_content = if mode == "knowledge" {
-        append_knowledge_references(&final_result, knowledge_results.as_deref().unwrap_or(&[]))
-    } else {
-        final_result
+    // Adapter errors were already converted to a stream `error` event and
+    // surfaced via early `return Err(...)` above, so any error reaching here
+    // would be a control-flow regression. Treat it the same way as the
+    // early-return path and bail out without emitting a final event.
+    let final_content = match result {
+        Ok(value) => {
+            if mode == "knowledge" {
+                append_knowledge_references(&value, knowledge_results.as_deref().unwrap_or(&[]))
+            } else {
+                value
+            }
+        }
+        Err(error) => {
+            tracing::error!("ai_chat_stream: adapter error leaked past early return: {}", error);
+            return Err(StreamCommandError::AIRequest(error.to_string()));
+        }
     };
 
     if mode == "knowledge" {
@@ -272,7 +280,7 @@ pub async fn ai_edit_stream(
 
     let result = adapter
         .edit_stream(request, |delta| {
-            if crate::commands::STREAM_CANCELLED.lock().contains(&session_id_for_cb) {
+            if crate::commands::is_stream_cancelled(&session_id_for_cb) {
                 return;
             }
             emit(&app, StreamPayload::text(&session_id_for_cb, &message_id_for_cb, &delta));
@@ -280,7 +288,7 @@ pub async fn ai_edit_stream(
         .await
         .map_err(|error| StreamCommandError::AIRequest(error.to_string()))?;
 
-    if crate::commands::STREAM_CANCELLED.lock().remove(&session_id) {
+    if crate::commands::clear_stream_cancelled(&session_id) {
         emit(&app, StreamPayload::cancelled(&session_id, &message_id));
         return Ok(());
     }

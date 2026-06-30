@@ -36,20 +36,22 @@ import {
 import { editorDiffActions } from './editorStore';
 import type { AIPanelState, AIPanelStateCreator, DiffApplicationActions } from './aiPanelStore.types';
 
-function mergePersistedState(
+function pickPersistedUiBits(
   persistedState: unknown,
   currentState: AIPanelState,
 ): AIPanelState {
+  // Renamed from `mergePersistedState`: this is a *pick*, not a merge.
+  // We deliberately keep only the two UI-mode bits that survive a reload
+  // (panel open state and active tab). Session content is intentionally
+  // dropped — the backend's workspace snapshots are the canonical source
+  // of truth and are reloaded lazily — and `activeSessionId` is dropped
+  // so a stale id from an older snapshot can't pin a session that no
+  // longer exists.
   const persisted = (persistedState ?? {}) as Partial<Pick<
     AIPanelState,
     'isOpen' | 'activeTab' | 'activeSessionId'
   >>;
 
-  // Persisted session content is intentionally discarded — the backend's
-  // workspace snapshots are the canonical source of truth and get reloaded
-  // lazily. We keep the UI-mode bits (panel open state, current tab) and
-  // drop `activeSessionId` so a stale id from an older snapshot can't pin a
-  // session that no longer exists.
   return {
     ...currentState,
     isOpen: persisted.isOpen ?? currentState.isOpen,
@@ -288,7 +290,7 @@ export const useAIPanelStore = create<AIPanelState>()(
         isOpen: state.isOpen,
         activeTab: state.activeTab,
       }),
-      merge: mergePersistedState,
+      merge: pickPersistedUiBits,
     }
   )
 );

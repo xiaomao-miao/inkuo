@@ -19,6 +19,27 @@ use tauri_plugin_opener::OpenerExt;
 
 pub static STREAM_CANCELLED: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
+/// True if the given session has been marked cancelled. Use this rather
+/// than reaching for `STREAM_CANCELLED.lock()` directly at every call site
+/// so the lock acquisition pattern stays uniform (and so we have a single
+/// place to swap in a more sophisticated cancellation queue later).
+pub fn is_stream_cancelled(session_id: &str) -> bool {
+    STREAM_CANCELLED.lock().contains(session_id)
+}
+
+/// Mark a session as cancelled. Cheaply idempotent — the existing key
+/// stays put if already present.
+pub fn mark_stream_cancelled(session_id: &str) {
+    STREAM_CANCELLED.lock().insert(session_id.to_string());
+}
+
+/// Drop the cancellation flag for `session_id`, returning whether one was
+/// actually removed. Callers usually want to suppress the regular "done"
+/// event when this returns `true`.
+pub fn clear_stream_cancelled(session_id: &str) -> bool {
+    STREAM_CANCELLED.lock().remove(session_id)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Error)]
 pub enum AppCommandError {
     #[error("Failed to read document: {0}")]
@@ -263,14 +284,28 @@ pub async fn search_directory(
 
     let query_lower = query.to_lowercase();
     let mut results: Vec<FileEntry> = Vec::new();
+    let mut visited: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
 
     fn walk_dir(
         dir: &std::path::Path,
         query: &str,
         results: &mut Vec<FileEntry>,
         max_results: usize,
+        visited: &mut std::collections::HashSet<std::path::PathBuf>,
     ) {
         if results.len() >= max_results {
+            return;
+        }
+
+        // Canonicalise so symlink cycles within the workspace (e.g. a dir
+        // pointing back to an ancestor) get caught the second time we try
+        // to descend into them. Failing canonicalise (e.g. dangling link)
+        // means the path isn't readable anyway, so we skip it.
+        let canonical = match std::fs::canonicalize(dir) {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+        if !visited.insert(canonical) {
             return;
         }
 
@@ -291,7 +326,18 @@ pub async fn search_directory(
                 continue;
             }
 
-            let is_dir = path.is_dir();
+            let file_type = match entry.file_type() {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            // Skip symlinks — they can create cycles or escape the
+            // workspace. We deliberately don't follow them during search;
+            // users who want to search them can `read_link` themselves.
+            if file_type.is_symlink() {
+                continue;
+            }
+
+            let is_dir = file_type.is_dir();
 
             if name.to_lowercase().contains(query) {
                 let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
@@ -306,12 +352,12 @@ pub async fn search_directory(
             }
 
             if is_dir {
-                walk_dir(&path, query, results, max_results);
+                walk_dir(&path, query, results, max_results, visited);
             }
         }
     }
 
-    walk_dir(std::path::Path::new(&path), &query_lower, &mut results, 100);
+    walk_dir(std::path::Path::new(&path), &query_lower, &mut results, 100, &mut visited);
 
     // Sort results: directories first, then by relevance (shorter paths first).
     // Depth is measured in `Path` components so we count correctly on both
@@ -352,14 +398,29 @@ pub async fn unwatch_directory(
     path: Option<String>,
     state: State<'_, file_watcher::FileWatcherState>,
 ) -> Result<(), AppCommandError> {
-    // The frontend passes the path it previously watched. We only honour an
-    // explicit stop when it matches the currently-watched path; a mismatched
-    // stop request is silently ignored so a stale cleanup from a previous
-    // workspace can't kill the active watcher. With no `path` argument we
-    // stop unconditionally (preserves the original behaviour for callers
-    // that don't know what they were watching).
-    let _ = path;
-    state.stop();
+    // Frontend passes the path it previously watched. Only honour an
+    // explicit stop when it matches the currently-watched path; a
+    // mismatched stop request is silently ignored so a stale cleanup from
+    // a previous workspace can't kill the active watcher. With no `path`
+    // argument we stop unconditionally (preserves the original behaviour
+    // for callers that don't know what they were watching).
+    match path {
+        Some(requested) => {
+            let active = state
+                .watched_path()
+                .map(|p| p.to_string_lossy().to_string());
+            if active.as_deref() == Some(requested.as_str()) {
+                state.stop();
+            } else {
+                tracing::debug!(
+                    "Ignoring unwatch_directory for {} (active watcher is {:?})",
+                    requested,
+                    active
+                );
+            }
+        }
+        None => state.stop(),
+    }
     Ok(())
 }
 
@@ -568,6 +629,12 @@ pub async fn save_settings(settings: Settings, state: State<'_, AppState>) -> Re
 
     std::fs::write(&path, content)
         .map_err(|e| AppCommandError::WriteSettings(e.to_string()))?;
+
+    // Refresh the in-memory settings cache so subsequent calls to
+    // `get_embedding_model()`, `get_chunk_size()`, and `get_settings_cached()`
+    // see the freshly written values without re-reading the file (and without
+    // requiring a process restart, which was the previous behaviour).
+    crate::commands::update_settings_cache(settings.clone());
 
     *state.ai_config.write().await = ai_config::build_settings_ai_config(&settings)
         .map_err(|error| AppCommandError::AIConfig(error.to_string()))?;

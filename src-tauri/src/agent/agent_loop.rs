@@ -17,18 +17,17 @@ use futures_util::StreamExt;
 
 use super::tools::{ToolCall, SharedToolRegistry};
 use crate::ai::{AIConfig, AIProvider};
-use crate::commands::STREAM_CANCELLED;
 use crate::diff;
 use crate::streaming::{StreamPayload, FileDiffSummary, StreamDiffHunk, StreamDiffChange, OfficeFileModified};
 
 /// Check if a session has been cancelled
 fn is_session_cancelled(session_id: &str) -> bool {
-    STREAM_CANCELLED.lock().contains(session_id)
+    crate::commands::is_stream_cancelled(session_id)
 }
 
 /// Clear cancellation flag for a session
 fn clear_cancellation(session_id: &str) {
-    STREAM_CANCELLED.lock().remove(session_id);
+    let _ = crate::commands::clear_stream_cancelled(session_id);
 }
 
 /// Default iteration cap for tool-calling agent loops.
@@ -552,18 +551,23 @@ impl AgentExecutor {
             let chunk = String::from_utf8_lossy(&bytes).to_string();
             buffer.push_str(&chunk);
 
-            // Process complete lines
-            while let Some(pos) = buffer.find('\n') {
-                let line = buffer[..pos].trim_end().to_string();
-                buffer = buffer[pos + 1..].to_string();
+            // Process complete SSE events using the shared splitter. We
+            // prefer event-level boundaries ("\n\n" / "\r\n\r\n") over a
+            // single "\n" so that CRLF-terminated streams from proxies
+            // (and Ollama's mangled line endings) don't leak a stray '\r'
+            // into the JSON parser.
+            while let Some((event, rest)) =
+                crate::openai_stream::take_next_sse_event(&buffer)
+            {
+                buffer = rest;
 
-                // Skip empty lines
-                if line.trim().is_empty() {
+                // An event with no `data:` lines (e.g. event-name-only
+                // frames some gateways emit) should not advance state.
+                if event.trim().is_empty() {
                     continue;
                 }
 
-                // Parse SSE data
-                for data in crate::openai_stream::iter_sse_event_data_lines(&line) {
+                for data in crate::openai_stream::iter_sse_event_data_lines(&event) {
                     if data.trim() == "[DONE]" {
                         continue;
                     }
@@ -779,9 +783,11 @@ impl AgentExecutor {
                     if let Some(content) = delta.content {
                         current_content.push_str(&content);
                     }
-                    if delta.tool_calls.is_some() {
-                        // Note: This is residual data, tool calls from partial chunks are already processed above
-                    }
+                    // `delta.tool_calls` from residual data is intentionally
+                    // ignored here — every tool call was already accounted
+                    // for in the main loop above where its delta, start
+                    // event, and accumulated arguments were emitted. We
+                    // only pick up any trailing `content` text.
                 }
             }
         }
@@ -997,22 +1003,66 @@ impl AgentExecutor {
             .get("tool_calls")
             .and_then(|tc| tc.as_array())
             .map(|arr| {
-                arr.iter()
-                    .filter_map(|tc| {
-                        Some(ToolCallMessage {
-                            id: tc.get("id")?.as_str()?.to_string(),
-                            call_type: tc.get("type")?.as_str()?.to_string(),
-                            function: ToolCallFunction {
-                                name: tc.get("function")?.get("name")?.as_str()?.to_string(),
-                                arguments: tc.get("function")?.get("arguments")?.as_str()?.to_string(),
-                            },
-                        })
-                    })
-                    .collect()
+                let mut parsed: Vec<ToolCallMessage> = Vec::with_capacity(arr.len());
+                for (index, tc) in arr.iter().enumerate() {
+                    match parse_tool_call_message(tc) {
+                        Ok(message) => parsed.push(message),
+                        Err(reason) => {
+                            // Surface the drop so the caller doesn't silently
+                            // lose a tool invocation. We log at warn rather
+                            // than returning an error because the response
+                            // is otherwise well-formed and the agent loop
+                            // has to continue with whatever did parse.
+                            tracing::warn!(
+                                "Dropping malformed tool_call #{index} in parse_response: {reason}"
+                            );
+                        }
+                    }
+                }
+                parsed
             });
 
         Ok((content, reasoning_content, tool_calls))
     }
+}
+
+/// Strictly parse a `tool_call` payload into our internal [`ToolCallMessage`]
+/// representation. Any missing or wrong-typed field is treated as a hard
+/// failure (we never silently coerce), so the caller can decide whether the
+/// error is recoverable.
+fn parse_tool_call_message(tc: &serde_json::Value) -> Result<ToolCallMessage, String> {
+    let id = tc
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "missing or non-string `id`".to_string())?;
+    let call_type = tc
+        .get("type")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "missing or non-string `type`".to_string())?;
+    let function = tc
+        .get("function")
+        .ok_or_else(|| "missing `function` object".to_string())?;
+    let name = function
+        .get("name")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "missing or non-string `function.name`".to_string())?;
+    let arguments = function
+        .get("arguments")
+        .and_then(|v| match v {
+            serde_json::Value::String(s) => Some(s.clone()),
+            serde_json::Value::Object(map) => Some(serde_json::to_string(map).unwrap_or_default()),
+            _ => None,
+        })
+        .ok_or_else(|| "missing or unsupported `function.arguments`".to_string())?;
+
+    Ok(ToolCallMessage {
+        id: id.to_string(),
+        call_type: call_type.to_string(),
+        function: ToolCallFunction {
+            name: name.to_string(),
+            arguments,
+        },
+    })
 }
 
 #[derive(Debug)]

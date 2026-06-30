@@ -3,7 +3,6 @@ import type {
   ChatMessage,
   ChatSession,
   CurrentDiff,
-  DiffChange,
   OutputItem,
 } from '../types';
 
@@ -166,59 +165,6 @@ export function trimSessionMessagesAfter(session: ChatSession, messageId: string
   };
 }
 
-export function applyHunkChanges(_originalText: string, changes: DiffChange[]): string {
-  let result = '';
-  let i = 0;
-
-  while (i < changes.length) {
-    const change = changes[i];
-
-    if (change.tag === 'equal') {
-      result += change.content;
-      i++;
-    } else if (change.tag === 'delete') {
-      // Skip deleted content, but if next change is insert, merge them
-      if (i + 1 < changes.length && changes[i + 1].tag === 'insert') {
-        result += changes[i + 1].content;
-        i += 2;
-      } else {
-        i++;
-      }
-    } else if (change.tag === 'insert') {
-      // Solo insert (no preceding delete)
-      result += change.content;
-      i++;
-    }
-  }
-
-  return result;
-}
-
-export function updatePendingDiffHunks(
-  session: ChatSession,
-  hunkId: string,
-): ChatSession {
-  if (!session.pendingDiff) return session;
-  const remainingHunks = session.pendingDiff.hunks.filter((hunk) => hunk.id !== hunkId);
-  return {
-    ...session,
-    pendingDiff:
-      remainingHunks.length > 0
-        ? { ...session.pendingDiff, hunks: remainingHunks }
-        : null,
-  };
-}
-
-export function applyAcceptedHunkToText(
-  originalText: string,
-  hunkId: string,
-  hunks: CurrentDiff['hunks'],
-): string {
-  const hunk = hunks.find((h) => h.id === hunkId);
-  if (!hunk) return originalText;
-  return applyHunkChanges(originalText, hunk.changes);
-}
-
 export function patchMessageOutputItems(
   message: ChatMessage,
   matchKey: OutputItemMatchKey,
@@ -282,4 +228,19 @@ export function patchMessageOutputState(
   return updateMessages(session, messageId, (message) =>
     patchMessageOutputItems(message, matchKey, patch)
   );
+}
+
+export function updatePendingDiffHunks(
+  session: ChatSession,
+  hunkId: string,
+): ChatSession {
+  if (!session.pendingDiff) return session;
+  const remainingHunks = session.pendingDiff.hunks.filter((hunk) => hunk.id !== hunkId);
+  return {
+    ...session,
+    pendingDiff:
+      remainingHunks.length > 0
+        ? { ...session.pendingDiff, hunks: remainingHunks }
+        : null,
+  };
 }

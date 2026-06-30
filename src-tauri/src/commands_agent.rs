@@ -281,7 +281,7 @@ pub async fn ai_agent_stream(
 #[tauri::command]
 pub async fn ai_agent_cancel(session_id: String) -> Result<(), AgentCommandError> {
     tracing::info!("ai_agent_cancel - session: {}", session_id);
-    crate::commands::STREAM_CANCELLED.lock().insert(session_id);
+    crate::commands::mark_stream_cancelled(&session_id);
     Ok(())
 }
 

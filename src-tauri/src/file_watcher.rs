@@ -150,6 +150,13 @@ impl FileWatcherState {
         Ok(())
     }
 
+    /// Currently-watched directory path, if any. Used by callers that need
+    /// to confirm a `stop()` request applies to the active watcher (e.g.
+    /// `commands::unwatch_directory`).
+    pub fn watched_path(&self) -> Option<PathBuf> {
+        self.watched_path.lock().clone()
+    }
+
     /// Stop watching the current directory and release all resources
     pub fn stop(&self) {
         let _guard = self.lock.lock();

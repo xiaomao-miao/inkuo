@@ -10,6 +10,10 @@ use thiserror::Error;
 use futures_util::StreamExt;
 use once_cell::sync::Lazy;
 
+/// inkuo's official cloud gateway. Used by the `Official` provider below; kept
+/// in one place so future swaps don't need to touch five call sites.
+const OFFICIAL_BASE_URL: &str = "https://api.inkuo.com/v1";
+
 // ============================================================================
 // Prompts - loaded from markdown files at compile time
 // ============================================================================
@@ -46,6 +50,43 @@ pub enum AIError {
     InvalidResponse(String),
     #[error("Rate limited")]
     RateLimited,
+}
+
+impl AIError {
+    /// Whether this error is transient and worth retrying. Network blips,
+    /// provider rate limits, and upstream 5xx responses are all considered
+    /// transient — auth failures, malformed payloads, and client-side
+    /// serialization issues are not.
+    ///
+    /// The `AIError` enum doesn't carry the upstream HTTP status (it gets
+    /// flattened into the human-readable `ModelError` message), so we lean
+    /// on the message format used by `handle_http_error`. That's stable
+    /// enough for an opt-in retry decision; if you need stricter
+    /// classification, change `handle_http_error` to expose the status
+    /// separately.
+    pub fn is_transient(&self) -> bool {
+        match self {
+            Self::NetworkError(_) => true,
+            Self::RateLimited => true,
+            Self::ModelError(msg) => {
+                const RETRY_TOKENS: &[&str] = &[
+                    "HTTP 502",
+                    "HTTP 503",
+                    "HTTP 504",
+                    "Service Unavailable",
+                    "Bad Gateway",
+                    "Gateway Timeout",
+                    "Request Timeout",
+                    "connect error",
+                    "connection reset",
+                    "connection refused",
+                    "timed out",
+                ];
+                RETRY_TOKENS.iter().any(|token| msg.contains(token))
+            }
+            Self::AuthError(_) | Self::InvalidResponse(_) => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -278,15 +319,17 @@ Context text:
                 self.call_openai_compatible_chat_stream(api_key, base_url, system_prompt, &user_prompt, &mut on_delta)
                     .await
             }
-            // Streaming for Ollama not implemented in this step
+            // Streaming for Ollama isn't supported in this provider (only
+            // `agent_loop.rs` implements true streaming for Ollama, used by
+            // the agent tool-calling path). For chat we round-trip the full
+            // response and surface it as a single tick to the frontend.
             AIProvider::Ollama { base_url } => {
                 let text = self.call_ollama_chat(base_url, system_prompt, &user_prompt).await?;
                 on_delta(text.clone());
                 Ok(text)
             }
             AIProvider::Official { api_key } => {
-                let base_url = "https://api.inkuo.com/v1";
-                self.call_openai_compatible_chat_stream(api_key, base_url, system_prompt, &user_prompt, &mut on_delta)
+                self.call_openai_compatible_chat_stream(api_key, OFFICIAL_BASE_URL, system_prompt, &user_prompt, &mut on_delta)
                     .await
             }
         }
@@ -322,15 +365,17 @@ Context (optional references):
                 self.call_openai_compatible_edit_stream(api_key, base_url, system_prompt, &user_prompt, &mut on_delta)
                     .await
             }
-            // Streaming for Ollama not implemented in this step
+            // Streaming for Ollama isn't supported in this provider (only
+            // `agent_loop.rs` implements true streaming for Ollama, used by
+            // the agent tool-calling path). For edit we round-trip the full
+            // response and surface it as a single tick to the frontend.
             AIProvider::Ollama { base_url } => {
                 let resp = self.call_ollama(base_url, system_prompt, &user_prompt).await?;
                 on_delta(resp.content.clone());
                 Ok(resp)
             }
             AIProvider::Official { api_key } => {
-                let base_url = "https://api.inkuo.com/v1";
-                self.call_openai_compatible_edit_stream(api_key, base_url, system_prompt, &user_prompt, &mut on_delta)
+                self.call_openai_compatible_edit_stream(api_key, OFFICIAL_BASE_URL, system_prompt, &user_prompt, &mut on_delta)
                     .await
             }
         }
@@ -362,8 +407,7 @@ Context text:
             }
             AIProvider::Ollama { base_url } => self.call_ollama_chat(base_url, system_prompt, &user_prompt).await,
             AIProvider::Official { api_key } => {
-                let base_url = "https://api.inkuo.com/v1";
-                self.call_openai_compatible_chat(api_key, base_url, system_prompt, &user_prompt)
+                self.call_openai_compatible_chat(api_key, OFFICIAL_BASE_URL, system_prompt, &user_prompt)
                     .await
             }
         }
@@ -378,8 +422,7 @@ Context text:
             }
             AIProvider::Ollama { base_url } => self.call_ollama_chat(base_url, system_prompt, user_prompt).await,
             AIProvider::Official { api_key } => {
-                let base_url = "https://api.inkuo.com/v1";
-                self.call_openai_compatible_chat_no_thinking(api_key, base_url, system_prompt, user_prompt)
+                self.call_openai_compatible_chat_no_thinking(api_key, OFFICIAL_BASE_URL, system_prompt, user_prompt)
                     .await
             }
         }
@@ -450,9 +493,7 @@ Context (optional references):
                 self.call_ollama(base_url, system_prompt, &user_prompt).await
             }
             AIProvider::Official { api_key } => {
-                // Official provider uses inkuo's gateway
-                let base_url = "https://api.inkuo.com/v1";
-                self.call_openai_compatible(api_key, base_url, system_prompt, &user_prompt).await
+                self.call_openai_compatible(api_key, OFFICIAL_BASE_URL, system_prompt, &user_prompt).await
             }
         }
     }

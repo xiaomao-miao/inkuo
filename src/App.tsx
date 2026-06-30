@@ -28,9 +28,22 @@ function App() {
   // first paint can show a stale workspace, because effects with an empty
   // dep array run synchronously after layout.
   useEffect(() => {
-    if ((window as unknown as { __INKUO_FRESH_WINDOW__?: boolean }).__INKUO_FRESH_WINDOW__ !== true) {
+    // The Rust side sets `window.__INKUO_FRESH_WINDOW__ = true` via
+    // `initialization_script` for windows opened from "File > New Window"
+    // so we can wipe the live workspace view (open tabs, document cache,
+    // sidebar expansion, AI panel live state) without disturbing
+    // per-workspace snapshots or user preferences.
+    //
+    // The flag stays set for the lifetime of the page, which means a hard
+    // reload of *this* window would otherwise rerun the reset and silently
+    // throw away the user's tabs. Delete it after reading so a refresh of
+    // an existing window keeps the workspace intact.
+    const freshWindow = (window as unknown as { __INKUO_FRESH_WINDOW__?: boolean }).__INKUO_FRESH_WINDOW__ === true;
+    if (!freshWindow) {
       return;
     }
+    delete (window as unknown as { __INKUO_FRESH_WINDOW__?: boolean }).__INKUO_FRESH_WINDOW__;
+
     useSidebarStore.setState({
       workspacePath: null,
       directoryCache: new Map(),
