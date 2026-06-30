@@ -199,8 +199,14 @@ impl GrepTool {
                     }
                 }
             } else if path_obj.is_dir() {
-                grep_directory_traverse(path, &pattern_lower, case_sensitive, &mut results)
-                    .await?;
+                grep_directory_traverse(
+                    path,
+                    &pattern_lower,
+                    case_sensitive,
+                    workspace.as_deref(),
+                    &mut results,
+                )
+                .await?;
             }
         }
 
@@ -220,6 +226,7 @@ async fn grep_directory_traverse(
     dir: &str,
     pattern: &str,
     case_sensitive: bool,
+    workspace: Option<&str>,
     results: &mut Vec<String>,
 ) -> Result<(), ToolError> {
     let mut dir_entries = tokio::fs::read_dir(dir)
@@ -234,13 +241,37 @@ async fn grep_directory_traverse(
             continue;
         }
 
+        // Reject symlinks outright: a symlink inside the workspace can point
+        // outside it, which would bypass the workspace boundary the caller
+        // expects. Skipping them entirely is the safest behavior; legitimate
+        // reads of symlinked files can still go through file_tools.
         let file_type = entry.file_type().await.map_err(|e| ToolError::IoError(e.to_string()))?;
+        if file_type.is_symlink() {
+            continue;
+        }
+
+        let path_str = path.to_string_lossy().to_string();
 
         if file_type.is_dir() {
+            // Defensive re-validation: the entry-level `validate_workspace_path`
+            // check at the public entrypoint only sees the user-supplied path.
+            // When recursing, follow-up directories may themselves be reachable
+            // only via a symlink that the OS resolved for us; canonicalize and
+            // confirm we're still inside the workspace before descending.
+            if let Some(root) = workspace {
+                if let Ok(canonical) = std::fs::canonicalize(&path) {
+                    if let Ok(root_canonical) = std::fs::canonicalize(root) {
+                        if !canonical.starts_with(&root_canonical) {
+                            continue;
+                        }
+                    }
+                }
+            }
             Box::pin(grep_directory_traverse(
-                &path.to_string_lossy(),
+                &path_str,
                 pattern,
                 case_sensitive,
+                workspace,
                 results,
             ))
             .await?;
@@ -253,7 +284,6 @@ async fn grep_directory_traverse(
                     content.to_lowercase()
                 };
 
-                let path_str = path.to_string_lossy().to_string();
                 for (line_num, line) in search_content.lines().enumerate() {
                     if line.contains(pattern) {
                         let original_line = content.lines().nth(line_num).unwrap_or("");
