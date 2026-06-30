@@ -227,7 +227,7 @@ export function useKnowledgeBase({ activeSessionId }: UseKnowledgeBaseArgs): Use
           });
         }
       });
-    } catch (err) {
+    } catch {
       // Silently ignore progress listener errors
     }
 

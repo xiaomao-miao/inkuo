@@ -32,6 +32,7 @@ pub enum OfficeFileType {
 }
 
 /// Structured elements for Word documents (paragraphs + tables with IDs).
+#[allow(dead_code)] // reserved for a future structured-elements API
 pub struct WordElements {
     pub elements: Vec<DocElement>,
 }

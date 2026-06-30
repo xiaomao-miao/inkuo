@@ -125,6 +125,15 @@ pub struct InlineCompletionState {
 static INLINE_CANCEL_SEQ: AtomicU64 = AtomicU64::new(0);
 static INLINE_CANCEL_GUARD: once_cell::sync::Lazy<Arc<Mutex<()>>> = once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(())));
 
+/// Used to wake up an in-flight completion the moment the user cancels. We
+/// can't rely on `INLINE_CANCEL_SEQ` alone because it's only polled between
+/// await points — if the awaited future is a long-running HTTP request to the
+/// AI provider, the request keeps running until completion. `Notify` lets us
+/// race that future against a cancel signal via `tokio::select!`, so dropping
+/// the future also drops the underlying network request.
+static INLINE_CANCEL_NOTIFY: once_cell::sync::Lazy<tokio::sync::Notify> =
+    once_cell::sync::Lazy::new(tokio::sync::Notify::new);
+
 /// Extract context around cursor position
 fn extract_context(document: &str, cursor_pos: usize, context_lines: usize) -> (String, usize) {
     // Convert character offset to byte offset. If `cursor_pos` exceeds the
@@ -411,15 +420,25 @@ pub async fn ai_inline_complete(
         return Err("cancelled".to_string());
     }
 
-    // Get completion from AI
-    let raw_completion = get_completion(&config, &prompt)
-        .await
-        .map_err(|e| {
-            tracing::error!("AI completion error: {}", e);
-            format!("AI 请求失败: {}", e)
-        })?;
+    // Get completion from AI, but make the request interruptible so cancelling
+    // mid-flight actually drops the underlying HTTP call instead of just
+    // discarding the response after the fact.
+    let raw_completion = tokio::select! {
+        biased;
+        _ = INLINE_CANCEL_NOTIFY.notified() => {
+            return Err("cancelled".to_string());
+        }
+        result = get_completion(&config, &prompt) => {
+            result.map_err(|e| {
+                tracing::error!("AI completion error: {}", e);
+                format!("AI 请求失败: {}", e)
+            })?
+        }
+    };
 
-    // If cancellation was requested while waiting for the model, ignore the result.
+    // Belt-and-suspenders: even if the future completed, double-check the
+    // seq counter in case a cancel arrived between the future resolving and
+    // us resuming here.
     if INLINE_CANCEL_SEQ.load(Ordering::SeqCst) != cancel_seq_at_start {
         return Err("cancelled".to_string());
     }
@@ -477,6 +496,12 @@ pub async fn ai_inline_complete(
 #[tauri::command]
 pub async fn ai_inline_complete_cancel() -> Result<(), String> {
     INLINE_CANCEL_SEQ.fetch_add(1, Ordering::SeqCst);
+    // Wake any `tokio::select!` waiting on `INLINE_CANCEL_NOTIFY` so the
+    // in-flight HTTP request is dropped immediately instead of running to
+    // completion. `notify_waiters()` only wakes currently-registered waiters,
+    // which is what we want — requests that start *after* this cancel won't
+    // see this notification and will instead be guarded by the seq counter.
+    INLINE_CANCEL_NOTIFY.notify_waiters();
     Ok(())
 }
 

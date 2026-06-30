@@ -336,8 +336,16 @@ pub async fn knowledge_build(
             .map_err(|e| KnowledgeCommandError::MetadataCreate(e.to_string()))?;
     }
 
+    // Build is a full rebuild from scratch: every document is "new" and
+    // nothing is removed. `chunk_count_by_doc` is derived from the chunks we
+    // just produced so the per-document chunk_count in metadata.json is
+    // accurate.
+    let mut chunk_count_by_doc: HashMap<String, usize> = HashMap::new();
+    for c in &chunks {
+        *chunk_count_by_doc.entry(c.document_id.clone()).or_insert(0) += 1;
+    }
     metadata_store
-        .update(&documents, chunks.len())
+        .update(&documents, &chunk_count_by_doc, chunks.len(), &[])
         .map_err(|e| KnowledgeCommandError::MetadataUpdate(e.to_string()))?;
 
     emit_build_progress(
@@ -494,15 +502,38 @@ pub async fn knowledge_update(
         .scan(&workspace)
         .map_err(|e| KnowledgeCommandError::DocumentScan(e.to_string()))?;
 
-    let (changed_docs, _removed) = metadata_store.find_changed_files(&current_docs);
+    let (changed_docs, removed) = metadata_store.find_changed_files(&current_docs);
 
-    if changed_docs.is_empty() {
+    // If nothing changed and nothing was removed, we're done. Note the old
+    // code early-returned before processing `removed`, so deleting a file
+    // from the workspace used to leave its vectors in Qdrant forever.
+    if changed_docs.is_empty() && removed.is_empty() {
         return Ok(UpdateResult {
             added: 0,
             removed: 0,
             updated: 0,
         });
     }
+
+    // Resolve the document_id for each removed path by inspecting the metadata
+    // we loaded earlier, so the vector store can drop the corresponding
+    // chunks. Without this, removing a file would silently leak stale vectors.
+    let removed_doc_ids: Vec<String> = metadata_store
+        .get_metadata()
+        .map(|m| {
+            m.indexed_files
+                .iter()
+                .filter(|f| removed.iter().any(|p| p == &f.path))
+                .filter_map(|f| {
+                    if f.document_id.is_empty() {
+                        None
+                    } else {
+                        Some(f.document_id.clone())
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
 
     let mut file_paths: HashMap<String, String> = HashMap::new();
     for doc in &changed_docs {
@@ -511,9 +542,11 @@ pub async fn knowledge_update(
     }
 
     let mut new_chunks = Vec::new();
+    let mut chunk_count_by_doc: HashMap<String, usize> = HashMap::new();
     let mut owned_changed_docs = Vec::new();
     for doc in &changed_docs {
         let chunks = chunker.chunk_document(&doc.id, &doc.title, &doc.content);
+        chunk_count_by_doc.insert(doc.id.clone(), chunks.len());
         new_chunks.extend(chunks);
         owned_changed_docs.push((*doc).clone());
     }
@@ -549,13 +582,28 @@ pub async fn knowledge_update(
         .await
         .map_err(|e| KnowledgeCommandError::StoreVectors(e.to_string()))?;
 
+    // Drop vectors for files that disappeared from the workspace. We do this
+    // *after* upserting the new chunks so a partial update that errors before
+    // reaching this point simply leaves stale vectors (still searchable,
+    // surfaced as "deleted on disk" next run) instead of losing the new
+    // vectors to a failed delete.
+    for doc_id in &removed_doc_ids {
+        if let Err(e) = vector_store.delete_by_document_id(doc_id).await {
+            tracing::warn!(
+                "[KB_UPDATE] Failed to delete vectors for removed document {}: {}",
+                doc_id,
+                e
+            );
+        }
+    }
+
     metadata_store
-        .update(&owned_changed_docs, new_chunks.len())
+        .update(&owned_changed_docs, &chunk_count_by_doc, new_chunks.len(), &removed)
         .map_err(|e| KnowledgeCommandError::MetadataUpdate(e.to_string()))?;
 
     Ok(UpdateResult {
         added: owned_changed_docs.len(),
-        removed: 0,
+        removed: removed.len(),
         updated: new_chunks.len(),
     })
 }
@@ -690,8 +738,10 @@ pub async fn knowledge_add_members(
 
     let mut new_chunks = Vec::new();
     let mut owned_docs = Vec::new();
+    let mut chunk_count_by_doc: HashMap<String, usize> = HashMap::new();
     for doc in &target_docs {
         let chunks = chunker.chunk_document(&doc.id, &doc.title, &doc.content);
+        chunk_count_by_doc.insert(doc.id.clone(), chunks.len());
         new_chunks.extend(chunks);
         owned_docs.push(doc.clone());
     }
@@ -715,9 +765,10 @@ pub async fn knowledge_add_members(
         .await
         .map_err(|e| KnowledgeCommandError::StoreVectors(e.to_string()))?;
 
-    // Update metadata with the new indexed files
+    // Update metadata with the new indexed files. Use the merge semantics so
+    // pre-existing entries in `indexed_files` are preserved.
     metadata_store
-        .update(&owned_docs, new_chunks.len())
+        .update(&owned_docs, &chunk_count_by_doc, new_chunks.len(), &[])
         .map_err(|e| KnowledgeCommandError::MetadataUpdate(e.to_string()))?;
 
     tracing::info!(

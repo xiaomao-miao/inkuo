@@ -217,7 +217,11 @@ mod tests {
         let chunks = chunker.chunk_document("doc1", "Test", &content);
         assert!(!chunks.is_empty());
         for chunk in &chunks {
-            assert!(chunk.content.len() <= 600); // target_size + some margin
+            // Compare in *characters*, not bytes. `chunk.content.len()` is the
+            // byte length; for the CJK-heavy corpus used here that is 3x the
+            // character count and trips this assertion spuriously even when
+            // chunking is correct.
+            assert!(chunk.content.chars().count() <= 600); // target_size + some margin
         }
     }
 }

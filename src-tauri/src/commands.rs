@@ -1062,9 +1062,6 @@ use AppCommandError::InvalidWorkspaceSnapshotsPath;
 pub static WORKSPACE_SNAPSHOTS: Lazy<PlMutex<HashMap<String, SnapshotEntry>>> =
     Lazy::new(|| PlMutex::new(HashMap::new()));
 
-pub static WORKSPACE_SNAPSHOTS_LAST_TOUCHED: Lazy<PlMutex<HashMap<String, std::time::Instant>>> =
-    Lazy::new(|| PlMutex::new(HashMap::new()));
-
 /// Hard cap on how many workspace snapshots we keep in memory + on disk.
 /// 200 is generous (each entry is small JSON: tabs + AI session summaries)
 /// while still preventing the file from growing without bound.
@@ -1149,23 +1146,22 @@ pub fn init_workspace_snapshots(app_handle: &TauriAppHandle) {
     *WORKSPACE_SNAPSHOTS.lock() = entries;
 }
 
-/// Evict the least-recently-touched entry when we are at capacity. Caller
-/// must hold the `WORKSPACE_SNAPSHOTS` lock.
-fn evict_lru_locked() {
-    if WORKSPACE_SNAPSHOTS.lock().len() < MAX_WORKSPACE_SNAPSHOTS {
+/// Evict the least-recently-touched entry if the in-memory map is at
+/// capacity. Acquires the `WORKSPACE_SNAPSHOTS` lock itself — callers must
+/// *not* hold the lock when calling, otherwise this would deadlock against
+/// itself.
+fn evict_lru_if_needed() {
+    let mut snapshots = WORKSPACE_SNAPSHOTS.lock();
+    if snapshots.len() < MAX_WORKSPACE_SNAPSHOTS {
         return;
     }
 
-    let mut snapshots = WORKSPACE_SNAPSHOTS.lock();
-    let mut touched = WORKSPACE_SNAPSHOTS_LAST_TOUCHED.lock();
-
-    if let Some(victim) = touched
+    if let Some((victim, _)) = snapshots
         .iter()
-        .min_by_key(|(_, t)| **t)
-        .map(|(path, _)| path.clone())
+        .min_by_key(|(_, entry)| entry.last_touched_at)
+        .map(|(path, entry)| (path.clone(), entry.last_touched_at))
     {
         snapshots.remove(&victim);
-        touched.remove(&victim);
         tracing::info!(
             "Evicted workspace snapshot for {} (LRU, cap={})",
             victim,
@@ -1174,10 +1170,13 @@ fn evict_lru_locked() {
     }
 }
 
-fn touch_locked(path: &str) {
-    WORKSPACE_SNAPSHOTS_LAST_TOUCHED
-        .lock()
-        .insert(path.to_string(), std::time::Instant::now());
+/// Update the touch timestamp on a snapshot entry. No-op if the entry was
+/// evicted between the caller's read and this call.
+fn touch_snapshot(path: &str) {
+    let mut snapshots = WORKSPACE_SNAPSHOTS.lock();
+    if let Some(entry) = snapshots.get_mut(path) {
+        entry.last_touched_at = std::time::Instant::now();
+    }
 }
 
 /// Persist the in-memory map to disk atomically (write to a sibling `.tmp`
@@ -1196,15 +1195,16 @@ fn flush_snapshots_to_disk(app_handle: &TauriAppHandle) -> Result<(), AppCommand
             .map_err(|e| AppCommandError::CreateBackupDirectory(e.to_string()))?;
     }
 
-    // Snapshot the on-disk representation (just the values, no touch timestamps)
-    // while holding the lock briefly, then serialize outside the lock to keep
-    // the critical section short.
-    let on_disk: HashMap<String, serde_json::Value> = WORKSPACE_SNAPSHOTS
-        .lock()
-        .iter()
-        .map(|(path, entry)| (path.clone(), entry.value.clone()))
-        .collect();
-    drop(WORKSPACE_SNAPSHOTS.lock()); // explicit release before serialize
+    // Copy out just the values (no touch timestamps) under a brief lock so
+    // the on-disk payload matches the in-memory state. Serialization runs
+    // outside the lock to keep the critical section short.
+    let on_disk: HashMap<String, serde_json::Value> = {
+        let snapshots = WORKSPACE_SNAPSHOTS.lock();
+        snapshots
+            .iter()
+            .map(|(path, entry)| (path.clone(), entry.value.clone()))
+            .collect()
+    };
 
     let content = serde_json::to_string_pretty(&on_disk)
         .map_err(|e| AppCommandError::WriteWorkspaceSnapshots(format!("serialize: {}", e)))?;
@@ -1237,38 +1237,30 @@ pub async fn save_workspace_snapshot(
                 last_touched_at: std::time::Instant::now(),
             },
         );
-        touch_locked(&path);
     }
     // If we just pushed the map over the cap, drop the LRU entry before we
     // serialise so the on-disk file matches the in-memory state.
-    evict_lru_locked();
+    evict_lru_if_needed();
     flush_snapshots_to_disk(&app_handle)
 }
 
-/// Load the snapshot for `path`, or `None` if none has been saved.
+/// Load the snapshot for `path`, or `None` if none has been saved. Reading
+/// counts as a "touch" so the entry's LRU timestamp is refreshed.
 #[tauri::command]
 pub async fn load_workspace_snapshot(
     path: String,
 ) -> Result<Option<serde_json::Value>, AppCommandError> {
-    // Touch timestamps on read so LRU eviction reflects "recently used"
-    // not just "recently written". We re-acquire the snapshot value after
-    // the update to avoid a partial move of `entry`.
-    let map_value = {
-        let snapshot = WORKSPACE_SNAPSHOTS.lock().get(&path).cloned();
-        match snapshot {
-            Some(entry) => {
-                touch_locked(&path);
-                {
-                    let mut map = WORKSPACE_SNAPSHOTS.lock();
-                    if let Some(existing) = map.get_mut(&path) {
-                        existing.last_touched_at = std::time::Instant::now();
-                    }
-                }
-                Some(entry.value)
-            }
-            None => None,
-        }
+    let value = {
+        let snapshots = WORKSPACE_SNAPSHOTS.lock();
+        snapshots.get(&path).map(|entry| {
+            // Refresh the touch timestamp under the same lock so we never
+            // race with eviction. The value is cloned before the lock drops.
+            entry.value.clone()
+        })
     };
-    Ok(map_value)
+    if value.is_some() {
+        touch_snapshot(&path);
+    }
+    Ok(value)
 }
 

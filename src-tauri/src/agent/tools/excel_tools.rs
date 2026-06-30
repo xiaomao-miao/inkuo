@@ -9,11 +9,17 @@
 //! - Batch-writing values to ranges
 //! - Managing sheets (create, rename, delete, hide)
 
-use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashSet;
 
 use super::{ToolDefinition, ToolError, ToolParameters, validate_workspace_path};
+// The `Merge*`, `RowCol*`, and standalone `*_xlsx` helpers in `office::xlsx`
+// are not wired into any tool yet — they sit behind `#![allow(dead_code)]`
+// in the module. They're re-exported from `office/mod.rs` so callers can
+// reach them when those features land. Mark the whole import group as
+// `unused_imports` to keep CI noise down until the next Excel feature pass
+// actually consumes them.
+#[allow(unused_imports)]
 use crate::office::{
     read_xlsx_structured,
     cell_address,

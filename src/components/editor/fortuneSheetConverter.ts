@@ -718,7 +718,7 @@ async function fortuneSheetToSheetJSWorksheet(
   sheet: FortuneSheetCoreSheet,
   XLSX: SheetJSLazy,
   dataToCelldata: (data: import('@fortune-sheet/core').CellMatrix) => import('@fortune-sheet/core').CellWithRowAndCol[],
-): Promise<{ worksheet: object; styleKeys: string[] }> {
+): Promise<{ worksheet: Record<string, unknown>; styleKeys: string[] }> {
   const cells: Record<string, object> = {};
   const styleKeys: string[] = [];
   const data = sheet.data ?? [];
@@ -832,7 +832,11 @@ export async function fortuneSheetsToSheetJSBuffer(
 
   // First pass: collect all style keys across all sheets.
   const allStyleKeys: string[] = [];
-  const sheetRawData: { name: string; worksheet: object }[] = [];
+  // `worksheet` is the parsed SheetJS Worksheet object (a `Record<string, unknown>`
+  // keyed by cell address like `"A1"` plus reserved keys prefixed with `!`).
+  // Typing it as `Record<string, unknown>` up front lets `buildWorksheetXml`
+  // accept it directly without a separate narrowing step.
+  const sheetRawData: { name: string; worksheet: Record<string, unknown> }[] = [];
 
   for (const sheet of allSheets) {
     const { worksheet, styleKeys } = await fortuneSheetToSheetJSWorksheet(sheet, XLSX, dataToCelldata);
@@ -920,7 +924,6 @@ function buildWorksheetXml(
   worksheet: Record<string, unknown>,
   styleIndexMap: Map<string, number>,
 ): string {
-  const ref = worksheet['!ref'] as string || 'A1';
   const merges = worksheet['!merges'] as Array<{ r: number; c: number; rs: number; cs: number }> || [];
   const rows = worksheet['!rows'] as Array<{ hpx?: number }> || [];
   const cols = worksheet['!cols'] as Array<{ wpx?: number }> || [];

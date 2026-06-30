@@ -165,15 +165,33 @@ impl VectorStore {
         let inner = inner_guard.as_ref()
             .ok_or_else(|| VectorStoreError::Storage("Shard not initialized".to_string()))?;
 
-        // Build points using PointStruct wrapper which handles conversions
+        // Stable, content-derived UUID for each chunk. We previously used
+        // `enumerate()`'s index here, which collided across documents because
+        // every document's chunk 0 ended up with `PointId::NumId(0)` and silently
+        // overwrote each other inside Qdrant. Derive the ID from the chunk's
+        // identifying tuple so:
+        //   1. The same logical chunk always gets the same ID across re-indexes
+        //      (idempotent upsert, no shard bloat on every incremental update).
+        //   2. Chunks from different documents never collide.
+        //   3. The ID does NOT include `content`, so editing a single word in
+        //      a long chunk does not invalidate its vector; only the line range
+        //      and document identity matter for ID stability.
+        // The namespace UUID is the inkuo knowledge base UUID; replace at
+        // build-time if a workspace ever needs isolation.
+        let namespace = uuid::Uuid::NAMESPACE_OID;
+
         let points: Vec<PointStruct> = chunks
             .iter()
-            .enumerate()
-            .map(|(idx, chunk)| {
+            .map(|chunk| {
                 let file_path = file_paths.get(&chunk.document_id).cloned().unwrap_or_default();
+                let id_seed = format!(
+                    "{}|{}|{}|{}",
+                    chunk.document_id, chunk.chunk_index, chunk.start_line, chunk.end_line
+                );
+                let point_id = PointId::Uuid(uuid::Uuid::new_v5(&namespace, id_seed.as_bytes()));
 
                 PointStruct::new(
-                    PointId::NumId(idx as u64),
+                    point_id,
                     Vectors::new_named([(inner.vector_name.as_str(), chunk.embedding.clone())]),
                     json!({
                         "document_id": chunk.document_id,

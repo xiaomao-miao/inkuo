@@ -6,6 +6,18 @@
 //! - The structured [`XlsxWorkbook`] / [`XlsxSheet`] / [`Cell`] / [`CellStyle`]
 //!   types provide cell-level fidelity (formulas, merged ranges, styles)
 //!   suitable for AI editing and conservative round-tripping.
+//!
+//! This module also contains several standalone `*_xlsx` helpers (merge,
+//! resize, sheet CRUD, incremental XML rewriting, ...) that predate the
+//! `ExcelOperation` enum in `agent/tools/excel_tools.rs`. The active editor
+//! path uses `ExcelOperation`, so these helpers have no callers today. We
+//! suppress the `dead_code` warnings rather than deleting them: dropping a
+//! 1500-line block is risky without a regression test that exercises the
+//! non-`ExcelOperation` code paths, and a future Excel feature may want to
+//! reuse some of these helpers. Revisit when the warning count is no longer
+//! considered noise.
+
+#![allow(dead_code)]
 
 use std::collections::HashMap;
 use std::io::{Cursor, Read, Write};
@@ -1480,9 +1492,9 @@ fn parse_sheet_xml(xml: &str, shared_strings: &[String], styles_info: Option<&St
     let mut in_value = false;
     let mut in_inline_string = false;
 
-    /// Parse the attributes of a `<c ...>` tag into a fresh `ParsedCell`. Shared by
-    /// both `Event::Start` (paired with `</c>`) and `Event::Empty` (self-closing
-    /// `<c .../>`, which is what `build_cell_xml` emits for empty cells).
+    // Parse the attributes of a `<c ...>` tag into a fresh `ParsedCell`. Shared by
+    // both `Event::Start` (paired with `</c>`) and `Event::Empty` (self-closing
+    // `<c .../>`, which is what `build_cell_xml` emits for empty cells).
     let parse_c_attrs = |e: &quick_xml::events::BytesStart| -> ParsedCell {
         let mut c = ParsedCell::default();
         for attr in e.attributes().with_checks(false).flatten() {
@@ -1501,9 +1513,9 @@ fn parse_sheet_xml(xml: &str, shared_strings: &[String], styles_info: Option<&St
         c
     };
 
-    /// Push a parsed cell into the result. Empty cells without style are dropped
-    /// to match Excel's "missing cell" semantics; cells with style only are kept
-    /// so that style-only edits survive a round-trip.
+    // Push a parsed cell into the result. Empty cells without style are dropped
+    // to match Excel's "missing cell" semantics; cells with style only are kept
+    // so that style-only edits survive a round-trip.
     let mut push_cell = |c: ParsedCell| {
         if let Some((row, col)) = parse_cell_address(&c.ref_addr) {
             if row + 1 > max_row {

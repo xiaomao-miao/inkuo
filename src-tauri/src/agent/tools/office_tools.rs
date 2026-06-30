@@ -192,9 +192,11 @@ struct DocParagraph {
     /// Insert position relative to anchor_id: "before", "after", "end".
     /// Only used when id is absent (new element).
     #[serde(default)]
+    #[allow(dead_code)] // accepted from JSON today; insertion logic not yet wired up
     position: Option<String>,
     /// Anchor element ID for insertion. Only used when id is absent.
     #[serde(default)]
+    #[allow(dead_code)] // accepted from JSON today; insertion logic not yet wired up
     anchor_id: Option<String>,
     /// If true, delete the element with this id instead.
     #[serde(default, rename = "action")]
@@ -227,9 +229,11 @@ struct DocTable {
     rows: Vec<Vec<String>>,
     /// Insert position: "before", "after", "end".
     #[serde(default)]
+    #[allow(dead_code)] // accepted from JSON today; insertion logic not yet wired up
     position: Option<String>,
     /// Anchor element ID for insertion.
     #[serde(default)]
+    #[allow(dead_code)] // accepted from JSON today; insertion logic not yet wired up
     anchor_id: Option<String>,
     /// If true, delete this table instead.
     #[serde(default, rename = "action")]
@@ -251,6 +255,7 @@ struct CreateWordDocParams {
     elements: Option<Vec<serde_json::Value>>,
     /// IDs of elements to delete.
     #[serde(default)]
+    #[allow(dead_code)] // accepted from JSON today; deletion-by-id is not yet implemented
     deletes: Option<Vec<String>>,
     /// Deprecated: use elements[]. Kept for backward compatibility.
     #[serde(default)]

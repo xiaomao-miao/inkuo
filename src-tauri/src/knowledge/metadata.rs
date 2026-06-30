@@ -11,6 +11,11 @@ use std::path::{Path, PathBuf};
 /// Indexed file record
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexedFile {
+    /// Document ID (matches `Document.id`, used as the `document_id` payload
+    /// field in Qdrant). `#[serde(default)]` keeps loading old `metadata.json`
+    /// files that predate this field.
+    #[serde(default)]
+    pub document_id: String,
     /// File relative path
     pub path: String,
     /// Content hash
@@ -144,26 +149,69 @@ impl MetadataStore {
         self.save()
     }
 
-    /// Update metadata with new documents (preserves members)
-    pub fn update(&mut self, documents: &[Document], chunk_count: usize) -> Result<(), MetadataError> {
+    /// Update metadata with new documents (preserves members).
+    ///
+    /// `documents` is the list of documents that were actually (re-)indexed in
+    /// this batch — typically the `changed_docs` returned from
+    /// `find_changed_files`. Previously this method *replaced* the entire
+    /// `indexed_files` list with this set, which silently wiped metadata for
+    /// unchanged files on every incremental update. It now merges:
+    ///
+    ///   - records for paths in `documents` are updated in place (or appended
+    ///     as new);
+    ///   - records for paths in `removed_paths` are dropped;
+    ///   - records for any other path are preserved untouched.
+    ///
+    /// `chunk_count_by_doc` lets the caller supply the real per-document
+    /// chunk counts; the previous hard-coded `chunk_count: 1` made the stored
+    /// chunk_count useless for diagnostics.
+    pub fn update(
+        &mut self,
+        documents: &[Document],
+        chunk_count_by_doc: &HashMap<String, usize>,
+        total_chunk_count: usize,
+        removed_paths: &[String],
+    ) -> Result<(), MetadataError> {
         let metadata = self.metadata.as_mut()
             .ok_or_else(|| MetadataError::NoMetadata)?;
 
-        // Update indexed files
-        let indexed_files: Vec<IndexedFile> = documents
-            .iter()
-            .map(|doc| IndexedFile {
+        // 1. Drop records for files that no longer exist / are no longer
+        //    members of the knowledge base.
+        if !removed_paths.is_empty() {
+            metadata
+                .indexed_files
+                .retain(|f| !removed_paths.iter().any(|p| p == &f.path));
+        }
+
+        // 2. Upsert per-document records. We touch only what changed in this
+        //    batch; the rest of `indexed_files` stays put.
+        let now = Utc::now();
+        for doc in documents {
+            let chunk_count = chunk_count_by_doc
+                .get(&doc.id)
+                .copied()
+                .unwrap_or(0);
+            let entry = IndexedFile {
+                document_id: doc.id.clone(),
                 path: doc.path.clone(),
                 hash: doc.file_hash.clone(),
-                chunk_count: 1, // Simplified
-                indexed_at: Utc::now(),
-            })
-            .collect();
+                chunk_count,
+                indexed_at: now,
+            };
+            if let Some(existing) = metadata
+                .indexed_files
+                .iter_mut()
+                .find(|f| f.path == doc.path)
+            {
+                *existing = entry;
+            } else {
+                metadata.indexed_files.push(entry);
+            }
+        }
 
-        metadata.indexed_files = indexed_files;
-        metadata.document_count = documents.len();
-        metadata.chunk_count = chunk_count;
-        metadata.last_updated = Utc::now();
+        metadata.document_count = metadata.indexed_files.len();
+        metadata.chunk_count = total_chunk_count;
+        metadata.last_updated = now;
 
         self.save()
     }
