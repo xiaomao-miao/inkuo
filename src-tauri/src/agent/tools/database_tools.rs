@@ -39,7 +39,8 @@ impl DatabaseSearchTool {
                     (
                         "workspace_path",
                         "string",
-                        Some("Absolute path to the workspace root."),
+                        Some("DEPRECATED: ignored. The active workspace is determined by the registry, \
+                              not by the LLM-supplied value, for security reasons."),
                     ),
                     (
                         "top_k",
@@ -54,7 +55,7 @@ impl DatabaseSearchTool {
     pub async fn execute(
         &self,
         arguments: Value,
-        _workspace: Option<String>,
+        workspace: Option<String>,
     ) -> Result<String, ToolError> {
         let query = arguments["query"]
             .as_str()
@@ -65,12 +66,15 @@ impl DatabaseSearchTool {
                 )
             })?;
 
-        let workspace_path = arguments["workspace_path"]
-            .as_str()
+        // Always use the registry-provided workspace, not an AI-supplied one.
+        // Allowing the LLM to override the workspace would defeat the security
+        // boundary established by ToolRegistry::set_workspace(). If the
+        // registry has no workspace, the tool simply isn't usable.
+        let workspace_path = workspace
+            .as_deref()
             .ok_or_else(|| {
-                ToolError::InvalidArguments(
-                    "database_search".to_string(),
-                    "workspace_path must be a string".into(),
+                ToolError::ExecutionError(
+                    "database_search requires an active workspace; none is configured".into(),
                 )
             })?;
 
@@ -78,9 +82,6 @@ impl DatabaseSearchTool {
             .as_i64()
             .map(|v| v.clamp(1, 20) as usize)
             .unwrap_or(5);
-
-        // Validate workspace path
-        super::validate_workspace_path(workspace_path, &Some(workspace_path.to_string()))?;
 
         // Search through the shared infrastructure (same cache as KB mode)
         let results = crate::knowledge::search_knowledge_base(
