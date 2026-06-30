@@ -40,16 +40,20 @@ function mergePersistedState(
   persistedState: unknown,
   currentState: AIPanelState,
 ): AIPanelState {
-  const typedState = persistedState as Partial<{
-    isOpen: boolean;
-    activeTab: 'chat' | 'edit';
-    activeSessionId: string;
-  }>;
+  const persisted = (persistedState ?? {}) as Partial<Pick<
+    AIPanelState,
+    'isOpen' | 'activeTab' | 'activeSessionId'
+  >>;
 
+  // Persisted session content is intentionally discarded — the backend's
+  // workspace snapshots are the canonical source of truth and get reloaded
+  // lazily. We keep the UI-mode bits (panel open state, current tab) and
+  // drop `activeSessionId` so a stale id from an older snapshot can't pin a
+  // session that no longer exists.
   return {
     ...currentState,
-    ...typedState,
-    activeSessionId: currentState.activeSessionId,
+    isOpen: persisted.isOpen ?? currentState.isOpen,
+    activeTab: persisted.activeTab ?? currentState.activeTab,
   };
 }
 

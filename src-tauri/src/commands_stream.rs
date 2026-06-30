@@ -43,10 +43,21 @@ fn build_knowledge_context(results: &[knowledge::SearchResult]) -> String {
         .join("\n\n")
 }
 
-fn build_knowledge_instruction(user_question: &str, results: &[knowledge::SearchResult]) -> String {
+fn build_knowledge_instruction(
+    user_question: &str,
+    results: &[knowledge::SearchResult],
+    selection: &str,
+) -> String {
+    let selection_block = if selection.trim().is_empty() {
+        String::new()
+    } else {
+        format!("\n\n用户当前选中的文本：\n{}\n", selection)
+    };
+
     format!(
-        "用户问题：\n{question}\n\n知识库片段：\n{context}",
+        "用户问题：\n{question}{selection}\n\n知识库片段：\n{context}",
         question = user_question,
+        selection = selection_block,
         context = build_knowledge_context(results),
     )
 }
@@ -128,7 +139,8 @@ pub async fn ai_chat_stream(
 ) -> Result<(), StreamCommandError> {
     tracing::info!("ai_chat_stream start - session: {}, mode: {}", session_id, mode);
     let _ = state;
-    let config = ai_config::build_input_ai_config(config_input);
+    let config = ai_config::build_input_ai_config(config_input)
+        .map_err(|error| StreamCommandError::AIRequest(error.to_string()))?;
     let adapter = ai::AIProviderAdapter::new(config);
     let original_text = original_text.unwrap_or_default();
 
@@ -149,7 +161,11 @@ pub async fn ai_chat_stream(
         .await
         .map_err(|error| StreamCommandError::KnowledgeSearch(error.to_string()))?;
 
-        let knowledge_instruction = build_knowledge_instruction(&instruction, &results);
+        // Pass any user-provided selection through to the LLM as additional
+        // grounding context (it might be the exact phrase the user is asking
+        // about). The retrieved knowledge chunks still drive the prompt; the
+        // selection is appended only if present.
+        let knowledge_instruction = build_knowledge_instruction(&instruction, &results, original_text.as_str());
         (knowledge_instruction, String::new(), Some(results))
     } else {
         (instruction, original_text, None)
@@ -163,28 +179,7 @@ pub async fn ai_chat_stream(
             if crate::commands::STREAM_CANCELLED.lock().contains(&session_id_for_cb) {
                 return;
             }
-            emit(
-                &app,
-                StreamPayload {
-                    session_id: session_id_for_cb.clone(),
-                    message_id: message_id_for_cb.clone(),
-                    event_type: "text".to_string(),
-                    content: Some(delta),
-                    summary: None,
-                    tool_call_id: None,
-                    tool_name: None,
-                    tool_args: None,
-                    final_content: None,
-                    error: None,
-                    search_results: None,
-                    done: false,
-                    file_path: None,
-                    original_content: None,
-                    new_content: None,
-                    diff_summary: None,
-                    office_file_modified: None,
-                },
-            );
+            emit(&app, StreamPayload::text(&session_id_for_cb, &message_id_for_cb, &delta));
         })
         .await;
 
@@ -198,52 +193,13 @@ pub async fn ai_chat_stream(
         tracing::error!("AI chat error: {}", error);
         emit(
             &app,
-            StreamPayload {
-                session_id: session_id.clone(),
-                message_id: message_id.clone(),
-                event_type: "error".to_string(),
-                content: None,
-                summary: None,
-                tool_call_id: None,
-                tool_name: None,
-                tool_args: None,
-                final_content: None,
-                error: Some(error.to_string()),
-                search_results: None,
-                done: true,
-                file_path: None,
-                original_content: None,
-                new_content: None,
-                diff_summary: None,
-                office_file_modified: None,
-            },
+            StreamPayload::error(&session_id, &message_id, &error.to_string()),
         );
         return Err(StreamCommandError::AIRequest(error.to_string()));
     }
 
     if crate::commands::STREAM_CANCELLED.lock().remove(&session_id) {
-        emit(
-            &app,
-            StreamPayload {
-                session_id,
-                message_id,
-                event_type: "error".to_string(),
-                content: None,
-                summary: None,
-                tool_call_id: None,
-                tool_name: None,
-                tool_args: None,
-                final_content: None,
-                error: Some("cancelled".to_string()),
-                search_results: None,
-                done: true,
-                file_path: None,
-                original_content: None,
-                new_content: None,
-                diff_summary: None,
-                office_file_modified: None,
-            },
-        );
+        emit(&app, StreamPayload::cancelled(&session_id, &message_id));
         return Ok(());
     }
 
@@ -256,34 +212,27 @@ pub async fn ai_chat_stream(
     } else {
         final_result
     };
-    let search_results = if mode == "knowledge" {
-        knowledge_results.as_deref().map(map_search_results)
-    } else {
-        None
-    };
 
-    emit(
-        &app,
-        StreamPayload {
-            session_id,
-            message_id,
-            event_type: "text".to_string(),
-            content: None,
-            summary: None,
-            tool_call_id: None,
-            tool_name: None,
-            tool_args: None,
-            final_content: Some(final_content),
-            error: None,
-            search_results,
-            done: true,
-            file_path: None,
-            original_content: None,
-            new_content: None,
-            diff_summary: None,
-            office_file_modified: None,
-        },
-    );
+    if mode == "knowledge" {
+        let search_results = knowledge_results
+            .as_deref()
+            .map(map_search_results)
+            .unwrap_or_default();
+        emit(
+            &app,
+            StreamPayload::final_text_with_results(
+                &session_id,
+                &message_id,
+                &final_content,
+                search_results,
+            ),
+        );
+    } else {
+        emit(
+            &app,
+            StreamPayload::done(&session_id, &message_id, Some(&final_content)),
+        );
+    }
 
     tracing::info!("ai_chat_stream done event emitted");
     Ok(())
@@ -326,79 +275,19 @@ pub async fn ai_edit_stream(
             if crate::commands::STREAM_CANCELLED.lock().contains(&session_id_for_cb) {
                 return;
             }
-            emit(
-                &app,
-                StreamPayload {
-                    session_id: session_id_for_cb.clone(),
-                    message_id: message_id_for_cb.clone(),
-                    event_type: "text".to_string(),
-                    content: Some(delta),
-                    summary: None,
-                    tool_call_id: None,
-                    tool_name: None,
-                    tool_args: None,
-                    final_content: None,
-                    error: None,
-                    search_results: None,
-                    done: false,
-                    file_path: None,
-                    original_content: None,
-                    new_content: None,
-                    diff_summary: None,
-                    office_file_modified: None,
-                },
-            );
+            emit(&app, StreamPayload::text(&session_id_for_cb, &message_id_for_cb, &delta));
         })
         .await
         .map_err(|error| StreamCommandError::AIRequest(error.to_string()))?;
 
     if crate::commands::STREAM_CANCELLED.lock().remove(&session_id) {
-        emit(
-            &app,
-            StreamPayload {
-                session_id,
-                message_id,
-                event_type: "error".to_string(),
-                content: None,
-                summary: None,
-                tool_call_id: None,
-                tool_name: None,
-                tool_args: None,
-                final_content: None,
-                error: Some("cancelled".to_string()),
-                search_results: None,
-                done: true,
-                file_path: None,
-                original_content: None,
-                new_content: None,
-                diff_summary: None,
-                office_file_modified: None,
-            },
-        );
+        emit(&app, StreamPayload::cancelled(&session_id, &message_id));
         return Ok(());
     }
 
     emit(
         &app,
-        StreamPayload {
-            session_id,
-            message_id,
-            event_type: "summary".to_string(),
-            content: None,
-            summary: Some(result.summary),
-            tool_call_id: None,
-            tool_name: None,
-            tool_args: None,
-            final_content: Some(result.content),
-            error: None,
-            search_results: None,
-            done: true,
-            file_path: None,
-            original_content: None,
-            new_content: None,
-            diff_summary: None,
-            office_file_modified: None,
-        },
+        StreamPayload::summary(&session_id, &message_id, &result.summary, &result.content),
     );
 
     Ok(())

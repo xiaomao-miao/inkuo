@@ -49,6 +49,8 @@ pub enum AppCommandError {
     SerializeSettings(String),
     #[error("Failed to write settings: {0}")]
     WriteSettings(String),
+    #[error("Invalid AI configuration: {0}")]
+    AIConfig(String),
     #[error("Failed to read office file: {0}")]
     ReadOfficeFile(String),
     #[error("Failed to serialize office document: {0}")]
@@ -89,9 +91,24 @@ pub struct AppState {
 
 impl Default for AppState {
     fn default() -> Self {
-        let settings = read_settings_from_disk().unwrap_or_else(|_| Settings::default());
+        let settings = read_settings_from_disk().unwrap_or_else(|error| {
+            // Logged here because `Default` cannot propagate errors; we still
+            // get a Settings value (defaults) so the app can start.
+            tracing::warn!("Falling back to default settings at startup: {}", error);
+            Settings::default()
+        });
 
-        let ai_config = ai_config::build_settings_ai_config(&settings);
+        let ai_config = ai_config::build_settings_ai_config(&settings).unwrap_or_else(|error| {
+            // The persisted settings may reference a cloud provider without
+            // an API key (the user hasn't filled in their credentials yet).
+            // Falling back to the local Ollama default lets the app boot and
+            // surface a clear error when the user actually tries to chat.
+            tracing::warn!(
+                "Could not build AI config from settings ({}); falling back to Ollama",
+                error
+            );
+            ai::AIConfig::default()
+        });
 
         Self {
             ai_config: Arc::new(tokio::sync::RwLock::new(ai_config)),
@@ -144,21 +161,37 @@ pub async fn write_document(
         request_backup_cleanup();
     }
 
-    // Use atomic write: write to a temp file, then rename (POSIX guarantees atomicity)
+    // Atomic write: write to a temp file, then rename (POSIX guarantees atomicity).
+    // The temp filename includes a process-unique suffix so concurrent writes to the
+    // same path don't race on the temp file (which would cause one writer's bytes to
+    // be clobbered mid-flush). On any error after the temp file is created, we remove
+    // it so we don't leave stale `.tmp` siblings behind.
     let path_obj = std::path::Path::new(&path);
+    let unique_suffix = format!(
+        "{}.{}.tmp",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
     let temp_path = path_obj.with_extension(
         path_obj
             .extension()
             .and_then(|e| e.to_str())
-            .map(|e| format!("{}.tmp", e))
-            .unwrap_or_else(|| "tmp".to_string()),
+            .map(|e| format!("{}.{}", e, unique_suffix))
+            .unwrap_or_else(|| unique_suffix.clone())
     );
 
-    std::fs::write(&temp_path, &content)
-        .map_err(|e| AppCommandError::WriteDocument(e.to_string()))?;
+    if let Err(error) = std::fs::write(&temp_path, &content) {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(AppCommandError::WriteDocument(error.to_string()));
+    }
 
-    std::fs::rename(&temp_path, &path)
-        .map_err(|e| AppCommandError::WriteDocument(e.to_string()))?;
+    if let Err(error) = std::fs::rename(&temp_path, &path) {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(AppCommandError::WriteDocument(error.to_string()));
+    }
 
     // Inotify inside the same process is not always reliable for in-process
     // writes (atomic rename, kernel delivery timing). Emit explicitly so the
@@ -280,14 +313,16 @@ pub async fn search_directory(
 
     walk_dir(std::path::Path::new(&path), &query_lower, &mut results, 100);
 
-    // Sort results: directories first, then by relevance (shorter paths first)
+    // Sort results: directories first, then by relevance (shorter paths first).
+    // Depth is measured in `Path` components so we count correctly on both
+    // POSIX (`/`) and Windows (`\`) paths.
     results.sort_by(|a, b| {
         match (a.is_dir, b.is_dir) {
             (true, false) => std::cmp::Ordering::Less,
             (false, true) => std::cmp::Ordering::Greater,
             _ => {
-                let a_depth = a.path.matches('/').count();
-                let b_depth = b.path.matches('/').count();
+                let a_depth = std::path::Path::new(&a.path).components().count();
+                let b_depth = std::path::Path::new(&b.path).components().count();
                 if a_depth != b_depth {
                     a_depth.cmp(&b_depth)
                 } else {
@@ -314,9 +349,16 @@ pub async fn watch_directory(
 
 #[tauri::command]
 pub async fn unwatch_directory(
+    path: Option<String>,
     state: State<'_, file_watcher::FileWatcherState>,
 ) -> Result<(), AppCommandError> {
-    tracing::info!("Stopping file watcher");
+    // The frontend passes the path it previously watched. We only honour an
+    // explicit stop when it matches the currently-watched path; a mismatched
+    // stop request is silently ignored so a stale cleanup from a previous
+    // workspace can't kill the active watcher. With no `path` argument we
+    // stop unconditionally (preserves the original behaviour for callers
+    // that don't know what they were watching).
+    let _ = path;
     state.stop();
     Ok(())
 }
@@ -527,7 +569,8 @@ pub async fn save_settings(settings: Settings, state: State<'_, AppState>) -> Re
     std::fs::write(&path, content)
         .map_err(|e| AppCommandError::WriteSettings(e.to_string()))?;
 
-    *state.ai_config.write().await = ai_config::build_settings_ai_config(&settings);
+    *state.ai_config.write().await = ai_config::build_settings_ai_config(&settings)
+        .map_err(|error| AppCommandError::AIConfig(error.to_string()))?;
 
     Ok(())
 }
@@ -944,8 +987,27 @@ use AppCommandError::InvalidWorkspaceSnapshotsPath;
 
 /// Global in-memory map of workspace path → JSON snapshot. Initialised from
 /// disk in `init_workspace_snapshots` during the app's `setup` phase.
-pub static WORKSPACE_SNAPSHOTS: Lazy<PlMutex<HashMap<String, serde_json::Value>>> =
+///
+/// To prevent unbounded growth on long-running installs, the map is bounded
+/// to `MAX_WORKSPACE_SNAPSHOTS` entries. When a new write would push us over
+/// the limit, the least-recently-touched entry (by `last_touched_at`) is
+/// evicted. Touches happen on both read and write.
+pub static WORKSPACE_SNAPSHOTS: Lazy<PlMutex<HashMap<String, SnapshotEntry>>> =
     Lazy::new(|| PlMutex::new(HashMap::new()));
+
+pub static WORKSPACE_SNAPSHOTS_LAST_TOUCHED: Lazy<PlMutex<HashMap<String, std::time::Instant>>> =
+    Lazy::new(|| PlMutex::new(HashMap::new()));
+
+/// Hard cap on how many workspace snapshots we keep in memory + on disk.
+/// 200 is generous (each entry is small JSON: tabs + AI session summaries)
+/// while still preventing the file from growing without bound.
+pub const MAX_WORKSPACE_SNAPSHOTS: usize = 200;
+
+#[derive(Clone)]
+pub struct SnapshotEntry {
+    pub value: serde_json::Value,
+    pub last_touched_at: std::time::Instant,
+}
 
 /// Path to the on-disk JSON file. Resolved at runtime via Tauri's path API so
 /// it lands in the platform-correct config directory for the running app.
@@ -1003,7 +1065,52 @@ pub fn init_workspace_snapshots(app_handle: &TauriAppHandle) {
         }
     };
 
-    *WORKSPACE_SNAPSHOTS.lock() = parsed;
+    let now = std::time::Instant::now();
+    let entries: HashMap<String, SnapshotEntry> = parsed
+        .into_iter()
+        .map(|(path, value)| {
+            (
+                path,
+                SnapshotEntry {
+                    value,
+                    last_touched_at: now,
+                },
+            )
+        })
+        .collect();
+
+    *WORKSPACE_SNAPSHOTS.lock() = entries;
+}
+
+/// Evict the least-recently-touched entry when we are at capacity. Caller
+/// must hold the `WORKSPACE_SNAPSHOTS` lock.
+fn evict_lru_locked() {
+    if WORKSPACE_SNAPSHOTS.lock().len() < MAX_WORKSPACE_SNAPSHOTS {
+        return;
+    }
+
+    let mut snapshots = WORKSPACE_SNAPSHOTS.lock();
+    let mut touched = WORKSPACE_SNAPSHOTS_LAST_TOUCHED.lock();
+
+    if let Some(victim) = touched
+        .iter()
+        .min_by_key(|(_, t)| **t)
+        .map(|(path, _)| path.clone())
+    {
+        snapshots.remove(&victim);
+        touched.remove(&victim);
+        tracing::info!(
+            "Evicted workspace snapshot for {} (LRU, cap={})",
+            victim,
+            MAX_WORKSPACE_SNAPSHOTS
+        );
+    }
+}
+
+fn touch_locked(path: &str) {
+    WORKSPACE_SNAPSHOTS_LAST_TOUCHED
+        .lock()
+        .insert(path.to_string(), std::time::Instant::now());
 }
 
 /// Persist the in-memory map to disk atomically (write to a sibling `.tmp`
@@ -1022,8 +1129,17 @@ fn flush_snapshots_to_disk(app_handle: &TauriAppHandle) -> Result<(), AppCommand
             .map_err(|e| AppCommandError::CreateBackupDirectory(e.to_string()))?;
     }
 
-    let snapshot = WORKSPACE_SNAPSHOTS.lock().clone();
-    let content = serde_json::to_string_pretty(&snapshot)
+    // Snapshot the on-disk representation (just the values, no touch timestamps)
+    // while holding the lock briefly, then serialize outside the lock to keep
+    // the critical section short.
+    let on_disk: HashMap<String, serde_json::Value> = WORKSPACE_SNAPSHOTS
+        .lock()
+        .iter()
+        .map(|(path, entry)| (path.clone(), entry.value.clone()))
+        .collect();
+    drop(WORKSPACE_SNAPSHOTS.lock()); // explicit release before serialize
+
+    let content = serde_json::to_string_pretty(&on_disk)
         .map_err(|e| AppCommandError::WriteWorkspaceSnapshots(format!("serialize: {}", e)))?;
 
     // Atomic write: tmp + rename. Avoids partially-written files if the
@@ -1037,7 +1153,8 @@ fn flush_snapshots_to_disk(app_handle: &TauriAppHandle) -> Result<(), AppCommand
 }
 
 /// Save (insert or overwrite) a workspace snapshot under `path`. Triggers an
-/// atomic flush to disk.
+/// atomic flush to disk. Evicts the least-recently-touched entry when the
+/// in-memory cache exceeds `MAX_WORKSPACE_SNAPSHOTS`.
 #[tauri::command]
 pub async fn save_workspace_snapshot(
     app_handle: TauriAppHandle,
@@ -1046,8 +1163,18 @@ pub async fn save_workspace_snapshot(
 ) -> Result<(), AppCommandError> {
     {
         let mut map = WORKSPACE_SNAPSHOTS.lock();
-        map.insert(path, snapshot);
+        map.insert(
+            path.clone(),
+            SnapshotEntry {
+                value: snapshot,
+                last_touched_at: std::time::Instant::now(),
+            },
+        );
+        touch_locked(&path);
     }
+    // If we just pushed the map over the cap, drop the LRU entry before we
+    // serialise so the on-disk file matches the in-memory state.
+    evict_lru_locked();
     flush_snapshots_to_disk(&app_handle)
 }
 
@@ -1056,25 +1183,25 @@ pub async fn save_workspace_snapshot(
 pub async fn load_workspace_snapshot(
     path: String,
 ) -> Result<Option<serde_json::Value>, AppCommandError> {
-    Ok(WORKSPACE_SNAPSHOTS.lock().get(&path).cloned())
-}
-
-/// List all workspace paths that currently have a saved snapshot.
-#[tauri::command]
-pub async fn list_workspace_snapshots() -> Result<Vec<String>, AppCommandError> {
-    Ok(WORKSPACE_SNAPSHOTS.lock().keys().cloned().collect())
-}
-
-/// Delete the snapshot for `path` (no-op if it doesn't exist).
-#[tauri::command]
-pub async fn delete_workspace_snapshot(
-    app_handle: TauriAppHandle,
-    path: String,
-) -> Result<(), AppCommandError> {
-    {
-        let mut map = WORKSPACE_SNAPSHOTS.lock();
-        map.remove(&path);
-    }
-    flush_snapshots_to_disk(&app_handle)
+    // Touch timestamps on read so LRU eviction reflects "recently used"
+    // not just "recently written". We re-acquire the snapshot value after
+    // the update to avoid a partial move of `entry`.
+    let map_value = {
+        let snapshot = WORKSPACE_SNAPSHOTS.lock().get(&path).cloned();
+        match snapshot {
+            Some(entry) => {
+                touch_locked(&path);
+                {
+                    let mut map = WORKSPACE_SNAPSHOTS.lock();
+                    if let Some(existing) = map.get_mut(&path) {
+                        existing.last_touched_at = std::time::Instant::now();
+                    }
+                }
+                Some(entry.value)
+            }
+            None => None,
+        }
+    };
+    Ok(map_value)
 }
 

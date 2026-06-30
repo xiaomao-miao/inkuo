@@ -115,48 +115,47 @@ pub struct OfficeFileModified {
 }
 
 impl StreamPayload {
-    pub fn text(session_id: &str, message_id: &str, content: &str) -> Self {
-        Self {
-            session_id: session_id.to_string(),
-            message_id: message_id.to_string(),
-            event_type: "text".to_string(),
-            content: Some(content.to_string()),
-            summary: None,
-            tool_call_id: None,
-            tool_name: None,
-            tool_args: None,
-            final_content: None,
-            error: None,
-            search_results: None,
-            done: false,
-            file_path: None,
-            original_content: None,
-            new_content: None,
-            diff_summary: None,
-            office_file_modified: None,
-        }
+    fn with_event(mut self, event_type: &str) -> Self {
+        self.event_type = event_type.to_string();
+        self
     }
 
+    fn with_ids(mut self, session_id: &str, message_id: &str) -> Self {
+        self.session_id = session_id.to_string();
+        self.message_id = message_id.to_string();
+        self
+    }
+
+    /// A streaming text delta. Caller is responsible for emitting the final
+    /// `final_text` / `done` event when the stream completes.
+    pub fn text(session_id: &str, message_id: &str, content: &str) -> Self {
+        Self::default()
+            .with_ids(session_id, message_id)
+            .with_event("text")
+            .with(|p| p.content = Some(content.to_string()))
+    }
+
+    /// Terminal error event (done=true).
     pub fn error(session_id: &str, message_id: &str, error: &str) -> Self {
-        Self {
-            session_id: session_id.to_string(),
-            message_id: message_id.to_string(),
-            event_type: "error".to_string(),
-            content: None,
-            summary: None,
-            tool_call_id: None,
-            tool_name: None,
-            tool_args: None,
-            final_content: None,
-            error: Some(error.to_string()),
-            search_results: None,
-            done: true,
-            file_path: None,
-            original_content: None,
-            new_content: None,
-            diff_summary: None,
-            office_file_modified: None,
-        }
+        Self::default()
+            .with_ids(session_id, message_id)
+            .with_event("error")
+            .with(|p| {
+                p.error = Some(error.to_string());
+                p.done = true;
+            })
+    }
+
+    /// Cancellation event (done=true, error=cancelled). Distinct from a real
+    /// error so the frontend can treat it as a non-fatal terminal state.
+    pub fn cancelled(session_id: &str, message_id: &str) -> Self {
+        Self::default()
+            .with_ids(session_id, message_id)
+            .with_event("error")
+            .with(|p| {
+                p.error = Some("cancelled".to_string());
+                p.done = true;
+            })
     }
 
     pub fn tool_call_start(
@@ -166,25 +165,14 @@ impl StreamPayload {
         tool_name: &str,
         args: &str,
     ) -> Self {
-        Self {
-            session_id: session_id.to_string(),
-            message_id: message_id.to_string(),
-            event_type: "tool_call_start".to_string(),
-            content: None,
-            summary: None,
-            tool_call_id: Some(tool_call_id.to_string()),
-            tool_name: Some(tool_name.to_string()),
-            tool_args: Some(args.to_string()),
-            final_content: None,
-            error: None,
-            search_results: None,
-            done: false,
-            file_path: None,
-            original_content: None,
-            new_content: None,
-            diff_summary: None,
-            office_file_modified: None,
-        }
+        Self::default()
+            .with_ids(session_id, message_id)
+            .with_event("tool_call_start")
+            .with(|p| {
+                p.tool_call_id = Some(tool_call_id.to_string());
+                p.tool_name = Some(tool_name.to_string());
+                p.tool_args = Some(args.to_string());
+            })
     }
 
     pub fn tool_result(
@@ -194,48 +182,68 @@ impl StreamPayload {
         result: &str,
         is_error: bool,
     ) -> Self {
-        Self {
-            session_id: session_id.to_string(),
-            message_id: message_id.to_string(),
-            event_type: "tool_result".to_string(),
-            // When error, only put in error field, not content, to avoid duplication
-            content: if is_error { None } else { Some(result.to_string()) },
-            summary: None,
-            tool_call_id: Some(tool_call_id.to_string()),
-            tool_name: None,
-            tool_args: None,
-            final_content: None,
-            error: if is_error { Some(result.to_string()) } else { None },
-            search_results: None,
-            done: false,
-            file_path: None,
-            original_content: None,
-            new_content: None,
-            diff_summary: None,
-            office_file_modified: None,
-        }
+        Self::default()
+            .with_ids(session_id, message_id)
+            .with_event("tool_result")
+            .with(|p| {
+                p.tool_call_id = Some(tool_call_id.to_string());
+                if is_error {
+                    p.error = Some(result.to_string());
+                } else {
+                    p.content = Some(result.to_string());
+                }
+            })
     }
 
+    /// Final event for a plain chat stream.
     pub fn done(session_id: &str, message_id: &str, final_content: Option<&str>) -> Self {
-        Self {
-            session_id: session_id.to_string(),
-            message_id: message_id.to_string(),
-            event_type: "done".to_string(),
-            content: None,
-            summary: None,
-            tool_call_id: None,
-            tool_name: None,
-            tool_args: None,
-            final_content: final_content.map(String::from),
-            error: None,
-            search_results: None,
-            done: true,
-            file_path: None,
-            original_content: None,
-            new_content: None,
-            diff_summary: None,
-            office_file_modified: None,
-        }
+        Self::default()
+            .with_ids(session_id, message_id)
+            .with_event("done")
+            .with(|p| {
+                p.final_content = final_content.map(String::from);
+                p.done = true;
+            })
+    }
+
+    /// Final event for an edit stream: summary + final content.
+    pub fn summary(
+        session_id: &str,
+        message_id: &str,
+        summary: &str,
+        final_content: &str,
+    ) -> Self {
+        Self::default()
+            .with_ids(session_id, message_id)
+            .with_event("summary")
+            .with(|p| {
+                p.summary = Some(summary.to_string());
+                p.final_content = Some(final_content.to_string());
+                p.done = true;
+            })
+    }
+
+    /// Final event for a knowledge-mode chat stream. Carries the final answer
+    /// plus the search results so the frontend can render the references.
+    pub fn final_text_with_results(
+        session_id: &str,
+        message_id: &str,
+        final_content: &str,
+        search_results: Vec<KnowledgeSearchResult>,
+    ) -> Self {
+        Self::default()
+            .with_ids(session_id, message_id)
+            .with_event("text")
+            .with(|p| {
+                p.final_content = Some(final_content.to_string());
+                p.search_results = Some(search_results);
+                p.done = true;
+            })
+    }
+
+    fn with(mut self, f: impl FnOnce(&mut Self)) -> Self {
+        f(&mut self);
+        self
     }
 }
 

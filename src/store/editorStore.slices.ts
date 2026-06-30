@@ -116,10 +116,6 @@ function createDefaultDocumentMetadata(overrides?: Partial<DocumentMetadata>): D
   };
 }
 
-function normalizeDocumentMetadata(metadata?: Partial<DocumentMetadata>): DocumentMetadata {
-  return createDefaultDocumentMetadata(metadata);
-}
-
 function createDefaultDocumentDiffState(overrides?: Partial<DocumentDiffState>): DocumentDiffState {
   return {
     hunks: [],
@@ -129,10 +125,6 @@ function createDefaultDocumentDiffState(overrides?: Partial<DocumentDiffState>):
     isActive: false,
     ...overrides,
   };
-}
-
-function normalizeDocumentDiffState(diff?: Partial<DocumentDiffState>): DocumentDiffState {
-  return createDefaultDocumentDiffState(diff);
 }
 
 function createDefaultDocumentOfficeState(overrides?: Partial<DocumentOfficeState>): DocumentOfficeState {
@@ -145,10 +137,6 @@ function createDefaultDocumentOfficeState(overrides?: Partial<DocumentOfficeStat
   };
 }
 
-function normalizeDocumentOfficeState(office?: Partial<DocumentOfficeState>): DocumentOfficeState {
-  return createDefaultDocumentOfficeState(office);
-}
-
 export function createDefaultDocumentState(overrides?: {
   metadata?: Partial<DocumentMetadata>;
   diff?: Partial<DocumentDiffState>;
@@ -158,14 +146,6 @@ export function createDefaultDocumentState(overrides?: {
     metadata: createDefaultDocumentMetadata(overrides?.metadata),
     diff: createDefaultDocumentDiffState(overrides?.diff),
     office: createDefaultDocumentOfficeState(overrides?.office),
-  };
-}
-
-export function normalizeDocumentState(documentState?: Partial<DocumentState> | null): DocumentState {
-  return {
-    metadata: normalizeDocumentMetadata(documentState?.metadata),
-    diff: normalizeDocumentDiffState(documentState?.diff),
-    office: normalizeDocumentOfficeState(documentState?.office),
   };
 }
 
@@ -217,19 +197,29 @@ function toLegacyDiffContext(documentState: DocumentState) {
 export const createDocumentSlice: EditorStoreCreator<DocumentSlice> = (set) => ({
   documentContents: {},
   setDocumentContent: (path, doc, content, mtime = 0) =>
-    set((state) => ({
-      documentContents: {
-        ...state.documentContents,
-        [path]: createDefaultDocumentState({
-          metadata: { document: doc, content, mtime },
-          office: {
-            docxBuffer: state.documentContents[path]?.office.docxBuffer ?? null,
-            excelData: state.documentContents[path]?.office.excelData ?? null,
-            bufferVersion: state.documentContents[path]?.office.bufferVersion ?? 0,
+    set((state) => {
+      // Preserve any in-flight diff hunks and the user's selection when
+      // (re)loading the document content. The previous behaviour silently
+      // dropped `diff` and `metadata.selection`, which lost pending AI
+      // edits if `setDocumentContent` was called mid-edit.
+      const previous = state.documentContents[path];
+      const office = previous
+        ? { ...previous.office }
+        : createDefaultDocumentOfficeState();
+      const diff = previous?.diff ?? createDefaultDocumentDiffState();
+      const selection = previous?.metadata.selection ?? null;
+
+      return {
+        documentContents: {
+          ...state.documentContents,
+          [path]: {
+            metadata: { document: doc, content, mtime, isDirty: false, selection },
+            diff,
+            office,
           },
-        }),
-      },
-    })),
+        },
+      };
+    }),
   setContent: (path, content) =>
     set((state) => updateDocumentSection(state, path, 'metadata', { content, isDirty: true })),
   setSelection: (path, selection) =>

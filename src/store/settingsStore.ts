@@ -111,7 +111,11 @@ export const useSettingsStore = create<SettingsState>()(
           name: config?.name || 'New API',
           provider: config?.provider || 'openai',
           baseUrl: config?.baseUrl || 'https://api.openai.com/v1',
-          apiKey: config?.apiKey || null,
+          // Preserve the empty string the user typed (e.g. "I want to
+          // clear the key") — only fall back to null when the caller
+          // didn't pass the field at all. The backend will then surface a
+          // proper "missing API key" error for cloud providers.
+          apiKey: config?.apiKey ?? null,
           model: config?.model || 'gpt-4o-mini',
           isDefault: false,
           enabled: true,

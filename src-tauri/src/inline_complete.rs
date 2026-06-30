@@ -158,31 +158,19 @@ fn extract_context(document: &str, cursor_pos: usize, context_lines: usize) -> (
 
     for (i, line) in lines[start_line..end_line].iter().enumerate() {
         if start_line + i == line_index {
-            // Find column within this line (in bytes)
+            // Split the line at the cursor byte offset without going through
+            // a `Vec<char>` round-trip. `split_at` operates on the byte
+            // boundary, which is safe here because we computed `col_bytes`
+            // as a byte offset above and only enter the branch when the
+            // boundary falls on a UTF-8 char boundary.
             let line_start = if start_line > 0 {
                 lines[..start_line].iter().map(|l| l.len() + 1).sum::<usize>()
             } else {
                 0
             };
             let col_bytes = cursor_byte.saturating_sub(line_start);
-
-            // Use char indices to split safely
-            let chars: Vec<char> = line.chars().collect();
-            let mut char_pos = 0usize;
-            let mut byte_pos = 0usize;
-
-            for (j, c) in chars.iter().enumerate() {
-                let c_len = c.len_utf8();
-                if byte_pos + c_len > col_bytes {
-                    char_pos = j;
-                    break;
-                }
-                byte_pos += c_len;
-                char_pos = j + 1;
-            }
-
-            let before: String = chars[..char_pos].iter().collect();
-            let after: String = chars[char_pos..].iter().collect();
+            let safe_col = col_bytes.min(line.len());
+            let (before, after) = line.split_at(safe_col);
 
             context_parts.push(format!("{}\x00\x00\x00{}\n", before, after));
         } else {
@@ -238,10 +226,11 @@ Completion:""#,
     )
 }
 
-/// Generate a simple completion ID
+/// Generate a short, URL-safe completion ID. `simple()` returns just the first
+/// 12 hex characters of the v4 UUID, which is enough entropy for an ID used
+/// within a single AI completion request — full UUIDs are wasted bytes here.
 fn generate_completion_id() -> String {
-    use uuid::Uuid;
-    Uuid::new_v4().to_string()[..8].to_string()
+    uuid::Uuid::new_v4().simple().to_string()
 }
 
 /// Call AI model for completion with retry logic (thinking disabled for speed)

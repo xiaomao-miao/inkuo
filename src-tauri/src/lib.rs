@@ -119,8 +119,6 @@ pub fn run() {
             commands::create_new_window,
             commands::save_workspace_snapshot,
             commands::load_workspace_snapshot,
-            commands::list_workspace_snapshots,
-            commands::delete_workspace_snapshot,
         ])
         .run(tauri::generate_context!())
         .expect("error while running inkuo application");

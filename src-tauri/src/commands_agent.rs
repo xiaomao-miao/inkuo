@@ -20,6 +20,8 @@ pub enum AgentCommandError {
     MissingToolCallId,
     #[error("Failed to serialize tool definitions: {0}")]
     ToolDefinitionsSerialization(String),
+    #[error("Invalid AI configuration: {0}")]
+    InvalidAIConfig(String),
 }
 
 /// Shared tool registries for agent - separate for full and read-only modes
@@ -32,15 +34,27 @@ async fn get_full_tool_registry(app: &AppHandle) -> SharedToolRegistry {
     let registry = FULL_TOOL_REGISTRY
         .get_or_init(|| Arc::new(RwLock::new(ToolRegistry::new())))
         .clone();
-    // Lazily add database_search tool with AppHandle (idempotent)
-    static DB_SEARCH_ADDED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
-    if DB_SEARCH_ADDED.get().is_none() {
-        let mut reg = registry.write().await;
+
+    // Lazily attach the AppHandle so the database_search tool can issue IPC
+    // calls. We previously used a `OnceLock` here but the check-then-act
+    // pattern was racy (two callers could both observe the flag as unset
+    // and both grab the write lock). The write guard itself plus the inner
+    // `has_tool` check are sufficient to make initialisation happen
+    // exactly once; the `OnceLock` only existed to short-circuit the read
+    // guard after the first call, which is a micro-optimisation we don't
+    // need. Subsequent callers will take the read lock and see
+    // `database_search` is already present.
+    {
+        let reg = registry.read().await;
         if !reg.has_tool("database_search") {
-            reg.set_app_handle(app.clone());
-            DB_SEARCH_ADDED.get_or_init(|| {});
+            drop(reg);
+            let mut reg = registry.write().await;
+            if !reg.has_tool("database_search") {
+                reg.set_app_handle(app.clone());
+            }
         }
     }
+
     registry
 }
 
@@ -50,7 +64,11 @@ async fn get_read_only_tool_registry(_app: &AppHandle) -> SharedToolRegistry {
         .clone()
 }
 
-/// Update the workspace path for both tool registries
+/// Update the workspace path for both tool registries. `set_workspace` is
+/// synchronous, so holding the write lock between the two updates does not
+/// yield — the two registries are therefore always updated back-to-back
+/// without an interleaving point, which is the property we want (so the
+/// full and read-only registries never disagree about the active workspace).
 async fn update_registry_workspace(workspace_path: Option<String>) {
     if let Some(registry) = FULL_TOOL_REGISTRY.get() {
         let mut registry = registry.write().await;
@@ -151,7 +169,8 @@ pub async fn ai_agent_stream(
     update_registry_workspace(workspace_path.clone()).await;
 
     // Create AI config from input
-    let ai_config = ai_config::build_input_ai_config(config_input);
+    let ai_config = ai_config::build_input_ai_config(config_input)
+        .map_err(|error| AgentCommandError::InvalidAIConfig(error.to_string()))?;
 
     tracing::info!("Using AI provider: {:?}", ai_config.provider);
 
@@ -193,31 +212,28 @@ pub async fn ai_agent_stream(
     // Add current user message
     session.add_message(Message::user(instruction.clone()));
 
-    let session_id_clone = session_id.clone();
-    let message_id_clone = message_id.clone();
-    let app_clone = app.clone();
+    // The executor already fills `session_id` and `message_id` on every
+    // payload it constructs before invoking this callback, so we just
+    // forward `payload` straight to the emit channel. The single clone here
+    // is the unavoidable one required by the `Fn(StreamPayload)` bound
+    // (the executor clones before calling us); everything else was a
+    // wasted copy.
+    let app_for_emit = app.clone();
     let instruction_clone = instruction.clone();
-
-    tracing::info!("[DEBUG] Setting up callback for session: {}, message: {}", session_id_clone, message_id_clone);
-
     let callback = move |payload: StreamPayload| {
-        let mut p = payload.clone();
-        p.session_id = session_id_clone.clone();
-        p.message_id = message_id_clone.clone();
-        emit(&app_clone, p);
+        emit(&app_for_emit, payload.clone());
 
-        // Emit a dedicated file-written event when a file modification tool succeeds.
-        // This bypasses the file watcher path-matching issue and directly tells the
-        // frontend which file changed, so it can refresh the editor immediately.
+        // Emit a dedicated file-written event when a file modification tool
+        // succeeds. This bypasses the file watcher path-matching issue and
+        // directly tells the frontend which file changed, so it can refresh
+        // the editor immediately.
         if payload.event_type == "tool_result"
             && !payload.error.as_ref().map(|e| !e.is_empty()).unwrap_or(false)
         {
-            if let Some(changed_path) = payload.file_path.clone() {
-                if let Err(error) = app_clone.emit(
+            if let Some(changed_path) = &payload.file_path {
+                if let Err(error) = app_for_emit.emit(
                     "file-written",
-                    serde_json::json!({
-                        "path": changed_path,
-                    }),
+                    serde_json::json!({ "path": changed_path }),
                 ) {
                     tracing::warn!("Failed to emit file-written event: {}", error);
                 }
@@ -238,25 +254,7 @@ pub async fn ai_agent_stream(
 
             emit(
                 &app,
-                StreamPayload {
-                    session_id,
-                    message_id,
-                    event_type: "done".to_string(),
-                    content: None,
-                    summary: None,
-                    tool_call_id: None,
-                    tool_name: None,
-                    tool_args: None,
-                    final_content: Some(final_response),
-                    error: None,
-                    search_results: None,
-                    done: true,
-                    file_path: None,
-                    original_content: None,
-                    new_content: None,
-                    diff_summary: None,
-                    office_file_modified: None,
-                },
+                StreamPayload::done(&session_id, &message_id, Some(&final_response)),
             );
         }
         Err(e) => {
@@ -272,25 +270,7 @@ pub async fn ai_agent_stream(
 
             emit(
                 &app,
-                StreamPayload {
-                    session_id,
-                    message_id,
-                    event_type: "error".to_string(),
-                    content: None,
-                    summary: None,
-                    tool_call_id: None,
-                    tool_name: None,
-                    tool_args: None,
-                    final_content: None,
-                    error: Some(error_msg),
-                    search_results: None,
-                    done: true,
-                    file_path: None,
-                    original_content: None,
-                    new_content: None,
-                    diff_summary: None,
-                    office_file_modified: None,
-                },
+                StreamPayload::error(&session_id, &message_id, &error_msg),
             );
         }
     }

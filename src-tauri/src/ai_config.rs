@@ -15,6 +15,8 @@ pub enum AIConfigError {
     ParseResponse(String),
     #[error("Network error: {0}")]
     Network(String),
+    #[error("Provider '{provider}' requires an API key but none was provided")]
+    MissingApiKey { provider: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,15 +67,6 @@ impl AIProviderKind {
             Self::Official => "official",
         }
     }
-
-    pub fn default_base_url(self) -> Option<&'static str> {
-        match self {
-            Self::OpenAI => Some(DEFAULT_OPENAI_BASE_URL),
-            Self::DeepSeek => Some(DEFAULT_DEEPSEEK_BASE_URL),
-            Self::Ollama => Some(DEFAULT_OLLAMA_BASE_URL),
-            Self::Official => None,
-        }
-    }
 }
 
 impl fmt::Display for AIProviderKind {
@@ -82,37 +75,46 @@ impl fmt::Display for AIProviderKind {
     }
 }
 
-pub fn default_base_url(provider: AIProviderKind) -> &'static str {
-    provider.default_base_url().unwrap_or(DEFAULT_DEEPSEEK_BASE_URL)
-}
-
 pub fn build_provider(
     provider: AIProviderKind,
     api_key: Option<&str>,
     base_url: Option<&str>,
-) -> ai::AIProvider {
-    match provider {
+) -> Result<ai::AIProvider, AIConfigError> {
+    // OpenAI-compatible cloud providers require an API key. Returning an
+    // error here (instead of silently sending `Authorization: Bearer ` with
+    // an empty token, which produces confusing upstream 401s) lets callers
+    // surface a clear "missing API key" message to the user.
+    let require_key = matches!(
+        provider,
+        AIProviderKind::OpenAI | AIProviderKind::DeepSeek | AIProviderKind::Official
+    );
+    let key_is_empty = api_key.map(str::trim).map_or(true, str::is_empty);
+    if require_key && key_is_empty {
+        return Err(AIConfigError::MissingApiKey {
+            provider: provider.as_str().to_string(),
+        });
+    }
+
+    let key = api_key.unwrap_or_default().to_string();
+    let resolve_base = |url: Option<&str>, fallback: &'static str| {
+        url.map(str::to_string)
+            .unwrap_or_else(|| fallback.to_string())
+    };
+
+    Ok(match provider {
         AIProviderKind::OpenAI => ai::AIProvider::OpenAI {
-            api_key: api_key.unwrap_or_default().to_string(),
-            base_url: base_url
-                .map(str::to_string)
-                .unwrap_or_else(|| default_base_url(AIProviderKind::OpenAI).to_string()),
+            api_key: key,
+            base_url: resolve_base(base_url, DEFAULT_OPENAI_BASE_URL),
         },
         AIProviderKind::DeepSeek => ai::AIProvider::OpenAI {
-            api_key: api_key.unwrap_or_default().to_string(),
-            base_url: base_url
-                .map(str::to_string)
-                .unwrap_or_else(|| default_base_url(AIProviderKind::DeepSeek).to_string()),
+            api_key: key,
+            base_url: resolve_base(base_url, DEFAULT_DEEPSEEK_BASE_URL),
         },
         AIProviderKind::Ollama => ai::AIProvider::Ollama {
-            base_url: base_url
-                .map(str::to_string)
-                .unwrap_or_else(|| default_base_url(AIProviderKind::Ollama).to_string()),
+            base_url: resolve_base(base_url, DEFAULT_OLLAMA_BASE_URL),
         },
-        AIProviderKind::Official => ai::AIProvider::Official {
-            api_key: api_key.unwrap_or_default().to_string(),
-        },
-    }
+        AIProviderKind::Official => ai::AIProvider::Official { api_key: key },
+    })
 }
 
 pub fn active_api_config<'a>(settings: &'a Settings) -> Option<&'a ApiConfig> {
@@ -120,7 +122,7 @@ pub fn active_api_config<'a>(settings: &'a Settings) -> Option<&'a ApiConfig> {
     settings.api_configs.iter().find(|config| config.id == *active_id)
 }
 
-pub fn build_provider_from_api_config(config: &ApiConfig) -> ai::AIProvider {
+pub fn build_provider_from_api_config(config: &ApiConfig) -> Result<ai::AIProvider, AIConfigError> {
     build_provider(
         config.provider,
         config.api_key.as_deref(),
@@ -128,31 +130,33 @@ pub fn build_provider_from_api_config(config: &ApiConfig) -> ai::AIProvider {
     )
 }
 
-pub fn build_settings_ai_config(settings: &Settings) -> ai::AIConfig {
+pub fn build_settings_ai_config(settings: &Settings) -> Result<ai::AIConfig, AIConfigError> {
     let config = active_api_config(settings)
         .or_else(|| settings.api_configs.iter().find(|config| config.enabled))
         .or_else(|| settings.api_configs.first())
-        .expect("settings should always contain at least one API config");
+        .ok_or_else(|| AIConfigError::MissingApiKey {
+            provider: "none".to_string(),
+        })?;
 
-    ai::AIConfig {
-        provider: build_provider_from_api_config(config),
+    Ok(ai::AIConfig {
+        provider: build_provider_from_api_config(config)?,
         model: config.model.clone(),
         temperature: config.temperature,
         max_tokens: config.max_tokens,
-    }
+    })
 }
 
-pub fn build_input_ai_config(config_input: AIConfigInput) -> ai::AIConfig {
-    ai::AIConfig {
+pub fn build_input_ai_config(config_input: AIConfigInput) -> Result<ai::AIConfig, AIConfigError> {
+    Ok(ai::AIConfig {
         provider: build_provider(
             config_input.provider,
             config_input.api_key.as_deref(),
             config_input.base_url.as_deref(),
-        ),
+        )?,
         model: config_input.model,
         temperature: config_input.temperature.unwrap_or(0.7),
         max_tokens: config_input.max_tokens,
-    }
+    })
 }
 
 fn build_test_request(client: &Client, api_key: Option<&str>, url: &str) -> RequestBuilder {
@@ -209,7 +213,9 @@ pub async fn test_ai_connection_impl(
     base_url: &str,
     model: &str,
 ) -> Result<AITestResult, AIConfigError> {
-    let client = Client::new();
+    // Reuse the shared `HTTP_CLIENT` from `ai` so we keep-alive connections
+    // and DNS cache across calls. Building a fresh `reqwest::Client` per
+    // test would re-do the TLS handshake every time.
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
 
     let body = serde_json::json!({
@@ -220,7 +226,7 @@ pub async fn test_ai_connection_impl(
         "max_tokens": 50,
     });
 
-    let response = build_test_request(&client, api_key, &url)
+    let response = build_test_request(&crate::ai::HTTP_CLIENT, api_key, &url)
         .json(&body)
         .send()
         .await

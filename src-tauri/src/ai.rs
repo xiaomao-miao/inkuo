@@ -131,7 +131,7 @@ pub enum StreamEventType {
     Error,
 }
 
-static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
+pub(crate) static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
     reqwest::Client::builder()
         .pool_idle_timeout(std::time::Duration::from_secs(90))
         .build()
@@ -160,7 +160,10 @@ impl AIProviderAdapter {
         })
     }
 
-    /// Build chat request body with thinking disabled (for inline completion)
+    /// Build chat request body for OpenAI-compatible providers with the
+    /// vendor-specific `thinking` extension disabled. Do **not** use this
+    /// for non-OpenAI providers — the `thinking` field is meaningless on
+    /// e.g. Ollama and may even confuse some clients.
     fn build_chat_body_no_thinking(&self, system_prompt: &str, user_prompt: &str) -> serde_json::Value {
         serde_json::json!({
             "model": self.config.model,

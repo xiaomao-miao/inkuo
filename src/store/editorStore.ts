@@ -15,11 +15,20 @@ function migrateEditorState(
   persistedState: unknown,
   version: number,
 ): Pick<EditorState, 'documentContents' | 'isPreviewMode'> {
-  const typedState = (persistedState ?? {}) as Partial<Pick<EditorState, 'documentContents' | 'isPreviewMode'>>;
+  const typedState = (persistedState ?? {}) as Partial<
+    Pick<EditorState, 'documentContents' | 'isPreviewMode'>
+  >;
+
+  // `documentContents` is intentionally wiped on every migration — it caches
+  // heavy document state that is reloaded from disk on demand. `isPreviewMode`
+  // is a small UI preference and is preserved across migrations of the same
+  // version; only a downgrade (or unknown future version) discards it so we
+  // don't resurrect stale entries against a newer schema.
+  const preservePreview = version === EDITOR_STORAGE_VERSION;
 
   return {
     documentContents: {},
-    isPreviewMode: version === EDITOR_STORAGE_VERSION ? (typedState.isPreviewMode ?? {}) : (typedState.isPreviewMode ?? {}),
+    isPreviewMode: preservePreview ? (typedState.isPreviewMode ?? {}) : {},
   };
 }
 
