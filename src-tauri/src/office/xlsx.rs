@@ -1426,7 +1426,9 @@ impl StylesInfo {
                 style.font_bold = font.bold;
                 style.font_italic = font.italic;
                 style.font_color = font.color.clone();
-                style.font_size = font.size.map(|s| s / 100);
+                // OOXML SpreadsheetML's `sz@val` is in points (a double, not 1/100 pt).
+                // Keep the parsed value as-is so the writer can emit it back unchanged.
+                style.font_size = font.size;
                 style.font_name = font.name.clone();
             }
         }
