@@ -13,7 +13,10 @@ import {
 import { fortuneSheetsToSheetJSBuffer } from './fortuneSheetConverter';
 import type { RustXlsxWorkbook } from './fortuneSheetConverter';
 import { reportError } from '../../utils/errors';
-import { scheduleWordInlineCompletion } from '../inline-complete/useWordInlineCompleteTrigger';
+import {
+  clearWordTimersForEditor,
+  scheduleWordInlineCompletion,
+} from '../inline-complete/useWordInlineCompleteTrigger';
 import { createWordInlineCompletePlugin } from '../inline-complete/wordInlineCompletePlugin';
 import type { EditorView } from 'prosemirror-view';
 import styles from './OfficeViewer.module.css';
@@ -218,6 +221,21 @@ export const WordEditor: React.FC<WordEditorProps> = ({
 
   const handleEditorViewReady = useCallback((view: EditorView) => {
     pmViewRef.current = view;
+  }, []);
+
+  // When this editor unmounts (tab closed, file switched, etc.) the ProseMirror
+  // view is torn down. Drop our cached reference and the inline-complete
+  // module-level state for this view so the underlying DOM/transaction machinery
+  // can be GC'd promptly. Without this, `editorContexts` / `trackedViews` would
+  // keep a live reference path to the (already destroyed) view.
+  useEffect(() => {
+    return () => {
+      const view = pmViewRef.current;
+      if (view) {
+        clearWordTimersForEditor(view);
+      }
+      pmViewRef.current = null;
+    };
   }, []);
 
   const loadFromDiskRef = useRef<() => Promise<void>>(() => Promise.resolve());

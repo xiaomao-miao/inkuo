@@ -48,12 +48,28 @@ interface EditorContext {
 
 const editorContexts = new WeakMap<EditorView, EditorContext>();
 /// Best-effort iteration list for `dismissAllWordCompletions`. WeakMap does
-/// not expose enumeration, but the entries are kept alive only as long as
-/// the view itself is referenced by the editor — when a `WordEditor` unmounts
-/// the view (and therefore its entry) is dropped and this Set's reference is
-/// the only thing keeping it alive. We clean up on access in `dismissAllWordCompletions`
-/// by checking for `view.isDestroyed` and dropping dead entries.
-const trackedViews = new Set<EditorView>();
+/// not expose enumeration, so we hold a *weak* reference to each view here:
+/// once the view itself is unreferenced (e.g. the editor unmounted) the
+/// WeakRef entry becomes a dead reference and gets pruned on the next
+/// `dismissAllWordCompletions` pass. This is the only place that needs to
+/// iterate the contexts, so we accept the small pruning cost rather than
+/// keeping a strong `Set` that would pin destroyed views in memory.
+const trackedViews = new Set<WeakRef<EditorView>>();
+
+function trackView(view: EditorView): void {
+  for (const ref of trackedViews) {
+    if (ref.deref() === view) return;
+  }
+  trackedViews.add(new WeakRef(view));
+}
+
+function pruneDeadViews(): void {
+  for (const ref of trackedViews) {
+    if (ref.deref() === undefined) {
+      trackedViews.delete(ref);
+    }
+  }
+}
 
 function getOrCreateContext(view: EditorView): EditorContext {
   let ctx = editorContexts.get(view);
@@ -66,7 +82,7 @@ function getOrCreateContext(view: EditorView): EditorContext {
       inFlightRequestId: null,
     };
     editorContexts.set(view, ctx);
-    trackedViews.add(view);
+    trackView(view);
   }
   return ctx;
 }
@@ -204,7 +220,11 @@ export function scheduleWordInlineCompletion(view: EditorView, filePath: string)
   }, store.debounceMs);
 }
 
-/** Clear timers for a specific editor (call when focus leaves or user dismisses). */
+/** Clear timers for a specific editor (call when focus leaves or user dismisses).
+ *
+ * Also drops the per-editor context and WeakRef tracking entry so a destroyed
+ * view can be garbage-collected promptly. Editors that mount a fresh view on
+ * every render (e.g. WordEditor) must call this from their cleanup effect. */
 export function clearWordTimersForEditor(view: EditorView) {
   const ctx = editorContexts.get(view);
   if (!ctx) return;
@@ -219,6 +239,19 @@ export function clearWordTimersForEditor(view: EditorView) {
 
   cancelBackendRequest(ctx.inFlightRequestId);
   ctx.inFlightRequestId = null;
+
+  // Drop the context and tracking entry so the view (and its DOM/transaction
+  // machinery) is no longer kept alive by our module-level state. The
+  // WeakMap entry would go away on its own once nothing else holds `view`,
+  // but cleaning it up here makes the lifecycle explicit and removes the
+  // WeakRef dead entry on the next `dismissAllWordCompletions` pass too.
+  editorContexts.delete(view);
+  for (const ref of trackedViews) {
+    if (ref.deref() === view) {
+      trackedViews.delete(ref);
+      break;
+    }
+  }
 
   // Best-effort cancel: if a request is in-flight, its response will be ignored
   // because myCancelSeq !== ctx.cancelSeq.
@@ -235,14 +268,14 @@ export function dismissAllWordCompletions() {
   if (useInlineCompleteStore.getState().isLoading) {
     useInlineCompleteStore.getState().setLoading(false);
   }
-  for (const view of trackedViews) {
+  pruneDeadViews();
+  for (const ref of trackedViews) {
+    const view = ref.deref();
+    if (!view) continue;
     const ctx = editorContexts.get(view);
-    if (!ctx) {
-      trackedViews.delete(view);
-      continue;
-    }
+    if (!ctx) continue;
     if (view.isDestroyed) {
-      trackedViews.delete(view);
+      trackedViews.delete(ref);
       editorContexts.delete(view);
       continue;
     }

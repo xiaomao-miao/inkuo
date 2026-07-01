@@ -185,14 +185,24 @@ impl EditFileTool {
             .await
             .map_err(|e| ToolError::IoError(format!("Failed to read file {}: {}", path, e)))?;
 
-        if !content.contains(old_text) {
-            return Err(ToolError::InvalidArguments(
-                "edit_file".to_string(),
-                format!("old_text not found in file. Make sure to provide the exact text including whitespace and newlines.\n\nSearched for:\n{}", old_text),
-            ));
-        }
-
-        let new_content = content.replace(old_text, new_text);
+        let new_content = match content.matches(old_text).count() {
+            0 => {
+                return Err(ToolError::InvalidArguments(
+                    "edit_file".to_string(),
+                    format!("old_text not found in file. Make sure to provide the exact text including whitespace and newlines.\n\nSearched for:\n{}", old_text),
+                ));
+            }
+            1 => content.replacen(old_text, new_text, 1),
+            n => {
+                return Err(ToolError::InvalidArguments(
+                    "edit_file".to_string(),
+                    format!(
+                        "old_text matches {} locations in the file. Provide more surrounding context so it matches exactly once.",
+                        n
+                    ),
+                ));
+            }
+        };
 
         tokio::fs::write(path, &new_content)
             .await

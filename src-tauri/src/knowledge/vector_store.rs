@@ -326,21 +326,32 @@ impl VectorStore {
         Ok(())
     }
 
-    /// Get the number of stored vectors
-    pub async fn len(&self) -> usize {
+    /// Get the number of stored vectors.
+    ///
+    /// Returns the count along with an optional error so callers can surface
+    /// real failures (disk corruption, lock conflicts) instead of being
+    /// misled into believing the knowledge base is empty when `count()`
+    /// actually failed.
+    pub async fn try_len(&self) -> Result<usize, VectorStoreError> {
         let inner_guard = self.inner.read().await;
         match inner_guard.as_ref() {
             Some(inner) => inner
                 .shard
                 .count(CountRequest { filter: None, exact: true })
-                .unwrap_or(0),
-            None => 0,
+                .map_err(|e| VectorStoreError::Update(format!("count failed: {}", e))),
+            None => Ok(0),
         }
     }
 
-    /// Check if the store is empty
-    pub async fn is_empty(&self) -> bool {
-        self.len().await == 0
+    /// Check if the store is empty.
+    ///
+    /// Like [`try_len`], returns an error when the underlying count could
+    /// not be performed. Callers that just want a yes/no answer can use
+    /// `try_len().map(|n| n == 0)`; the previous infallible `is_empty()`
+    /// silently masked storage failures as "empty", which could trick
+    /// users into triggering a full rebuild that overwrites intact data.
+    pub async fn is_empty(&self) -> Result<bool, VectorStoreError> {
+        self.try_len().await.map(|n| n == 0)
     }
 
     /// Get the storage path

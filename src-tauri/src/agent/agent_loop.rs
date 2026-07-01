@@ -249,13 +249,6 @@ impl AgentExecutor {
             // Parse response
             let (content, reasoning_content, tool_calls) = self.parse_response(&response)?;
 
-            // Check for cancellation
-            if let Some(c) = &content {
-                if c.contains("__CANCELLED__") {
-                    return Err(AgentError::Cancelled);
-                }
-            }
-
             // Add assistant message to history (with reasoning_content for DeepSeek)
             session.add_message(Message::assistant(content.clone(), reasoning_content.clone(), tool_calls.clone()));
 
@@ -650,10 +643,11 @@ impl AgentExecutor {
 
                                     let entry = &mut current_tool_calls[tc.index];
 
-                                    // Only update the ID if the model provided a non-empty one.
-                                    // This prevents placeholder IDs (call_1, call_2...) from
-                                    // overwriting real IDs returned by the model.
-                                    let new_id = if let Some(id) = &tc.id {
+                                    // Track whether this chunk mutated the entry's id or name. Used below to
+                                    // decide whether to fire a `tool_call_args_delta` event for a
+                                    // tool call we've already announced (id/name updates count
+                                    // as a reason to emit, in addition to incoming arg deltas).
+                                    let id_updated = if let Some(id) = &tc.id {
                                         if !id.is_empty() {
                                             entry.id = id.clone();
                                             true
@@ -664,7 +658,7 @@ impl AgentExecutor {
                                         false
                                     };
 
-                                    let new_name = if let Some(name) = &tc.function.name {
+                                    let name_updated = if let Some(name) = &tc.function.name {
                                         if !name.is_empty() {
                                             entry.function.name = name.clone();
                                             true
@@ -718,7 +712,7 @@ impl AgentExecutor {
                                             diff_summary: None,
                                             office_file_modified: None,
                                         });
-                                    } else if new_id || new_name || arg_delta.is_some() {
+                                    } else if id_updated || name_updated || arg_delta.is_some() {
                                         // Subsequent chunk for the same tool call index.
                                         // Throttle the emission so we don't flood the IPC
                                         // channel with 10000-char payloads at SSE rate.

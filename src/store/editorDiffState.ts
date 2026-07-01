@@ -38,20 +38,22 @@ function searchWindowForHunk(originalText: string, hunk: DiffHunk, otherHunks: D
   let windowEnd = originalText.length;
   for (const other of otherHunks) {
     if (other === hunk) continue;
+    // Length of `other` in the original text (excludes pure inserts which
+    // don't consume source bytes).
+    const otherLength = other.changes
+      .filter((c) => c.tag !== 'insert')
+      .reduce((sum, c) => sum + c.content.length, 0);
+    const otherEnd = other.old_offset + otherLength;
+
     if (other.old_offset > hunk.old_offset) {
       // `other` is later in the original text; cap the search end at its
       // start so a duplicate of `oldContent` between hunks doesn't get
       // matched first.
       windowEnd = Math.min(windowEnd, other.old_offset);
-    } else if (other.old_offset + (other.changes
-      .filter((c) => c.tag !== 'insert')
-      .reduce((sum, c) => sum + c.content.length, 0)) < hunk.old_offset) {
+    } else if (otherEnd < hunk.old_offset) {
       // `other` is earlier in the original text; the search must start
       // after its tail (i.e. not be allowed to re-match text that
       // belongs to an earlier hunk).
-      const otherEnd = other.old_offset + other.changes
-        .filter((c) => c.tag !== 'insert')
-        .reduce((sum, c) => sum + c.content.length, 0);
       windowStart = Math.max(windowStart, otherEnd);
     }
   }
@@ -109,7 +111,7 @@ function applyHunkToText(
   //    windowEnd) range so we never splice text that belongs to a
   //    different region of the document.
   let matchOffset = -1;
-  let searchFrom = Math.max(windowStart, hunk.old_offset);
+  const searchFrom = Math.max(windowStart, hunk.old_offset);
   while (searchFrom <= windowEnd - oldLength) {
     const found = originalText.indexOf(oldContent, searchFrom);
     if (found === -1 || found >= windowEnd) break;

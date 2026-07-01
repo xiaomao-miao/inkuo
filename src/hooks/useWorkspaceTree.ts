@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { useSidebarStore } from '../store';
 import type { FileEntry } from '../types';
 import { useWorkspaceFileWatcher } from './useWorkspaceFileWatcher';
@@ -81,6 +81,23 @@ export function useWorkspaceTree(): UseWorkspaceTreeResult {
   );
 
   const refreshLockRef = useRef<Set<string>>(new Set());
+  /// Outstanding lock-release timers for each parent path. We track them so a
+  /// hook unmount (e.g. workspace switch) can cancel pending releases instead
+  /// of letting them fire against a (potentially remounted) ref. The set is
+  /// the source of truth for `clearTimeout` calls on cleanup.
+  const lockReleaseTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
+  useEffect(() => {
+    const timers = lockReleaseTimersRef.current;
+    const lockSet = refreshLockRef.current;
+    return () => {
+      for (const handle of timers.values()) {
+        clearTimeout(handle);
+      }
+      timers.clear();
+      lockSet.clear();
+    };
+  }, []);
 
   /**
    * Refresh a specific directory's cache and reload.
@@ -115,9 +132,16 @@ export function useWorkspaceTree(): UseWorkspaceTreeResult {
       try {
         await triggerFileRefresh(parentPath);
       } finally {
-        setTimeout(() => {
+        const timers = lockReleaseTimersRef.current;
+        const existing = timers.get(parentPath);
+        if (existing !== undefined) {
+          clearTimeout(existing);
+        }
+        const handle = setTimeout(() => {
+          timers.delete(parentPath);
           refreshLockRef.current.delete(parentPath);
         }, 500);
+        timers.set(parentPath, handle);
       }
     },
     300,
