@@ -11,8 +11,7 @@ use crate::ai::{AIProviderAdapter, AIConfig, AIError};
 use crate::commands::AppState;
 use tauri::State;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::Notify;
 
 /// Request for inline completion
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -123,7 +122,6 @@ pub struct InlineCompletionState {
 }
 
 static INLINE_CANCEL_SEQ: AtomicU64 = AtomicU64::new(0);
-static INLINE_CANCEL_GUARD: once_cell::sync::Lazy<Arc<Mutex<()>>> = once_cell::sync::Lazy::new(|| Arc::new(Mutex::new(())));
 
 /// Used to wake up an in-flight completion the moment the user cancels. We
 /// can't rely on `INLINE_CANCEL_SEQ` alone because it's only polled between
@@ -131,8 +129,11 @@ static INLINE_CANCEL_GUARD: once_cell::sync::Lazy<Arc<Mutex<()>>> = once_cell::s
 /// AI provider, the request keeps running until completion. `Notify` lets us
 /// race that future against a cancel signal via `tokio::select!`, so dropping
 /// the future also drops the underlying network request.
-static INLINE_CANCEL_NOTIFY: once_cell::sync::Lazy<tokio::sync::Notify> =
-    once_cell::sync::Lazy::new(tokio::sync::Notify::new);
+static INLINE_CANCEL_NOTIFY: std::sync::OnceLock<Notify> = std::sync::OnceLock::new();
+
+fn inline_cancel_notify() -> &'static Notify {
+    INLINE_CANCEL_NOTIFY.get_or_init(Notify::new)
+}
 
 /// Extract context around cursor position
 fn extract_context(document: &str, cursor_pos: usize, context_lines: usize) -> (String, usize) {
@@ -376,8 +377,6 @@ pub async fn ai_inline_complete(
     state: State<'_, AppState>,
 ) -> Result<InlineCompletionResponse, String> {
     let cancel_seq_at_start = INLINE_CANCEL_SEQ.load(Ordering::SeqCst);
-    let my_guard = INLINE_CANCEL_GUARD.clone();
-    let _guard = my_guard.lock().await;
 
     tracing::info!(
         "[WORD-INLINE] Inline completion request - language: {}, cursor: {}, doc_len: {}, snippet: {:?}",
@@ -425,7 +424,7 @@ pub async fn ai_inline_complete(
     // discarding the response after the fact.
     let raw_completion = tokio::select! {
         biased;
-        _ = INLINE_CANCEL_NOTIFY.notified() => {
+        _ = inline_cancel_notify().notified() => {
             return Err("cancelled".to_string());
         }
         result = get_completion(&config, &prompt) => {
@@ -501,7 +500,7 @@ pub async fn ai_inline_complete_cancel() -> Result<(), String> {
     // completion. `notify_waiters()` only wakes currently-registered waiters,
     // which is what we want — requests that start *after* this cancel won't
     // see this notification and will instead be guarded by the seq counter.
-    INLINE_CANCEL_NOTIFY.notify_waiters();
+    inline_cancel_notify().notify_waiters();
     Ok(())
 }
 

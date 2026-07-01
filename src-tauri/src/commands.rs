@@ -563,6 +563,13 @@ pub fn get_chunk_size() -> usize {
         .unwrap_or(500)
 }
 
+/// Get chunk overlap from settings
+pub fn get_chunk_overlap() -> usize {
+    get_settings_cached()
+        .map(|s| s.chunk_overlap)
+        .unwrap_or(50)
+}
+
 fn get_settings_path() -> std::path::PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
@@ -631,9 +638,10 @@ pub async fn save_settings(settings: Settings, state: State<'_, AppState>) -> Re
         .map_err(|e| AppCommandError::WriteSettings(e.to_string()))?;
 
     // Refresh the in-memory settings cache so subsequent calls to
-    // `get_embedding_model()`, `get_chunk_size()`, and `get_settings_cached()`
-    // see the freshly written values without re-reading the file (and without
-    // requiring a process restart, which was the previous behaviour).
+    // `get_embedding_model()`, `get_chunk_size()`, `get_chunk_overlap()`,
+    // and `get_settings_cached()` see the freshly written values without
+    // re-reading the file (and without requiring a process restart, which
+    // was the previous behaviour).
     crate::commands::update_settings_cache(settings.clone());
 
     *state.ai_config.write().await = ai_config::build_settings_ai_config(&settings)

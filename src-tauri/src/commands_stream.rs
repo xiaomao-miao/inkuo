@@ -278,7 +278,7 @@ pub async fn ai_edit_stream(
     let session_id_for_cb = session_id.clone();
     let message_id_for_cb = message_id.clone();
 
-    let result = adapter
+    let result = match adapter
         .edit_stream(request, |delta| {
             if crate::commands::is_stream_cancelled(&session_id_for_cb) {
                 return;
@@ -286,7 +286,24 @@ pub async fn ai_edit_stream(
             emit(&app, StreamPayload::text(&session_id_for_cb, &message_id_for_cb, &delta));
         })
         .await
-        .map_err(|error| StreamCommandError::AIRequest(error.to_string()))?;
+    {
+        Ok(value) => value,
+        Err(error) => {
+            // Surface the failure on the stream channel so the frontend UI
+            // doesn't get stuck on a half-finished "loading" state — it
+            // needs the terminal `error` event the same way `ai_chat_stream`
+            // emits one. The IPC-level `Err` return below is for the
+            // tauri::command contract; both signals are needed because the
+            // frontend may be listening on either.
+            let message = error.to_string();
+            tracing::error!("AI edit stream error: {}", message);
+            emit(
+                &app,
+                StreamPayload::error(&session_id, &message_id, &message),
+            );
+            return Err(StreamCommandError::AIRequest(message));
+        }
+    };
 
     if crate::commands::clear_stream_cancelled(&session_id) {
         emit(&app, StreamPayload::cancelled(&session_id, &message_id));

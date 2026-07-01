@@ -88,8 +88,12 @@ impl Chunker {
                 String::new()
             };
 
-            // Only keep chunks that meet minimum size
-            if chunk_text.len() >= self.config.min_size {
+            // Only keep chunks that meet minimum size. Compare in *characters*
+            // rather than bytes — the chunker operates on `chars().count()`,
+            // and for CJK text 1 char = 3 bytes, so a byte-based threshold
+            // would let ~17-char Chinese chunks through while rejecting 50-char
+            // English chunks of the same "logical" length.
+            if chunk_text.chars().count() >= self.config.min_size {
                 let chunk_start_line = line_number_for_byte_offset(content, byte_start);
                 let chunk_end_line = line_number_for_byte_offset(content, byte_end.saturating_sub(1));
                 let chunk = Chunk {

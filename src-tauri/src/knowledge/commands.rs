@@ -1,6 +1,6 @@
 //! Knowledge base Tauri commands
 
-use crate::commands::{get_chunk_size, get_embedding_model};
+use crate::commands::{get_chunk_overlap, get_chunk_size, get_embedding_model};
 use crate::knowledge::{
     BuildResult, ChunkConfig, Chunker, DocScanner, Embedder, MetadataStore, ModelInfo,
     SearchResult, UpdateResult, VectorStore,
@@ -229,7 +229,7 @@ pub async fn knowledge_build(
 
     let chunker = Chunker::new(ChunkConfig {
         target_size: chunk_size,
-        overlap: 50,
+        overlap: get_chunk_overlap(),
         min_size: 50,
         preserve_headers: true,
     });
@@ -285,29 +285,9 @@ pub async fn knowledge_build(
     );
 
     let batch_size = 64usize;
-    let total_batches = chunks.len().div_ceil(batch_size.max(1));
     embedder
-        .encode_chunks_batched(&mut chunks, batch_size, |completed, total| {
-            let completed_batches = completed.div_ceil(batch_size.max(1));
-            tracing::info!(
-                "[KB_BUILD] Embedding progress: {}/{} chunks, batch {}/{}",
-                completed,
-                total,
-                completed_batches,
-                total_batches
-            );
-            emit_build_progress(
-                &app,
-                &session_id,
-                "embedding",
-                2,
-                4,
-                format!(
-                    "生成向量中... ({}/{} 块, 第 {}/{} 批)",
-                    completed, total, completed_batches, total_batches
-                ),
-            );
-        })
+        .encode_chunks_batched_async(&mut chunks, batch_size)
+        .await
         .map_err(|e| KnowledgeCommandError::Embedding(e.to_string()))?;
     tracing::info!("[KB_BUILD] Embedding complete");
 
@@ -457,7 +437,10 @@ pub fn knowledge_status(
 pub async fn knowledge_update(
     app: AppHandle,
     workspace_path: String,
-    session_id: String,
+    // Kept for IPC compatibility with the frontend even though the async
+    // embedder wrapper no longer takes a per-batch progress callback that
+    // would consume the session id.
+    #[allow(unused_variables)] session_id: String,
 ) -> Result<UpdateResult, KnowledgeCommandError> {
     tracing::info!("Updating knowledge base for workspace: {}", workspace_path);
 
@@ -466,7 +449,7 @@ pub async fn knowledge_update(
     let chunk_size = get_chunk_size();
     let chunker = Chunker::new(ChunkConfig {
         target_size: chunk_size,
-        overlap: 50,
+        overlap: get_chunk_overlap(),
         min_size: 50,
         preserve_headers: true,
     });
@@ -552,29 +535,9 @@ pub async fn knowledge_update(
     }
 
     let batch_size = 64usize;
-    let total_batches = new_chunks.len().div_ceil(batch_size.max(1));
     embedder
-        .encode_chunks_batched(&mut new_chunks, batch_size, |completed, total| {
-            let completed_batches = completed.div_ceil(batch_size.max(1));
-            tracing::info!(
-                "[KB_UPDATE] Embedding progress: {}/{} chunks, batch {}/{}",
-                completed,
-                total,
-                completed_batches,
-                total_batches
-            );
-            emit_build_progress(
-                &app,
-                &session_id,
-                "embedding",
-                2,
-                4,
-                format!(
-                    "增量生成向量中... ({}/{} 块, 第 {}/{} 批)",
-                    completed, total, completed_batches, total_batches
-                ),
-            );
-        })
+        .encode_chunks_batched_async(&mut new_chunks, batch_size)
+        .await
         .map_err(|e| KnowledgeCommandError::Embedding(e.to_string()))?;
 
     vector_store
@@ -642,7 +605,10 @@ pub async fn knowledge_add_members(
     app: AppHandle,
     workspace_path: String,
     member_paths: Vec<String>,
-    session_id: String,
+    // Kept for IPC compatibility with the frontend even though the async
+    // embedder wrapper no longer takes a per-batch progress callback that
+    // would consume the session id.
+    #[allow(unused_variables)] session_id: String,
 ) -> Result<UpdateResult, KnowledgeCommandError> {
     tracing::info!(
         "[KB_ADD_MEMBERS] workspace={}, members={:?}",
@@ -708,7 +674,7 @@ pub async fn knowledge_add_members(
     let chunk_size = get_chunk_size();
     let chunker = Chunker::new(ChunkConfig {
         target_size: chunk_size,
-        overlap: 50,
+        overlap: get_chunk_overlap(),
         min_size: 50,
         preserve_headers: true,
     });
@@ -748,16 +714,8 @@ pub async fn knowledge_add_members(
 
     let batch_size = 64usize;
     embedder
-        .encode_chunks_batched(&mut new_chunks, batch_size, |completed, total| {
-            emit_build_progress(
-                &app,
-                &session_id,
-                "embedding",
-                completed,
-                total,
-                format!("为 {} 个文件生成向量...", owned_docs.len()),
-            );
-        })
+        .encode_chunks_batched_async(&mut new_chunks, batch_size)
+        .await
         .map_err(|e| KnowledgeCommandError::Embedding(e.to_string()))?;
 
     vector_store

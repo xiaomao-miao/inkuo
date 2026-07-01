@@ -183,14 +183,19 @@ pub struct ParsedToolCall {
 /// Agent executor that runs the tool-calling loop
 pub struct AgentExecutor {
     config: AIConfig,
-    client: reqwest::Client,
+    client: &'static reqwest::Client,
 }
 
 impl AgentExecutor {
     pub fn new(config: AIConfig) -> Self {
+        // Reuse the shared `HTTP_CLIENT` from `ai` so we keep-alive connections
+        // and DNS cache across calls — and across executors. Building a fresh
+        // `reqwest::Client` per executor would re-do the TLS handshake every
+        // time the user opens a new chat, and would also fragment the
+        // connection pool.
         Self {
             config,
-            client: reqwest::Client::new(),
+            client: &crate::ai::HTTP_CLIENT,
         }
     }
 

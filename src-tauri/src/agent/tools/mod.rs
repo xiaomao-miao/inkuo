@@ -53,22 +53,33 @@ pub fn validate_workspace_path(path: &str, workspace: &Option<String>) -> Result
     let canonical_requested = match std::fs::canonicalize(Path::new(path)) {
         Ok(p) => p,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            // Path doesn't exist yet - this is OK for write operations
-            // But we still need to validate that the PARENT directory is within workspace
-            if let Some(parent) = Path::new(path).parent() {
-                match std::fs::canonicalize(parent) {
-                    Ok(p) => p,
-                    Err(_) => {
-                        return Err(ToolError::PathValidationError(
-                            format!("Parent directory does not exist or is inaccessible: {}", parent.display())
-                        ));
-                    }
-                }
-            } else {
-                return Err(ToolError::PathValidationError(
-                    format!("Cannot determine parent directory for path: {}", path)
-                ));
+            // Path doesn't exist yet — this is OK for write operations.
+            // Validate that the *resolved* parent directory lives inside the
+            // workspace, so a path like `/workspace/../../etc/passwd` (whose
+            // canonicalized parent is `/etc`) can't sneak through. Without
+            // this check the function would `return Ok(())` here and bypass
+            // the sandbox entirely, which is a path-traversal vulnerability.
+            let parent = Path::new(path).parent().ok_or_else(|| {
+                ToolError::PathValidationError(format!(
+                    "Cannot determine parent directory for path: {}",
+                    path
+                ))
+            })?;
+            let canonical_parent = std::fs::canonicalize(parent).map_err(|e| {
+                ToolError::PathValidationError(format!(
+                    "Parent directory does not exist or is inaccessible: {} ({})",
+                    parent.display(),
+                    e
+                ))
+            })?;
+            if !canonical_parent.starts_with(&canonical_workspace) {
+                return Err(ToolError::PathValidationError(format!(
+                    "Path '{}' is outside the workspace directory '{}'. \
+                    Access is denied for security reasons.",
+                    path, workspace_root
+                )));
             }
+            return Ok(());
         }
         Err(e) => {
             return Err(ToolError::PathValidationError(

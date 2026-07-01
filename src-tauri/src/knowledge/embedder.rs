@@ -278,6 +278,44 @@ impl Embedder {
         self.encode_chunks_batched(chunks, 64, |_, _| {})
     }
 
+    /// Async-friendly wrapper around [`encode_chunks_batched`]. The underlying
+    /// fastembed inference is CPU-bound and can take seconds per batch, so we
+    /// must not run it on the tokio executor directly — it would block all
+    /// IPC, AI chat, and other tasks sharing the worker thread.
+    ///
+    /// `spawn_blocking` would be the obvious tool, but `Embedder` is not
+    /// `Send` (the underlying `fastembed::TextEmbedding` holds a non-`Send`
+    /// ONNX session), and `spawn_blocking` requires `Send + 'static`.
+    /// `tokio::task::block_in_place` is the right escape hatch: it temporarily
+    /// converts the current worker thread into a blocking thread without
+    /// requiring `Send`. Internally tokio hands other tasks off to another
+    /// worker, so the executor as a whole keeps making progress.
+    ///
+    /// Progress reporting is intentionally absent here — the underlying
+    /// `encode_chunks_batched` callback runs synchronously, and bridging it
+    /// through an async channel would force the callback to be `Send +
+    /// 'static`, which captures like `&AppHandle` cannot satisfy. Callers
+    /// that need mid-pass progress should drive their own channel on top of
+    /// the synchronous API.
+    pub async fn encode_chunks_batched_async(
+        &self,
+        chunks: &mut Vec<Chunk>,
+        batch_size: usize,
+    ) -> Result<(), EmbedError> {
+        // Move the chunk buffer into the blocking section via `mem::take`.
+        // If `block_in_place` panics, the caller still owns an empty Vec
+        // (via the original `*chunks` reference we restore at the end) and
+        // can retry. `block_in_place` reborrows `&self` only for the
+        // duration of the closure; the original lifetime of `&self` is held
+        // by the outer async function so the borrow is sound.
+        let mut owned: Vec<Chunk> = std::mem::take(chunks);
+        let result = tokio::task::block_in_place(|| {
+            self.encode_chunks_batched(&mut owned, batch_size, |_completed, _total| {})
+        });
+        *chunks = owned;
+        result
+    }
+
     /// Get embedding dimension
     pub fn dimension(&self) -> usize {
         self.dimension
