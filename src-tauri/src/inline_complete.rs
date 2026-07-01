@@ -10,7 +10,8 @@ use serde::{Deserialize, Serialize};
 use crate::ai::{AIProviderAdapter, AIConfig, AIError};
 use crate::commands::AppState;
 use tauri::State;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use tokio::sync::Notify;
 
 /// Request for inline completion
@@ -25,6 +26,12 @@ pub struct InlineCompletionSnippet {
 /// Request for inline completion
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InlineCompletionRequest {
+    /// Stable identifier for this request. The frontend mints a fresh id for
+    /// every call so the backend can route cancellation to a specific
+    /// in-flight request instead of cancelling every concurrent completion
+    /// (e.g. in a different editor window).
+    #[serde(default)]
+    pub request_id: String,
     /// Current document content (either full document, or snippet text)
     pub document: String,
     /// Cursor position.
@@ -121,18 +128,58 @@ pub struct InlineCompletionState {
     pub error: Option<String>,
 }
 
-static INLINE_CANCEL_SEQ: AtomicU64 = AtomicU64::new(0);
+/// Per-request cancel state. Previously a single `AtomicU64` seq counter and
+/// one global `Notify` covered all in-flight completions, which meant
+/// cancelling a completion in one editor window would also abort completions
+/// in other windows (the `ai_inline_complete_cancel` command had no way to
+/// name the request being cancelled). We now register a dedicated
+/// `Arc<Notify>` per `request_id` (== `session_id` from the frontend) and
+/// the cancel command looks it up by id.
+type CancelRegistry = Mutex<HashMap<String, Arc<Notify>>>;
 
-/// Used to wake up an in-flight completion the moment the user cancels. We
-/// can't rely on `INLINE_CANCEL_SEQ` alone because it's only polled between
-/// await points — if the awaited future is a long-running HTTP request to the
-/// AI provider, the request keeps running until completion. `Notify` lets us
-/// race that future against a cancel signal via `tokio::select!`, so dropping
-/// the future also drops the underlying network request.
-static INLINE_CANCEL_NOTIFY: std::sync::OnceLock<Notify> = std::sync::OnceLock::new();
+static INLINE_CANCEL_REGISTRY: std::sync::OnceLock<CancelRegistry> =
+    std::sync::OnceLock::new();
 
-fn inline_cancel_notify() -> &'static Notify {
-    INLINE_CANCEL_NOTIFY.get_or_init(Notify::new)
+fn inline_cancel_registry() -> &'static CancelRegistry {
+    INLINE_CANCEL_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Register a fresh cancel channel for `request_id` and return it. The
+/// caller must call [`release_cancel_channel`] when it finishes (success,
+/// failure, or already-cancelled) so the registry does not grow unbounded
+/// across many completions.
+fn take_cancel_channel(request_id: &str) -> Arc<Notify> {
+    let notify = Arc::new(Notify::new());
+    inline_cancel_registry()
+        .lock()
+        .expect("cancel registry poisoned")
+        .insert(request_id.to_string(), Arc::clone(&notify));
+    notify
+}
+
+fn release_cancel_channel(request_id: &str) {
+    inline_cancel_registry()
+        .lock()
+        .expect("cancel registry poisoned")
+        .remove(request_id);
+}
+
+/// Wake any in-flight completion registered under `request_id`. Returns
+/// `true` if a matching request was found, so callers can distinguish
+/// "cancelled an in-flight call" from "no-op for an unknown id".
+fn cancel_inline_request(request_id: &str) -> bool {
+    let notify = inline_cancel_registry()
+        .lock()
+        .expect("cancel registry poisoned")
+        .get(request_id)
+        .map(Arc::clone);
+    match notify {
+        Some(notify) => {
+            notify.notify_waiters();
+            true
+        }
+        None => false,
+    }
 }
 
 /// Extract context around cursor position
@@ -376,10 +423,32 @@ pub async fn ai_inline_complete(
     request: InlineCompletionRequest,
     state: State<'_, AppState>,
 ) -> Result<InlineCompletionResponse, String> {
-    let cancel_seq_at_start = INLINE_CANCEL_SEQ.load(Ordering::SeqCst);
+    // Reject requests with no `request_id` — the cancel path needs one to
+    // route the wake-up. Older frontends that don't supply it fall back to a
+    // derived id, but we still want a non-empty key in the registry.
+    if request.request_id.is_empty() {
+        return Err("inline completion request is missing request_id".to_string());
+    }
+    let request_id = request.request_id.clone();
+    let cancel_notify = take_cancel_channel(&request_id);
+
+    // RAII guard so we always release the registry slot, even on early
+    // returns. The Arc<Notify> is dropped here, but cancel-side already
+    // took its own clone before the entry is removed, so any in-flight
+    // `select!` still sees a usable channel until it drops.
+    struct ReleaseGuard<'a> {
+        request_id: &'a str,
+    }
+    impl Drop for ReleaseGuard<'_> {
+        fn drop(&mut self) {
+            release_cancel_channel(self.request_id);
+        }
+    }
+    let _release = ReleaseGuard { request_id: &request_id };
 
     tracing::info!(
-        "[WORD-INLINE] Inline completion request - language: {}, cursor: {}, doc_len: {}, snippet: {:?}",
+        "[WORD-INLINE] Inline completion request - id: {}, language: {}, cursor: {}, doc_len: {}, snippet: {:?}",
+        request_id,
         request.language,
         request.cursor_position,
         request.document.len(),
@@ -414,17 +483,15 @@ pub async fn ai_inline_complete(
 
     tracing::debug!("Inline completion prompt:\n{}", prompt);
 
-    // If cancellation was requested while we were building prompt, stop early.
-    if INLINE_CANCEL_SEQ.load(Ordering::SeqCst) != cancel_seq_at_start {
-        return Err("cancelled".to_string());
-    }
-
     // Get completion from AI, but make the request interruptible so cancelling
     // mid-flight actually drops the underlying HTTP call instead of just
-    // discarding the response after the fact.
+    // discarding the response after the fact. We hold a strong reference to
+    // the same `Notify` that the cancel side will look up, so the wake-up
+    // is delivered even if the registry entry is released in between.
+    let notify = Arc::clone(&cancel_notify);
     let raw_completion = tokio::select! {
         biased;
-        _ = inline_cancel_notify().notified() => {
+        _ = notify.notified() => {
             return Err("cancelled".to_string());
         }
         result = get_completion(&config, &prompt) => {
@@ -434,13 +501,6 @@ pub async fn ai_inline_complete(
             })?
         }
     };
-
-    // Belt-and-suspenders: even if the future completed, double-check the
-    // seq counter in case a cancel arrived between the future resolving and
-    // us resuming here.
-    if INLINE_CANCEL_SEQ.load(Ordering::SeqCst) != cancel_seq_at_start {
-        return Err("cancelled".to_string());
-    }
 
     tracing::info!("[WORD-INLINE] Received completion ({} chars)", raw_completion.len());
 
@@ -491,17 +551,13 @@ pub async fn ai_inline_complete(
     Ok(resp)
 }
 
-/// Cancel any pending completion request
+/// Cancel a pending completion request by its `request_id`. Wake-up is
+/// delivered through the per-request `Notify` registered by
+/// `ai_inline_complete`, so cancelling one in-flight request does not affect
+/// concurrent completions in other windows / editors.
 #[tauri::command]
-pub async fn ai_inline_complete_cancel() -> Result<(), String> {
-    INLINE_CANCEL_SEQ.fetch_add(1, Ordering::SeqCst);
-    // Wake any `tokio::select!` waiting on `INLINE_CANCEL_NOTIFY` so the
-    // in-flight HTTP request is dropped immediately instead of running to
-    // completion. `notify_waiters()` only wakes currently-registered waiters,
-    // which is what we want — requests that start *after* this cancel won't
-    // see this notification and will instead be guarded by the seq counter.
-    inline_cancel_notify().notify_waiters();
-    Ok(())
+pub async fn ai_inline_complete_cancel(request_id: String) -> Result<bool, String> {
+    Ok(cancel_inline_request(&request_id))
 }
 
 /// Get current inline completion state
@@ -537,5 +593,71 @@ mod tests {
         assert!(prompt.contains("rust"));
         assert!(prompt.contains("main.rs"));
         assert!(prompt.contains("fn main()"));
+    }
+
+    /// Per-request cancel registry smoke test: registering two distinct ids
+    /// and cancelling only one must not affect the other. This guards
+    /// against regressions where the global single-counter mechanism is
+    /// reintroduced (the original bug — cancelling one in-flight completion
+    /// was aborting every concurrent completion in other windows).
+    #[tokio::test]
+    async fn cancel_registry_isolates_requests() {
+        // Always start from a clean registry slot for this test so we
+        // don't conflict with other tests using the same id.
+        let request_a = format!("test-a-{}", uuid::Uuid::new_v4());
+        let request_b = format!("test-b-{}", uuid::Uuid::new_v4());
+
+        let notify_a = take_cancel_channel(&request_a);
+        let notify_b = take_cancel_channel(&request_b);
+
+        // Start two `tokio::select!` races — one per request — and cancel
+        // only `a`. `a`'s branch should resolve via `notified()`; `b`'s
+        // branch should fall through to its own never-resolving future
+        // and hit the timeout. This mirrors how `ai_inline_complete`
+        // actually uses the channel.
+        let cancelled_a = tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            async {
+                // Register `a`'s waiter first so `notify_waiters` fires
+                // while we are sleeping.
+                let pending = notify_a.notified();
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                assert!(cancel_inline_request(&request_a));
+                pending.await;
+                true
+            },
+        )
+        .await
+        .unwrap_or(false);
+
+        let b_woken = tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            async {
+                let pending = notify_b.notified();
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                // Cancel only `a`. `b` must remain quiet.
+                assert!(cancel_inline_request(&request_a));
+                pending.await;
+                true
+            },
+        )
+        .await
+        .unwrap_or(false);
+
+        assert!(cancelled_a, "request_a should have been woken by its cancel");
+        assert!(!b_woken, "request_b should NOT be woken by request_a's cancel");
+
+        // Cleaning up is idempotent and does not panic.
+        release_cancel_channel(&request_a);
+        release_cancel_channel(&request_b);
+    }
+
+    /// Cancelling an unknown request id is a no-op (returns `false`) rather
+    /// than panicking. This is the contract `ai_inline_complete_cancel`
+    /// depends on.
+    #[test]
+    fn cancel_unknown_id_is_noop() {
+        let unknown = format!("not-registered-{}", uuid::Uuid::new_v4());
+        assert!(!cancel_inline_request(&unknown));
     }
 }

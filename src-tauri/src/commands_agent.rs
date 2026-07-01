@@ -241,6 +241,8 @@ pub async fn ai_agent_stream(
         }
     };
 
+    let _cancel_guard = crate::commands::StreamCancelGuard::new(&session_id);
+
     match executor
         .run(&mut session, &instruction_clone, &session_id, &message_id, callback)
         .await
@@ -251,6 +253,19 @@ pub async fn ai_agent_stream(
                 session_id,
                 final_response.len()
             );
+
+            // If the user requested cancellation during the loop, the agent's
+            // own cleanup in `agent_loop.rs` already cleared the flag; if not,
+            // our drop guard clears it.
+            if crate::commands::clear_stream_cancelled(&session_id) {
+                _cancel_guard.clear();
+                emit(
+                    &app,
+                    StreamPayload::cancelled(&session_id, &message_id),
+                );
+                return Ok(());
+            }
+            _cancel_guard.clear();
 
             emit(
                 &app,
@@ -268,10 +283,23 @@ pub async fn ai_agent_stream(
                 _ => e.to_string(),
             };
 
-            emit(
-                &app,
-                StreamPayload::error(&session_id, &message_id, &error_msg),
-            );
+            // Cancellation: surface it as a terminal `cancelled` event so
+            // the frontend can match the same shape it does for chat/edit.
+            // Other errors get the `error` event. Either way the cancel
+            // guard's drop will clear any leftover flag.
+            if matches!(e, AgentError::Cancelled) {
+                _cancel_guard.clear();
+                emit(
+                    &app,
+                    StreamPayload::cancelled(&session_id, &message_id),
+                );
+            } else {
+                _cancel_guard.clear();
+                emit(
+                    &app,
+                    StreamPayload::error(&session_id, &message_id, &error_msg),
+                );
+            }
         }
     }
 

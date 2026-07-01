@@ -19,8 +19,6 @@ import { useEditorKeyboardShortcuts, useEditorSelectionSync } from './useEditorI
 import styles from './Editor.module.css';
 import inlineCompleteStyles from '../inline-complete/InlineComplete.module.css';
 
-const diffDecorationsCompartment = new Compartment();
-
 const EditorContent: React.FC<{
   editorRef: React.RefObject<ReactCodeMirrorRef | null>;
 }> = ({ editorRef }) => {
@@ -32,6 +30,16 @@ const EditorContent: React.FC<{
   const settings = useSettingsStore((state) => state.settings);
   const setOpenTabDirty = useSidebarStore((state) => state.setOpenTabDirty);
   const [refreshToken, setRefreshToken] = useState(0);
+
+  // Each editor instance needs its own `Compartment` for the dynamic diff
+  // decoration extensions. Sharing one at module scope was incorrect — it
+  // meant each tab attached extensions to the same Compartment object,
+  // so a `Compartment.reconfigure(...)` call on one editor's `EditorView`
+  // would (in principle) be visible to whichever editor observed the
+  // stored reference next. Holding the compartment in `useMemo` gives
+  // every `EditorContent` instance a stable, private reference it can
+  // pass to `.of(...)` and `.reconfigure(...)` independently.
+  const diffDecorationsCompartment = useMemo(() => new Compartment(), []);
 
   const currentMetadata = currentDoc?.metadata;
   const currentDiff = currentDoc?.diff;

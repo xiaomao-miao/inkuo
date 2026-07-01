@@ -40,6 +40,56 @@ pub fn clear_stream_cancelled(session_id: &str) -> bool {
     STREAM_CANCELLED.lock().remove(session_id)
 }
 
+/// RAII guard that clears the cancellation flag for `session_id` on drop.
+/// Use [`scoped_stream_cleanup`] to obtain one.
+///
+/// Why this exists: cancellation flags are a global `HashSet<String>`, and
+/// every code path that calls `mark_stream_cancelled` MUST call
+/// `clear_stream_cancelled` (or leave the flag in a way that prevents the
+/// next request from being misclassified as cancelled). A `?` early-return,
+/// a panic, or a refactor that adds a new error branch all silently leak
+/// the flag, which then blocks every subsequent stream for that session_id.
+/// The guard makes the cleanup unconditional.
+///
+/// Note: this guard does NOT mark the session as cancelled on creation.
+/// Cancellation is set by the `ai_*_cancel` command, not by the start of a
+/// stream; this guard only guarantees cleanup on the stream side.
+pub struct StreamCancelGuard {
+    session_id: String,
+    cleared: bool,
+}
+
+impl StreamCancelGuard {
+    /// Create a guard that will clear the cancellation flag for
+    /// `session_id` on drop. The flag is NOT set by this constructor.
+    pub fn new(session_id: &str) -> Self {
+        Self {
+            session_id: session_id.to_string(),
+            cleared: false,
+        }
+    }
+
+    /// Explicitly clear the flag without waiting for drop, returning
+    /// `true` if the flag was still set when this was called. Consumes
+    /// the guard so its `Drop` does not run a second clear.
+    pub fn clear(mut self) -> bool {
+        if !self.cleared {
+            self.cleared = true;
+            clear_stream_cancelled(&self.session_id)
+        } else {
+            false
+        }
+    }
+}
+
+impl Drop for StreamCancelGuard {
+    fn drop(&mut self) {
+        if !self.cleared {
+            let _ = clear_stream_cancelled(&self.session_id);
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Error)]
 pub enum AppCommandError {
     #[error("Failed to read document: {0}")]
@@ -531,6 +581,12 @@ static SETTINGS_CACHE: Lazy<Mutex<Option<Settings>>> = Lazy::new(|| Mutex::new(N
 
 /// Get cached settings, reading from disk only when cache is empty.
 pub fn get_settings_cached() -> Result<Settings, AppCommandError> {
+    // Fast path: cache hit. We do the read inside the lock so that the
+    // "warm cache" check is consistent with the eventual write to the
+    // cache. Without this, two callers racing on the empty cache could
+    // both see `None`, both read from disk, and the slower one would
+    // overwrite the fresh result with its own copy. The result is still
+    // correct (same JSON content most of the time), just wasteful.
     {
         let guard = SETTINGS_CACHE.lock();
         if let Some(ref settings) = *guard {
@@ -539,6 +595,14 @@ pub fn get_settings_cached() -> Result<Settings, AppCommandError> {
     }
     let settings = read_settings_from_disk()?;
     let mut guard = SETTINGS_CACHE.lock();
+    // Re-check: another thread may have populated the cache while we
+    // were reading the disk. Theirs is at least as fresh as ours (they
+    // read the same file under the same lock-guarded path), and writing
+    // ours on top would discard any mutations made after their read
+    // (e.g. `update_settings_cache`).
+    if let Some(existing) = guard.clone() {
+        return Ok(existing);
+    }
     *guard = Some(settings.clone());
     Ok(settings)
 }

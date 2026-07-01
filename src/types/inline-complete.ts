@@ -2,6 +2,11 @@
 
 /** Request for inline completion */
 export interface InlineCompletionRequest {
+  /** Stable identifier for this request. The backend uses it to route
+   * cancellation to a specific in-flight call (so cancelling a completion
+   * in one editor window does not abort completions in other windows).
+   * The frontend mints a fresh id per call. */
+  request_id: string;
   /** Current document content (either full document, or a snippet around cursor) */
   document: string;
   /** Cursor position.

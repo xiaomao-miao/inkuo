@@ -174,6 +174,14 @@ pub async fn ai_chat_stream(
     let session_id_for_cb = session_id.clone();
     let message_id_for_cb = message_id.clone();
 
+    // Cleanup guard: any return path from this function must clear the
+    // stream-cancelled flag so it does not leak into the next call. The
+    // previous implementation called `clear_stream_cancelled` only on the
+    // happy paths and the early `Err` returns; a panic or a future
+    // refactor that adds a new error branch would silently leak the flag,
+    // and the next stream for the same session_id would emit nothing.
+    let _cancel_guard = crate::commands::StreamCancelGuard::new(&session_id);
+
     let result = adapter
         .chat_stream(mode.clone(), instruction, original_text, |delta| {
             if crate::commands::is_stream_cancelled(&session_id_for_cb) {
@@ -199,9 +207,15 @@ pub async fn ai_chat_stream(
     }
 
     if crate::commands::clear_stream_cancelled(&session_id) {
+        // User requested cancellation: tell the guard to skip its drop
+        // cleanup (we just cleared) by consuming it.
+        _cancel_guard.clear();
         emit(&app, StreamPayload::cancelled(&session_id, &message_id));
         return Ok(());
     }
+
+    // Consume the guard so its Drop does not run another clear.
+    _cancel_guard.clear();
 
     // Adapter errors were already converted to a stream `error` event and
     // surfaced via early `return Err(...)` above, so any error reaching here
@@ -278,6 +292,11 @@ pub async fn ai_edit_stream(
     let session_id_for_cb = session_id.clone();
     let message_id_for_cb = message_id.clone();
 
+    // Cleanup guard: see `ai_chat_stream` for the same rationale. Drop
+    // fires on any return path so a panic or new `?` branch cannot leak
+    // the cancellation flag into the next call.
+    let _cancel_guard = crate::commands::StreamCancelGuard::new(&session_id);
+
     let result = match adapter
         .edit_stream(request, |delta| {
             if crate::commands::is_stream_cancelled(&session_id_for_cb) {
@@ -306,9 +325,15 @@ pub async fn ai_edit_stream(
     };
 
     if crate::commands::clear_stream_cancelled(&session_id) {
+        // User requested cancellation: tell the guard to skip its drop
+        // cleanup (we just cleared) by consuming it.
+        _cancel_guard.clear();
         emit(&app, StreamPayload::cancelled(&session_id, &message_id));
         return Ok(());
     }
+
+    // Consume the guard so its Drop does not run another clear.
+    _cancel_guard.clear();
 
     emit(
         &app,

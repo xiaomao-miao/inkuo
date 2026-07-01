@@ -6,9 +6,6 @@ import { reportError } from '../../utils/errors';
 import { showWordInlineCompletion } from './wordInlineCompletePlugin';
 import { TIMING, PROSEMIRROR_SNIPPET_BOUNDS } from '../../constants/timing';
 
-// Throttle cancel invocations to avoid flooding the backend
-const CANCEL_THROTTLE_MS = TIMING.INLINE_COMPLETION_CANCEL_THROTTLE_MS;
-
 function clampStyles(styles: InlineStyle[] | undefined, textLen: number): InlineStyle[] {
   if (!styles || styles.length === 0) return [];
 
@@ -43,9 +40,20 @@ interface EditorContext {
   requestSeq: number;
   cancelSeq: number;
   lastAcceptTime: number;
+  /// Backend-side request id of the in-flight call (if any). Used to route
+  /// the cancel command to a specific request so cancelling one editor's
+  /// completion does not abort completions running in other windows.
+  inFlightRequestId: string | null;
 }
 
 const editorContexts = new WeakMap<EditorView, EditorContext>();
+/// Best-effort iteration list for `dismissAllWordCompletions`. WeakMap does
+/// not expose enumeration, but the entries are kept alive only as long as
+/// the view itself is referenced by the editor — when a `WordEditor` unmounts
+/// the view (and therefore its entry) is dropped and this Set's reference is
+/// the only thing keeping it alive. We clean up on access in `dismissAllWordCompletions`
+/// by checking for `view.isDestroyed` and dropping dead entries.
+const trackedViews = new Set<EditorView>();
 
 function getOrCreateContext(view: EditorView): EditorContext {
   let ctx = editorContexts.get(view);
@@ -55,36 +63,24 @@ function getOrCreateContext(view: EditorView): EditorContext {
       requestSeq: 0,
       cancelSeq: 0,
       lastAcceptTime: 0,
+      inFlightRequestId: null,
     };
     editorContexts.set(view, ctx);
+    trackedViews.add(view);
   }
   return ctx;
 }
 
-// ─── Global throttle for backend cancel RPC ────────────────────────────────────
+// ─── Targeted cancel for a specific backend request ───────────────────────────
 
-interface CancelController {
-  lastInvokeTime: number;
-  pending: boolean;
-}
-
-const cancelController: CancelController = {
-  lastInvokeTime: 0,
-  pending: false,
-};
-
-function cancelWordInlineCompletion() {
-  const now = Date.now();
-  if (now - cancelController.lastInvokeTime < CANCEL_THROTTLE_MS) return;
-  if (cancelController.pending) return;
-  cancelController.lastInvokeTime = now;
-  cancelController.pending = true;
-  void invoke('ai_inline_complete_cancel')
+/** Wake the backend's cancel channel for a specific in-flight request id.
+ * Best-effort: errors are logged, not surfaced, because the request may
+ * already have completed by the time the cancel lands. */
+function cancelBackendRequest(requestId: string | null) {
+  if (!requestId) return;
+  void invoke('ai_inline_complete_cancel', { requestId })
     .catch((err) => {
       console.warn('[WordInlineCompletion] Cancel request failed:', err);
-    })
-    .finally(() => {
-      cancelController.pending = false;
     });
 }
 
@@ -125,9 +121,10 @@ export function scheduleWordInlineCompletion(view: EditorView, filePath: string)
   if (Date.now() - ctx.lastAcceptTime < TIMING.COMPLETION_RETRIGGER_DELAY_MS) return;
   if (isComposing(view)) return;
 
-  // Tell the backend to cancel any in-flight request.
-  // This is safe even if multiple editors are active because each has its own ctx.cancelSeq.
-  cancelWordInlineCompletion();
+  // If a previous request for this editor is still in-flight on the backend,
+  // target it specifically so we don't disturb other editors' requests.
+  cancelBackendRequest(ctx.inFlightRequestId);
+  ctx.inFlightRequestId = null;
 
   const { snippetText, cursorInSnippet, from } = getSnippet(view);
   const triggerHeadAtSchedule = view.state.selection.head;
@@ -143,13 +140,20 @@ export function scheduleWordInlineCompletion(view: EditorView, filePath: string)
 
     const mySeq = ++ctx.requestSeq;
     const myCancelSeq = ctx.cancelSeq;
+    // Mint a fresh id per call. Including the editor's `requestSeq` keeps
+    // it unique even if two completions race from the same editor; including
+    // the file path keeps ids distinct across the two windows of a multi-
+    // window setup so the backend registry never sees a collision.
+    const requestId = `${filePath}#${Date.now()}#${mySeq}`;
 
     latest.setLoading(true);
     latest.setError(null);
+    ctx.inFlightRequestId = requestId;
 
     try {
       const response = await invoke<InlineCompletionResponse>('ai_inline_complete', {
         request: {
+          request_id: requestId,
           document: snippetText,
           cursor_position: cursorInSnippet,
           language: 'docx',
@@ -159,8 +163,15 @@ export function scheduleWordInlineCompletion(view: EditorView, filePath: string)
       });
 
       // Ignore if a newer request started or this editor was cancelled.
-      if (mySeq !== ctx.requestSeq) return;
-      if (myCancelSeq !== ctx.cancelSeq) return;
+      if (mySeq !== ctx.requestSeq) {
+        return;
+      }
+      if (myCancelSeq !== ctx.cancelSeq) {
+        return;
+      }
+      if (ctx.inFlightRequestId === requestId) {
+        ctx.inFlightRequestId = null;
+      }
 
       const current = useInlineCompleteStore.getState();
       const headNow = view.state.selection.head;
@@ -185,6 +196,9 @@ export function scheduleWordInlineCompletion(view: EditorView, filePath: string)
     } finally {
       if (mySeq === ctx.requestSeq) {
         useInlineCompleteStore.getState().setLoading(false);
+        if (ctx.inFlightRequestId === requestId) {
+          ctx.inFlightRequestId = null;
+        }
       }
     }
   }, store.debounceMs);
@@ -203,6 +217,9 @@ export function clearWordTimersForEditor(view: EditorView) {
     ctx.completionTimer = null;
   }
 
+  cancelBackendRequest(ctx.inFlightRequestId);
+  ctx.inFlightRequestId = null;
+
   // Best-effort cancel: if a request is in-flight, its response will be ignored
   // because myCancelSeq !== ctx.cancelSeq.
   if (useInlineCompleteStore.getState().isLoading) {
@@ -218,7 +235,20 @@ export function dismissAllWordCompletions() {
   if (useInlineCompleteStore.getState().isLoading) {
     useInlineCompleteStore.getState().setLoading(false);
   }
-  cancelWordInlineCompletion();
+  for (const view of trackedViews) {
+    const ctx = editorContexts.get(view);
+    if (!ctx) {
+      trackedViews.delete(view);
+      continue;
+    }
+    if (view.isDestroyed) {
+      trackedViews.delete(view);
+      editorContexts.delete(view);
+      continue;
+    }
+    cancelBackendRequest(ctx.inFlightRequestId);
+    ctx.inFlightRequestId = null;
+  }
 }
 
 /** @deprecated Use dismissAllWordCompletions instead. Alias for backward compatibility. */

@@ -308,9 +308,43 @@ impl Embedder {
         // can retry. `block_in_place` reborrows `&self` only for the
         // duration of the closure; the original lifetime of `&self` is held
         // by the outer async function so the borrow is sound.
+        //
+        // We catch panics (instead of letting them unwind across `await`
+        // points, which would corrupt the buffer) and translate them into a
+        // typed error. The most likely panic source is running this on a
+        // single-threaded tokio runtime (e.g. `tokio::runtime::Builder::new_current_thread`),
+        // which `block_in_place` rejects.
         let mut owned: Vec<Chunk> = std::mem::take(chunks);
+        let self_ptr = self as *const Self;
         let result = tokio::task::block_in_place(|| {
-            self.encode_chunks_batched(&mut owned, batch_size, |_completed, _total| {})
+            // Safety: `self_ptr` is the address of a borrow that the outer
+            // async fn holds across the await; block_in_place runs on the
+            // same thread, so no other task can mutate `*self` here.
+            let embedder = unsafe { &*self_ptr };
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                embedder.encode_chunks_batched(&mut owned, batch_size, |_completed, _total| {})
+            })) {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(e)) => Err(e),
+                Err(payload) => {
+                    let message = if let Some(s) = payload.downcast_ref::<&str>() {
+                        (*s).to_string()
+                    } else if let Some(s) = payload.downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        // `block_in_place` specifically rejects call from a
+                        // current-thread runtime with the message
+                        // "Cannot block the current thread from within a
+                        //  runtime". Detect that and surface a friendlier
+                        // hint to the caller.
+                        "blocking task panicked (likely single-threaded runtime)".to_string()
+                    };
+                    Err(EmbedError::Generation(format!(
+                        "inference panicked: {} — multi-threaded tokio runtime required",
+                        message
+                    )))
+                }
+            }
         });
         *chunks = owned;
         result

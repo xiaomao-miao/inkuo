@@ -10,6 +10,33 @@ import type {
 } from '../types';
 import type { WorkspaceSnapshot } from '../store/sidebarStore';
 
+// Single-flight queue for workspace switches. Without this, two calls to
+// `switchWorkspace` that fire in rapid succession (e.g. user picks "A",
+// then quickly picks "B" before A finishes loading) overlap: the second
+// call's `saveCurrentSnapshot(sidebar)` step sees the partially-updated
+// state left over by the first call's apply step, and its `loadSnapshot`
+// can return a target-file payload that no longer matches the actual UI.
+//
+// The simplest correct serialization is to chain promises: each caller
+// awaits the previous one before starting its own work. Late callers
+// observe the most recent state when they eventually run, which matches
+// user expectation (the latest click wins).
+let switchQueue: Promise<void> = Promise.resolve();
+
+/** Enqueue `task` behind any in-flight workspace switch. */
+function withSwitchLock<T>(task: () => Promise<T>): Promise<T> {
+  const next = switchQueue.then(task, task);
+  // Swallow rejections on the queue itself — they belong to the caller
+  // who will await `next` (the original task's promise). Without this the
+  // queue could become a permanently-rejected promise and block every
+  // subsequent switch.
+  switchQueue = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  return next;
+}
+
 /**
  * Load children entries for a directory from the backend.
  */
@@ -62,46 +89,52 @@ export async function applyWorkspaceDirectoryLoad(
  * populate the directory cache and trigger file-tree rendering.
  */
 export async function switchWorkspace(targetPath: string): Promise<void> {
-  const sidebar = useSidebarStore.getState();
-  const aiPanel = useAIPanelStore.getState();
+  // Coalesce rapid double-clicks of the picker so only one switch is in
+  // flight at a time. The latest click still wins because each task reads
+  // the live sidebar state at the moment it runs (after the previous task
+  // has fully applied its changes).
+  return withSwitchLock(async () => {
+    const sidebar = useSidebarStore.getState();
+    const aiPanel = useAIPanelStore.getState();
 
-  // 1. Persist the current workspace's snapshot before leaving it. We do this
-  //    best-effort: a save failure must not block the user from switching
-  //    workspaces. The most common cause is "no current workspace yet" (e.g.
-  //    we are on the welcome page), which is not an error.
-  if (sidebar.workspacePath) {
-    try {
-      await saveCurrentSnapshot(sidebar.workspacePath, sidebar.openTabs, sidebar.activeTabId, aiPanel.sessions, aiPanel.activeSessionId);
-    } catch (err) {
-      console.warn('Failed to save current workspace snapshot before switch:', err);
+    // 1. Persist the current workspace's snapshot before leaving it. We do this
+    //    best-effort: a save failure must not block the user from switching
+    //    workspaces. The most common cause is "no current workspace yet" (e.g.
+    //    we are on the welcome page), which is not an error.
+    if (sidebar.workspacePath) {
+      try {
+        await saveCurrentSnapshot(sidebar.workspacePath, sidebar.openTabs, sidebar.activeTabId, aiPanel.sessions, aiPanel.activeSessionId);
+      } catch (err) {
+        console.warn('Failed to save current workspace snapshot before switch:', err);
+      }
     }
-  }
 
-  // 2. Load the target workspace's snapshot from the shared store.
-  const snapshot = await loadSnapshot(targetPath);
+    // 2. Load the target workspace's snapshot from the shared store.
+    const snapshot = await loadSnapshot(targetPath);
 
-  // 3. Apply the snapshot to the live stores through proper actions so we
-  //    keep the React subscription lifecycle consistent.
-  if (snapshot && snapshot.openTabs.length > 0) {
-    sidebar.setWorkspacePath(targetPath);
-    sidebar.replaceTabs(snapshot.openTabs, snapshot.activeTabId);
-    const targetSessions = snapshot.aiSessions.length > 0
-      ? snapshot.aiSessions
-      : [createNewSession(1)];
-    useAIPanelStore.setState({
-      sessions: targetSessions,
-      activeSessionId: snapshot.activeSessionId ?? targetSessions[0].id,
-    });
-  } else {
-    // Fresh workspace — reset everything to empty/default.
-    sidebar.setWorkspacePath(targetPath);
-    sidebar.replaceTabs([], null);
-    const fresh = createNewSession(1);
-    useAIPanelStore.setState({
-      sessions: [fresh],
-      activeSessionId: fresh.id,
-    });
-  }
+    // 3. Apply the snapshot to the live stores through proper actions so we
+    //    keep the React subscription lifecycle consistent.
+    if (snapshot && snapshot.openTabs.length > 0) {
+      sidebar.setWorkspacePath(targetPath);
+      sidebar.replaceTabs(snapshot.openTabs, snapshot.activeTabId);
+      const targetSessions = snapshot.aiSessions.length > 0
+        ? snapshot.aiSessions
+        : [createNewSession(1)];
+      useAIPanelStore.setState({
+        sessions: targetSessions,
+        activeSessionId: snapshot.activeSessionId ?? targetSessions[0].id,
+      });
+    } else {
+      // Fresh workspace — reset everything to empty/default.
+      sidebar.setWorkspacePath(targetPath);
+      sidebar.replaceTabs([], null);
+      const fresh = createNewSession(1);
+      useAIPanelStore.setState({
+        sessions: [fresh],
+        activeSessionId: fresh.id,
+      });
+    }
+  });
 }
 
 /**

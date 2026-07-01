@@ -88,6 +88,7 @@ export function InlineCompleteProvider({ children }: InlineCompleteProviderProps
     debounceTimerRef.current = setTimeout(async () => {
       try {
         const request: InlineCompletionRequest = {
+          request_id: `${params.filePath ?? 'inline'}#${Date.now()}#${seq}`,
           document: params.document,
           cursor_position: params.cursorPosition,
           language: params.language,

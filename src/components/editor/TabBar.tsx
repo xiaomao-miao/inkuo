@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { FileText, File, X, Circle, Settings } from 'lucide-react';
 import { useSidebarStore } from '../../store';
 import type { OpenTab } from '../../store';
@@ -8,6 +8,20 @@ export const TabBar = () => {
   const { openTabs, activeTabId, setActiveTab, closeTab } = useSidebarStore();
   const [confirmClosePath, setConfirmClosePath] = useState<string | null>(null);
   const tabBarRef = useRef<HTMLDivElement>(null);
+
+  // If the user switches tabs while the "discard changes" dialog is open,
+  // the dialog would otherwise stay mounted and display the previous tab's
+  // name (driven by `confirmClosePath`). Dismissing the dialog here keeps
+  // the UI consistent with the active tab the user just landed on.
+  useEffect(() => {
+    if (confirmClosePath) {
+      setConfirmClosePath(null);
+    }
+    // We intentionally depend only on `activeTabId` — clearing the dialog
+    // on tab switch is the only side effect we want, and including
+    // `confirmClosePath` would put us in an infinite update loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTabId]);
 
   const handleWheel = (e: React.WheelEvent) => {
     if (tabBarRef.current) {

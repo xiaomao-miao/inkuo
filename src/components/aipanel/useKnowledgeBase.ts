@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
-import { listen } from '@tauri-apps/api/event';
-import { useCallback, useEffect } from 'react';
+import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { useCallback, useEffect, useRef } from 'react';
 import {
   useSidebarStore,
   useNotificationStore,
@@ -43,6 +43,32 @@ export function useKnowledgeBase({ activeSessionId }: UseKnowledgeBaseArgs): Use
   const setBuildProgress = useSidebarStore((state) => state.setBuildProgress);
   const setKnowledgeToolCall = useSidebarStore((state) => state.setKnowledgeToolCall);
   const pushNotification = useNotificationStore((state) => state.pushNotification);
+
+  // Tracks the in-flight build's progress listener so a subsequent call
+  // can detach it before attaching its own. Without this, two concurrent
+  // `handleKnowledgeBuild` calls (e.g. user double-clicks "构建") would
+  // each register a listener and the second call's `finally` would tear
+  // down the first call's listener, leaving the first call's progress
+  // events with no consumer (or, if timing went the other way, the second
+  // call would still receive the first call's events).
+  const buildProgressUnlistenRef = useRef<UnlistenFn | null>(null);
+  // Tracks the `toolCallId` of the currently-pending build so stale progress
+  // events can be ignored.
+  const activeBuildIdRef = useRef<string | null>(null);
+  // Detach the progress listener and clear the active-build marker. Safe
+  // to call multiple times.
+  const detachBuildListener = useCallback(() => {
+    if (buildProgressUnlistenRef.current) {
+      const fn = buildProgressUnlistenRef.current;
+      buildProgressUnlistenRef.current = null;
+      try {
+        fn();
+      } catch (err) {
+        console.warn('Failed to detach build progress listener:', err);
+      }
+    }
+    activeBuildIdRef.current = null;
+  }, []);
 
   useEffect(() => {
     if (!workspacePath) {
@@ -98,8 +124,24 @@ export function useKnowledgeBase({ activeSessionId }: UseKnowledgeBaseArgs): Use
   const handleKnowledgeBuild = useCallback(async () => {
     if (!activeSessionId || !workspacePath) return;
 
-    const toolCallId = `knowledge-build-${activeSessionId}`;
+    // Reject re-entry: a second build started before the first finished
+    // would otherwise clobber `knowledgeToolCall` and emit a tangled stream
+    // of progress events. The user can re-trigger after this one finishes.
+    if (buildProgressUnlistenRef.current) {
+      pushNotification({
+        kind: 'info',
+        title: '知识库正在构建中',
+        message: '请等待当前构建完成后再试。',
+      });
+      return;
+    }
+
+    // Use a unique `toolCallId` per invocation (not per session) so two
+    // builds for the same session can be distinguished. Also use it as
+    // the `activeBuildIdRef` marker for stale-progress filtering.
+    const toolCallId = `knowledge-build-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const startedAt = Date.now();
+    activeBuildIdRef.current = toolCallId;
     setKnowledgeToolCall({
       id: toolCallId,
       name: 'knowledge_build',
@@ -110,16 +152,22 @@ export function useKnowledgeBase({ activeSessionId }: UseKnowledgeBaseArgs): Use
       startTime: startedAt,
     });
 
-    let unlistenProgress: (() => void) | undefined;
     try {
-      unlistenProgress = await listen<{
+      const unlisten = await listen<{
         session_id: string;
         phase: string;
         current: number;
         total: number;
         message: string;
       }>('kb://build-progress', (event) => {
+        // Drop events that don't belong to the current build. We can't
+        // easily route by `toolCallId` because the backend identifies the
+        // build by `sessionId`; instead, we trust the backend to deliver
+        // events only for the most recent build per session, and we drop
+        // events that arrive after `activeBuildIdRef` was reset (e.g.
+        // listener was just detached).
         if (event.payload.session_id !== activeSessionId) return;
+        if (activeBuildIdRef.current !== toolCallId) return;
         if (event.payload.phase === 'done') {
           setBuildProgress(undefined);
         } else {
@@ -131,6 +179,7 @@ export function useKnowledgeBase({ activeSessionId }: UseKnowledgeBaseArgs): Use
           });
         }
       });
+      buildProgressUnlistenRef.current = unlisten;
     } catch (err) {
       const message = reportError('knowledge-build-listener', err);
       pushNotification({
@@ -146,41 +195,51 @@ export function useKnowledgeBase({ activeSessionId }: UseKnowledgeBaseArgs): Use
         sessionId: activeSessionId,
       });
 
-      setKnowledgeBase({
-        workspaceId: result.workspace_id,
-        documentCount: result.total_documents,
-        chunkCount: result.total_chunks,
-        lastUpdated: Date.now(),
-        members: [],
-      });
-      pushNotification({
-        kind: 'success',
-        title: '知识库构建完成',
-        message: `已构建 ${result.total_documents} 个文档，生成 ${result.total_chunks} 个分块。`,
-      });
+      // Only apply the result if we are still the active build.
+      if (activeBuildIdRef.current === toolCallId) {
+        setKnowledgeBase({
+          workspaceId: result.workspace_id,
+          documentCount: result.total_documents,
+          chunkCount: result.total_chunks,
+          lastUpdated: Date.now(),
+          members: [],
+        });
+        pushNotification({
+          kind: 'success',
+          title: '知识库构建完成',
+          message: `已构建 ${result.total_documents} 个文档，生成 ${result.total_chunks} 个分块。`,
+        });
+      }
     } catch (err) {
-      const message = reportError('knowledge-build', err);
-      pushNotification({
-        kind: 'error',
-        title: '知识库构建失败',
-        message,
-      });
-      setKnowledgeToolCall({
-        id: toolCallId,
-        name: 'knowledge_build',
-        arguments: {
-          workspacePath,
-        },
-        status: 'error',
-        error: extractErrorMessage(err),
-        result: extractErrorMessage(err),
-        startTime: startedAt,
-        duration: Date.now() - startedAt,
-      });
+      if (activeBuildIdRef.current === toolCallId) {
+        const message = reportError('knowledge-build', err);
+        pushNotification({
+          kind: 'error',
+          title: '知识库构建失败',
+          message,
+        });
+        setKnowledgeToolCall({
+          id: toolCallId,
+          name: 'knowledge_build',
+          arguments: {
+            workspacePath,
+          },
+          status: 'error',
+          error: extractErrorMessage(err),
+          result: extractErrorMessage(err),
+          startTime: startedAt,
+          duration: Date.now() - startedAt,
+        });
+      }
     } finally {
-      unlistenProgress?.();
+      // Only the build that owns the listener should tear it down, and
+      // only if it is still the active build (a newer build would have
+      // re-assigned the ref).
+      if (activeBuildIdRef.current === toolCallId) {
+        detachBuildListener();
+      }
     }
-  }, [activeSessionId, workspacePath, setKnowledgeBase, setBuildProgress, setKnowledgeToolCall, pushNotification]);
+  }, [activeSessionId, workspacePath, setKnowledgeBase, setBuildProgress, setKnowledgeToolCall, pushNotification, detachBuildListener]);
 
   const handleKnowledgeClear = useCallback(async () => {
     if (!activeSessionId || !workspacePath) return;
@@ -307,6 +366,15 @@ export function useKnowledgeBase({ activeSessionId }: UseKnowledgeBaseArgs): Use
       });
     }
   }, [workspacePath, setKnowledgeBase, pushNotification]);
+
+  // Tear down the progress listener when the consumer unmounts. Without
+  // this, a build in-flight when the panel closes would keep its listener
+  // subscribed, leaking Tauri IPC handles across navigations.
+  useEffect(() => {
+    return () => {
+      detachBuildListener();
+    };
+  }, [detachBuildListener]);
 
   return {
     workspacePath: workspacePath ?? undefined,
