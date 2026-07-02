@@ -37,7 +37,7 @@ function createDefaultAPIConfig(): APIConfig {
     isDefault: true,
     enabled: true,
     temperature: 0.7,
-    maxTokens: 4096,
+    maxTokens: 16384,
   };
 }
 

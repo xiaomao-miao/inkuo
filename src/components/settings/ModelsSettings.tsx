@@ -340,6 +340,26 @@ export const ModelsSettings = ({ onClose }: ModelsSettingsProps) => {
                       <span className={styles.rangeValue}>{config.temperature.toFixed(1)}</span>
                     </div>
                   </div>
+
+                  <div className={styles.field}>
+                    <label className={styles.label}>最大输出 Tokens</label>
+                    <div className={styles.rangeWrapper}>
+                      <input
+                        type="range"
+                        min="512"
+                        max="32768"
+                        step="512"
+                        value={config.maxTokens ?? 16384}
+                        onChange={(e) =>
+                          handleUpdateConfig(config.id, {
+                            maxTokens: parseInt(e.target.value, 10),
+                          })
+                        }
+                        className={styles.range}
+                      />
+                      <span className={styles.rangeValue}>{config.maxTokens ?? 16384}</span>
+                    </div>
+                  </div>
                 </div>}
 
                 {isExpanded && <div className={styles.configFooter}>

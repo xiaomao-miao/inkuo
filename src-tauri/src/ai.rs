@@ -122,7 +122,7 @@ impl Default for AIConfig {
             },
             model: "llama3".to_string(),
             temperature: 0.7,
-            max_tokens: Some(4096),
+            max_tokens: Some(16384),
         }
     }
 }
