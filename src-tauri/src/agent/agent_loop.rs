@@ -599,14 +599,17 @@ impl AgentExecutor {
                                     office_file_modified: None,
                                 });
                             }
-                            // Also handle reasoning_content (DeepSeek's thinking)
+                            // Also handle reasoning_content (DeepSeek's thinking).
+                            // Emitted with a dedicated "reasoning" event type so the
+                            // frontend can render thinking blocks separately from
+                            // the final answer and collapse them once they're done.
                             if let Some(reasoning) = delta.reasoning_content {
                                 if !reasoning.is_empty() {
                                     current_reasoning_content.push_str(&reasoning);
                                     on_event(StreamPayload {
                                         session_id: session_id.to_string(),
                                         message_id: message_id.to_string(),
-                                        event_type: "text".to_string(),
+                                        event_type: "reasoning".to_string(),
                                         content: Some(reasoning),
                                         summary: None,
                                         tool_call_id: None,

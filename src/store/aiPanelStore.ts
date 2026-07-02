@@ -19,13 +19,16 @@ import {
   appendSessionToolCall,
   clearSessionToolCalls,
   clearSessionConversation,
+  collapseMessageHead,
   createNewSession,
   finishSessionMessageStreaming,
   patchMessageOutputState,
   removeSessionToolCall,
   setMessageDiffState,
   setMessageOutputItems,
+  spliceMessagePrefix,
   trimSessionMessagesAfter,
+  updateMessages,
   updatePendingDiffHunks,
   updatePendingDiffState,
   updateSessionMessage,
@@ -108,7 +111,7 @@ const createSessionSlice: AIPanelStateCreator<Pick<AIPanelState, 'sessions' | 'a
   };
 };
 
-const createMessageSlice: AIPanelStateCreator<Pick<AIPanelState, 'addMessage' | 'updateMessage' | 'appendMessageContent' | 'setIsStreaming' | 'clearMessages' | 'truncateMessagesAfter' | 'getMessage' | 'updateMessageOutput' | 'addOutputToMessage' | 'patchOutputItem' | 'finishMessageStreaming' | 'setErrorMessage' | 'setMessageSearchResults'>> = (set, get) => ({
+const createMessageSlice: AIPanelStateCreator<Pick<AIPanelState, 'addMessage' | 'updateMessage' | 'appendMessageContent' | 'setIsStreaming' | 'clearMessages' | 'truncateMessagesAfter' | 'getMessage' | 'updateMessageOutput' | 'addOutputToMessage' | 'patchOutputItem' | 'finishMessageStreaming' | 'setErrorMessage' | 'setMessageSearchResults' | 'expandMessagePrefix' | 'collapseMessagePrefix' | 'toggleReasoningExpansion' | 'autoExpandTruncatedPrefixes'>> = (set, get) => ({
   addMessage: (sessionId, message) =>
     set((state) => ({
       sessions: appendSessionMessage(state.sessions, sessionId, message),
@@ -177,6 +180,73 @@ const createMessageSlice: AIPanelStateCreator<Pick<AIPanelState, 'addMessage' | 
         ...message,
         searchResults: results,
       })),
+    })),
+  expandMessagePrefix: (sessionId, messageId, keepTail) =>
+    set((state) => ({
+      sessions: updateSessions(state.sessions, sessionId, (session) =>
+        updateMessages(session, messageId, (message) => {
+          const lastItem =
+            message.outputItems[message.outputItems.length - 1];
+          const itemPrefix =
+            lastItem && lastItem.type === 'text'
+              ? lastItem.truncatedPrefix
+              : undefined;
+          const prefix = message.truncatedPrefix || itemPrefix || '';
+          if (!prefix) return message;
+          return spliceMessagePrefix(message, prefix, keepTail);
+        })
+      ),
+    })),
+  collapseMessagePrefix: (sessionId, messageId, keepTail) =>
+    set((state) => ({
+      sessions: updateSessions(state.sessions, sessionId, (session) =>
+        updateMessages(session, messageId, (message) =>
+          collapseMessageHead(message, keepTail)
+        )
+      ),
+    })),
+  toggleReasoningExpansion: (sessionId, messageId, reasoningId) =>
+    set((state) => ({
+      sessions: updateSessions(state.sessions, sessionId, (session) =>
+        updateMessages(session, messageId, (message) => {
+          const current = message.expandedReasoningIds ?? [];
+          const next = current.includes(reasoningId)
+            ? current.filter((id) => id !== reasoningId)
+            : [...current, reasoningId];
+          return {
+            ...message,
+            expandedReasoningIds: next.length > 0 ? next : undefined,
+          };
+        })
+      ),
+    })),
+  autoExpandTruncatedPrefixes: (sessionId) =>
+    set((state) => ({
+      sessions: updateSessions(state.sessions, sessionId, (session) => {
+        let changed = false;
+        const messages = session.messages.map((message) => {
+          const items = message.outputItems;
+          const lastItem = items[items.length - 1];
+          const itemHasTruncation =
+            lastItem &&
+            (lastItem.type === 'text' || lastItem.type === 'reasoning') &&
+            !!lastItem.truncatedPrefix;
+          if (!itemHasTruncation && !message.truncatedPrefix) {
+            return message;
+          }
+          const prefix =
+            (lastItem &&
+              (lastItem.type === 'text' || lastItem.type === 'reasoning') &&
+              lastItem.truncatedPrefix) ||
+            message.truncatedPrefix ||
+            '';
+          if (!prefix) return message;
+          changed = true;
+          return spliceMessagePrefix(message, prefix);
+        });
+        if (!changed) return session;
+        return { ...session, messages };
+      }),
     })),
 });
 

@@ -47,6 +47,48 @@ export interface AIPanelMessageSlice {
   finishMessageStreaming: (sessionId: string, messageId: string, finalContent: string) => void;
   setErrorMessage: (sessionId: string, messageId: string, error: string) => void;
   setMessageSearchResults: (sessionId: string, messageId: string, results: SearchResult[]) => void;
+  /**
+   * Restore a previously-truncated head of text for a message's trailing
+   * OutputItem (or `content` if the message has no outputItems). Used by the
+   * lazy-load "show earlier content" affordance in the chat panel.
+   *
+   * `keepTail` controls how many trailing chars of the visible content to
+   * keep rendered after collapsing — the rest (the head) is folded back into
+   * `truncatedPrefix` so the user can collapse again later.
+   */
+  expandMessagePrefix: (
+    sessionId: string,
+    messageId: string,
+    keepTail?: number,
+  ) => void;
+  /**
+   * Collapse the head of a message back into `truncatedPrefix`. Inverse of
+   * `expandMessagePrefix`. Safe to call when nothing is truncated.
+   */
+  collapseMessagePrefix: (
+    sessionId: string,
+    messageId: string,
+    keepTail: number,
+  ) => void;
+  /**
+   * Toggle a specific reasoning block's "user expanded" state. Reads the
+   * current set of expanded ids from the message, adds or removes the
+   * given `reasoningId`, and writes the new set back. Each block is
+   * toggled independently — expanding one block does NOT affect any
+   * other reasoning block in the same message.
+   */
+  toggleReasoningExpansion: (
+    sessionId: string,
+    messageId: string,
+    reasoningId: string,
+  ) => void;
+  /**
+   * Auto-expand any message with a non-empty `truncatedPrefix` (i.e. head
+   * content that's currently folded away). Designed to be called when the
+   * user scrolls near the top of the chat panel so the older content is
+   * restored without an explicit click.
+   */
+  autoExpandTruncatedPrefixes: (sessionId: string) => void;
 }
 
 export interface AIPanelToolCallSlice {

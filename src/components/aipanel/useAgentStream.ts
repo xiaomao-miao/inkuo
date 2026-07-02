@@ -7,6 +7,7 @@ import {
 import type { StreamPayload } from './streamTypes';
 import { dispatchStreamEvent } from './streamEventDispatcher';
 import { useTextStreaming } from './useTextStreaming';
+import { useReasoningStreaming } from './useReasoningStreaming';
 import { useToolCallStreaming } from './useToolCallStreaming';
 import { isTauriRuntime } from '../../utils/tauri';
 
@@ -28,6 +29,11 @@ export function useAgentStream({ mode }: UseAgentStreamArgs) {
   } = useTextStreaming();
 
   const {
+    flushReasoningDeltas,
+    appendReasoningDelta,
+  } = useReasoningStreaming();
+
+  const {
     flushToolArgs,
     handleToolCallStart,
     handleToolCallArgsDelta,
@@ -43,10 +49,11 @@ export function useAgentStream({ mode }: UseAgentStreamArgs) {
 
   useEffect(() => {
     flushAllPendingRef.current = (sessionId) => {
+      flushReasoningDeltas();
       flushTextDeltas();
       flushToolArgs(sessionId);
     };
-  }, [flushTextDeltas, flushToolArgs]);
+  }, [flushReasoningDeltas, flushTextDeltas, flushToolArgs]);
 
   // Register the Tauri listener exactly once per mount. Callbacks read from
   // refs that are updated above, so they always see the latest closures
@@ -66,6 +73,7 @@ export function useAgentStream({ mode }: UseAgentStreamArgs) {
           flushAllPending: (sessionId) => flushAllPendingRef.current(sessionId),
           streamingContentRef,
           appendTextDelta,
+          appendReasoningDelta,
           handleToolCallStart,
           handleToolCallArgsDelta,
           setPendingDiff,

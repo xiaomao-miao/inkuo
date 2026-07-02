@@ -38,6 +38,41 @@ function stripOpenTrailingTableBlock(text: string): string {
   return lines.slice(0, lastTableStart).join('\n').trimEnd();
 }
 
+/**
+ * Compute a flush interval that grows with buffer pressure.
+ *
+ * We use a 2-piece linear ramp:
+ *   bufferLen <= MIN_BUFFER_CHARS_FOR_SLOWDOWN           → MIN_MS
+ *   bufferLen >= MAX_BUFFER_CHARS_BEFORE_FORCE_FLUSH      → MAX_MS
+ *   in between                                         → linear interpolation
+ *
+ * The cap at MAX_MS ensures the user still sees progress while a flood of
+ * deltas is in flight; without it, a runaway buffer could stretch the
+ * interval to a point where the UI looks frozen.
+ */
+function computeFlushIntervalMs(bufferLen: number): number {
+  const {
+    STREAM_FLUSH_INTERVAL_MIN_MS,
+    STREAM_FLUSH_INTERVAL_MAX_MS,
+    MIN_BUFFER_CHARS_FOR_SLOWDOWN,
+    MAX_BUFFER_CHARS_BEFORE_FORCE_FLUSH,
+  } = TIMING;
+
+  if (bufferLen <= MIN_BUFFER_CHARS_FOR_SLOWDOWN) {
+    return STREAM_FLUSH_INTERVAL_MIN_MS;
+  }
+
+  const span = MAX_BUFFER_CHARS_BEFORE_FORCE_FLUSH - MIN_BUFFER_CHARS_FOR_SLOWDOWN;
+  if (span <= 0) return STREAM_FLUSH_INTERVAL_MAX_MS;
+
+  const over = Math.min(bufferLen, MAX_BUFFER_CHARS_BEFORE_FORCE_FLUSH) - MIN_BUFFER_CHARS_FOR_SLOWDOWN;
+  const ratio = over / span;
+  return Math.round(
+    STREAM_FLUSH_INTERVAL_MIN_MS +
+      ratio * (STREAM_FLUSH_INTERVAL_MAX_MS - STREAM_FLUSH_INTERVAL_MIN_MS),
+  );
+}
+
 /** Per-session pending text state. */
 type SessionTextPending = {
   deltas: Record<string, string>;
@@ -59,6 +94,22 @@ export function useTextStreaming() {
     }
     return sessionPendingRef.current[_sessionId];
   };
+
+  /**
+   * Truncate the *visible* text in a text OutputItem so the DOM stays bounded.
+   *
+   * The first `trim` characters of the visible content are moved into
+   * `truncatedPrefix` on the item. `streamingContentRef` keeps the full
+   * accumulated string so we can restore the head when the user expands the
+   * message.
+   */
+  const truncateTextItem = useCallback((item: { type: 'text'; content: string; isPendingMarkdown?: boolean; truncatedPrefix?: string }, keepTail: number) => {
+    const full = item.content;
+    if (full.length <= keepTail) return item;
+    const trim = full.length - keepTail;
+    const newPrefix = (item.truncatedPrefix ?? '') + full.slice(0, trim);
+    return { ...item, content: full.slice(trim), truncatedPrefix: newPrefix };
+  }, []);
 
   const flushTextDeltas = useCallback(() => {
     const allPending = sessionPendingRef.current;
@@ -88,14 +139,49 @@ export function useTextStreaming() {
       return applyStreamingTextDeltas(
         state,
         deltaMap,
-        (text) => text !== stripOpenTrailingTableBlock(text)
+        (text) => text !== stripOpenTrailingTableBlock(text),
+        // Post-process: if any text OutputItem now exceeds the soft cap, trim
+        // its head so the rendered DOM stays bounded.
+        (item) => {
+          const threshold = TIMING.MESSAGE_TRUNCATE_THRESHOLD_CHARS;
+          const keep = TIMING.MESSAGE_TRUNCATE_KEEP_TAIL_CHARS;
+          if (item.content.length <= threshold) return item;
+          return truncateTextItem(item, keep);
+        },
       );
     });
-  }, []);
+  }, [truncateTextItem]);
 
   const scheduleFlush = useCallback(() => {
-    if (flushTimeoutRef.current !== null) return;
-    flushTimeoutRef.current = setTimeout(flushTextDeltas, TIMING.STREAM_FLUSH_INTERVAL_MS);
+    // Total pending chars across all sessions — drives the adaptive interval.
+    let bufferLen = 0;
+    for (const pending of Object.values(sessionPendingRef.current)) {
+      for (const delta of Object.values(pending.deltas)) {
+        bufferLen += delta.length;
+      }
+    }
+
+    // Force-flush if the buffer is dangerously large. This prevents the
+    // adaptive interval from growing past a safe point and keeps the UI
+    // responsive even under a flood of deltas.
+    if (bufferLen >= TIMING.MAX_BUFFER_CHARS_BEFORE_FORCE_FLUSH) {
+      if (flushTimeoutRef.current !== null) {
+        clearTimeout(flushTimeoutRef.current);
+        flushTimeoutRef.current = null;
+      }
+      // Defer one tick so we don't recursively flush inside the listener.
+      queueMicrotask(() => flushTextDeltas());
+      return;
+    }
+
+    if (flushTimeoutRef.current !== null) {
+      // Timer already armed. Keep the earliest deadline so we never stretch
+      // an already-scheduled interval past the requested next one.
+      return;
+    }
+
+    const interval = computeFlushIntervalMs(bufferLen);
+    flushTimeoutRef.current = setTimeout(flushTextDeltas, interval);
   }, [flushTextDeltas]);
 
   const appendTextDelta = useCallback((messageId: string, content: string) => {

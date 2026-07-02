@@ -22,6 +22,43 @@ export const TIMING = {
 
   /** Long-press threshold for context menu (ms) */
   CONTEXT_MENU_LONG_PRESS_MS: 500,
+
+  /**
+   * Stream flush interval adapts to buffer pressure:
+   *   - bufferLen <= MIN_BUFFER_CHARS_FOR_SLOWDOWN: STREAM_FLUSH_INTERVAL_MS
+   *   - bufferLen >= MAX_BUFFER_CHARS_BEFORE_FORCE_FLUSH: force flush immediately
+   * The interval grows linearly from MIN to MAX as the buffer fills.
+   */
+  /** Minimum flush interval (ms) — used when the buffer is small. */
+  STREAM_FLUSH_INTERVAL_MIN_MS: 16,
+  /** Maximum flush interval (ms) — used when the buffer is large. */
+  STREAM_FLUSH_INTERVAL_MAX_MS: 80,
+  /** Buffer size at which we start stretching the flush interval. */
+  MIN_BUFFER_CHARS_FOR_SLOWDOWN: 200,
+  /** Buffer size above which we force-flush regardless of timer. */
+  MAX_BUFFER_CHARS_BEFORE_FORCE_FLUSH: 1600,
+  /** Per-message soft cap (chars). Past this we drop the head on flush. */
+  MESSAGE_TRUNCATE_THRESHOLD_CHARS: 16000,
+  /** How much head to keep once truncation kicks in. */
+  MESSAGE_TRUNCATE_KEEP_TAIL_CHARS: 8000,
+
+  /**
+   * Reasoning-block flush tunables. Reasoning content is typically much
+   * larger than the final answer and is rendered collapsed by default, so
+   * we tolerate a larger buffer (less frequent React re-renders) and only
+   * force-flush under heavier pressure.
+   */
+  REASONING_FLUSH_INTERVAL_MIN_MS: 32,
+  REASONING_FLUSH_INTERVAL_MAX_MS: 120,
+  REASONING_MIN_BUFFER_CHARS_FOR_SLOWDOWN: 400,
+  REASONING_MAX_BUFFER_CHARS_BEFORE_FORCE_FLUSH: 3200,
+
+  /**
+   * Pixel distance from the top of the scroll container at which
+   * truncated-prefix auto-expand kicks in. Smaller = user has to be
+   * closer to the very top before content is restored.
+   */
+  TRUNCATED_PREFIX_AUTOEXPAND_SCROLL_PX: 64,
 } as const;
 
 // ============================================================================

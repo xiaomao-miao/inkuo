@@ -244,3 +244,90 @@ export function updatePendingDiffHunks(
         : null,
   };
 }
+
+/**
+ * Splice `prefix` back in front of the visible content for a message's
+ * trailing text OutputItem (or the message's `content` field if the message
+ * has no outputItems), and clear `truncatedPrefix` on the message / item.
+ *
+ * If `keepTail` is provided and the visible content is longer than
+ * `keepTail`, only the trailing `keepTail` chars stay rendered — the rest
+ * is folded back into `truncatedPrefix` so the DOM stays bounded.
+ */
+export function spliceMessagePrefix(
+  message: ChatMessage,
+  prefix: string,
+  keepTail?: number,
+): ChatMessage {
+  if (!prefix) return message;
+  const items = message.outputItems;
+  const lastItem = items[items.length - 1];
+
+  if (lastItem && lastItem.type === 'text') {
+    const restored = prefix + lastItem.content;
+    let content = restored;
+    let leftover = '';
+    if (typeof keepTail === 'number' && content.length > keepTail) {
+      const headLen = content.length - keepTail;
+      leftover = content.slice(0, headLen);
+      content = content.slice(headLen);
+    }
+    const updatedItem = {
+      ...lastItem,
+      content,
+      truncatedPrefix: leftover || undefined,
+    };
+    return { ...message, outputItems: [...items.slice(0, -1), updatedItem] };
+  }
+
+  // No text OutputItem — fall back to the legacy `content` field.
+  const restored = prefix + (message.content || '');
+  let content = restored;
+  let leftover = '';
+  if (typeof keepTail === 'number' && content.length > keepTail) {
+    const headLen = content.length - keepTail;
+    leftover = content.slice(0, headLen);
+    content = content.slice(headLen);
+  }
+  return {
+    ...message,
+    content,
+    truncatedPrefix: leftover || undefined,
+  };
+}
+
+/**
+ * Move the head of the message's visible content into `truncatedPrefix` so
+ * the DOM shrinks. Used by the lazy-load affordance to collapse the message
+ * back to its tail window.
+ */
+export function collapseMessageHead(
+  message: ChatMessage,
+  keepTail: number,
+): ChatMessage {
+  const items = message.outputItems;
+  const lastItem = items[items.length - 1];
+
+  if (lastItem && lastItem.type === 'text') {
+    const full = lastItem.content;
+    if (full.length <= keepTail) return message;
+    const trim = full.length - keepTail;
+    const nextPrefix = (lastItem.truncatedPrefix ?? '') + full.slice(0, trim);
+    return {
+      ...message,
+      outputItems: [
+        ...items.slice(0, -1),
+        { ...lastItem, content: full.slice(trim), truncatedPrefix: nextPrefix },
+      ],
+    };
+  }
+
+  const full = message.content || '';
+  if (full.length <= keepTail) return message;
+  const trim = full.length - keepTail;
+  return {
+    ...message,
+    content: full.slice(trim),
+    truncatedPrefix: (message.truncatedPrefix ?? '') + full.slice(0, trim),
+  };
+}

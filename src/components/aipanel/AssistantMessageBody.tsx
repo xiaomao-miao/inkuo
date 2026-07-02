@@ -1,11 +1,12 @@
 import React from 'react';
 import { Loader2, X } from 'lucide-react';
-import { MarkdownRenderer } from './MarkdownRenderer';
-import { StreamingMarkdownRenderer } from './StreamingMarkdownRenderer';
+import { LazyTextContent } from './LazyTextContent';
+import { ReasoningBlock } from './ReasoningBlock';
 import { ToolCallCard } from './ToolCallCard';
 import { CompactToolCard } from './CompactToolCard';
 import { COMPACT_TOOLS } from './toolUtils';
 import { parsePlanBlocks, type PlanBlock } from './planRender';
+import { useAIPanelStore } from '../../store';
 import type { ActiveToolCall, ChatMessage, ChatMode, OutputItem } from '../../store';
 import styles from './AIPanelMessage.module.css';
 
@@ -14,6 +15,7 @@ interface AssistantMessageBodyProps {
   isThisStreaming: boolean;
   mode: ChatMode;
   activeToolCalls: ActiveToolCall[];
+  sessionId: string;
 }
 
 export const AssistantMessageBody: React.FC<AssistantMessageBodyProps> = ({
@@ -21,6 +23,7 @@ export const AssistantMessageBody: React.FC<AssistantMessageBodyProps> = ({
   isThisStreaming,
   mode,
   activeToolCalls,
+  sessionId,
 }) => {
   const hasOutputItems = message.outputItems && message.outputItems.length > 0;
 
@@ -32,6 +35,7 @@ export const AssistantMessageBody: React.FC<AssistantMessageBodyProps> = ({
             key={idx}
             item={item}
             message={message}
+            sessionId={sessionId}
             isThisStreaming={isThisStreaming}
             isLastItem={idx === message.outputItems.length - 1}
           />
@@ -44,6 +48,7 @@ export const AssistantMessageBody: React.FC<AssistantMessageBodyProps> = ({
     return (
       <LegacyMessageContent
         message={message}
+        sessionId={sessionId}
         isThisStreaming={isThisStreaming}
         mode={mode}
         activeToolCalls={activeToolCalls}
@@ -57,6 +62,7 @@ export const AssistantMessageBody: React.FC<AssistantMessageBodyProps> = ({
 interface OutputItemViewProps {
   item: OutputItem;
   message: ChatMessage;
+  sessionId: string;
   isThisStreaming: boolean;
   isLastItem: boolean;
 }
@@ -64,22 +70,26 @@ interface OutputItemViewProps {
 const OutputItemView: React.FC<OutputItemViewProps> = ({
   item,
   message,
+  sessionId,
   isThisStreaming,
   isLastItem,
 }) => {
   if (item.type === 'text') {
     return (
       <div className={styles.outputTextItem}>
-        {item.isPendingMarkdown ? (
-          <StreamingMarkdownRenderer
-            content={item.content}
-            isStreaming={isThisStreaming}
-          />
-        ) : (
-          <MarkdownRenderer content={item.content} />
-        )}
+        <LazyTextContent
+          messageId={message.id}
+          sessionId={sessionId}
+          visibleContent={item.content}
+          truncatedPrefixLength={item.truncatedPrefix?.length ?? 0}
+          isStreaming={isThisStreaming}
+        />
       </div>
     );
+  }
+
+  if (item.type === 'reasoning') {
+    return <ReasoningItemView item={item} messageId={message.id} sessionId={sessionId} />;
   }
 
   if (item.type === 'tool_call_start') {
@@ -169,6 +179,57 @@ const ToolOutputItem: React.FC<ToolOutputItemProps> = ({
   );
 };
 
+interface ReasoningItemViewProps {
+  item: Extract<OutputItem, { type: 'reasoning' }>;
+  messageId: string;
+  sessionId: string;
+}
+
+/**
+ * Render a single reasoning OutputItem.
+ *
+ * Collapse state is per-block — each reasoning item has a `reasoningId`
+ * that is added to (or removed from) the parent message's
+ * `expandedReasoningIds` set as the user clicks the header. This way one
+ * block can be expanded while another in the same message stays
+ * collapsed.
+ */
+const ReasoningItemView: React.FC<ReasoningItemViewProps> = ({
+  item,
+  messageId,
+  sessionId,
+}) => {
+  // The streaming reducer assigns a fresh stable id at creation time.
+  // For items loaded from a persisted snapshot (no id) we fall back to
+  // a stringified combination of messageId + the item's relative
+  // position; that keeps the per-block state stable for the lifetime
+  // of the item even without a real id.
+  const reasoningId = item.reasoningId ?? `${messageId}:reasoning-legacy`;
+
+  const userExpanded = useAIPanelStore((state) => {
+    const session = state.sessions.find((s) => s.id === sessionId);
+    const message = session?.messages.find((m) => m.id === messageId);
+    return message?.expandedReasoningIds?.includes(reasoningId) ?? false;
+  });
+  const toggleReasoningExpansion = useAIPanelStore(
+    (state) => state.toggleReasoningExpansion,
+  );
+
+  const handleToggleExpansion = () => {
+    toggleReasoningExpansion(sessionId, messageId, reasoningId);
+  };
+
+  return (
+    <ReasoningBlock
+      content={item.content}
+      completed={!!item.completed}
+      userExpanded={userExpanded}
+      reasoningId={reasoningId}
+      onToggleExpansion={handleToggleExpansion}
+    />
+  );
+};
+
 const ContinueGeneratingIndicator: React.FC = () => (
   <div className={styles.continueGenerating}>
     <span className={styles.continueDots}>
@@ -181,6 +242,7 @@ const ContinueGeneratingIndicator: React.FC = () => (
 
 interface LegacyMessageContentProps {
   message: ChatMessage;
+  sessionId: string;
   isThisStreaming: boolean;
   mode: ChatMode;
   activeToolCalls: ActiveToolCall[];
@@ -188,6 +250,7 @@ interface LegacyMessageContentProps {
 
 const LegacyMessageContent: React.FC<LegacyMessageContentProps> = ({
   message,
+  sessionId,
   isThisStreaming,
   mode,
   activeToolCalls,
@@ -216,11 +279,13 @@ const LegacyMessageContent: React.FC<LegacyMessageContentProps> = ({
           ))}
         </div>
       ) : message.content ? (
-        isThisStreaming ? (
-          <StreamingMarkdownRenderer content={message.content} isStreaming={true} />
-        ) : (
-          <MarkdownRenderer content={message.content} />
-        )
+        <LazyTextContent
+          messageId={message.id}
+          sessionId={sessionId}
+          visibleContent={message.content}
+          truncatedPrefixLength={message.truncatedPrefix?.length ?? 0}
+          isStreaming={isThisStreaming}
+        />
       ) : !message.toolResults?.length && !isThisStreaming ? (
         <div className={styles.toolOnlyPlaceholder}>工具执行完成</div>
       ) : null}

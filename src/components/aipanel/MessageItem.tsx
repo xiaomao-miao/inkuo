@@ -70,12 +70,15 @@ export const MessageItem: React.FC<MessageItemProps> = ({
     return (
       <div className={`${styles.message} ${styles.assistant}`}>
         <div className={styles.messageContent}>
-          <AssistantMessageBody
-            message={message}
-            isThisStreaming={isThisStreaming}
-            mode={mode}
-            activeToolCalls={activeToolCalls}
-          />
+          {activeSession && (
+            <AssistantMessageBody
+              message={message}
+              isThisStreaming={isThisStreaming}
+              mode={mode}
+              activeToolCalls={activeToolCalls}
+              sessionId={activeSession.id}
+            />
+          )}
 
           {message.diff && !isThisStreaming && activeSession && (
             <InlineDiffPreview

@@ -208,6 +208,7 @@ export interface StreamEvent {
 /** Stream event types */
 export type StreamEventType =
   | 'text'
+  | 'reasoning'
   | 'error'
   | 'tool_call_start'
   | 'tool_result'
@@ -247,7 +248,26 @@ export interface MessageToolResult {
 }
 
 export type OutputItem =
-  | { type: 'text'; content: string; isPendingMarkdown?: boolean }
+  | { type: 'text'; content: string; isPendingMarkdown?: boolean; truncatedPrefix?: string }
+  | {
+      type: 'reasoning';
+      content: string;
+      isPendingMarkdown?: boolean;
+      /** Truncated characters held back from the visible content (lazy load). */
+      truncatedPrefix?: string;
+      /**
+       * Stable id used to track per-block UI state (e.g. which blocks the
+       * user has explicitly expanded). Optional for legacy items persisted
+       * from earlier sessions — the renderer falls back to the item's
+       * array index in that case.
+       */
+      reasoningId?: string;
+      /**
+       * `true` once the assistant has begun emitting final-answer content,
+       * marking the reasoning block as complete and eligible for auto-collapse.
+       */
+      completed?: boolean;
+    }
   | {
       type: 'tool_call_start';
       toolCallId: string;
@@ -318,6 +338,20 @@ export interface ChatMessage {
   role: MessageRole;
   timestamp: number;
   content?: string;
+  /**
+   * Overflow characters removed from `content` (or from the trailing text
+   * OutputItem) to keep the rendered DOM small. Empty string means no
+   * truncation has occurred. The full content is reconstructed lazily when
+   * the user expands the message.
+   */
+  truncatedPrefix?: string;
+  /**
+   * Set of reasoning-block ids the user has explicitly expanded. Stored
+   * per-message because a single message can contain multiple reasoning
+   * blocks (one per `reasoning` event), each with independent collapse
+   * state.
+   */
+  expandedReasoningIds?: string[];
   outputItems: OutputItem[];
   toolCalls?: MessageToolCall[];
   toolResults?: MessageToolResult[];

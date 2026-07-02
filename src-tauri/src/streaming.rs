@@ -23,7 +23,7 @@ pub struct StreamPayload {
     pub session_id: String,
     /// Message identifier
     pub message_id: String,
-    /// Event type: "text", "error", "tool_call_start", "tool_result", "done"
+    /// Event type: "text", "reasoning", "error", "tool_call_start", "tool_result", "done"
     pub event_type: String,
 
     /// Text content delta (for text events)

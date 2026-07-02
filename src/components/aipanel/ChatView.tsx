@@ -2,6 +2,8 @@ import React, { useEffect, useRef } from 'react';
 import { InlineDiffPreview } from './InlineDiffPreview';
 import { ChatEmptyState } from './ChatEmptyState';
 import { MessageItem } from './MessageItem';
+import { useAIPanelStore } from '../../store';
+import { TIMING } from '../../constants/timing';
 import type {
   ChatMessage, ChatSession, ChatMode, ActiveToolCall, CurrentDiff,
 } from '../../store';
@@ -50,11 +52,39 @@ export const ChatView: React.FC<ChatViewProps> = ({
     isAtBottomRef.current = scrollHeight - scrollTop - clientHeight < 50;
   };
 
+  /**
+   * Auto-expand: when the user scrolls near the top, restore the head of
+   * any message that's currently collapsed. Debounced so a quick flick
+   * across the threshold doesn't trigger an expand mid-stream.
+   */
+  const autoExpandRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleScrollForAutoExpand = () => {
+    if (!contentRef.current || !activeSession) return;
+    const el = contentRef.current;
+    if (el.scrollTop > TIMING.TRUNCATED_PREFIX_AUTOEXPAND_SCROLL_PX) return;
+    if (autoExpandRef.current !== null) {
+      clearTimeout(autoExpandRef.current);
+    }
+    autoExpandRef.current = setTimeout(() => {
+      useAIPanelStore.getState().autoExpandTruncatedPrefixes(activeSession.id);
+      autoExpandRef.current = null;
+    }, 120);
+  };
+
   useEffect(() => {
     if (isAtBottomRef.current || messages.length <= 2) {
       messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
   }, [messages, activeToolCalls]);
+
+  useEffect(() => {
+    return () => {
+      if (autoExpandRef.current !== null) {
+        clearTimeout(autoExpandRef.current);
+        autoExpandRef.current = null;
+      }
+    };
+  }, []);
 
   if (messages.length === 0) {
     return (
@@ -65,7 +95,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
   }
 
   return (
-    <div className={styles.content} ref={contentRef} onScroll={checkIfAtBottom}>
+    <div
+      className={styles.content}
+      ref={contentRef}
+      onScroll={() => {
+        checkIfAtBottom();
+        handleScrollForAutoExpand();
+      }}
+    >
       <div className={styles.messages}>
         {messages.map((message) => (
           <MessageItem
