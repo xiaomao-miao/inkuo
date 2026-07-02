@@ -1,5 +1,5 @@
 import React, { useRef } from 'react';
-import { PlusCircle, MessageSquare, X } from 'lucide-react';
+import { PlusCircle, MessageSquare, X, History } from 'lucide-react';
 import type { ChatSession } from '../../store';
 import styles from './AIPanelHeader.module.css';
 
@@ -10,8 +10,14 @@ interface ChatHeaderProps {
   activeSessionId: string | null;
   onCreateSession: () => void;
   onSelectSession: (id: string) => void;
-  onDeleteSession: (id: string) => void;
+  /**
+   * Soft-close: removes the chip from the header bar but keeps the
+   * session in history. Wired to `closeSession` in the store.
+   */
+  onCloseSession: (id: string) => void;
   onClose: () => void;
+  onToggleHistory: () => void;
+  historyOpen: boolean;
 }
 
 export const ChatHeader: React.FC<ChatHeaderProps> = ({
@@ -19,8 +25,10 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   activeSessionId,
   onCreateSession,
   onSelectSession,
-  onDeleteSession,
+  onCloseSession,
   onClose,
+  onToggleHistory,
+  historyOpen,
 }) => {
   const sessionListRef = useRef<HTMLDivElement>(null);
 
@@ -50,6 +58,15 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
         >
           <PlusCircle size={16} />
         </button>
+        <button
+          className={styles.newSessionBtn}
+          onClick={onToggleHistory}
+          title="历史对话"
+          type="button"
+          data-active={historyOpen ? true : undefined}
+        >
+          <History size={16} />
+        </button>
         <div className={styles.sessionList} ref={sessionListRef} onWheel={handleWheel}>
           {sessions.map((session) => (
             <button
@@ -60,11 +77,11 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
             >
               <MessageSquare size={12} />
               <span className={styles.sessionTitle}>{getTitle(session)}</span>
-              {sessions.length > 1 && (
+              {sessions.length > 0 && (
                 <span
                   className={styles.sessionClose}
-                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); onDeleteSession(session.id); }}
-                  title="关闭"
+                  onClick={(e) => { e.preventDefault(); e.stopPropagation(); onCloseSession(session.id); }}
+                  title="关闭对话（保留在历史中）"
                 >
                   <X size={11} />
                 </span>

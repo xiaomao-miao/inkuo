@@ -3,6 +3,7 @@ import { Layout } from './components/layout';
 import { CmdK } from './components/cmdk';
 import { WelcomePage } from './components/welcome';
 import { WorkspaceBootstrap } from './components/WorkspaceBootstrap';
+import { useInitialSnapshotLoader } from './hooks/useInitialSnapshotLoader';
 import { useSettingsStore, useEditorStore } from './store';
 import { useSidebarStore } from './store/sidebarStore';
 import { adjustColor } from './utils/color';
@@ -12,6 +13,10 @@ import './styles/global.css';
 function App() {
   const settings = useSettingsStore((state) => state.settings);
   const workspacePath = useSidebarStore((state) => state.workspacePath);
+
+  // Restore AI chat sessions from the Rust backend snapshot on startup so
+  // the user sees their history without having to switch workspaces first.
+  useInitialSnapshotLoader();
 
   // For new windows opened via "File > New Window", the Rust side sets
   // `window.__INKUO_FRESH_WINDOW__` via initialization_script. Reset the

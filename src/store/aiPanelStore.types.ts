@@ -21,7 +21,25 @@ export interface AIPanelSessionSlice {
   sessions: ChatSession[];
   activeSessionId: string;
   createSession: () => string;
+  /**
+   * Hard delete. The session is removed from the array AND the next
+   * workspace snapshot save will omit it. Use only for explicit "delete
+   * forever" actions (e.g. the HistorySidebar trash button).
+   */
   deleteSession: (sessionId: string) => void;
+  /**
+   * Soft close. Marks the session as `archived: true` and drops it from
+   * the header chip bar, but the session (with its full message
+   * history) stays in the array and keeps being persisted to disk via
+   * `saveCurrentSnapshot`. The session is still selectable from the
+   * HistorySidebar at any time. This is what "close" / "×" from the
+   * header chip bar should call so users don't accidentally lose work.
+   */
+  closeSession: (sessionId: string) => void;
+  /**
+   * Un-archive a session. The session reappears in the header chip bar.
+   */
+  reopenSession: (sessionId: string) => void;
   setActiveSession: (sessionId: string) => void;
   setSessionMode: (sessionId: string, mode: ChatMode) => void;
   getSession: (sessionId: string) => ChatSession | undefined;

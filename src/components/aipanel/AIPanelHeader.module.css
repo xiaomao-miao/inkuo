@@ -37,6 +37,16 @@
   color: var(--fg-primary);
 }
 
+.newSessionBtn[data-active] {
+  background-color: var(--accent-subtle);
+  color: var(--accent-primary);
+}
+
+.newSessionBtn.active {
+  background-color: var(--accent-subtle);
+  color: var(--accent-primary);
+}
+
 .sessionList {
   display: flex;
   align-items: center;

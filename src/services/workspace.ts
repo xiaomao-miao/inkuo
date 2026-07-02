@@ -120,9 +120,19 @@ export async function switchWorkspace(targetPath: string): Promise<void> {
       const targetSessions = snapshot.aiSessions.length > 0
         ? snapshot.aiSessions
         : [createNewSession(1)];
+      // If the persisted activeSessionId points at a session that's no
+      // longer in the list (or has been archived), fall back to the
+      // first non-archived session so the user isn't dropped onto a
+      // blank/closed conversation.
+      const stillActive = snapshot.activeSessionId
+        ? targetSessions.some((s) => s.id === snapshot.activeSessionId)
+        : false;
+      const resolvedActiveId = stillActive
+        ? snapshot.activeSessionId!
+        : targetSessions.find((s) => !s.archived)?.id ?? targetSessions[0].id;
       useAIPanelStore.setState({
         sessions: targetSessions,
-        activeSessionId: snapshot.activeSessionId ?? targetSessions[0].id,
+        activeSessionId: resolvedActiveId,
       });
     } else {
       // Fresh workspace — reset everything to empty/default.
@@ -161,7 +171,7 @@ export async function saveCurrentSnapshot(
  * failed. Logs (does not throw) on read errors so callers can treat a missing
  * snapshot the same as an empty one.
  */
-async function loadSnapshot(path: string): Promise<WorkspaceSnapshot | null> {
+export async function loadSnapshot(path: string): Promise<WorkspaceSnapshot | null> {
   try {
     const raw = await invoke<Record<string, unknown> | null>('load_workspace_snapshot', { path });
     if (!raw) return null;

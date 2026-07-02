@@ -70,7 +70,7 @@ const createUiSlice: AIPanelStateCreator<Pick<AIPanelState, 'isOpen' | 'activeTa
   setActiveTab: (tab) => set({ activeTab: tab }),
 });
 
-const createSessionSlice: AIPanelStateCreator<Pick<AIPanelState, 'sessions' | 'activeSessionId' | 'createSession' | 'deleteSession' | 'setActiveSession' | 'setSessionMode' | 'getSession' | 'updateSession'>> = (set, get) => {
+const createSessionSlice: AIPanelStateCreator<Pick<AIPanelState, 'sessions' | 'activeSessionId' | 'createSession' | 'deleteSession' | 'closeSession' | 'reopenSession' | 'setActiveSession' | 'setSessionMode' | 'getSession' | 'updateSession'>> = (set, get) => {
   const initialSession = createNewSession(1);
 
   return {
@@ -85,6 +85,11 @@ const createSessionSlice: AIPanelStateCreator<Pick<AIPanelState, 'sessions' | 'a
       }));
       return session.id;
     },
+    /**
+     * Hard delete. Permanent — the next snapshot save will omit the
+     * session. Callers (e.g. HistorySidebar trash) must ask for explicit
+     * confirmation first; a mis-click should not destroy history.
+     */
     deleteSession: (sessionId) => {
       set((state) => {
         const remaining = state.sessions.filter((session) => session.id !== sessionId);
@@ -97,6 +102,35 @@ const createSessionSlice: AIPanelStateCreator<Pick<AIPanelState, 'sessions' | 'a
           activeSessionId: nextActiveId,
         };
       });
+    },
+    /**
+     * Soft-close. Marks the session as archived so it falls out of the
+     * header chip bar, but the data stays put and is still loaded
+     * back from disk after a restart.
+     */
+    closeSession: (sessionId) => {
+      set((state) => {
+        const sessions = state.sessions.map((session) =>
+          session.id === sessionId ? { ...session, archived: true } : session,
+        );
+
+        let nextActiveId = state.activeSessionId;
+        if (state.activeSessionId === sessionId) {
+          // Pick the next non-archived session so the user isn't stranded
+          // on a closed conversation.
+          const next = sessions.find((s) => !s.archived && s.id !== sessionId);
+          const fallback = sessions.find((s) => !s.archived);
+          nextActiveId = next?.id ?? fallback?.id ?? sessionId;
+        }
+        return { sessions, activeSessionId: nextActiveId };
+      });
+    },
+    reopenSession: (sessionId) => {
+      set((state) => ({
+        sessions: state.sessions.map((session) =>
+          session.id === sessionId ? { ...session, archived: undefined } : session,
+        ),
+      }));
     },
     setActiveSession: (sessionId) => set({ activeSessionId: sessionId }),
     setSessionMode: (sessionId, mode) =>

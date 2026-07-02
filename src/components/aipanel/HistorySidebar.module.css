@@ -1,0 +1,247 @@
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  width: 280px;
+  min-width: 280px;
+  height: 100%;
+  background-color: var(--bg-secondary);
+  border-right: 1px solid var(--border-color);
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-xs) var(--space-sm);
+  border-bottom: 1px solid var(--border-color);
+  height: 40px;
+  flex-shrink: 0;
+}
+
+.title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-primary);
+}
+
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.newBtn,
+.closeBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  color: var(--fg-secondary);
+  background: transparent;
+}
+
+.newBtn:hover {
+  background-color: var(--bg-hover);
+  color: var(--fg-primary);
+}
+
+.closeBtn:hover {
+  background-color: var(--bg-hover);
+  color: var(--fg-primary);
+}
+
+.searchBar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px var(--space-sm);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.searchIcon {
+  color: var(--fg-muted);
+  flex-shrink: 0;
+}
+
+.searchInput {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--fg-primary);
+  font-size: 12px;
+  outline: none;
+  font-family: inherit;
+}
+
+.searchInput::placeholder {
+  color: var(--fg-muted);
+}
+
+.sessionList {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.sessionList::-webkit-scrollbar {
+  width: 4px;
+}
+
+.sessionList::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.sessionList::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 2px;
+}
+
+.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 80px;
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.group {
+  margin-bottom: 4px;
+}
+
+.groupLabel {
+  padding: 6px var(--space-sm) 3px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.sessionItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px var(--space-sm);
+  border: none;
+  background: transparent;
+  color: var(--fg-secondary);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  position: relative;
+}
+
+.sessionItem:hover {
+  background-color: var(--bg-hover);
+  color: var(--fg-primary);
+}
+
+.sessionActive {
+  background-color: var(--accent-subtle);
+  color: var(--fg-primary);
+}
+
+.sessionActive:hover {
+  background-color: var(--accent-subtle);
+}
+
+.sessionIcon {
+  flex-shrink: 0;
+  color: var(--fg-muted);
+}
+
+.sessionTitle {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.3;
+}
+
+.deleteBtn {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all var(--transition-fast);
+}
+
+.sessionItem:hover .deleteBtn {
+  display: flex;
+}
+
+.deleteBtn:hover {
+  background-color: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
+
+.chevron {
+  flex-shrink: 0;
+  color: var(--fg-muted);
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.sessionActive .chevron {
+  opacity: 1;
+  color: var(--accent-primary);
+}
+
+.sessionArchived {
+  opacity: 0.55;
+}
+
+.archivedBadge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 5px;
+  font-size: 10px;
+  font-weight: 500;
+  border-radius: 3px;
+  background-color: var(--bg-tertiary);
+  color: var(--fg-muted);
+  vertical-align: middle;
+}
+
+.reopenBtn {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: all var(--transition-fast);
+}
+
+.sessionItem:hover .reopenBtn {
+  display: flex;
+}
+
+.reopenBtn:hover {
+  background-color: rgba(34, 197, 94, 0.15);
+  color: #22c55e;
+}

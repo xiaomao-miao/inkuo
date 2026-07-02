@@ -8,9 +8,19 @@ export function useAIPanelController() {
   const activeSessionId = useAIPanelStore((state) => state.activeSessionId);
   const createSession = useAIPanelStore((state) => state.createSession);
   const deleteSession = useAIPanelStore((state) => state.deleteSession);
+  const closeSession = useAIPanelStore((state) => state.closeSession);
+  const reopenSession = useAIPanelStore((state) => state.reopenSession);
   const setActiveSession = useAIPanelStore((state) => state.setActiveSession);
   const clearMessages = useAIPanelStore((state) => state.clearMessages);
   const setIsOpen = useAIPanelStore((state) => state.setIsOpen);
+
+  // Only show non-archived sessions in the header chip bar. The closed
+  // ones still live in the array (and on disk) — they're reachable from
+  // the HistorySidebar.
+  const visibleSessions = useMemo(
+    () => sessions.filter((s) => !s.archived),
+    [sessions]
+  );
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === activeSessionId) ?? sessions[0],
@@ -43,6 +53,7 @@ export function useAIPanelController() {
 
   return {
     sessions,
+    visibleSessions,
     activeSessionId,
     activeSession,
     messages,
@@ -58,6 +69,8 @@ export function useAIPanelController() {
     knowledgeToolbar,
     createSession,
     deleteSession,
+    closeSession,
+    reopenSession,
     setActiveSession,
     clearMessages,
     closePanel: () => setIsOpen(false),

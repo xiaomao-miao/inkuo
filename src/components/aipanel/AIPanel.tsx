@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { ChatHeader } from './ChatHeader';
 import { ChatInput } from './ChatInput';
 import { ChatView } from './ChatView';
+import { HistorySidebar } from './HistorySidebar';
 import { KnowledgeBuildToolCard } from './KnowledgeBuildToolCard';
 import { KnowledgeToolbar } from './KnowledgeToolbar';
 import { useAgentStream } from './useAgentStream';
@@ -10,8 +11,11 @@ import { useAIPanelController } from './useAIPanelController';
 import layoutStyles from './AIPanelLayout.module.css';
 
 export const AIPanel: React.FC = () => {
+  const [historyOpen, setHistoryOpen] = useState(false);
+
   const {
     sessions,
+    visibleSessions,
     activeSessionId,
     activeSession,
     messages,
@@ -25,6 +29,8 @@ export const AIPanel: React.FC = () => {
     knowledgeToolbar,
     createSession,
     deleteSession,
+    closeSession,
+    reopenSession,
     setActiveSession,
     clearMessages,
     closePanel,
@@ -51,15 +57,27 @@ export const AIPanel: React.FC = () => {
 
   useAgentStream({ mode });
 
+  const handleHistorySelect = (sessionId: string) => {
+    setActiveSession(sessionId);
+    setHistoryOpen(false);
+  };
+
+  const handleHistoryNewChat = () => {
+    createSession();
+    setHistoryOpen(false);
+  };
+
   return (
     <aside className={layoutStyles.panel}>
       <ChatHeader
-        sessions={sessions}
+        sessions={visibleSessions}
         activeSessionId={activeSessionId}
         onCreateSession={createSession}
         onSelectSession={setActiveSession}
-        onDeleteSession={deleteSession}
+        onCloseSession={closeSession}
         onClose={closePanel}
+        onToggleHistory={() => setHistoryOpen((v) => !v)}
+        historyOpen={historyOpen}
       />
 
       <div className={layoutStyles.panelBody}>
@@ -71,27 +89,43 @@ export const AIPanel: React.FC = () => {
           />
         )}
 
-        <ChatView
-          messages={messages}
-          activeSession={activeSession}
-          isStreaming={isStreaming}
-          pendingDiff={pendingDiff}
-          mode={mode}
-          activeToolCalls={activeToolCalls}
-          editingMessageId={editingMessageId}
-          editingContent={editingContent}
-          onStartEdit={handleStartEdit}
-          onCancelEdit={handleCancelEdit}
-          onSaveEdit={handleSaveEdit}
-          onSetEditingContent={setEditingContent}
-          onSetInput={setInput}
-          footer={mode === 'knowledge' && knowledgeToolCall ? (
-            <KnowledgeBuildToolCard
-              toolCall={knowledgeToolCall}
-              buildProgress={buildProgress}
+        <div className={layoutStyles.chatArea}>
+          {historyOpen && (
+            <HistorySidebar
+              sessions={sessions}
+              activeSessionId={activeSessionId}
+              onSelect={handleHistorySelect}
+              onReopen={reopenSession}
+              onNewChat={handleHistoryNewChat}
+              onDelete={deleteSession}
+              onClose={() => setHistoryOpen(false)}
             />
-          ) : undefined}
-        />
+          )}
+
+          <div className={layoutStyles.chatMain}>
+            <ChatView
+              messages={messages}
+              activeSession={activeSession}
+              isStreaming={isStreaming}
+              pendingDiff={pendingDiff}
+              mode={mode}
+              activeToolCalls={activeToolCalls}
+              editingMessageId={editingMessageId}
+              editingContent={editingContent}
+              onStartEdit={handleStartEdit}
+              onCancelEdit={handleCancelEdit}
+              onSaveEdit={handleSaveEdit}
+              onSetEditingContent={setEditingContent}
+              onSetInput={setInput}
+              footer={mode === 'knowledge' && knowledgeToolCall ? (
+                <KnowledgeBuildToolCard
+                  toolCall={knowledgeToolCall}
+                  buildProgress={buildProgress}
+                />
+              ) : undefined}
+            />
+          </div>
+        </div>
       </div>
 
       <ChatInput

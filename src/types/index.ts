@@ -387,6 +387,16 @@ export interface ChatSession {
   currentDiff: CurrentDiff | null;
   activeToolCalls: ActiveToolCall[];
   pendingDiff: CurrentDiff | null;
+  /**
+   * Soft-deleted / closed marker. Set by `closeSession` so the session
+   * drops out of the header chip bar but stays in the array forever and
+   * still appears in the HistorySidebar (with a "已关闭" badge).
+   *
+   * Only `deleteSession` truly removes a session from history. Closing
+   * is reversible (the data is intact on disk and across restarts), so
+   * users never lose work just by hiding a conversation tab.
+   */
+  archived?: boolean;
 }
 
 // ============================================================================
