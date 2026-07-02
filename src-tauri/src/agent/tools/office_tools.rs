@@ -669,7 +669,13 @@ impl Default for CreateWordDocTool {
 
 fn uuid_simple() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+    // `SystemTime::duration_since(UNIX_EPOCH)` only fails when the system
+    // clock is set *before* 1970. Falling back to zero costs us one epoch of
+    // nanosecond resolution; the value is only used to build an opaque id,
+    // not as a real timestamp.
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
     use std::sync::atomic::{AtomicU64, Ordering};
     thread_local! { static CNT: AtomicU64 = AtomicU64::new(0); }
     let cnt = CNT.with(|c| c.fetch_add(1, Ordering::Relaxed));

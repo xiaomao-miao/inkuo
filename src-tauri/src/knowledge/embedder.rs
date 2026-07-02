@@ -95,10 +95,15 @@ impl Embedder {
             model_info.source
         );
 
-        let model = match model_info.source {
-            ModelSource::Native => {
+        // Reserve the fastembed variant ahead of the source `match` so the
+        // Native branch never has to `unwrap()` an `Option`. Adding a new
+        // model above means handling both fields together; the borrow
+        // checker enforces this.
+        let fastembed_model = model_info.fastembed_model;
+        let model = match (model_info.source, fastembed_model) {
+            (ModelSource::Native, Some(fastembed_model)) => {
                 tracing::info!("[EMBEDDER] Loading native model, cache_dir: {:?}", model_path);
-                let init_options = InitOptions::new(model_info.fastembed_model.unwrap())
+                let init_options = InitOptions::new(fastembed_model)
                     .with_cache_dir(model_path.to_path_buf())
                     .with_show_download_progress(false);
                 tracing::info!("[EMBEDDER] Calling TextEmbedding::try_new (native)");
@@ -108,9 +113,19 @@ impl Embedder {
                         EmbedError::ModelInit(format!("Native model init failed: {}", e))
                     })?
             }
-            ModelSource::UserDefined => {
+            (ModelSource::UserDefined, None) => {
                 tracing::info!("[EMBEDDER] Loading user-defined model");
                 Self::load_user_defined_model(model_path, model_name)?
+            }
+            (ModelSource::UserDefined, Some(_)) => {
+                return Err(EmbedError::ModelInit(
+                    "Internal invariant violation: user-defined model has fastembed variant".to_string(),
+                ));
+            }
+            (ModelSource::Native, None) => {
+                return Err(EmbedError::ModelInit(
+                    "Internal invariant violation: native model missing fastembed variant".to_string(),
+                ));
             }
         };
 

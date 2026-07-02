@@ -11,7 +11,7 @@ use crate::ai::{AIProviderAdapter, AIConfig, AIError};
 use crate::commands::AppState;
 use tauri::State;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::sync::Notify;
 
 /// Request for inline completion
@@ -135,13 +135,19 @@ pub struct InlineCompletionState {
 /// name the request being cancelled). We now register a dedicated
 /// `Arc<Notify>` per `request_id` (== `session_id` from the frontend) and
 /// the cancel command looks it up by id.
-type CancelRegistry = Mutex<HashMap<String, Arc<Notify>>>;
+///
+/// We use `parking_lot::Mutex` here instead of `std::sync::Mutex`: it has no
+/// poisoning semantics, so a panic in one thread can't cascade into a panic
+/// (and broken cancellation) across every subsequent completion. The other
+/// global registries in `commands.rs` use the same lock type for the same
+/// reason.
+type CancelRegistry = parking_lot::Mutex<HashMap<String, Arc<Notify>>>;
 
 static INLINE_CANCEL_REGISTRY: std::sync::OnceLock<CancelRegistry> =
     std::sync::OnceLock::new();
 
 fn inline_cancel_registry() -> &'static CancelRegistry {
-    INLINE_CANCEL_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+    INLINE_CANCEL_REGISTRY.get_or_init(|| parking_lot::Mutex::new(HashMap::new()))
 }
 
 /// Register a fresh cancel channel for `request_id` and return it. The
@@ -152,16 +158,12 @@ fn take_cancel_channel(request_id: &str) -> Arc<Notify> {
     let notify = Arc::new(Notify::new());
     inline_cancel_registry()
         .lock()
-        .expect("cancel registry poisoned")
         .insert(request_id.to_string(), Arc::clone(&notify));
     notify
 }
 
 fn release_cancel_channel(request_id: &str) {
-    inline_cancel_registry()
-        .lock()
-        .expect("cancel registry poisoned")
-        .remove(request_id);
+    inline_cancel_registry().lock().remove(request_id);
 }
 
 /// Wake any in-flight completion registered under `request_id`. Returns
@@ -170,7 +172,6 @@ fn release_cancel_channel(request_id: &str) {
 fn cancel_inline_request(request_id: &str) -> bool {
     let notify = inline_cancel_registry()
         .lock()
-        .expect("cancel registry poisoned")
         .get(request_id)
         .map(Arc::clone);
     match notify {

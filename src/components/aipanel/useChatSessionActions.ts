@@ -9,6 +9,7 @@ import {
   type ChatSession,
 } from '../../store';
 import { buildConversationHistory } from './messageTransform';
+import { extractErrorMessage } from '../../utils/errors';
 
 interface UseChatSessionActionsArgs {
   activeSession: ChatSession | undefined;
@@ -20,18 +21,6 @@ interface UseChatSessionActionsArgs {
   editingMessageId: string | null;
   editingContent: string;
   clearEditingState: () => void;
-}
-
-function extractErrorMessage(error: unknown): string {
-  if (typeof error === 'string') return error;
-  if (error instanceof Error) return error.message;
-  if (error && typeof error === 'object') {
-    const maybeMessage = Reflect.get(error, 'message');
-    if (typeof maybeMessage === 'string' && maybeMessage.trim()) {
-      return maybeMessage;
-    }
-  }
-  return String(error);
 }
 
 export function useChatSessionActions({
