@@ -28,6 +28,7 @@ import {
   setMessageOutputItems,
   spliceMessagePrefix,
   trimSessionMessagesAfter,
+  touchSession,
   updateMessages,
   updatePendingDiffHunks,
   updatePendingDiffState,
@@ -107,6 +108,12 @@ const createSessionSlice: AIPanelStateCreator<Pick<AIPanelState, 'sessions' | 'a
      * Soft-close. Marks the session as archived so it falls out of the
      * header chip bar, but the data stays put and is still loaded
      * back from disk after a restart.
+     *
+     * Invariant: after `closeSession`, `activeSessionId` always points
+     * at a non-archived session (or a brand-new empty one). If the user
+     * closes every single session we auto-create a fresh empty one
+     * so the panel always has an active conversation in view — never
+     * a closed one displayed as the "current" session.
      */
     closeSession: (sessionId) => {
       set((state) => {
@@ -116,19 +123,30 @@ const createSessionSlice: AIPanelStateCreator<Pick<AIPanelState, 'sessions' | 'a
 
         let nextActiveId = state.activeSessionId;
         if (state.activeSessionId === sessionId) {
-          // Pick the next non-archived session so the user isn't stranded
-          // on a closed conversation.
-          const next = sessions.find((s) => !s.archived && s.id !== sessionId);
-          const fallback = sessions.find((s) => !s.archived);
-          nextActiveId = next?.id ?? fallback?.id ?? sessionId;
+          // The session the user just closed was the active one — pick
+          // a replacement that's still open. If nothing is open, mint a
+          // brand-new empty session so `activeSession` never resolves
+          // to an archived/empty-but-displayed state.
+          const open = sessions.find((s) => !s.archived);
+          if (open) {
+            nextActiveId = open.id;
+          } else {
+            const fresh = createNewSession(sessions.length + 1);
+            nextActiveId = fresh.id;
+            sessions.unshift(fresh);
+          }
         }
         return { sessions, activeSessionId: nextActiveId };
       });
     },
     reopenSession: (sessionId) => {
       set((state) => ({
+        // Reopening is an explicit "I'm working on this again" — bump
+        // lastActivityAt so it floats to the top of the history list.
         sessions: state.sessions.map((session) =>
-          session.id === sessionId ? { ...session, archived: undefined } : session,
+          session.id === sessionId
+            ? { ...session, archived: undefined, lastActivityAt: Date.now() }
+            : session,
         ),
       }));
     },
@@ -148,7 +166,14 @@ const createSessionSlice: AIPanelStateCreator<Pick<AIPanelState, 'sessions' | 'a
 const createMessageSlice: AIPanelStateCreator<Pick<AIPanelState, 'addMessage' | 'updateMessage' | 'appendMessageContent' | 'setIsStreaming' | 'clearMessages' | 'truncateMessagesAfter' | 'getMessage' | 'updateMessageOutput' | 'addOutputToMessage' | 'patchOutputItem' | 'finishMessageStreaming' | 'setErrorMessage' | 'setMessageSearchResults' | 'expandMessagePrefix' | 'collapseMessagePrefix' | 'toggleReasoningExpansion' | 'autoExpandTruncatedPrefixes'>> = (set, get) => ({
   addMessage: (sessionId, message) =>
     set((state) => ({
-      sessions: appendSessionMessage(state.sessions, sessionId, message),
+      // Every new message — user prompt or assistant reply — counts as
+      // activity, so bump lastActivityAt so the history sidebar bubbles
+      // it to the top of its date group.
+      sessions: updateSessions(
+        appendSessionMessage(state.sessions, sessionId, message),
+        sessionId,
+        touchSession,
+      ),
     })),
   updateMessage: (sessionId, messageId, content) =>
     set((state) => ({
@@ -170,7 +195,9 @@ const createMessageSlice: AIPanelStateCreator<Pick<AIPanelState, 'addMessage' | 
     })),
   clearMessages: (sessionId) =>
     set((state) => ({
-      sessions: updateSessions(state.sessions, sessionId, clearSessionConversation),
+      sessions: updateSessions(state.sessions, sessionId, (session) =>
+        touchSession(clearSessionConversation(session)),
+      ),
     })),
   truncateMessagesAfter: (sessionId, messageId) =>
     set((state) => ({
@@ -202,7 +229,13 @@ const createMessageSlice: AIPanelStateCreator<Pick<AIPanelState, 'addMessage' | 
     })),
   finishMessageStreaming: (sessionId, messageId, finalContent) =>
     set((state) => ({
-      sessions: finishSessionMessageStreaming(state.sessions, sessionId, messageId, finalContent),
+      // Stream completion is also "user-visible activity worth promoting
+      // in history" — bump lastActivityAt alongside the content update.
+      sessions: updateSessions(
+        finishSessionMessageStreaming(state.sessions, sessionId, messageId, finalContent),
+        sessionId,
+        touchSession,
+      ),
     })),
   setErrorMessage: (sessionId, messageId, error) =>
     set((state) => ({

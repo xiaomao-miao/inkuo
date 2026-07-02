@@ -57,7 +57,12 @@ export const AIPanel: React.FC = () => {
 
   useAgentStream({ mode });
 
-  const handleHistorySelect = (sessionId: string) => {
+  const handleHistoryActivate = (sessionId: string) => {
+    // Clicking a session in the history panel should both restore it
+    // to the chip bar AND make it the active conversation — never
+    // just silently activate an archived session (it would still be
+    // hidden in the header, which is confusing).
+    reopenSession(sessionId);
     setActiveSession(sessionId);
     setHistoryOpen(false);
   };
@@ -94,8 +99,7 @@ export const AIPanel: React.FC = () => {
             <HistorySidebar
               sessions={sessions}
               activeSessionId={activeSessionId}
-              onSelect={handleHistorySelect}
-              onReopen={reopenSession}
+              onActivate={handleHistoryActivate}
               onNewChat={handleHistoryNewChat}
               onDelete={deleteSession}
               onClose={() => setHistoryOpen(false)}

@@ -18,6 +18,7 @@ export function createNewSession(index: number): ChatSession {
     id: crypto.randomUUID(),
     title: createSessionTitle(index),
     createdAt: now,
+    lastActivityAt: now,
     mode: 'ask',
     messages: [],
     isStreaming: false,
@@ -25,6 +26,16 @@ export function createNewSession(index: number): ChatSession {
     activeToolCalls: [],
     pendingDiff: null,
   };
+}
+
+/**
+ * Returns the session with `lastActivityAt` set to `now`. Used by the
+ * store to bubble a session to the top of the history sidebar's
+ * sort-by-recency ordering whenever the conversation meaningfully
+ * progresses (new message, stream finished, reopened from history).
+ */
+export function touchSession(session: ChatSession): ChatSession {
+  return { ...session, lastActivityAt: Date.now() };
 }
 
 export function updateSessions(

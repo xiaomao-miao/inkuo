@@ -397,6 +397,14 @@ export interface ChatSession {
    * users never lose work just by hiding a conversation tab.
    */
   archived?: boolean;
+  /**
+   * Monotonically increasing wall-clock timestamp updated every time
+   * the session is touched (new message added, stream completed,
+   * session reopened from history, etc.). The history sidebar sorts
+   * by this so an active or just-restored conversation bubbles to the
+   * top of its date group. Falls back to `createdAt` if never set.
+   */
+  lastActivityAt?: number;
 }
 
 // ============================================================================

@@ -1,13 +1,18 @@
 import React, { useState } from 'react';
-import { X, MessageSquare, PlusCircle, Search, Trash2, ChevronRight, RotateCcw } from 'lucide-react';
+import { X, MessageSquare, PlusCircle, Search, Trash2 } from 'lucide-react';
 import type { ChatSession } from '../../store';
 import styles from './HistorySidebar.module.css';
 
 interface HistorySidebarProps {
   sessions: ChatSession[];
   activeSessionId: string | null;
-  onSelect: (sessionId: string) => void;
-  onReopen: (sessionId: string) => void;
+  /**
+   * Restore the session back into the header chip bar AND make it the
+   * active one. Used for both freshly-archived sessions (auto reopens
+   * them) and already-open sessions in the sidebar (no-op for the
+   * archived flag, but still activates).
+   */
+  onActivate: (sessionId: string) => void;
   onNewChat: () => void;
   /** Permanent delete — pass through confirmation logic in the caller. */
   onDelete: (sessionId: string) => void;
@@ -39,12 +44,24 @@ function formatDate(timestamp: number): string {
   return new Date(timestamp).toLocaleDateString('zh-CN', { month: 'short', day: 'numeric' });
 }
 
+function getActivityAt(session: ChatSession): number {
+  // Prefer lastActivityAt (updated on send/receive/reopen/clear) and
+  // fall back to createdAt for old sessions persisted before the
+  // field existed.
+  return session.lastActivityAt ?? session.createdAt;
+}
+
 function groupByDate(sessions: ChatSession[]): [string, ChatSession[]][] {
   const groups = new Map<string, ChatSession[]>();
   for (const s of sessions) {
-    const label = formatDate(s.createdAt);
+    const label = formatDate(getActivityAt(s));
     if (!groups.has(label)) groups.set(label, []);
     groups.get(label)!.push(s);
+  }
+  // Within each date bucket, newest activity first. Newly answered or
+  // reopened conversations bubble to the top of their group.
+  for (const [, items] of groups) {
+    items.sort((a, b) => getActivityAt(b) - getActivityAt(a));
   }
   return [...groups.entries()];
 }
@@ -52,8 +69,7 @@ function groupByDate(sessions: ChatSession[]): [string, ChatSession[]][] {
 export const HistorySidebar: React.FC<HistorySidebarProps> = ({
   sessions,
   activeSessionId,
-  onSelect,
-  onReopen,
+  onActivate,
   onNewChat,
   onDelete,
   onClose,
@@ -117,7 +133,7 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
                   className={`${styles.sessionItem} ${
                     session.id === activeSessionId ? styles.sessionActive : ''
                   } ${session.archived ? styles.sessionArchived : ''}`}
-                  onClick={() => onSelect(session.id)}
+                  onClick={() => onActivate(session.id)}
                 >
                   <MessageSquare size={13} className={styles.sessionIcon} />
                   <span className={styles.sessionTitle}>
@@ -126,19 +142,6 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
                       <span className={styles.archivedBadge}>已关闭</span>
                     )}
                   </span>
-                  {session.archived && (
-                    <button
-                      className={styles.reopenBtn}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onReopen(session.id);
-                      }}
-                      title="恢复到标签栏"
-                      type="button"
-                    >
-                      <RotateCcw size={12} />
-                    </button>
-                  )}
                   <button
                     className={styles.deleteBtn}
                     onClick={(e) => {
@@ -152,7 +155,6 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
                   >
                     <Trash2 size={12} />
                   </button>
-                  <ChevronRight size={12} className={styles.chevron} />
                 </button>
               ))}
             </div>
