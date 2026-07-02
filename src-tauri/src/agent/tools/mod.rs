@@ -272,12 +272,14 @@ mod search_tools;
 mod office_tools;
 mod excel_tools;
 mod database_tools;
+mod meta_tools; // get_tool_help + delegate_to
 
 pub use file_tools::{ReadFileTool, WriteFileTool, EditFileTool, CreateDirTool, MoveFileTool};
 pub use search_tools::{ListDirTool, GlobTool, GrepTool};
 pub use office_tools::{ReadOfficeFileTool, CreateWordDocTool, CompareWordDocsTool, GetDocxInfoTool, ModifyExcelTool, GetExcelInfoTool, CreateExcelTool};
 pub use excel_tools::{ReadExcelRangeTool, ReadExcelMetadataTool};
 pub use database_tools::DatabaseSearchTool;
+pub use meta_tools::{GetToolHelpTool, DelegateToTool};
 
 /// Unified executor enum combining all tool implementations
 pub enum ToolExecutor {
@@ -301,6 +303,10 @@ pub enum ToolExecutor {
     ReadExcelMetadata(excel_tools::ReadExcelMetadataTool),
     // End
     DatabaseSearch(database_tools::DatabaseSearchTool),
+    // Meta tools (intercepted by the agent loop; execute() returns an error
+    // if reached directly).
+    GetToolHelp(meta_tools::GetToolHelpTool),
+    DelegateTo(meta_tools::DelegateToTool),
 }
 
 impl ToolExecutor {
@@ -324,6 +330,8 @@ impl ToolExecutor {
             ToolExecutor::ReadExcelRange(_) => "read_excel_range",
             ToolExecutor::ReadExcelMetadata(_) => "read_excel_metadata",
             ToolExecutor::DatabaseSearch(_) => "database_search",
+            ToolExecutor::GetToolHelp(_) => "get_tool_help",
+            ToolExecutor::DelegateTo(_) => "delegate_to",
         }
     }
 
@@ -347,6 +355,8 @@ impl ToolExecutor {
             ToolExecutor::ReadExcelRange(t) => t.definition(),
             ToolExecutor::ReadExcelMetadata(t) => t.definition(),
             ToolExecutor::DatabaseSearch(t) => t.definition(),
+            ToolExecutor::GetToolHelp(t) => t.definition(),
+            ToolExecutor::DelegateTo(t) => t.definition(),
         }
     }
 
@@ -370,6 +380,8 @@ impl ToolExecutor {
             ToolExecutor::ReadExcelRange(t) => t.execute(arguments, workspace).await,
             ToolExecutor::ReadExcelMetadata(t) => t.execute(arguments, workspace).await,
             ToolExecutor::DatabaseSearch(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::GetToolHelp(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::DelegateTo(t) => t.execute(arguments, workspace).await,
         }
     }
 }
@@ -460,6 +472,10 @@ impl ToolRegistry {
             ToolExecutor::ReadExcelRange(ReadExcelRangeTool),
             ToolExecutor::ReadExcelMetadata(ReadExcelMetadataTool),
             // DatabaseSearchTool added lazily via with_app_handle()
+            // Meta tools (intercepted in agent loop, but still registered so
+            // they appear in tool catalogs and can be schema-validated).
+            ToolExecutor::GetToolHelp(GetToolHelpTool),
+            ToolExecutor::DelegateTo(DelegateToTool),
         ];
 
         for tool in tools {
@@ -487,6 +503,21 @@ impl ToolRegistry {
 
     pub fn has_tool(&self, name: &str) -> bool {
         self.executors.contains_key(name)
+    }
+
+    /// Return a list of tool definitions filtered by `allowed`. The
+    /// underlying registry (and `AppHandle`) is shared unchanged — the
+    /// filter is a view, not a copy, so sub-agents automatically inherit
+    /// any tools added later (e.g. lazy `database_search`).
+    ///
+    /// Sub-agents that want to call an unfiltered tool name will still
+    /// resolve at runtime, but the LLM never *sees* it, so this is safe.
+    pub fn filtered_definitions(&self, allowed: &[String]) -> Vec<ToolDefinition> {
+        self.definitions
+            .iter()
+            .filter(|(name, _)| allowed.iter().any(|a| a == *name))
+            .map(|(_, def)| def.clone())
+            .collect()
     }
 
     pub async fn execute(&self, tool_call: &ToolCall) -> ToolResult {

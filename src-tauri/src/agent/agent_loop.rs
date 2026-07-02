@@ -15,7 +15,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use futures_util::StreamExt;
 
-use super::tools::{ToolCall, SharedToolRegistry};
+use super::profile::AgentProfile;
+use super::tools::{ToolCall, ToolResult, SharedToolRegistry};
+// `find_tool_spec` is reached via the `pub use super::prompts::*` glob below
+// — don't re-import it explicitly or we'll trigger the hidden_glob_reexports
+// lint. Same goes for `list_profiles` and `resolve_profile`.
 use crate::ai::{AIConfig, AIProvider};
 use crate::diff;
 use crate::streaming::{StreamPayload, FileDiffSummary, StreamDiffHunk, StreamDiffChange, OfficeFileModified};
@@ -124,6 +128,42 @@ impl AgentSession {
             max_iterations: DEFAULT_MAX_ITERATIONS,
             tool_registry,
         }
+    }
+
+    /// Construct a sub-agent session driven by `profile`.
+    ///
+    /// Shares the parent's `SharedToolRegistry` (tools/executors are shared —
+    /// the profile's `allowed_tools` only restricts what's *advertised* to
+    /// the LLM via `filtered_definitions`). Per-iteration cap is taken from
+    /// the profile, defaulting to `DEFAULT_MAX_ITERATIONS` if zero.
+    ///
+    /// Used by `delegate_to` (sub-agent dispatch) and by the main Agent Mode
+    /// entry point when the slim prompt is enabled.
+    pub fn new_with_profile(profile: AgentProfile, tool_registry: SharedToolRegistry) -> Self {
+        let max_iters = if profile.max_iterations == 0 {
+            DEFAULT_MAX_ITERATIONS
+        } else {
+            profile.max_iterations
+        };
+        Self {
+            messages: vec![Message::system(profile.system_prompt)],
+            max_iterations: max_iters,
+            tool_registry,
+        }
+    }
+
+    /// Returns the tool definitions that should be advertised to the LLM
+    /// for this session. For a profile-driven session the caller passes the
+    /// profile's `allowed_tools` here; for legacy sessions, pass `None`.
+    pub async fn tool_definitions_for_api(&self, allowed_tools: Option<&[String]>) -> Vec<Value> {
+        let registry = self.tool_registry.read().await;
+        let defs = match allowed_tools {
+            Some(list) if !list.is_empty() => registry.filtered_definitions(list),
+            _ => registry.get_all_definitions(),
+        };
+        defs.iter()
+            .map(|t| serde_json::to_value(t).unwrap_or(Value::Null))
+            .collect()
     }
 
     pub fn with_max_iterations(mut self, max: usize) -> Self {
@@ -291,14 +331,27 @@ impl AgentExecutor {
 
             // Execute each tool call
             for parsed in &parsed_calls {
-                // Execute tool
                 let tool_call = ToolCall {
                     id: parsed.id.clone(),
                     name: parsed.name.clone(),
                     arguments: parsed.arguments.clone(),
                 };
 
-                let mut result = session.tool_registry.read().await.execute(&tool_call).await;
+                // Meta-tool short-circuit: `get_tool_help` and `delegate_to`
+                // are handled by the executor itself, not the registry.
+                let mut result = match self
+                    .try_handle_meta_tool(
+                        &tool_call,
+                        session,
+                        session_id,
+                        message_id,
+                        on_event.clone(),
+                    )
+                    .await
+                {
+                    Some(r) => r,
+                    None => session.tool_registry.read().await.execute(&tool_call).await,
+                };
 
                 // Inject the correct tool_call_id from streamed data (not the placeholder)
                 result.tool_call_id = parsed.id.clone();
@@ -402,6 +455,165 @@ impl AgentExecutor {
         }
 
         Err(AgentError::MaxIterationsReached(session.max_iterations))
+    }
+
+    /// Intercept meta-tools (`get_tool_help`, `delegate_to`) so the loop
+    /// doesn't try to dispatch them via the registry.
+    ///
+    /// Returns `Some(ToolResult)` for intercepted calls (caller should
+    /// use this directly); returns `None` for normal tools (caller should
+    /// fall through to `ToolRegistry::execute`).
+    ///
+    /// `session_id` / `message_id` are forwarded into the tool result event
+    /// so the frontend can attribute the output correctly. For
+    /// `delegate_to`, sub-agent intermediate events are emitted under a
+    /// prefixed sub-message-id so the UI can render them inside a
+    /// collapsible "delegated to X" card.
+    fn try_handle_meta_tool<'a, F>(
+        &'a self,
+        tool_call: &'a ToolCall,
+        session: &'a AgentSession,
+        session_id: &'a str,
+        message_id: &'a str,
+        on_event: F,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Option<ToolResult>> + Send + 'a>>
+    where
+        F: Fn(StreamPayload) + Clone + Send + Sync + 'static,
+    {
+        Box::pin(async move {
+            match tool_call.name.as_str() {
+                "get_tool_help" => {
+                    // Accept either `category` (preferred) or the older
+                    // `spec` key for backwards compatibility during the
+                    // transition.
+                    let category = tool_call
+                        .arguments
+                        .get("category")
+                        .or_else(|| tool_call.arguments.get("spec"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    match find_tool_spec(category) {
+                        // Spec text is injected into the LLM's context via
+                        // the tool result so it can use the detailed
+                        // instructions on subsequent turns. The returned
+                        // string is internal — the frontend only renders a
+                        // tiny indicator (category name), never the spec
+                        // body itself.
+                        Some(text) => Some(ToolResult::success(
+                            &tool_call.id,
+                            text.to_string(),
+                        )),
+                        None => {
+                            let available = ["general", "word", "excel", "markdown"]
+                                .join(", ");
+                            let msg = format!(
+                                "Unknown help category '{}'. Available: {}",
+                                category, available
+                            );
+                            Some(ToolResult::error(&tool_call.id, msg))
+                        }
+                    }
+                }
+                "delegate_to" => {
+                    let expert = tool_call
+                        .arguments
+                        .get("expert")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let task = tool_call
+                        .arguments
+                        .get("task")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let context = tool_call
+                        .arguments
+                        .get("context")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+
+                    let profile = match resolve_profile(&expert) {
+                        Some(p) => p,
+                        None => {
+                            let available: Vec<String> = list_profiles()
+                                .into_iter()
+                                .filter(|(n, _)| *n != "main")
+                                .map(|(n, _)| n.to_string())
+                                .collect();
+                            let msg = format!(
+                                "Unknown expert '{}'. Available: {}",
+                                expert,
+                                available.join(", ")
+                            );
+                            return Some(ToolResult::error(&tool_call.id, msg));
+                        }
+                    };
+
+                    let result = self
+                        .run_subagent(
+                            &profile,
+                            &task,
+                            context.as_deref(),
+                            session,
+                            session_id,
+                            message_id,
+                            on_event,
+                        )
+                        .await;
+
+                    match result {
+                        Ok(summary) => Some(ToolResult::success(&tool_call.id, summary)),
+                        Err(e) => Some(ToolResult::error(&tool_call.id, format!("[{}] {}", expert, e))),
+                    }
+                }
+                _ => None,
+            }
+        })
+    }
+
+    /// Execute a sub-agent run. Reuses the parent's shared `ToolRegistry`
+    /// (so `AppHandle` and lazily-added tools like `database_search`
+    /// propagate), filters tool visibility via the profile, and routes the
+    /// sub-agent's stream events under a sub-message-id prefixed with
+    /// `"sub:"` so the UI can collapse them.
+    fn run_subagent<'a, F>(
+        &'a self,
+        profile: &'a AgentProfile,
+        task: &'a str,
+        context: Option<&'a str>,
+        parent_session: &'a AgentSession,
+        session_id: &'a str,
+        _parent_message_id: &'a str,
+        on_event: F,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, AgentError>> + Send + 'a>>
+    where
+        F: Fn(StreamPayload) + Clone + Send + Sync + 'static,
+    {
+        Box::pin(async move {
+            let registry = parent_session.tool_registry.clone();
+            let mut sub_session = AgentSession::new_with_profile(profile.clone(), registry);
+
+            // Append an optional context line so the sub-agent knows the why.
+            let task_message = match context {
+                Some(ctx) if !ctx.is_empty() => format!("{}\n\nContext:\n{}", task, ctx),
+                _ => task.to_string(),
+            };
+
+            let sub_message_id = format!("sub:{}:{}", profile.name, uuid::Uuid::new_v4());
+
+            // Run nested. The same callback channel is reused; the on_event
+            // listener (frontend) should distinguish via message_id.
+            let summary = self
+                .run(&mut sub_session, &task_message, session_id, &sub_message_id, on_event)
+                .await?;
+
+            Ok(format!(
+                "[{} completed]\n\n{}",
+                profile.label,
+                summary
+            ))
+        })
     }
 
     /// Call AI with tools

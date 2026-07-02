@@ -19,7 +19,23 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   merge_excel_cells: '合并 Excel 单元格',
   resize_excel_rows_cols: '调整 Excel 行高列宽',
   manage_excel_sheets: '管理 Excel 工作表',
+  // Meta / sub-agent tools
+  get_tool_help: '加载工具帮助',
+  delegate_to: '委派子代理',
 };
+
+const EXPERT_DISPLAY_NAMES: Record<string, string> = {
+  office_word_expert: 'Word 文档专家',
+  office_excel_expert: 'Excel 文档专家',
+  md_writer: 'Markdown 写作专家',
+  researcher: '调研员',
+  batch_editor: '批量编辑员',
+  code_expert: '代码工程专家',
+};
+
+export function getExpertDisplayName(name: string): string {
+  return EXPERT_DISPLAY_NAMES[name] || name;
+}
 
 export function getToolDisplayName(name: string): string {
   return TOOL_DISPLAY_NAMES[name] || name;

@@ -8,6 +8,7 @@ export { UserMessageBubble } from './UserMessageBubble';
 export { AssistantMessageBody } from './AssistantMessageBody';
 export { ToolCallCard } from './ToolCallCard';
 export { CompactToolCard } from './CompactToolCard';
+export { DelegateToCard, GetToolHelpCard } from './DelegateToCard';
 export { KnowledgeToolbar } from './KnowledgeToolbar';
 export { buildKnowledgeToolbarModel } from './knowledgeToolbarModel';
 export { KnowledgeBuildToolCard } from './KnowledgeBuildToolCard';
@@ -30,6 +31,7 @@ export {
   COMPACT_TOOLS,
   FILE_MODIFICATION_TOOLS,
   getToolDisplayName,
+  getExpertDisplayName,
   isFileModificationTool,
   extractFileNameFromPath,
 } from './toolUtils';

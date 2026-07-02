@@ -4,6 +4,7 @@ import { LazyTextContent } from './LazyTextContent';
 import { ReasoningBlock } from './ReasoningBlock';
 import { ToolCallCard } from './ToolCallCard';
 import { CompactToolCard } from './CompactToolCard';
+import { DelegateToCard, GetToolHelpCard } from './DelegateToCard';
 import { COMPACT_TOOLS } from './toolUtils';
 import { parsePlanBlocks, type PlanBlock } from './planRender';
 import { useAIPanelStore } from '../../store';
@@ -95,6 +96,49 @@ const OutputItemView: React.FC<OutputItemViewProps> = ({
   if (item.type === 'tool_call_start') {
     const status = item.status || (item.isExecuting ? 'executing' : 'pending');
 
+    // Specialized renderers for sub-agent meta tools.
+    if (item.toolName === 'delegate_to') {
+      const args = item.arguments || {};
+      return (
+        <ToolOutputItem
+          isCompact={false}
+          isThisStreaming={isThisStreaming}
+          isLastItem={isLastItem}
+          content={
+            <DelegateToCard
+              id={item.toolCallId}
+              expert={(args.expert as string) || ''}
+              task={(args.task as string) || ''}
+              status={status}
+              result={item.result}
+              duration={item.duration}
+            />
+          }
+        />
+      );
+    }
+
+    if (item.toolName === 'get_tool_help') {
+      const args = item.arguments || {};
+      const category = (args.category as string) || (args.spec as string) || '';
+      return (
+        <ToolOutputItem
+          isCompact={false}
+          isThisStreaming={isThisStreaming}
+          isLastItem={isLastItem}
+          content={
+            <GetToolHelpCard
+              id={item.toolCallId}
+              spec={category}
+              status={status}
+              result={item.result}
+              duration={item.duration}
+            />
+          }
+        />
+      );
+    }
+
     return (
       <ToolOutputItem
         isCompact={COMPACT_TOOLS.has(item.toolName)}
@@ -128,11 +172,45 @@ const OutputItemView: React.FC<OutputItemViewProps> = ({
 
   if (item.type === 'tool_result') {
     const toolCall = message.toolCalls?.find((tc) => tc.id === item.toolCallId);
+    const toolName = toolCall?.name || 'unknown';
+
+    if (toolName === 'delegate_to') {
+      const args = toolCall?.arguments || {};
+      return (
+        <div className={styles.toolResultItem} style={{ display: 'none' }}>
+          <DelegateToCard
+            id={item.toolCallId}
+            expert={(args.expert as string) || ''}
+            task={(args.task as string) || ''}
+            status={item.status}
+            result={item.result}
+            duration={item.duration}
+          />
+        </div>
+      );
+    }
+
+    if (toolName === 'get_tool_help') {
+      const args = toolCall?.arguments || {};
+      const category = (args.category as string) || (args.spec as string) || '';
+      return (
+        <div className={styles.toolResultItem} style={{ display: 'none' }}>
+          <GetToolHelpCard
+            id={item.toolCallId}
+            spec={category}
+            status={item.status}
+            result={item.result}
+            duration={item.duration}
+          />
+        </div>
+      );
+    }
+
     return (
       <div className={styles.toolResultItem} style={{ display: 'none' }}>
         <ToolCallCard
           id={item.toolCallId}
-          name={toolCall?.name || 'unknown'}
+          name={toolName}
           arguments={toolCall?.arguments || {}}
           status={item.status}
           result={item.result}
@@ -291,11 +369,43 @@ const LegacyMessageContent: React.FC<LegacyMessageContentProps> = ({
       ) : null}
       {message.toolResults?.map((result) => {
         const toolCall = message.toolCalls?.find((tc) => tc.id === result.toolCallId);
+        const toolName = toolCall?.name || 'unknown';
+        if (toolName === 'delegate_to') {
+          const args = toolCall?.arguments || {};
+          return (
+            <div key={`tool-${result.toolCallId}`} className={styles.toolResultItem}>
+              <DelegateToCard
+                id={result.toolCallId}
+                expert={(args.expert as string) || ''}
+                task={(args.task as string) || ''}
+                status={result.isError ? 'error' : 'success'}
+                result={result.result}
+                error={result.isError ? result.result : undefined}
+                duration={result.duration}
+              />
+            </div>
+          );
+        }
+        if (toolName === 'get_tool_help') {
+          const args = toolCall?.arguments || {};
+          const category = (args.category as string) || (args.spec as string) || '';
+          return (
+            <div key={`tool-${result.toolCallId}`} className={styles.toolResultItem}>
+              <GetToolHelpCard
+                id={result.toolCallId}
+                spec={category}
+                status={result.isError ? 'error' : 'success'}
+                result={result.result}
+                duration={result.duration}
+              />
+            </div>
+          );
+        }
         return (
           <div key={`tool-${result.toolCallId}`} className={styles.toolResultItem}>
             <ToolCallCard
               id={result.toolCallId}
-              name={toolCall?.name || 'unknown'}
+              name={toolName}
               arguments={toolCall?.arguments || {}}
               status={result.isError ? 'error' : 'success'}
               result={result.result}
