@@ -11,7 +11,6 @@ export { CompactToolCard } from './CompactToolCard';
 export { KnowledgeToolbar } from './KnowledgeToolbar';
 export { buildKnowledgeToolbarModel } from './knowledgeToolbarModel';
 export { KnowledgeBuildToolCard } from './KnowledgeBuildToolCard';
-export { KnowledgeView } from './KnowledgeView';
 export { InlineDiffPreview } from './InlineDiffPreview';
 export { MarkdownRenderer } from './MarkdownRenderer';
 export { StreamingMarkdownRenderer } from './StreamingMarkdownRenderer';

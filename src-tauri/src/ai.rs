@@ -158,20 +158,6 @@ pub struct AIEditResponse {
     pub rules_applied: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AIStreamEvent {
-    pub event_type: StreamEventType,
-    pub content: Option<String>,
-    pub done: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum StreamEventType {
-    Text,
-    Summary,
-    Error,
-}
-
 pub(crate) static HTTP_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
     reqwest::Client::builder()
         .pool_idle_timeout(std::time::Duration::from_secs(90))

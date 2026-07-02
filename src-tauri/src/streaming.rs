@@ -13,30 +13,6 @@ pub struct KnowledgeSearchResult {
     pub end_line: Option<usize>,
 }
 
-/// Stream event types
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
-pub enum StreamEventType {
-    /// Text content delta
-    Text,
-    /// Summary of changes
-    Summary,
-    /// Error occurred
-    Error,
-    /// Tool call started (also used as first-time arrival: a new tool call appeared in stream)
-    ToolCallStart,
-    /// Tool call arguments delta (sent repeatedly as the AI streams the JSON argument string)
-    ToolCallArgsDelta,
-    /// Tool call completed
-    ToolCallEnd,
-    /// Tool execution result
-    ToolResult,
-    /// Thinking/processing indicator
-    Thinking,
-    /// Final completion
-    Done,
-}
-
 /// Re-exports from diff module for external use
 pub use crate::diff::{FileDiffSummary, StreamDiffHunk, StreamDiffChange};
 
