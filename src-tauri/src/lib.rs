@@ -130,6 +130,7 @@ pub fn run() {
             commands::delete_workspace_snapshot_cmd,
             commands::preview_workspace_snapshot_restore_cmd,
             commands::restore_workspace_snapshot_cmd,
+            commands::collect_workspace_empty_dirs_cmd,
             commands::collect_workspace_files_cmd,
             commands::read_file_bytes_cmd,
             commands::read_snapshot_file_cmd,

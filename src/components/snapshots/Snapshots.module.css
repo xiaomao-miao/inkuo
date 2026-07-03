@@ -429,34 +429,7 @@
   min-height: 56px;
 }
 
-.destructiveOption {
-  flex-shrink: 0;
-  padding: 12px 16px;
-  border-top: 1px solid var(--border-color);
-  background: rgba(220, 80, 70, 0.08);
-}
-
-.destructiveOptionLabel {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--text-secondary);
-  cursor: pointer;
-  line-height: 1.5;
-}
-
-.destructiveOptionLabel input[type='checkbox'] {
-  margin-top: 2px;
-  cursor: pointer;
-}
-
-.destructiveOptionLabel strong {
-  color: #f08a7a;
-  font-weight: 600;
-}
-
-.destructiveOptionLabel code {
+.dialogSummary code {
   font-size: 11px;
   background: var(--bg-tertiary);
   padding: 1px 4px;

@@ -88,6 +88,14 @@ pub struct SnapshotManifest {
     pub trigger: String,
     pub created_at: u64,
     pub files: Vec<SnapshotFileEntry>,
+    /// Empty directories that existed in the workspace at capture time.
+    /// Required for a full-state restore: when the workspace is rolled back
+    /// to a previous state, every directory the user removed since then
+    /// (including ones that *became* empty) must be re-created, otherwise
+    /// the post-restore workspace would be missing structure that was
+    /// present at snapshot time.
+    #[serde(default)]
+    pub directories: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,10 +116,16 @@ pub struct WorkspaceSnapshotIndex {
     pub snapshots: Vec<SnapshotIndexEntry>,
 }
 
-/// Result of a restore operation.  `restored` lists files overwritten by the
-/// snapshot contents; `deleted` lists files removed when
-/// `delete_extra_files = true`.  `backup_path` is the absolute path of the
-/// timestamped directory where pre-restore copies were written.
+/// Result of a restore operation.  After a full-state restore:
+///
+/// - `restored`: files overwritten by the snapshot contents.
+/// - `deleted`: files that were on disk but not in the snapshot (removed).
+/// - `deleted_dirs`: directories that were on disk but not in the snapshot
+///   (removed, deepest-first so the final state matches the snapshot).
+/// - `created_dirs`: empty directories recorded in the snapshot that had to
+///   be re-created on disk.
+/// - `backup_path`: absolute path of the timestamped backup directory under
+///   `~/.inkuo/backups/`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RestoreResult {
@@ -119,6 +133,10 @@ pub struct RestoreResult {
     pub restored: Vec<String>,
     #[serde(default)]
     pub deleted: Vec<String>,
+    #[serde(default)]
+    pub deleted_dirs: Vec<String>,
+    #[serde(default)]
+    pub created_dirs: Vec<String>,
     pub backup_path: String,
 }
 
@@ -394,6 +412,7 @@ pub fn create_workspace_snapshot(
     label: Option<String>,
     trigger: &str,
     file_paths: Vec<(String, Vec<u8>)>,
+    directories: Vec<String>,
 ) -> Result<SnapshotManifest, SnapshotError> {
     if !Path::new(workspace_path).is_absolute() {
         return Err(SnapshotError::InvalidWorkspacePath(
@@ -442,6 +461,7 @@ pub fn create_workspace_snapshot(
         trigger: trigger.to_string(),
         created_at: now_ms,
         files,
+        directories,
     };
 
     // Write files first (fail early if disk is full)
@@ -586,19 +606,24 @@ pub fn preview_workspace_snapshot_restore(
     Ok(previews)
 }
 
-/// Restore `snapshot_id` over the current workspace.  Before writing, a
-/// timestamped backup of the current files is created under
-/// `~/.inkuo/backups/`.  On success, `file-change` events are emitted for
-/// every written path so that the editor refreshes automatically.
+/// Restore `snapshot_id` to make the workspace **exactly** match the state
+/// captured at snapshot time:
 ///
-/// `delete_extra_files` controls the destructive mode: when true, files that
-/// exist on disk but are NOT in the snapshot (i.e. files added since the
-/// snapshot was taken) are also deleted.  They are backed up first under
-/// `~/.inkuo/backups/<stamp>/<rel>` so the user can recover manually.
+/// 1. Every file in the snapshot is written back to its path.
+/// 2. Every file on disk that was NOT in the snapshot is removed.
+/// 3. Every directory on disk that was NOT in the snapshot is removed
+///    (recursively, including directories that became empty after step 2).
+/// 4. Every empty directory recorded in the snapshot is re-created.
+///
+/// Before any of this happens, a timestamped backup of the *current*
+/// workspace contents (files + directories) is written under
+/// `~/.inkuo/backups/`, so the user can recover manually if needed.
+///
+/// On success, `file-change` events are emitted for every touched path so
+/// that the editor refreshes automatically.
 pub fn restore_workspace_snapshot(
     workspace_path: &str,
     snapshot_id: &str,
-    delete_extra_files: bool,
     app_handle: &AppHandle,
 ) -> Result<RestoreResult, SnapshotError> {
     if !Path::new(workspace_path).is_absolute() {
@@ -610,7 +635,7 @@ pub fn restore_workspace_snapshot(
     let snap_dir = snapshot_dir(workspace_path, snapshot_id);
     let manifest = load_manifest(&snap_dir)?;
 
-    // Pre-restore safety backup.
+    // Pre-restore safety backup of every file currently on disk.
     let backup_dir = get_backup_dir();
     let backup_stamp = format!(
         "pre_restore_{}",
@@ -619,24 +644,71 @@ pub fn restore_workspace_snapshot(
     let backup_target = backup_dir.join(&backup_stamp);
     fs::create_dir_all(&backup_target)?;
 
-    for entry in &manifest.files {
-        if Path::new(&entry.abs_path).exists() {
-            let rel = Path::new(&entry.abs_path)
+    let ws_path = Path::new(workspace_path);
+    if let Ok(tracked) = collect_tracked_files(ws_path, 0) {
+        for path_str in tracked {
+            let path = Path::new(&path_str);
+            if !path.exists() {
+                continue;
+            }
+            let rel = path
                 .strip_prefix(workspace_path)
-                .unwrap_or_else(|_| Path::new(&entry.rel_path));
+                .unwrap_or_else(|_| Path::new(&path_str));
             let dest = backup_target.join(rel);
             if let Some(parent) = dest.parent() {
-                fs::create_dir_all(parent)?;
+                let _ = fs::create_dir_all(parent);
             }
-            if let Err(e) = fs::copy(&entry.abs_path, &dest) {
-                tracing::warn!("Pre-restore backup failed for {}: {}", entry.abs_path, e);
+            if let Err(e) = fs::copy(path, &dest) {
+                tracing::warn!(
+                    "Pre-restore backup failed for {}: {}",
+                    path_str,
+                    e
+                );
             }
         }
     }
 
-    // Restore each file.
-    let mut restored: Vec<String> = Vec::with_capacity(manifest.files.len());
+    // Build the set of paths the snapshot considers "kept".  Used to decide
+    // what to delete.
+    let manifest_file_abs: std::collections::HashSet<String> = manifest
+        .files
+        .iter()
+        .map(|e| e.abs_path.clone())
+        .collect();
+    let manifest_dir_abs: std::collections::HashSet<std::path::PathBuf> = manifest
+        .directories
+        .iter()
+        .map(|d| ws_path.join(d))
+        .collect();
 
+    // 1. Delete files on disk that are not in the snapshot.
+    let mut deleted: Vec<String> = Vec::new();
+    if let Ok(tracked) = collect_tracked_files(ws_path, manifest.files.len()) {
+        for path_str in tracked {
+            if manifest_file_abs.contains(&path_str) {
+                continue;
+            }
+            let path = Path::new(&path_str);
+            if !path.exists() {
+                continue;
+            }
+            // (already backed up above)
+            if let Err(e) = fs::remove_file(path) {
+                tracing::warn!("Delete failed for {}: {}", path_str, e);
+                continue;
+            }
+            deleted.push(path_str.clone());
+            emit_file_change(
+                app_handle,
+                FileChangeEvent::Deleted {
+                    path: path_str.clone(),
+                },
+            );
+        }
+    }
+
+    // 2. Restore in-snapshot files.
+    let mut restored: Vec<String> = Vec::with_capacity(manifest.files.len());
     for entry in &manifest.files {
         let src = snap_dir.join("files").join(&entry.rel_path);
         if !src.exists() {
@@ -647,12 +719,10 @@ pub fn restore_workspace_snapshot(
         let bytes = fs::read(&src)?;
         let dest = Path::new(&entry.abs_path);
 
-        // Re-create parent directories if needed (e.g. file was deleted).
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent)?;
         }
 
-        // Atomic write.
         let tmp = dest.with_extension("inkuo_restore_tmp");
         {
             let mut f = File::create(&tmp)?;
@@ -663,69 +733,65 @@ pub fn restore_workspace_snapshot(
 
         restored.push(entry.abs_path.clone());
 
-        // Tell the file watcher to re-read.
-        emit_file_change(app_handle, FileChangeEvent::Modified {
-            path: entry.abs_path.clone(),
-        });
+        emit_file_change(
+            app_handle,
+            FileChangeEvent::Modified {
+                path: entry.abs_path.clone(),
+            },
+        );
     }
 
-    let mut deleted: Vec<String> = Vec::new();
-
-    // Optional destructive mode: delete files on disk that were NOT in the
-    // snapshot.  Each is backed up first to the same pre-restore backup
-    // directory so the user can recover from `~/.inkuo/backups/<stamp>/`.
-    if delete_extra_files {
-        let ws_path = Path::new(workspace_path);
-        if let Ok(tracked) = collect_tracked_files(ws_path, manifest.files.len()) {
-            for path_str in tracked {
-                // Skip anything that was in the snapshot manifest.
-                if manifest.files.iter().any(|e| e.abs_path == path_str) {
-                    continue;
-                }
-                let path = Path::new(&path_str);
-                if !path.exists() {
-                    continue;
-                }
-
-                // Back up first.
-                let rel = path
-                    .strip_prefix(workspace_path)
-                    .unwrap_or_else(|_| Path::new(&path_str));
-                let backup_dest = backup_target.join(rel);
-                if let Some(parent) = backup_dest.parent() {
-                    let _ = fs::create_dir_all(parent);
-                }
-                if let Err(e) = fs::copy(path, &backup_dest) {
-                    tracing::warn!(
-                        "Pre-delete backup failed for {}: {}",
-                        path_str,
-                        e
-                    );
-                    // If backup failed, refuse to delete — better safe than
-                    // silently losing the file.
-                    continue;
-                }
-
-                if let Err(e) = fs::remove_file(path) {
-                    tracing::warn!("Delete failed for {}: {}", path_str, e);
-                    continue;
-                }
-
-                deleted.push(path_str.clone());
-
-                emit_file_change(
-                    app_handle,
-                    FileChangeEvent::Deleted {
-                        path: path_str.clone(),
-                    },
-                );
+    // 3. Delete directories on disk that were not in the snapshot, deepest
+    //    first so we never try to delete a parent before its children.  Only
+    //    directories whose final state is empty (no files, no kept
+    //    sub-directories) are removed; manifest-listed dirs are preserved.
+    let mut deleted_dirs: Vec<String> = Vec::new();
+    if let Ok(mut extra_dirs) = collect_extra_directories(ws_path, &manifest_dir_abs) {
+        // deepest first
+        extra_dirs.sort_by(|a, b| {
+            let ad = a.components().count();
+            let bd = b.components().count();
+            ad.cmp(&bd).reverse()
+        });
+        for dir in extra_dirs {
+            if !dir.exists() {
+                continue;
             }
+            // Final emptiness check (race-safe: only remove if still empty).
+            let is_empty = fs::read_dir(&dir)
+                .map(|mut it| it.next().is_none())
+                .unwrap_or(false);
+            if !is_empty {
+                continue;
+            }
+            if let Err(e) = fs::remove_dir(&dir) {
+                tracing::warn!("rmdir failed for {}: {}", dir.display(), e);
+                continue;
+            }
+            deleted_dirs.push(dir.to_string_lossy().to_string());
         }
+    }
+
+    // 4. Re-create empty directories that were in the snapshot but are not
+    //    currently on disk.
+    let mut created_dirs: Vec<String> = Vec::new();
+    for rel in &manifest.directories {
+        let abs = ws_path.join(rel);
+        if abs.exists() {
+            continue;
+        }
+        if let Err(e) = fs::create_dir_all(&abs) {
+            tracing::warn!("mkdir failed for {}: {}", abs.display(), e);
+            continue;
+        }
+        created_dirs.push(abs.to_string_lossy().to_string());
     }
 
     Ok(RestoreResult {
         restored,
         deleted,
+        deleted_dirs,
+        created_dirs,
         backup_path: backup_target.to_string_lossy().to_string(),
     })
 }
@@ -761,5 +827,173 @@ fn collect_tracked_files(
     Ok(result)
 }
 
-// walkdir is already a transitive dependency via office or other modules;
-// if not, Cargo.toml should already pull it in.
+/// Walk `workspace_path` recursively and return the relative paths of every
+/// directory that is empty (no files anywhere in its subtree, after
+/// `skip_dirs` branches are pruned).  Result is sorted deepest-first so
+/// callers can iterate in creation order without re-walking.
+///
+/// `rel_paths` are relative to `workspace_path`.  Returns `Ok(vec![])`
+/// when the workspace itself does not exist.
+pub fn collect_empty_directories(
+    workspace_path: &Path,
+    skip_dirs: &[String],
+) -> Result<Vec<String>, io::Error> {
+    let mut result: Vec<String> = Vec::new();
+    if !workspace_path.exists() {
+        return Ok(result);
+    }
+
+    // Gather every directory under the workspace, excluding any branch whose
+    // path contains a skip-dir name component.
+    let mut all_dirs: Vec<std::path::PathBuf> = Vec::new();
+    for entry in walkdir::WalkDir::new(workspace_path)
+        .max_depth(10)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        if !entry.file_type().is_dir() {
+            continue;
+        }
+        if entry.path() == workspace_path {
+            continue;
+        }
+        let mut skip = false;
+        for comp in entry.path().components() {
+            if let Some(name) = comp.as_os_str().to_str() {
+                if skip_dirs.iter().any(|s| s == name) {
+                    skip = true;
+                    break;
+                }
+            }
+        }
+        if skip {
+            continue;
+        }
+        all_dirs.push(entry.path().to_path_buf());
+    }
+
+    // Recursive emptiness check: a directory is empty iff it contains no
+    // files AND no non-empty subdirectories.  Walk leaves first so a parent
+    // that contains only empty subdirs is also detected as empty.
+    use std::collections::HashMap;
+    let mut is_empty: HashMap<std::path::PathBuf, bool> = HashMap::new();
+
+    all_dirs.sort_by_key(|d| std::cmp::Reverse(d.components().count()));
+
+    for d in &all_dirs {
+        let mut empty = true;
+        let read = match std::fs::read_dir(d) {
+            Ok(r) => r,
+            Err(_) => {
+                is_empty.insert(d.clone(), false);
+                continue;
+            }
+        };
+        for child in read.filter_map(|c| c.ok()) {
+            let path = child.path();
+            if path.is_file() {
+                empty = false;
+                break;
+            }
+            if path.is_dir() {
+                let child_empty = is_empty.get(&path).copied().unwrap_or(false);
+                if !child_empty {
+                    empty = false;
+                    break;
+                }
+            }
+        }
+        is_empty.insert(d.clone(), empty);
+        if empty {
+            if let Ok(rel) = d.strip_prefix(workspace_path) {
+                result.push(rel.to_string_lossy().to_string());
+            }
+        }
+    }
+
+    // Stable, deep-first ordering for callers.
+    result.sort_by(|a, b| {
+        let ad = a.matches('/').count();
+        let bd = b.matches('/').count();
+        ad.cmp(&bd).then(a.cmp(b))
+    });
+    Ok(result)
+}
+
+// ── Internal: collect extra directories (not in manifest) for removal ──────
+
+/// Walk the workspace and return absolute paths of every directory that is
+/// NOT in `kept_dirs`.  Used during a full restore to identify directories
+/// that need to be removed (deepest-first ordering is applied by the
+/// caller).
+///
+/// The workspace root itself is never returned, and skip-dirs like
+/// `node_modules` / `.git` are pruned from the traversal.  The directory is
+/// only listed if it does NOT contain any directory that IS in `kept_dirs`
+/// transitively — otherwise removing it would also remove a kept subtree.
+fn collect_extra_directories(
+    workspace_path: &Path,
+    kept_dirs: &std::collections::HashSet<std::path::PathBuf>,
+) -> Result<Vec<std::path::PathBuf>, io::Error> {
+    let mut result: Vec<std::path::PathBuf> = Vec::new();
+    if !workspace_path.exists() {
+        return Ok(result);
+    }
+
+    let mut all_dirs: Vec<std::path::PathBuf> = Vec::new();
+    for entry in walkdir::WalkDir::new(workspace_path)
+        .max_depth(10)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        if !entry.file_type().is_dir() {
+            continue;
+        }
+        if entry.path() == workspace_path {
+            continue;
+        }
+        // Prune heavy / excluded directories.
+        let mut skip = false;
+        for comp in entry.path().components() {
+            if let Some(name) = comp.as_os_str().to_str() {
+                if name == "node_modules" || name == ".git" || name == ".inkuo" {
+                    skip = true;
+                    break;
+                }
+            }
+        }
+        if skip {
+            continue;
+        }
+        all_dirs.push(entry.path().to_path_buf());
+    }
+
+    // A directory is "extra" iff it is not in `kept_dirs` AND none of its
+    // descendants are in `kept_dirs` (a kept subtree must not be removed
+    // when we remove its non-kept ancestor).  Compute the set of ancestor
+    // paths so we can test in O(1).
+    for d in &all_dirs {
+        if kept_dirs.contains(d) {
+            continue;
+        }
+        // Walk parents: if any ancestor (including d itself) is kept, skip.
+        let mut cur: Option<&std::path::Path> = Some(d.as_path());
+        let mut has_kept_ancestor = false;
+        while let Some(p) = cur {
+            if p == workspace_path {
+                break;
+            }
+            if kept_dirs.contains(p) {
+                has_kept_ancestor = true;
+                break;
+            }
+            cur = p.parent();
+        }
+        if has_kept_ancestor {
+            continue;
+        }
+        result.push(d.clone());
+    }
+
+    Ok(result)
+}

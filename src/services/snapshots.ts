@@ -42,6 +42,7 @@ interface RustSnapshotManifest {
   trigger: string;
   created_at: number;
   files: RustSnapshotManifestFile[];
+  directories?: string[];
 }
 
 interface RustFileDiffPreview {
@@ -78,6 +79,8 @@ export interface SnapshotManifest {
   trigger: SnapshotTrigger;
   createdAt: number;
   files: SnapshotManifestFile[];
+  /** Relative paths of empty directories at snapshot time. */
+  directories: string[];
 }
 
 export interface FileDiffPreview {
@@ -114,6 +117,7 @@ function mapManifest(raw: RustSnapshotManifest): SnapshotManifest {
       sha256: f.sha256,
       isBinary: f.is_binary,
     })),
+    directories: raw.directories ?? [],
   };
 }
 
@@ -146,13 +150,16 @@ interface RustCreateSnapshotArgs {
   label: string | null;
   trigger: string;
   files: Array<{ rel_path: string; content_base64: string }>;
+  /** Relative paths of empty directories at capture time (forward slashes). */
+  directories?: string[];
 }
 
 export async function createSnapshot(
   workspacePath: string,
   label?: string | null,
   trigger: SnapshotTrigger = 'manual',
-  files: Array<{ relPath: string; contentBase64: string }> = []
+  files: Array<{ relPath: string; contentBase64: string }> = [],
+  directories: string[] = []
 ): Promise<SnapshotManifest> {
   const args: RustCreateSnapshotArgs = {
     workspace_path: workspacePath,
@@ -162,6 +169,7 @@ export async function createSnapshot(
       rel_path: f.relPath,
       content_base64: f.contentBase64,
     })),
+    directories,
   };
   const raw = await invoke<RustSnapshotManifest>('create_workspace_snapshot_cmd', {
     args,
@@ -197,38 +205,48 @@ export async function previewRestore(
 export interface RestoreSnapshotResult {
   restored: string[];
   deleted: string[];
+  deletedDirs: string[];
+  createdDirs: string[];
   backupPath: string;
-}
-
-export interface RestoreSnapshotOptions {
-  /**
-   * When true, files that exist on disk but were NOT in the snapshot
-   * (i.e. files added since the snapshot was taken) are also removed.
-   * Each deleted file is backed up to ~/.inkuo/backups/<stamp>/ first.
-   * Default: false.
-   */
-  deleteExtraFiles?: boolean;
 }
 
 export async function restoreSnapshot(
   workspacePath: string,
-  id: string,
-  options: RestoreSnapshotOptions = {}
+  id: string
 ): Promise<RestoreSnapshotResult> {
   const data = await invoke<{
     restored: string[];
     deleted: string[];
+    deletedDirs: string[];
+    createdDirs: string[];
     backupPath: string;
   }>('restore_workspace_snapshot_cmd', {
     workspacePath,
     snapshotId: id,
-    deleteExtraFiles: options.deleteExtraFiles ?? false,
   });
   return {
     restored: data.restored ?? [],
     deleted: data.deleted ?? [],
+    deletedDirs: data.deletedDirs ?? [],
+    createdDirs: data.createdDirs ?? [],
     backupPath: data.backupPath,
   };
+}
+
+/**
+ * Enumerate every empty directory under `workspacePath` (pruning heavy
+ * branches like `node_modules`, `.git`, `.inkuo`).  Returned paths are
+ * relative to the workspace root and use forward slashes.
+ *
+ * Used during snapshot creation so a full-state restore can re-create
+ * directories that became empty after the snapshot was taken.
+ */
+export async function collectWorkspaceEmptyDirs(
+  workspacePath: string
+): Promise<string[]> {
+  return invoke<string[]>('collect_workspace_empty_dirs_cmd', {
+    workspacePath,
+  });
 }
 
 export interface CollectFileResult {

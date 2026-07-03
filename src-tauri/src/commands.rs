@@ -1529,6 +1529,13 @@ pub struct CreateSnapshotArgs {
     /// the backend doesn't need a separate "enumerate workspace files"
     /// command.  Base64 keeps the IPC payload JSON-safe.
     pub files: Vec<SnapshotFilePayload>,
+    /// Relative paths of empty directories that exist in the workspace at
+    /// capture time.  Needed for a full-state restore — directories that
+    /// became empty after the snapshot (because all their files were deleted)
+    /// must be re-created to match the snapshot.  Optional for backwards
+    /// compatibility with old snapshots created before this field existed.
+    #[serde(default)]
+    pub directories: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1551,6 +1558,7 @@ pub async fn create_workspace_snapshot_cmd(
         label,
         trigger,
         files,
+        directories,
     } = args;
 
     let mut decoded: Vec<(String, Vec<u8>)> = Vec::with_capacity(files.len());
@@ -1560,8 +1568,14 @@ pub async fn create_workspace_snapshot_cmd(
         decoded.push((f.rel_path, bytes));
     }
 
-    crate::snapshots::create_workspace_snapshot(&workspace_path, label, &trigger, decoded)
-        .map_err(|e| AppCommandError::SnapshotWriteFailed(e.to_string()))
+    crate::snapshots::create_workspace_snapshot(
+        &workspace_path,
+        label,
+        &trigger,
+        decoded,
+        directories,
+    )
+    .map_err(|e| AppCommandError::SnapshotWriteFailed(e.to_string()))
 }
 
 #[tauri::command]
@@ -1594,16 +1608,33 @@ pub async fn preview_workspace_snapshot_restore_cmd(
 pub async fn restore_workspace_snapshot_cmd(
     workspace_path: String,
     snapshot_id: String,
-    delete_extra_files: bool,
     app_handle: TauriAppHandle,
 ) -> Result<crate::snapshots::RestoreResult, AppCommandError> {
-    crate::snapshots::restore_workspace_snapshot(
-        &workspace_path,
-        &snapshot_id,
-        delete_extra_files,
-        &app_handle,
-    )
-    .map_err(|e| AppCommandError::SnapshotWriteFailed(e.to_string()))
+    crate::snapshots::restore_workspace_snapshot(&workspace_path, &snapshot_id, &app_handle)
+        .map_err(|e| AppCommandError::SnapshotWriteFailed(e.to_string()))
+}
+
+/// Collect the relative paths of every empty directory under
+/// `workspace_path`, pruning heavy branches like `node_modules`, `.git`,
+/// `.inkuo`.  Returned paths use forward slashes and are relative to the
+/// workspace root.
+#[tauri::command]
+pub async fn collect_workspace_empty_dirs_cmd(
+    workspace_path: String,
+) -> Result<Vec<String>, AppCommandError> {
+    let p = std::path::Path::new(&workspace_path);
+    if !p.is_absolute() {
+        return Err(AppCommandError::SnapshotReadFailed(format!(
+            "workspace_path must be absolute: {workspace_path}"
+        )));
+    }
+    let skip_dirs = vec![
+        "node_modules".to_string(),
+        ".git".to_string(),
+        ".inkuo".to_string(),
+    ];
+    crate::snapshots::collect_empty_directories(p, &skip_dirs)
+        .map_err(|e| AppCommandError::SnapshotReadFailed(e.to_string()))
 }
 
 /// Minimal base64 decoder so we don't pull in the `base64` crate just for

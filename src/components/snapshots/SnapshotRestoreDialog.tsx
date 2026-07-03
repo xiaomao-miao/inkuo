@@ -70,7 +70,6 @@ export const SnapshotRestoreDialog = ({
   const [hunksByFile, setHunksByFile] = useState<Record<string, DiffHunk[]>>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [isRestoring, setIsRestoring] = useState(false);
-  const [deleteExtraFiles, setDeleteExtraFiles] = useState(false);
 
   useEffect(() => {
     if (!workspacePath) return;
@@ -154,7 +153,7 @@ export const SnapshotRestoreDialog = ({
     if (!workspacePath) return;
     setIsRestoring(true);
     try {
-      await restoreSnapshot(workspacePath, snapshot.id, { deleteExtraFiles });
+      await restoreSnapshot(workspacePath, snapshot.id);
       onRestored();
     } catch (err) {
       pushNotification({
@@ -165,7 +164,7 @@ export const SnapshotRestoreDialog = ({
     } finally {
       setIsRestoring(false);
     }
-  }, [workspacePath, snapshot.id, deleteExtraFiles, onRestored, pushNotification]);
+  }, [workspacePath, snapshot.id, onRestored, pushNotification]);
 
   const totalChanges = counts.added + counts.modified + counts.deleted;
 
@@ -197,11 +196,16 @@ export const SnapshotRestoreDialog = ({
           ) : (
             <>
               <div className={styles.dialogSummary}>
-                将还原 <strong>{previews.length}</strong> 个文件。
-                {counts.added > 0 && <> <strong>{counts.added}</strong> 个新增。</>}
+                将把工作区完全还原到此快照时刻的状态：共 <strong>{previews.length}</strong> 个文件将被处理。
+                {counts.added > 0 && <> 其中 <strong>{counts.added}</strong> 个新增。</>}
                 {counts.modified > 0 && <> <strong>{counts.modified}</strong> 个修改。</>}
-                {counts.deleted > 0 && <> <strong>{counts.deleted}</strong> 个删除。</>}
                 {counts.unchanged > 0 && <> <strong>{counts.unchanged}</strong> 个不变。</>}
+                {counts.deleted > 0 && (
+                  <>
+                    {' '}另有 <strong>{counts.deleted}</strong> 个文件（以及可能的新增目录）将被删除，
+                    全部会自动备份到 <code>~/.inkuo/backups/</code>。
+                  </>
+                )}
               </div>
 
               <div className={styles.dialogFileList}>
@@ -243,23 +247,6 @@ export const SnapshotRestoreDialog = ({
           )}
         </div>
 
-        {counts.deleted > 0 && (
-          <div className={styles.destructiveOption}>
-            <label className={styles.destructiveOptionLabel}>
-              <input
-                type="checkbox"
-                checked={deleteExtraFiles}
-                onChange={(e) => setDeleteExtraFiles(e.target.checked)}
-                disabled={isRestoring}
-              />
-              <span>
-                同时删除工作区新增的文件（<strong>{counts.deleted}</strong> 个），
-                会在删除前自动备份到 <code>~/.inkuo/backups/</code>
-              </span>
-            </label>
-          </div>
-        )}
-
         <div className={styles.dialogFooter}>
           <button
             className={styles.secondaryBtn}
@@ -277,19 +264,15 @@ export const SnapshotRestoreDialog = ({
                 ? '正在加载预览…'
                 : totalChanges === 0
                   ? '当前工作区与该快照完全一致（点击仍会执行）'
-                  : deleteExtraFiles
-                    ? '将覆盖快照中的文件，并删除工作区中新增的文件'
-                    : ''
+                  : counts.deleted > 0
+                    ? `将覆盖 ${counts.modified + counts.added} 个文件，并删除 ${counts.deleted} 个新增文件以及新增目录`
+                    : `将还原 ${counts.modified + counts.added} 个文件到快照时的内容`
             }
           >
             {isRestoring ? <span className={styles.spinner} /> : <RotateCcw size={12} />}
             {isRestoring
               ? '回滚中…'
-              : totalChanges === 0
-                ? '无变更，仍要回滚'
-                : deleteExtraFiles
-                  ? '确认回滚（含删除）'
-                  : '确认回滚'}
+              : '回滚到快照时刻'}
           </button>
         </div>
       </div>

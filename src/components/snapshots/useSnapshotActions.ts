@@ -13,12 +13,12 @@ import { useConfirmDialogStore } from '../../store/confirmDialogStore';
 import { useSidebarStore } from '../../store/sidebarStore';
 import {
   collectWorkspaceFiles,
+  collectWorkspaceEmptyDirs,
   createSnapshot,
   deleteSnapshot,
   listSnapshots,
   previewRestore,
   restoreSnapshot,
-  type RestoreSnapshotOptions,
   type RestoreSnapshotResult,
   type SnapshotIndexEntry,
   type SnapshotManifest,
@@ -46,8 +46,11 @@ export function useSnapshotActions() {
         return null;
       }
       try {
-        const files = await collectWorkspaceFiles(workspacePath);
-        if (files.length === 0) {
+        const [files, directories] = await Promise.all([
+          collectWorkspaceFiles(workspacePath),
+          collectWorkspaceEmptyDirs(workspacePath),
+        ]);
+        if (files.length === 0 && directories.length === 0) {
           pushNotification({
             kind: 'info',
             title: '工作区为空',
@@ -59,12 +62,17 @@ export function useSnapshotActions() {
           workspacePath,
           opts.label ?? null,
           opts.trigger ?? 'manual',
-          files
+          files,
+          directories
         );
+        const dirPart =
+          manifest.directories.length > 0
+            ? `、${manifest.directories.length} 个空目录`
+            : '';
         pushNotification({
           kind: 'success',
           title: '快照已创建',
-          message: `共 ${manifest.files.length} 个文件`,
+          message: `共 ${manifest.files.length} 个文件${dirPart}`,
         });
         return manifest;
       } catch (err) {
@@ -111,25 +119,26 @@ export function useSnapshotActions() {
   );
 
   const restore = useCallback(
-    async (
-      id: string,
-      options: RestoreSnapshotOptions = {}
-    ): Promise<RestoreSnapshotResult | null> => {
+    async (id: string): Promise<RestoreSnapshotResult | null> => {
       if (!workspacePath) return null;
       try {
-        const result = await restoreSnapshot(workspacePath, id, options);
-        const restoredCount = result.restored.length;
-        const deletedCount = result.deleted.length;
+        const result = await restoreSnapshot(workspacePath, id);
         const parts: string[] = [];
-        if (restoredCount > 0) parts.push(`还原 ${restoredCount} 个文件`);
-        if (deletedCount > 0) parts.push(`删除 ${deletedCount} 个新增文件`);
+        if (result.restored.length > 0)
+          parts.push(`还原 ${result.restored.length} 个文件`);
+        if (result.deleted.length > 0)
+          parts.push(`删除 ${result.deleted.length} 个新增文件`);
+        if (result.deletedDirs.length > 0)
+          parts.push(`删除 ${result.deletedDirs.length} 个目录`);
+        if (result.createdDirs.length > 0)
+          parts.push(`重建 ${result.createdDirs.length} 个目录`);
         pushNotification({
           kind: 'success',
           title: '已回滚到快照',
           message:
             parts.length > 0
-              ? `${parts.join('，')}（已备份到 ${result.backupPath}）`
-              : `无文件变更（已备份到 ${result.backupPath}）`,
+              ? `${parts.join('，')}（备份到 ${result.backupPath}）`
+              : `无变更（备份到 ${result.backupPath}）`,
         });
         return result;
       } catch (err) {
