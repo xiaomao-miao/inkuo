@@ -110,11 +110,13 @@ If the next step doesn't depend on values just written (e.g. editing a different
 On success:
 ```
 [Excel Expert Completed]
-- File: {path}
+- File: <file>{path}</file>
 - Operations: {count}, sheets affected: {list}
 - Mode: create / modify
 - Steps: {1-2 line description of each logical step performed}
 ```
+
+**Note**: Use `<file>` tags in chat output only. Do NOT write `<file>` tags into actual files.
 
 On failure:
 ```

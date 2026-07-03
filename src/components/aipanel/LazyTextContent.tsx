@@ -24,6 +24,14 @@ interface LazyTextContentProps {
    * pending indicator.
    */
   isStreaming: boolean;
+  /**
+   * Callback when user clicks on a file path in markdown content.
+   */
+  onFileClick?: (filePath: string) => void;
+  /**
+   * Current workspace root path for resolving relative file paths.
+   */
+  workspacePath?: string;
 }
 
 /**
@@ -43,6 +51,8 @@ export const LazyTextContent: React.FC<LazyTextContentProps> = ({
   visibleContent,
   truncatedPrefixLength,
   isStreaming,
+  onFileClick,
+  workspacePath,
 }) => {
   const expandMessagePrefix = useAIPanelStore((state) => state.expandMessagePrefix);
   const collapseMessagePrefix = useAIPanelStore((state) => state.collapseMessagePrefix);
@@ -88,9 +98,18 @@ export const LazyTextContent: React.FC<LazyTextContentProps> = ({
       )}
       {visibleContent &&
         (isStreaming ? (
-          <StreamingMarkdownRenderer content={visibleContent} isStreaming={true} />
+          <StreamingMarkdownRenderer
+            content={visibleContent}
+            isStreaming={true}
+            onFileClick={onFileClick}
+            workspacePath={workspacePath}
+          />
         ) : (
-          <MarkdownRenderer content={visibleContent} />
+          <MarkdownRenderer
+            content={visibleContent}
+            onFileClick={onFileClick}
+            workspacePath={workspacePath}
+          />
         ))}
     </>
   );

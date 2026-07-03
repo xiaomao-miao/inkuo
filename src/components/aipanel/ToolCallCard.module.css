@@ -143,6 +143,24 @@
   font-size: 11px;
 }
 
+.fileNameButton {
+  margin-left: auto;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--accent-primary);
+  background-color: transparent;
+  border: 1px solid var(--accent-primary);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.fileNameButton:hover {
+  background-color: var(--accent-primary);
+  color: white;
+}
+
 /* Diff container */
 .diffContainer {
   padding: 8px;

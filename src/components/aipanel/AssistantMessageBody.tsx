@@ -7,7 +7,7 @@ import { CompactToolCard } from './CompactToolCard';
 import { DelegateToCard, GetToolHelpCard } from './DelegateToCard';
 import { COMPACT_TOOLS } from './toolUtils';
 import { parsePlanBlocks, type PlanBlock } from './planRender';
-import { useAIPanelStore } from '../../store';
+import { useAIPanelStore, useSidebarStore } from '../../store';
 import type { ActiveToolCall, ChatMessage, ChatMode, OutputItem } from '../../store';
 import styles from './AIPanelMessage.module.css';
 
@@ -27,6 +27,12 @@ export const AssistantMessageBody: React.FC<AssistantMessageBodyProps> = ({
   sessionId,
 }) => {
   const hasOutputItems = message.outputItems && message.outputItems.length > 0;
+  const workspacePath = useSidebarStore((s) => s.workspacePath);
+  const openWorkspaceFile = useSidebarStore((s) => s.openWorkspaceFile);
+
+  const handleFileClick = React.useCallback((filePath: string) => {
+    openWorkspaceFile(filePath, { forceNew: true });
+  }, [openWorkspaceFile]);
 
   if (hasOutputItems) {
     return (
@@ -39,6 +45,8 @@ export const AssistantMessageBody: React.FC<AssistantMessageBodyProps> = ({
             sessionId={sessionId}
             isThisStreaming={isThisStreaming}
             isLastItem={idx === message.outputItems.length - 1}
+            onFileClick={handleFileClick}
+            workspacePath={workspacePath ?? undefined}
           />
         ))}
       </>
@@ -53,6 +61,8 @@ export const AssistantMessageBody: React.FC<AssistantMessageBodyProps> = ({
         isThisStreaming={isThisStreaming}
         mode={mode}
         activeToolCalls={activeToolCalls}
+        onFileClick={handleFileClick}
+        workspacePath={workspacePath ?? undefined}
       />
     );
   }
@@ -66,6 +76,8 @@ interface OutputItemViewProps {
   sessionId: string;
   isThisStreaming: boolean;
   isLastItem: boolean;
+  onFileClick?: (filePath: string) => void;
+  workspacePath?: string;
 }
 
 const OutputItemView: React.FC<OutputItemViewProps> = ({
@@ -74,6 +86,8 @@ const OutputItemView: React.FC<OutputItemViewProps> = ({
   sessionId,
   isThisStreaming,
   isLastItem,
+  onFileClick,
+  workspacePath,
 }) => {
   if (item.type === 'text') {
     return (
@@ -84,6 +98,8 @@ const OutputItemView: React.FC<OutputItemViewProps> = ({
           visibleContent={item.content}
           truncatedPrefixLength={item.truncatedPrefix?.length ?? 0}
           isStreaming={isThisStreaming}
+          onFileClick={onFileClick}
+          workspacePath={workspacePath}
         />
       </div>
     );
@@ -164,6 +180,8 @@ const OutputItemView: React.FC<OutputItemViewProps> = ({
             result={item.result}
             duration={item.duration}
             diffSummary={item.diffSummary}
+            onFileClick={onFileClick}
+            workspacePath={workspacePath}
           />
         )}
       />
@@ -217,6 +235,8 @@ const OutputItemView: React.FC<OutputItemViewProps> = ({
           error={item.status === 'error' ? item.result : undefined}
           duration={item.duration}
           diffSummary={item.diffSummary}
+          onFileClick={onFileClick}
+          workspacePath={workspacePath}
         />
       </div>
     );
@@ -324,6 +344,8 @@ interface LegacyMessageContentProps {
   isThisStreaming: boolean;
   mode: ChatMode;
   activeToolCalls: ActiveToolCall[];
+  onFileClick?: (filePath: string) => void;
+  workspacePath?: string;
 }
 
 const LegacyMessageContent: React.FC<LegacyMessageContentProps> = ({
@@ -332,6 +354,8 @@ const LegacyMessageContent: React.FC<LegacyMessageContentProps> = ({
   isThisStreaming,
   mode,
   activeToolCalls,
+  onFileClick,
+  workspacePath,
 }) => {
   return (
     <>
@@ -363,6 +387,8 @@ const LegacyMessageContent: React.FC<LegacyMessageContentProps> = ({
           visibleContent={message.content}
           truncatedPrefixLength={message.truncatedPrefix?.length ?? 0}
           isStreaming={isThisStreaming}
+          onFileClick={onFileClick}
+          workspacePath={workspacePath}
         />
       ) : !message.toolResults?.length && !isThisStreaming ? (
         <div className={styles.toolOnlyPlaceholder}>工具执行完成</div>
@@ -412,6 +438,8 @@ const LegacyMessageContent: React.FC<LegacyMessageContentProps> = ({
               error={result.isError ? result.result : undefined}
               duration={result.duration}
               diffSummary={result.diffSummary}
+              onFileClick={onFileClick}
+              workspacePath={workspacePath}
             />
           </div>
         );

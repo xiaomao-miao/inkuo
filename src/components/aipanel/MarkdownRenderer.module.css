@@ -320,3 +320,26 @@
     opacity: 0;
   }
 }
+
+/* File path button - clickable file links in markdown */
+.filePathTag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  color: var(--accent-primary);
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--accent-primary);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  margin: 2px 4px;
+  vertical-align: middle;
+}
+
+.filePathTag:hover {
+  background-color: var(--accent-primary);
+  color: white;
+}

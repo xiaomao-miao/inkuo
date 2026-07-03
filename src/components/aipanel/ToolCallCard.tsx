@@ -21,6 +21,10 @@ interface ToolCallCardProps {
   duration?: number;
   diffSummary?: StreamDiffSummary;
   isStreamingArguments?: boolean;
+  /** Callback when user clicks on a file name in diff summary */
+  onFileClick?: (filePath: string) => void;
+  /** Current workspace root path for resolving relative file paths */
+  workspacePath?: string;
 }
 
 interface ToolPreview {
@@ -170,10 +174,21 @@ const ToolCardPreview: React.FC<{
 
 const ToolCardDiff: React.FC<{
   diffSummary: StreamDiffSummary | undefined;
-}> = ({ diffSummary }) => {
+  onFileClick?: (filePath: string) => void;
+  workspacePath?: string;
+}> = ({ diffSummary, onFileClick, workspacePath }) => {
   const [isDiffExpanded, setIsDiffExpanded] = React.useState(false);
 
   if (!diffSummary) return null;
+
+  const handleFileClick = () => {
+    if (onFileClick && diffSummary.file_name) {
+      const fullPath = workspacePath
+        ? `${workspacePath}/${diffSummary.file_name}`
+        : diffSummary.file_name;
+      onFileClick(fullPath);
+    }
+  };
 
   return (
     <>
@@ -186,7 +201,17 @@ const ToolCardDiff: React.FC<{
           {isDiffExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
           <span className={styles.added}>+{diffSummary.added_lines}</span>
           <span className={styles.deleted}>-{diffSummary.deleted_lines}</span>
-          <span className={styles.fileNameLabel}>{diffSummary.file_name}</span>
+          <button
+            type="button"
+            className={styles.fileNameButton}
+            onClick={(e) => {
+              e.stopPropagation();
+              handleFileClick();
+            }}
+            title="点击打开文件"
+          >
+            {diffSummary.file_name}
+          </button>
         </button>
       </div>
       {diffSummary.hunks.length > 0 && isDiffExpanded && (
@@ -243,6 +268,8 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = React.memo(function Too
   duration,
   diffSummary,
   isStreamingArguments = false,
+  onFileClick,
+  workspacePath,
 }) {
   const isFileModification = isFileModificationTool(name);
   const filePath = (args?.path as string | undefined) ?? (args?.file_path as string | undefined);
@@ -274,7 +301,11 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = React.memo(function Too
         isStreamingArguments={isStreamingArguments}
         toolName={name}
       />
-      <ToolCardDiff diffSummary={diffSummary} />
+      <ToolCardDiff
+        diffSummary={diffSummary}
+        onFileClick={onFileClick}
+        workspacePath={workspacePath}
+      />
       <ToolCardError error={error} />
     </div>
   );

@@ -77,8 +77,10 @@ Every Markdown document must have:
 On success:
 ```
 [Markdown Writer Completed]
-- File: {path}
+- File: <file>{path}</file>
 - Word count: ~{N}
 - Sections: {M}
 - Summary: {1-2 sentence conclusion}
 ```
+
+**Note**: Use `<file>` tags in chat output only. Do NOT write `<file>` tags into actual files.

@@ -59,8 +59,14 @@ On success:
 - Total: {N} files
 - Successful: {S}, failed: {F}, skipped: {K}
 - Change rule: {one-line description}
+- Files modified:
+  <file>{path1}</file>
+  <file>{path2}</file>
+  ...
 - Failed files: {path + error}, if any
 ```
+
+**Note**: Use `<file>` tags in chat output only. Do NOT write `<file>` tags into actual files.
 
 On failure or interruption:
 ```

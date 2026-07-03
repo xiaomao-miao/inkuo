@@ -8,6 +8,10 @@ interface StreamingMarkdownRendererProps {
   content: string;
   className?: string;
   isStreaming?: boolean;
+  /** Callback when user clicks on a file path */
+  onFileClick?: (filePath: string) => void;
+  /** Current workspace root path for resolving relative file paths */
+  workspacePath?: string;
 }
 
 const MARKDOWN_INDICATORS = [
@@ -88,10 +92,24 @@ function findValidMarkdownPrefix(text: string): string {
   return text.slice(0, boundary);
 }
 
+/**
+ * Preprocess content to convert <file> tags to Markdown links.
+ * <file>/path/to/file.txt</file> → [/path/to/file.txt](/path/to/file.txt)
+ */
+function preprocessFileTags(content: string): string {
+  // Match <file>/path/to/file.txt</file> or <file path="/path">name</file>
+  return content.replace(/<file(?:\s+path="([^"]*)")?>([^<]*)<\/file>/gi, (_match, path, _content) => {
+    const filePath = path || _content.trim();
+    return `[${filePath}](${filePath})`;
+  });
+}
+
 export const StreamingMarkdownRenderer: React.FC<StreamingMarkdownRendererProps> = ({
   content,
   className,
   isStreaming = false,
+  onFileClick,
+  workspacePath,
 }) => {
   const { renderedContent, hasMore } = useMemo(() => {
     if (!content) return { renderedContent: '', hasMore: false };
@@ -107,6 +125,9 @@ export const StreamingMarkdownRenderer: React.FC<StreamingMarkdownRendererProps>
     const safeContent = findValidMarkdownPrefix(content);
     return { renderedContent: safeContent, hasMore: safeContent.length < content.length };
   }, [content, isStreaming]);
+
+  // Preprocess content to convert <file> tags to Markdown links
+  const processedContent = preprocessFileTags(renderedContent);
 
   return (
     <div className={`${styles.markdown} ${className || ''}`}>
@@ -135,7 +156,37 @@ export const StreamingMarkdownRenderer: React.FC<StreamingMarkdownRendererProps>
             );
           },
           a({ href, children, ...props }) {
+            // Decode URL-encoded paths (e.g. %E6%B5%8B%E8%AF%95 -> 测试3)
+            const decodedHref = href ? decodeURIComponent(href) : href;
+            // Check if this is a file path link (starts with / or ~)
+            const isFilePath = decodedHref?.startsWith('/') || decodedHref?.startsWith('~') || /^[A-Za-z]:\\/.test(decodedHref || '');
             const isExternal = href?.startsWith('http://') || href?.startsWith('https://');
+
+            if (isFilePath && onFileClick) {
+              const handleClick = (e: React.MouseEvent) => {
+                e.preventDefault();
+                let fullPath = decodedHref!;
+                if (!fullPath.startsWith('/') && !fullPath.startsWith('~') && workspacePath) {
+                  fullPath = `${workspacePath}/${fullPath}`;
+                }
+                onFileClick(fullPath);
+              };
+
+              // Extract just the filename for display
+              const fileName = decodedHref!.split('/').pop() || decodedHref!;
+
+              return (
+                <button
+                  type="button"
+                  className={styles.filePathTag}
+                  onClick={handleClick}
+                  title={`点击打开文件: ${decodedHref}`}
+                >
+                  {fileName}
+                </button>
+              );
+            }
+
             return (
               <a
                 href={href}
@@ -159,7 +210,7 @@ export const StreamingMarkdownRenderer: React.FC<StreamingMarkdownRendererProps>
           },
         }}
       >
-        {renderedContent}
+        {processedContent}
       </ReactMarkdown>
       {hasMore && <span className={styles.streamingCaret} />}
     </div>

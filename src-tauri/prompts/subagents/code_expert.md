@@ -59,8 +59,13 @@ On success:
 ```
 [Code Expert Completed]
 - Files changed: {N}
-- File list: {path list}
+- File list:
+  <file>{path1}</file>
+  <file>{path2}</file>
+  ...
 - Line change: +{added}, -{deleted}
 - Self-check: {build / tests status}
 - Summary: {1-2 sentence conclusion}
 ```
+
+**Note**: Use `<file>` tags in chat output only. Do NOT write `<file>` tags into actual files.

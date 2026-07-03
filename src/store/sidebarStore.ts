@@ -9,6 +9,23 @@ import type {
   NewEntryPayload,
 } from '../types';
 
+/**
+ * Extract parent directory path from a file path.
+ */
+function getParentPath(filePath: string, workspacePath: string | null): string | null {
+  if (!workspacePath) return null;
+
+  const relativePath = filePath.slice(workspacePath.length);
+  const segments = relativePath.split('/').filter(Boolean);
+
+  if (segments.length <= 1) {
+    return workspacePath;
+  }
+
+  const parentSegments = segments.slice(0, -1);
+  return `${workspacePath}/${parentSegments.join('/')}`;
+}
+
 export interface OpenTab {
   id: string;
   path: string;
@@ -289,10 +306,25 @@ export const useSidebarStore = create<SidebarState>()(
             isDirty: false,
           };
 
+          // Auto-expand parent directories in the file tree
+          const newExpandedDirs = new Set(state.expandedDirs);
+          const parentPath = getParentPath(resolvedPath, state.workspacePath);
+          if (parentPath) {
+            const parts = parentPath.split('/').filter(Boolean);
+            let currentPath = '';
+            for (const part of parts) {
+              currentPath = currentPath ? `${currentPath}/${part}` : part;
+              if (state.workspacePath && currentPath.startsWith(state.workspacePath)) {
+                newExpandedDirs.add(currentPath);
+              }
+            }
+          }
+
           return {
             openTabs: [...state.openTabs, newTab],
             activeTabId: newTab.id,
             selectedFile: resolvedPath,
+            expandedDirs: newExpandedDirs,
           };
         }),
 

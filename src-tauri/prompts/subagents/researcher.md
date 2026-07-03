@@ -37,8 +37,10 @@ Topic: {query}
 - {Conclusion 3, with paths}
 
 ## Relevant files
-- `path/a.md` — {one-line description}
-- `path/b.ts` — {one-line description}
+- <file>{path/a.md}</file> — {one-line description}
+- <file>{path/b.ts}</file> — {one-line description}
+
+**Note**: Use `<file>` tags in chat output only. Do NOT write `<file>` tags into actual files.
 
 ## Not found
 - {if anything: "knowledge base not built" or "not present in the workspace"}
