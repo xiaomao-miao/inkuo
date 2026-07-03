@@ -5,22 +5,6 @@ use std::path::Path;
 
 use super::{ToolDefinition, ToolError, ToolParameters, validate_workspace_path};
 
-pub fn definition() -> ToolDefinition {
-    ToolDefinition::new_with_label(
-        "read_file",
-        "读取文件",
-        "Read the complete contents of a file from the filesystem.",
-        ToolParameters::new(
-            vec!["path"],
-            vec![
-                ("path", "string", Some("Absolute path to the file to read")),
-                ("offset", "integer", Some("Line number to start reading from (0-indexed). Default: 0")),
-                ("limit", "integer", Some("Maximum number of lines to read. Default: all lines")),
-            ],
-        ),
-    )
-}
-
 pub async fn execute(arguments: Value, workspace: Option<String>) -> Result<String, ToolError> {
     let path = arguments["path"]
         .as_str()
@@ -48,7 +32,21 @@ pub struct ReadFileTool;
 
 impl ReadFileTool {
     pub fn new() -> Self { Self }
-    pub fn definition(&self) -> ToolDefinition { definition() }
+    pub fn definition(&self) -> ToolDefinition {
+        ToolDefinition::new_with_label(
+            "read_file",
+            "读取文件",
+            "Read the complete contents of a file from the filesystem.",
+            ToolParameters::new(
+                vec!["path"],
+                vec![
+                    ("path", "string", Some("Absolute path to the file to read")),
+                    ("offset", "integer", Some("Line number to start reading from (0-indexed). Default: 0")),
+                    ("limit", "integer", Some("Maximum number of lines to read. Default: all lines")),
+                ],
+            ),
+        )
+    }
     pub async fn execute(&self, arguments: Value, workspace: Option<String>) -> Result<String, ToolError> {
         execute(arguments, workspace).await
     }
@@ -155,13 +153,16 @@ impl EditFileTool {
         ToolDefinition::new_with_label(
             "edit_file",
             "编辑文件",
-            "Edit a specific portion of an existing file by replacing old_text with new_text.",
+            "Edit a specific portion of an existing file by replacing old_text with new_text. \
+            By default old_text must match **exactly once**; set `replace_all=true` to substitute \
+            every occurrence (useful for renames).",
             ToolParameters::new(
                 vec!["path", "old_text", "new_text"],
                 vec![
                     ("path", "string", Some("Absolute path to the file to edit")),
-                    ("old_text", "string", Some("The exact text to find and replace. Must match exactly including whitespace and newlines.")),
+                    ("old_text", "string", Some("The text to find and replace. Must match exactly including whitespace and newlines.")),
                     ("new_text", "string", Some("The replacement text")),
+                    ("replace_all", "boolean", Some("If true, replace every occurrence of old_text. Default: false (must match exactly once).")),
                 ],
             ),
         )
@@ -181,34 +182,47 @@ impl EditFileTool {
             .as_str()
             .ok_or_else(|| ToolError::InvalidArguments("edit_file".to_string(), "new_text must be a string".into()))?;
 
+        let replace_all = arguments["replace_all"].as_bool().unwrap_or(false);
+
         let content = tokio::fs::read_to_string(path)
             .await
             .map_err(|e| ToolError::IoError(format!("Failed to read file {}: {}", path, e)))?;
 
-        let new_content = match content.matches(old_text).count() {
-            0 => {
-                return Err(ToolError::InvalidArguments(
-                    "edit_file".to_string(),
-                    format!("old_text not found in file. Make sure to provide the exact text including whitespace and newlines.\n\nSearched for:\n{}", old_text),
-                ));
-            }
-            1 => content.replacen(old_text, new_text, 1),
-            n => {
-                return Err(ToolError::InvalidArguments(
-                    "edit_file".to_string(),
-                    format!(
-                        "old_text matches {} locations in the file. Provide more surrounding context so it matches exactly once.",
-                        n
-                    ),
-                ));
-            }
+        let occurrences = content.matches(old_text).count();
+        if occurrences == 0 {
+            return Err(ToolError::InvalidArguments(
+                "edit_file".to_string(),
+                format!("old_text not found in file. Make sure to provide the exact text including whitespace and newlines.\n\nSearched for:\n{}", old_text),
+            ));
+        }
+
+        if !replace_all && occurrences != 1 {
+            return Err(ToolError::InvalidArguments(
+                "edit_file".to_string(),
+                format!(
+                    "old_text matches {} locations in the file. Either provide more surrounding context so it matches exactly once, or pass `replace_all=true` to substitute every occurrence.",
+                    occurrences
+                ),
+            ));
+        }
+
+        let new_content = if replace_all {
+            content.replace(old_text, new_text)
+        } else {
+            content.replacen(old_text, new_text, 1)
         };
 
         tokio::fs::write(path, &new_content)
             .await
             .map_err(|e| ToolError::IoError(format!("Failed to write file {}: {}", path, e)))?;
 
-        Ok(format!("File '{}' edited successfully", path))
+        let replaced = if replace_all { occurrences } else { 1 };
+        Ok(format!(
+            "File '{}' edited successfully ({} replacement{})",
+            path,
+            replaced,
+            if replaced == 1 { "" } else { "s" }
+        ))
     }
 }
 

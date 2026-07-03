@@ -270,14 +270,15 @@ impl ToolResult {
 mod file_tools;
 mod search_tools;
 mod office_tools;
-mod excel_tools;
 mod database_tools;
 mod meta_tools; // get_tool_help + delegate_to
 
 pub use file_tools::{ReadFileTool, WriteFileTool, EditFileTool, CreateDirTool, MoveFileTool};
 pub use search_tools::{ListDirTool, GlobTool, GrepTool};
-pub use office_tools::{ReadOfficeFileTool, CreateWordDocTool, CompareWordDocsTool, GetDocxInfoTool, ModifyExcelTool, GetExcelInfoTool, CreateExcelTool};
-pub use excel_tools::{ReadExcelRangeTool, ReadExcelMetadataTool};
+pub use office_tools::{
+    ReadOfficeFileTool, CreateWordDocTool, CompareWordDocsTool, ModifyExcelTool,
+    CreateExcelTool, InspectOfficeTool,
+};
 pub use database_tools::DatabaseSearchTool;
 pub use meta_tools::{GetToolHelpTool, DelegateToTool};
 
@@ -294,14 +295,9 @@ pub enum ToolExecutor {
     ReadOfficeFile(office_tools::ReadOfficeFileTool),
     CreateWordDoc(office_tools::CreateWordDocTool),
     CompareWordDocs(office_tools::CompareWordDocsTool),
-    GetDocxInfo(office_tools::GetDocxInfoTool),
     ModifyExcel(office_tools::ModifyExcelTool),
-    GetExcelInfo(office_tools::GetExcelInfoTool),
     CreateExcel(office_tools::CreateExcelTool),
-    // Excel fine-grained tools (read-only / info)
-    ReadExcelRange(excel_tools::ReadExcelRangeTool),
-    ReadExcelMetadata(excel_tools::ReadExcelMetadataTool),
-    // End
+    InspectOffice(office_tools::InspectOfficeTool),
     DatabaseSearch(database_tools::DatabaseSearchTool),
     // Meta tools (intercepted by the agent loop; execute() returns an error
     // if reached directly).
@@ -323,12 +319,9 @@ impl ToolExecutor {
             ToolExecutor::ReadOfficeFile(_) => "read_office_file",
             ToolExecutor::CreateWordDoc(_) => "create_word_doc",
             ToolExecutor::CompareWordDocs(_) => "compare_word_docs",
-            ToolExecutor::GetDocxInfo(_) => "get_docx_info",
             ToolExecutor::ModifyExcel(_) => "modify_excel",
-            ToolExecutor::GetExcelInfo(_) => "get_excel_info",
             ToolExecutor::CreateExcel(_) => "create_excel",
-            ToolExecutor::ReadExcelRange(_) => "read_excel_range",
-            ToolExecutor::ReadExcelMetadata(_) => "read_excel_metadata",
+            ToolExecutor::InspectOffice(_) => "inspect_office",
             ToolExecutor::DatabaseSearch(_) => "database_search",
             ToolExecutor::GetToolHelp(_) => "get_tool_help",
             ToolExecutor::DelegateTo(_) => "delegate_to",
@@ -348,12 +341,9 @@ impl ToolExecutor {
             ToolExecutor::ReadOfficeFile(t) => t.definition(),
             ToolExecutor::CreateWordDoc(t) => t.definition(),
             ToolExecutor::CompareWordDocs(t) => t.definition(),
-            ToolExecutor::GetDocxInfo(t) => t.definition(),
             ToolExecutor::ModifyExcel(t) => t.definition(),
-            ToolExecutor::GetExcelInfo(t) => t.definition(),
             ToolExecutor::CreateExcel(t) => t.definition(),
-            ToolExecutor::ReadExcelRange(t) => t.definition(),
-            ToolExecutor::ReadExcelMetadata(t) => t.definition(),
+            ToolExecutor::InspectOffice(t) => t.definition(),
             ToolExecutor::DatabaseSearch(t) => t.definition(),
             ToolExecutor::GetToolHelp(t) => t.definition(),
             ToolExecutor::DelegateTo(t) => t.definition(),
@@ -373,12 +363,9 @@ impl ToolExecutor {
             ToolExecutor::ReadOfficeFile(t) => t.execute(arguments, workspace).await,
             ToolExecutor::CreateWordDoc(t) => t.execute(arguments, workspace).await,
             ToolExecutor::CompareWordDocs(t) => t.execute(arguments, workspace).await,
-            ToolExecutor::GetDocxInfo(t) => t.execute(arguments, workspace).await,
             ToolExecutor::ModifyExcel(t) => t.execute(arguments, workspace).await,
-            ToolExecutor::GetExcelInfo(t) => t.execute(arguments, workspace).await,
             ToolExecutor::CreateExcel(t) => t.execute(arguments, workspace).await,
-            ToolExecutor::ReadExcelRange(t) => t.execute(arguments, workspace).await,
-            ToolExecutor::ReadExcelMetadata(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::InspectOffice(t) => t.execute(arguments, workspace).await,
             ToolExecutor::DatabaseSearch(t) => t.execute(arguments, workspace).await,
             ToolExecutor::GetToolHelp(t) => t.execute(arguments, workspace).await,
             ToolExecutor::DelegateTo(t) => t.execute(arguments, workspace).await,
@@ -464,13 +451,9 @@ impl ToolRegistry {
             ToolExecutor::ReadOfficeFile(ReadOfficeFileTool),
             ToolExecutor::CreateWordDoc(CreateWordDocTool),
             ToolExecutor::CompareWordDocs(CompareWordDocsTool),
-            ToolExecutor::GetDocxInfo(GetDocxInfoTool),
             ToolExecutor::ModifyExcel(ModifyExcelTool),
-            ToolExecutor::GetExcelInfo(GetExcelInfoTool),
             ToolExecutor::CreateExcel(CreateExcelTool),
-            // Excel read/info tools
-            ToolExecutor::ReadExcelRange(ReadExcelRangeTool),
-            ToolExecutor::ReadExcelMetadata(ReadExcelMetadataTool),
+            ToolExecutor::InspectOffice(InspectOfficeTool),
             // DatabaseSearchTool added lazily via with_app_handle()
             // Meta tools (intercepted in agent loop, but still registered so
             // they appear in tool catalogs and can be schema-validated).

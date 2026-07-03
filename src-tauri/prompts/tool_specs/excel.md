@@ -9,16 +9,19 @@ Before modifying an Excel file, **only read what you actually need** — you nee
 - A "logical step" is usually one of: create a sheet / add a header / fill one column / add a formula / fix one number / adjust formatting.
 - Only batch unrelated changes when the user explicitly asks for a bulk edit.
 
-## Read tools (pick the cheapest that answers your question)
+## Read tools (use `inspect_office` with the right mode)
 
-| Tool | Returns | Use it when |
+All Excel inspection goes through the unified `inspect_office` tool. Pick the cheapest mode that answers your question.
+
+| `format` / `mode` | Returns | Use it when |
 |---|---|---|
-| `read_excel_metadata` | sheet names, merged ranges, formula addresses, used range | You don't know what's in the file yet |
-| `read_excel_range` | values / formulas / styles for a specific `A1:D10` region | You know the exact range you'll edit |
-| `read_office_file` | full sheets + 2-D values grid | Only when you genuinely need a full overview of a small workbook |
-| `get_excel_info` | sheet count, cell count, formula count, per-sheet max row/col | Quick size check before deciding to read deeper |
+| `format="xlsx", mode="info"` | sheet count, cell count, formula count, per-sheet max row/col | Quick size check before deciding to read deeper |
+| `format="xlsx", mode="metadata"` | sheet names, merged ranges, formula addresses, used range | You don't know what's in the file yet |
+| `format="xlsx", mode="range"` | values / formulas / styles for a specific `A1:D10` region (requires `sheet` + `range`) | You know the exact range you'll edit |
 
-Rule: start with `read_excel_metadata`. Only drill deeper into `read_excel_range` for the specific area of the next change.
+Plus `read_office_file` for the full sheets + 2-D values grid (only when you genuinely need a full overview of a small workbook).
+
+Rule: start with `inspect_office(format="xlsx", mode="info")`, then `inspect_office(format="xlsx", mode="metadata")`. Only drill deeper into `inspect_office(format="xlsx", mode="range")` for the specific area of the next change.
 
 ## modify_excel (structured, incremental modification)
 
@@ -48,7 +51,7 @@ Rule: start with `read_excel_metadata`. Only drill deeper into `read_excel_range
 
 ## Critical constraints
 
-- **Sheet names are case-sensitive** — copy exactly what `read_excel_metadata` returned.
+- **Sheet names are case-sensitive** — copy exactly what `inspect_office(format="xlsx", mode="metadata")` returned.
 - **Never use `write_file` for .xlsx** — it will corrupt the binary zip package.
 - **Re-read before each new logical step** if the next change depends on values you just wrote or that may have shifted.
 

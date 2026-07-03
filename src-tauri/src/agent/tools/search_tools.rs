@@ -171,11 +171,13 @@ impl GrepTool {
         ToolDefinition::new_with_label(
             "grep",
             "搜索文本",
-            "Search for lines containing a pattern in files. Supports basic regex patterns.",
+            "Search for lines containing a substring (case-insensitive by default) in files. \
+            This tool performs literal substring matching, NOT regex. \
+            For regex / advanced queries, delegate to `code_expert` which can shell out to `rg`.",
             ToolParameters::new(
                 vec!["pattern", "paths"],
                 vec![
-                    ("pattern", "string", Some("Text pattern or regex to search for")),
+                    ("pattern", "string", Some("Literal substring to search for. Not a regex.")),
                     ("paths", "array", Some("Array of file/directory paths to search in")),
                     ("case_sensitive", "boolean", Some("Whether search should be case sensitive. Default: false")),
                 ],

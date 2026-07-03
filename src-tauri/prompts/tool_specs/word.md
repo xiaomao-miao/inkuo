@@ -47,8 +47,9 @@ For .docx inputs returns:
 - `text_content` — full text as a string.
 - `elements` — structured element array, each paragraph / table with a stable `id` (used by `create_word_doc`).
 
-## get_docx_info
-Read .docx summary metadata (paragraph count, table count, word count, whether headers / footers / images / styles exist) — does NOT return body content. **Use before opening a large file to gauge its size.**
+## inspect_office (Word)
+For .docx files use `format="docx", mode="info"`. Returns paragraph count, table count, word count, whether headers / footers / images / styles exist — does NOT return body content. **Use before opening a large file to gauge its size.**
+- Parameters: `path`, `format="docx"`, `mode="info"`.
 
 ## compare_word_docs
 Compare two .docx files; return a structured diff (`added[]` / `removed[]` / `modified[]` + summary string).

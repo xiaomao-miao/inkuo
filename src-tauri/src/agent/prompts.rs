@@ -23,13 +23,14 @@ pub const PROFILES: &[ProfileDescriptor] = &[
         name: "main",
         label: "Main Agent",
         system_prompt: include_str!("../../prompts/main/agent.slim.md"),
+        // Office tools intentionally absent — main agent must `delegate_to`
+        // `office_word_expert` / `office_excel_expert` for any .docx/.xlsx
+        // work. This keeps the per-request tool schema (and tokens) small
+        // for the common case of pure code / Markdown work.
         tools: &[
             "read_file", "write_file", "edit_file",
             "list_dir", "glob", "grep",
             "database_search",
-            "read_office_file", "create_word_doc", "get_docx_info", "compare_word_docs",
-            "create_excel", "modify_excel",
-            "read_excel_range", "read_excel_metadata", "get_excel_info",
             "get_tool_help", "delegate_to",
         ],
         max_iterations: 50,
@@ -41,7 +42,7 @@ pub const PROFILES: &[ProfileDescriptor] = &[
         tools: &[
             "read_file", "write_file",
             "list_dir", "glob", "grep",
-            "read_office_file", "create_word_doc", "get_docx_info", "compare_word_docs",
+            "read_office_file", "create_word_doc", "inspect_office", "compare_word_docs",
         ],
         max_iterations: 15,
     },
@@ -54,7 +55,7 @@ pub const PROFILES: &[ProfileDescriptor] = &[
             "list_dir", "glob", "grep",
             "read_office_file",
             "create_excel", "modify_excel",
-            "read_excel_range", "read_excel_metadata", "get_excel_info",
+            "inspect_office",
         ],
         max_iterations: 15,
     },
@@ -85,7 +86,7 @@ pub const PROFILES: &[ProfileDescriptor] = &[
         tools: &[
             "read_file", "write_file", "edit_file",
             "list_dir", "glob", "grep",
-            "read_office_file", "get_docx_info", "get_excel_info",
+            "read_office_file", "inspect_office",
             "create_word_doc", "modify_excel",
         ],
         max_iterations: 25,

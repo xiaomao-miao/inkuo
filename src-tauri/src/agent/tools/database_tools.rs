@@ -27,7 +27,9 @@ impl DatabaseSearchTool {
             Use this when the user asks questions about code, documents, or information \
             that may be answered from indexed files in the workspace. \
             Returns the most relevant chunks ranked by semantic similarity. \
-            Note: the knowledge base must be built first via the Knowledge tab in the UI.",
+            Note: the knowledge base must be built first via the Knowledge tab in the UI. \
+            The active workspace is determined by the registry, not by this tool's arguments, \
+            so there is no `workspace_path` parameter to set.",
             ToolParameters::new(
                 vec!["query"],
                 vec![
@@ -35,12 +37,6 @@ impl DatabaseSearchTool {
                         "query",
                         "string",
                         Some("Natural language search query (e.g., 'how does the auth system work?')"),
-                    ),
-                    (
-                        "workspace_path",
-                        "string",
-                        Some("DEPRECATED: ignored. The active workspace is determined by the registry, \
-                              not by the LLM-supplied value, for security reasons."),
                     ),
                     (
                         "top_k",

@@ -27,8 +27,8 @@ Find all files matching a glob pattern (e.g., `**/*.md`, `docs/**/*.{txt,md}`).
 - **Parameters**: `pattern` (string, required), `base_dir` (string, required)
 
 ### grep
-Search for lines containing a pattern in files. Supports regex.
-- **Parameters**: `pattern` (string, required), `paths` (array of strings, required), `case_sensitive` (boolean, optional)
+Search for lines containing a **literal substring** (case-insensitive by default) across multiple files. This is plain substring matching — NOT regex.
+- **Parameters**: `pattern` (string, required — literal substring), `paths` (array of strings, required), `case_sensitive` (boolean, optional)
 
 ## Core Principles
 
