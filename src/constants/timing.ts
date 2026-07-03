@@ -59,6 +59,25 @@ export const TIMING = {
    * closer to the very top before content is restored.
    */
   TRUNCATED_PREFIX_AUTOEXPAND_SCROLL_PX: 64,
+
+  /**
+   * List-level virtualization tunables.
+   *
+   * When the session has more than `SESSION_VIRTUALIZE_THRESHOLD`
+   * messages, the older ones are replaced in the DOM by a single
+   * "collapsed history" placeholder card. The full message data
+   * remains in the store, so a click on the placeholder can restore
+   * them at any time. This prevents React from re-rendering dozens of
+   * (potentially heavy) markdown bodies on every streaming token and
+   * keeps the message list DOM bounded regardless of session length.
+   */
+  SESSION_VIRTUALIZE_THRESHOLD: 50,
+  /**
+   * Number of older messages to reveal when the user expands a collapsed
+   * history placeholder. The newest messages are always shown; this is
+   * how many EXTRA older ones get added back to the live DOM per click.
+   */
+  SESSION_VIRTUALIZE_EXPAND_BATCH: 50,
 } as const;
 
 // ============================================================================

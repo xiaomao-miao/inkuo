@@ -342,3 +342,77 @@ export function collapseMessageHead(
     truncatedPrefix: (message.truncatedPrefix ?? '') + full.slice(0, trim),
   };
 }
+
+/**
+ * Mark the oldest messages in a session as collapsed so the renderer can
+ * swap them for a single placeholder card. Returns the session unchanged
+ * when no collapse is needed.
+ *
+ * Strategy: keep the last `keepTail` (default = SESSION_VIRTUALIZE_THRESHOLD)
+ * messages fully rendered; everything earlier is flagged with
+ * `collapsed: true`. The full data (content, outputItems, toolCalls) is
+ * NOT mutated, so restoring later is just an object-shape flag flip.
+ */
+export function collapseOldSessionMessages(
+  session: ChatSession,
+  keepTail: number,
+): ChatSession {
+  const messages = session.messages;
+  if (messages.length <= keepTail) return session;
+  const collapseCount = messages.length - keepTail;
+  let touched = false;
+  const next = messages.map((message, idx) => {
+    if (idx >= collapseCount) return message;
+    if (message.collapsed) return message;
+    touched = true;
+    return { ...message, collapsed: true as const };
+  });
+  if (!touched) return session;
+  return { ...session, messages: next };
+}
+
+/**
+ * Un-collapse the oldest `revealCount` previously-collapsed messages so
+ * they render again. Used by the placeholder's "load earlier" affordance.
+ *
+ * `revealCount` defaults to `SESSION_VIRTUALIZE_EXPAND_BATCH`. We never
+ * cross into the always-live tail — collapsed messages are always older
+ * than the live window.
+ */
+export function expandCollapsedSessionMessages(
+  session: ChatSession,
+  revealCount: number,
+): ChatSession {
+  const messages = session.messages;
+  let touched = false;
+  let revealedSoFar = 0;
+  const next = messages.map((message) => {
+    if (!message.collapsed) return message;
+    if (revealedSoFar >= revealCount) return message;
+    revealedSoFar += 1;
+    touched = true;
+    const { collapsed: _collapsed, ...rest } = message;
+    void _collapsed;
+    return { ...rest } as ChatMessage;
+  });
+  if (!touched) return session;
+  return { ...session, messages: next };
+}
+
+/**
+ * Hard-collapse every currently-expanded history placeholder. Called when
+ * the user starts a new turn (sends a message) so the live DOM stays
+ * bounded while the new stream renders. This is the "新问题触发时立即
+ * 卸载旧消息" behavior the user explicitly requested.
+ */
+export function hardCollapseSessionHistory(session: ChatSession): ChatSession {
+  const messages = session.messages;
+  let touched = false;
+  const next = messages.map((message) => {
+    if (!message.collapsed) return message;
+    touched = true;
+    return { ...message, collapsed: true as const };
+  });
+  if (!touched) return session;
+  return { ...session, messages: next };
+}

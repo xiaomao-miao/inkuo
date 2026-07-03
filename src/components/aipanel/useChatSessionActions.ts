@@ -56,6 +56,8 @@ export function useChatSessionActions({
   const setIsStreaming = useAIPanelStore((state) => state.setIsStreaming);
   const truncateMessagesAfter = useAIPanelStore((state) => state.truncateMessagesAfter);
   const clearToolCalls = useAIPanelStore((state) => state.clearToolCalls);
+  const hardCollapseHistory = useAIPanelStore((state) => state.hardCollapseHistory);
+  const collapseOldMessages = useAIPanelStore((state) => state.collapseOldMessages);
   const pushNotification = useNotificationStore((s) => s.pushNotification);
 
   // Keep references so event listeners can read the latest values.
@@ -91,6 +93,13 @@ export function useChatSessionActions({
     } else {
       addMessage(sessionId, userMessage);
     }
+    // Re-collapse any previously-expanded history placeholders so the
+    // DOM stays bounded for the upcoming stream. This is the
+    // "新问题触发时立即卸载旧消息" hook — by the time React renders
+    // the new turn, every older placeholder is already collapsed and
+    // the renderer's live window shrinks back to the tail.
+    hardCollapseHistory(sessionId);
+    collapseOldMessages(sessionId);
     addMessage(sessionId, assistantPlaceholder);
 
     clearEditingState();
@@ -213,7 +222,7 @@ export function useChatSessionActions({
       updateMessage(sessionId, assistantMessageId, `抱歉，发生了错误：${extractErrorMessage(err)}`);
       setIsStreaming(sessionId, false);
     }
-  }, [activeSession, input, isStreaming, editingMessageId, updateMessage, addMessage, clearEditingState, setInput, setIsStreaming, clearToolCalls, messages, mode]);
+  }, [activeSession, input, isStreaming, editingMessageId, updateMessage, addMessage, clearEditingState, setInput, setIsStreaming, clearToolCalls, hardCollapseHistory, collapseOldMessages, messages, mode]);
 
   const handleSend = useCallback(async () => {
     await sendMessage();

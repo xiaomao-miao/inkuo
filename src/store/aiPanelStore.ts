@@ -20,8 +20,11 @@ import {
   clearSessionToolCalls,
   clearSessionConversation,
   collapseMessageHead,
+  collapseOldSessionMessages,
   createNewSession,
+  expandCollapsedSessionMessages,
   finishSessionMessageStreaming,
+  hardCollapseSessionHistory,
   patchMessageOutputState,
   removeSessionToolCall,
   setMessageDiffState,
@@ -38,6 +41,7 @@ import {
   updateToolCalls,
 } from './aiPanelReducers';
 import { editorDiffActions } from './editorStore';
+import { TIMING } from '../constants/timing';
 import type {
   AIPanelState,
   AIPanelStateCreator,
@@ -168,7 +172,7 @@ const createSessionSlice: AIPanelStateCreator<Pick<AIPanelState, 'sessions' | 'a
   };
 };
 
-const createMessageSlice: AIPanelStateCreator<Pick<AIPanelState, 'addMessage' | 'updateMessage' | 'appendMessageContent' | 'setIsStreaming' | 'clearMessages' | 'truncateMessagesAfter' | 'getMessage' | 'updateMessageOutput' | 'addOutputToMessage' | 'patchOutputItem' | 'finishMessageStreaming' | 'setErrorMessage' | 'setMessageSearchResults' | 'expandMessagePrefix' | 'collapseMessagePrefix' | 'toggleReasoningExpansion' | 'autoExpandTruncatedPrefixes'>> = (set, get) => ({
+const createMessageSlice: AIPanelStateCreator<Pick<AIPanelState, 'addMessage' | 'updateMessage' | 'appendMessageContent' | 'setIsStreaming' | 'clearMessages' | 'truncateMessagesAfter' | 'getMessage' | 'updateMessageOutput' | 'addOutputToMessage' | 'patchOutputItem' | 'finishMessageStreaming' | 'setErrorMessage' | 'setMessageSearchResults' | 'expandMessagePrefix' | 'collapseMessagePrefix' | 'toggleReasoningExpansion' | 'autoExpandTruncatedPrefixes' | 'collapseOldMessages' | 'expandCollapsedHistory' | 'hardCollapseHistory'>> = (set, get) => ({
   addMessage: (sessionId, message) =>
     set((state) => ({
       // Every new message — user prompt or assistant reply — counts as
@@ -319,6 +323,26 @@ const createMessageSlice: AIPanelStateCreator<Pick<AIPanelState, 'addMessage' | 
         if (!changed) return session;
         return { ...session, messages };
       }),
+    })),
+  collapseOldMessages: (sessionId, keepTail) =>
+    set((state) => ({
+      sessions: updateSessions(state.sessions, sessionId, (session) => {
+        const k = keepTail ?? TIMING.SESSION_VIRTUALIZE_THRESHOLD;
+        return collapseOldSessionMessages(session, k);
+      }),
+    })),
+  expandCollapsedHistory: (sessionId, revealCount) =>
+    set((state) => ({
+      sessions: updateSessions(state.sessions, sessionId, (session) => {
+        const k = revealCount ?? TIMING.SESSION_VIRTUALIZE_EXPAND_BATCH;
+        return expandCollapsedSessionMessages(session, k);
+      }),
+    })),
+  hardCollapseHistory: (sessionId) =>
+    set((state) => ({
+      sessions: updateSessions(state.sessions, sessionId, (session) =>
+        hardCollapseSessionHistory(session)
+      ),
     })),
 });
 

@@ -4,6 +4,7 @@ export { ChatInput } from './ChatInput';
 export { ChatView } from './ChatView';
 export { ChatEmptyState } from './ChatEmptyState';
 export { MessageItem } from './MessageItem';
+export { CollapsedHistoryPlaceholder } from './CollapsedHistoryPlaceholder';
 export { UserMessageBubble } from './UserMessageBubble';
 export { AssistantMessageBody } from './AssistantMessageBody';
 export { ToolCallCard } from './ToolCallCard';

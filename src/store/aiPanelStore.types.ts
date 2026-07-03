@@ -107,6 +107,24 @@ export interface AIPanelMessageSlice {
    * restored without an explicit click.
    */
   autoExpandTruncatedPrefixes: (sessionId: string) => void;
+  /**
+   * Mark every message older than the live tail window as collapsed so the
+   * renderer can swap them for a single placeholder. Idempotent: a session
+   * that already has the head collapsed is returned unchanged.
+   */
+  collapseOldMessages: (sessionId: string, keepTail?: number) => void;
+  /**
+   * Un-collapse the oldest `revealCount` previously-collapsed messages so
+   * the user can read further back. Called when the placeholder's "load
+   * earlier" button is clicked.
+   */
+  expandCollapsedHistory: (sessionId: string, revealCount?: number) => void;
+  /**
+   * Re-collapse every previously-expanded history placeholder. Called
+   * right before the user sends a new turn so the live DOM stays bounded
+   * while the new assistant response streams in.
+   */
+  hardCollapseHistory: (sessionId: string) => void;
 }
 
 export interface AIPanelToolCallSlice {

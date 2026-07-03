@@ -358,6 +358,17 @@ export interface ChatMessage {
    */
   truncatedPrefix?: string;
   /**
+   * Marks a message as having been collapsed into a history placeholder.
+   * The component layer replaces the message DOM with a single compact
+   * card; the real data (content / outputItems / toolCalls) is left
+   * untouched so it can be restored verbatim by `expandCollapsedHistory`.
+   *
+   * This is a session-wide list-level virtualization signal — distinct
+   * from `truncatedPrefix`, which is a per-message single-string tail
+   * truncation that fires during streaming.
+   */
+  collapsed?: true;
+  /**
    * Set of reasoning-block ids the user has explicitly expanded. Stored
    * per-message because a single message can contain multiple reasoning
    * blocks (one per `reasoning` event), each with independent collapse

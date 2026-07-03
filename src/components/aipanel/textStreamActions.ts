@@ -71,6 +71,11 @@ export function applyStreamingTextDeltas(
               isPendingMarkdown: getPendingMarkdown(lastForText.content + delta),
             };
             const updated = postProcessTextItem ? postProcessTextItem(next) : next;
+            // Preserves `collapsed` because we spread `...message` — collapsed
+            // placeholders never receive deltas in practice (the streaming
+            // reducer scopes by messageId, not by index), but if a stale
+            // event ever targets one, the collapse flag survives so the
+            // virtualized placeholder keeps rendering the compact card.
             return { ...message, outputItems: [...workingItems.slice(0, -1), updated] };
           }
 
