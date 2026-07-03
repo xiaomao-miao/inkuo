@@ -3,6 +3,7 @@ import type { MutableRefObject } from 'react';
 import type { ChatMode } from '../../store';
 import type { StreamPayload } from './streamTypes';
 import type { OutputItem } from '../../types';
+import { TIMING } from '../../constants/timing';
 
 /** Tracks which sub-agent activity a given sub-message_id belongs to */
 const subagentActivityMap = new Map<string, { parentMessageId: string; subagentId: string }>();
@@ -20,35 +21,121 @@ function getOrCreateBuffer(subagentId: string): { text: string; reasoning: strin
 }
 
 /**
- * Flush accumulated text/reasoning buffers into output items.
- * Called when switching categories (e.g., from text to tool call) or on completion.
+ * Flush accumulated text/reasoning buffers into output items by *appending*
+ * to the trailing matching item of the sub-agent. This mirrors the
+ * main-stream behavior so users see progressive updates inside a single
+ * OutputItem rather than a new item every flush tick.
  */
 function flushSubagentBuffer(
   sessionId: string,
   parentMessageId: string,
   subagentId: string,
-  addOutput: (sessionId: string, parentMessageId: string, subagentId: string, item: OutputItem) => void,
+  appendDelta: (
+    sessionId: string,
+    parentMessageId: string,
+    subagentId: string,
+    delta: { content: string; type: 'text' | 'reasoning' },
+  ) => void,
 ): void {
   const buf = subagentBuffers.get(subagentId);
   if (!buf) return;
 
   if (buf.text.length > 0) {
-    addOutput(sessionId, parentMessageId, subagentId, {
+    appendDelta(sessionId, parentMessageId, subagentId, {
       type: 'text',
       content: buf.text,
-      isPendingMarkdown: false,
     });
     buf.text = '';
   }
 
   if (buf.reasoning.length > 0) {
-    addOutput(sessionId, parentMessageId, subagentId, {
+    appendDelta(sessionId, parentMessageId, subagentId, {
       type: 'reasoning',
       content: buf.reasoning,
-      isPendingMarkdown: false,
     });
     buf.reasoning = '';
   }
+}
+
+/** Per-message sticky buffer category. */
+type BufferCategory = 'text' | 'reasoning' | 'tool';
+
+/**
+ * Adaptive flush timer for sub-agent buffers, mirroring the main stream's
+ * behavior so users see progressive updates instead of waiting for the first
+ * tool-call boundary.
+ */
+function getTotalPendingChars(): number {
+  let total = 0;
+  for (const buf of subagentBuffers.values()) {
+    total += buf.text.length + buf.reasoning.length;
+  }
+  return total;
+}
+
+function computeSubagentFlushIntervalMs(bufferLen: number): number {
+  if (bufferLen <= TIMING.STREAM_FLUSH_INTERVAL_MIN_MS * 12) {
+    return TIMING.STREAM_FLUSH_INTERVAL_MIN_MS;
+  }
+  const span = TIMING.MAX_BUFFER_CHARS_BEFORE_FORCE_FLUSH - 200;
+  if (span <= 0) return TIMING.STREAM_FLUSH_INTERVAL_MAX_MS;
+  const over = Math.min(bufferLen, TIMING.MAX_BUFFER_CHARS_BEFORE_FORCE_FLUSH) - 200;
+  const ratio = over / span;
+  return Math.round(
+    TIMING.STREAM_FLUSH_INTERVAL_MIN_MS +
+      ratio * (TIMING.STREAM_FLUSH_INTERVAL_MAX_MS - TIMING.STREAM_FLUSH_INTERVAL_MIN_MS),
+  );
+}
+
+let subagentFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+interface SubagentFlushCallback {
+  sessionId: string;
+  parentMessageId: string;
+  subagentId: string;
+  appendDelta: (
+    sessionId: string,
+    parentMessageId: string,
+    subagentId: string,
+    delta: { content: string; type: 'text' | 'reasoning' },
+  ) => void;
+}
+
+/** Pending flush callbacks, keyed by subagent id, so we know what to flush
+ *  when the timer fires. */
+const pendingFlushCallbacks = new Map<string, SubagentFlushCallback>();
+
+function scheduleSubagentFlush(cb: SubagentFlushCallback) {
+  pendingFlushCallbacks.set(cb.subagentId, cb);
+
+  const bufferLen = getTotalPendingChars();
+  if (bufferLen >= TIMING.MAX_BUFFER_CHARS_BEFORE_FORCE_FLUSH) {
+    if (subagentFlushTimer !== null) {
+      clearTimeout(subagentFlushTimer);
+      subagentFlushTimer = null;
+    }
+    queueMicrotask(() => flushAllSubagentBuffers());
+    return;
+  }
+
+  if (subagentFlushTimer !== null) return;
+
+  const interval = computeSubagentFlushIntervalMs(bufferLen);
+  subagentFlushTimer = setTimeout(flushAllSubagentBuffers, interval);
+}
+
+function flushAllSubagentBuffers() {
+  if (subagentFlushTimer !== null) {
+    clearTimeout(subagentFlushTimer);
+    subagentFlushTimer = null;
+  }
+
+  // Iterate over a copy so that flushSubagentBuffer (which doesn't mutate
+  // the map) is safe — but the callback map CAN shrink via clear().
+  for (const cb of Array.from(pendingFlushCallbacks.values())) {
+    flushSubagentBuffer(cb.sessionId, cb.parentMessageId, cb.subagentId, cb.appendDelta);
+  }
+  pendingFlushCallbacks.clear();
 }
 
 interface StreamEventDispatcherArgs {
@@ -72,6 +159,12 @@ interface StreamEventDispatcherArgs {
     parentMessageId: string,
     subagentId: string,
     outputItem: OutputItem,
+  ) => void;
+  appendOutputDeltaToSubagentActivity: (
+    sessionId: string,
+    parentMessageId: string,
+    subagentId: string,
+    delta: { content: string; type: 'text' | 'reasoning' },
   ) => void;
   completeSubagentActivity: (
     sessionId: string,
@@ -127,7 +220,6 @@ function getSubagentInfo(messageId: string): { isSubagent: boolean; parentMessag
  * `reasoning` items in the store always matches the order of the deltas
  * arriving on the wire.
  */
-type BufferCategory = 'text' | 'reasoning' | 'tool';
 
 function bufferCategoryFor(eventType: string): BufferCategory {
   if (eventType === 'reasoning') return 'reasoning';
@@ -151,6 +243,7 @@ export async function dispatchStreamEvent({
   setPendingDiff,
   addSubagentActivity,
   addOutputToSubagentActivity,
+  appendOutputDeltaToSubagentActivity,
   completeSubagentActivity,
 }: StreamEventDispatcherArgs) {
   const { session_id, message_id, event_type, content, done, final_content, summary, tool_args, error } = payload;
@@ -190,7 +283,8 @@ export async function dispatchStreamEvent({
     const info = subagentActivityMap.get(subMessageId);
     if (info) {
       // Flush any remaining buffers before completing
-      flushSubagentBuffer(session_id, info.parentMessageId, info.subagentId, addOutputToSubagentActivity);
+      flushSubagentBuffer(session_id, info.parentMessageId, info.subagentId, appendOutputDeltaToSubagentActivity);
+      pendingFlushCallbacks.delete(info.subagentId);
       completeSubagentActivity(session_id, info.parentMessageId, info.subagentId, 'completed');
       // Clean up
       subagentBuffers.delete(info.subagentId);
@@ -204,30 +298,43 @@ export async function dispatchStreamEvent({
 
   // For sub-agent messages, we need to route them to the nested activity
   if (subagentInfo) {
+    const flushCallback: SubagentFlushCallback = {
+      sessionId: session_id,
+      parentMessageId: subagentInfo.parentMessageId,
+      subagentId: subagentInfo.subagentId,
+      appendDelta: appendOutputDeltaToSubagentActivity,
+    };
+
     // Track category so we can flush the buffer on category switch
     const lastSubagentCategory = lastCategoryByMessage.get(message_id) ?? null;
 
     // Handle sub-agent stream events
     if (event_type === 'text' && typeof content === 'string' && content.length > 0) {
-      // Accumulate text into buffer
+      // Accumulate text into buffer and schedule an adaptive flush so
+      // users see progressive updates instead of waiting for the first
+      // tool-call boundary.
       const buf = getOrCreateBuffer(subagentInfo.subagentId);
       buf.text += content;
       lastCategoryByMessage.set(message_id, 'text');
+      scheduleSubagentFlush(flushCallback);
       return;
     }
 
     if (event_type === 'reasoning' && typeof content === 'string' && content.length > 0) {
-      // Accumulate reasoning into buffer
+      // Accumulate reasoning into buffer and schedule an adaptive flush.
       const buf = getOrCreateBuffer(subagentInfo.subagentId);
       buf.reasoning += content;
       lastCategoryByMessage.set(message_id, 'reasoning');
+      scheduleSubagentFlush(flushCallback);
       return;
     }
 
     // For tool events, flush text/reasoning buffers first
     if (event_type === 'tool_call_start' || event_type === 'tool_call_args_delta' || event_type === 'tool_result') {
       if (lastSubagentCategory !== null && lastSubagentCategory !== 'tool') {
-        flushSubagentBuffer(session_id, subagentInfo.parentMessageId, subagentInfo.subagentId, addOutputToSubagentActivity);
+        flushSubagentBuffer(session_id, subagentInfo.parentMessageId, subagentInfo.subagentId, appendOutputDeltaToSubagentActivity);
+        // Drop the pending callback so the timer doesn't double-flush.
+        pendingFlushCallbacks.delete(subagentInfo.subagentId);
       }
     }
 
@@ -261,7 +368,8 @@ export async function dispatchStreamEvent({
 
     if (event_type === 'error') {
       // Flush any pending buffers first
-      flushSubagentBuffer(session_id, subagentInfo.parentMessageId, subagentInfo.subagentId, addOutputToSubagentActivity);
+      flushSubagentBuffer(session_id, subagentInfo.parentMessageId, subagentInfo.subagentId, appendOutputDeltaToSubagentActivity);
+      pendingFlushCallbacks.delete(subagentInfo.subagentId);
       // Mark the sub-agent as errored
       completeSubagentActivity(session_id, subagentInfo.parentMessageId, subagentInfo.subagentId, 'error', undefined, error);
       // Clean up
@@ -273,7 +381,8 @@ export async function dispatchStreamEvent({
 
     // done events for sub-agent - flush all buffers and complete
     if (event_type === 'done') {
-      flushSubagentBuffer(session_id, subagentInfo.parentMessageId, subagentInfo.subagentId, addOutputToSubagentActivity);
+      flushSubagentBuffer(session_id, subagentInfo.parentMessageId, subagentInfo.subagentId, appendOutputDeltaToSubagentActivity);
+      pendingFlushCallbacks.delete(subagentInfo.subagentId);
       completeSubagentActivity(session_id, subagentInfo.parentMessageId, subagentInfo.subagentId, 'completed', final_content);
       // Clean up
       subagentBuffers.delete(subagentInfo.subagentId);

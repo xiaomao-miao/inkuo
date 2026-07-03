@@ -20,6 +20,9 @@ export function useAgentStream({ mode }: UseAgentStreamArgs) {
   const setPendingDiff = useAIPanelStore((state) => state.setPendingDiff);
   const addSubagentActivity = useAIPanelStore((state) => state.addSubagentActivity);
   const addOutputToSubagentActivity = useAIPanelStore((state) => state.addOutputToSubagentActivity);
+  const appendOutputDeltaToSubagentActivity = useAIPanelStore(
+    (state) => state.appendOutputDeltaToSubagentActivity,
+  );
   const completeSubagentActivity = useAIPanelStore((state) => state.completeSubagentActivity);
 
   const unlistenRef = useRef<(() => void) | null>(null);
@@ -82,6 +85,7 @@ export function useAgentStream({ mode }: UseAgentStreamArgs) {
           setPendingDiff,
           addSubagentActivity,
           addOutputToSubagentActivity,
+          appendOutputDeltaToSubagentActivity,
           completeSubagentActivity,
         });
       });

@@ -38,7 +38,12 @@ import {
   updateToolCalls,
 } from './aiPanelReducers';
 import { editorDiffActions } from './editorStore';
-import type { AIPanelState, AIPanelStateCreator, DiffApplicationActions } from './aiPanelStore.types';
+import type {
+  AIPanelState,
+  AIPanelStateCreator,
+  DiffApplicationActions,
+  SubagentActivitySlice,
+} from './aiPanelStore.types';
 
 function pickPersistedUiBits(
   persistedState: unknown,
@@ -338,34 +343,6 @@ const createToolCallSlice: AIPanelStateCreator<Pick<AIPanelState, 'addToolCall' 
     })),
 });
 
-/** Sub-agent activity slice */
-interface SubagentActivitySlice {
-  addSubagentActivity: (
-    sessionId: string,
-    messageId: string,
-    activity: import('../types').SubagentActivity,
-  ) => void;
-  addOutputToSubagentActivity: (
-    sessionId: string,
-    parentMessageId: string,
-    subagentId: string,
-    outputItem: OutputItem,
-  ) => void;
-  completeSubagentActivity: (
-    sessionId: string,
-    parentMessageId: string,
-    subagentId: string,
-    status: 'completed' | 'error',
-    summary?: string,
-    error?: string,
-  ) => void;
-  toggleSubagentActivityExpanded: (
-    sessionId: string,
-    parentMessageId: string,
-    subagentId: string,
-  ) => void;
-}
-
 const createSubagentSlice: AIPanelStateCreator<SubagentActivitySlice> = (set) => ({
   addSubagentActivity: (sessionId, messageId, activity) =>
     set((state) => ({
@@ -404,6 +381,47 @@ const createSubagentSlice: AIPanelStateCreator<SubagentActivitySlice> = (set) =>
               }
             : msg,
         ),
+      })),
+    })),
+
+  appendOutputDeltaToSubagentActivity: (
+    sessionId: string,
+    parentMessageId: string,
+    subagentId: string,
+    delta: { content: string; type: 'text' | 'reasoning' },
+  ) =>
+    set((state) => ({
+      sessions: updateSessions(state.sessions, sessionId, (session) => ({
+        ...session,
+        messages: session.messages.map((msg) => {
+          if (msg.id !== parentMessageId) return msg;
+          return {
+            ...msg,
+            subagentActivities: msg.subagentActivities?.map((activity) => {
+              if (activity.id !== subagentId) return activity;
+              const items = activity.outputItems;
+              const last = items[items.length - 1];
+              if (last && last.type === delta.type && (last.type === 'text' || last.type === 'reasoning')) {
+                const merged = {
+                  ...last,
+                  content: last.content + delta.content,
+                };
+                return {
+                  ...activity,
+                  outputItems: [...items.slice(0, -1), merged],
+                };
+              }
+              const fresh =
+                delta.type === 'text'
+                  ? { type: 'text' as const, content: delta.content, isPendingMarkdown: false }
+                  : { type: 'reasoning' as const, content: delta.content, isPendingMarkdown: false };
+              return {
+                ...activity,
+                outputItems: [...items, fresh],
+              };
+            }),
+          };
+        }),
       })),
     })),
 
@@ -526,7 +544,7 @@ const createDiffSlice = (
     })),
 });
 
-export const useAIPanelStore = create<AIPanelState & SubagentActivitySlice>()(
+export const useAIPanelStore = create<AIPanelState>()(
   persist(
     (...args) => ({
       ...createUiSlice(...args),

@@ -160,6 +160,18 @@ export interface SubagentActivitySlice {
     subagentId: string,
     outputItem: OutputItem,
   ) => void;
+  /**
+   * Stream-append a text/reasoning delta into the trailing item of a
+   * sub-agent's output list. Mirrors `applyStreamingTextDeltas` semantics
+   * for the top-level stream so users see progressive updates instead of
+   * a new item every flush tick.
+   */
+  appendOutputDeltaToSubagentActivity: (
+    sessionId: string,
+    parentMessageId: string,
+    subagentId: string,
+    delta: { content: string; type: 'text' | 'reasoning' },
+  ) => void;
   completeSubagentActivity: (
     sessionId: string,
     parentMessageId: string,

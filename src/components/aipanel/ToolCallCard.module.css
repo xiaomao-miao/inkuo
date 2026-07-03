@@ -781,3 +781,91 @@
 .subagentToolResult.error .toolResultLabel svg {
   color: #ef4444;
 }
+
+/* 子代理任务区域 - 默认折叠 */
+.subagentTask {
+  padding: 2px 0 2px 18px;
+}
+
+.taskToggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+  background: none;
+  border: none;
+  color: var(--fg-muted);
+  font-size: 10px;
+  cursor: pointer;
+  border-radius: 2px;
+}
+
+.taskToggle:hover {
+  background-color: var(--bg-hover);
+  color: var(--fg-secondary);
+}
+
+.taskContent {
+  margin: 4px 0 0 18px;
+  padding: 6px;
+  background-color: var(--bg-tertiary);
+  border-radius: 4px;
+  font-size: 10px;
+}
+
+.taskContent pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* 委派卡片结果区域 */
+.delegateResult {
+  margin: 8px 12px;
+  padding: 8px;
+  background-color: var(--bg-tertiary);
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.delegateResult strong {
+  color: var(--fg-secondary);
+  font-size: 11px;
+}
+
+/* 委派卡片提示词区域 */
+.promptSection {
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.promptToggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: none;
+  border: none;
+  color: var(--fg-muted);
+  font-size: 11px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background-color 0.15s;
+}
+
+.promptToggle:hover {
+  background-color: var(--bg-hover);
+  color: var(--fg-secondary);
+}
+
+.promptContent {
+  margin-top: 8px;
+  padding: 8px;
+  background-color: var(--bg-tertiary);
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.promptContent pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+}

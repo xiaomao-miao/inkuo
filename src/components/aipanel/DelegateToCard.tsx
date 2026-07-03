@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Check, Loader2, X, ChevronDown, ChevronRight, Users, Bot, FileText, BrainCircuit, Wrench } from 'lucide-react';
+import { ChevronDown, ChevronRight, Check, Loader2, X, Users, Bot, FileText, BrainCircuit, Wrench } from 'lucide-react';
 import { getExpertDisplayName, getToolDisplayName } from './toolUtils';
 import type { SubagentActivity as SubagentActivityType, OutputItem } from '../../types';
 import styles from './ToolCallCard.module.css';
@@ -19,12 +19,7 @@ interface DelegateToCardProps {
 }
 
 /**
- * Renders a `delegate_to` tool call as a specialized card. The user-facing
- * semantics are different from a generic tool call — instead of "what file
- * did it touch", we show "which expert was consulted, with what task".
- *
- * Sub-agent intermediate events are rendered inside this card when provided
- * via the `subagentActivities` prop.
+ * Renders a `delegate_to` tool call as a specialized card.
  */
 export const DelegateToCard: React.FC<DelegateToCardProps> = React.memo(function DelegateToCard({
   id,
@@ -37,9 +32,25 @@ export const DelegateToCard: React.FC<DelegateToCardProps> = React.memo(function
   subagentActivities,
   onToggleSubagentActivity,
 }) {
-  const [expanded, setExpanded] = useState(false);
+  // Three-state `userToggled`:
+  //   - `null`     : no manual override (auto-follows the running rule)
+  //   - `true`/`false`: user explicitly toggled the card
+  //
+  // While a sub-agent is running, the card defaults to OPEN. Once every
+  // sub-agent has finished, the card defaults to COLLAPSED. The first
+  // running-state edge clears any stale preference so a finished card from
+  // the previous run doesn't carry over.
+  const [userToggled, setUserToggled] = useState<boolean | null>(null);
   const isRunning = subagentActivities?.some(a => a.status === 'running') ?? false;
   const effectiveStatus = isRunning ? 'executing' : status;
+  const previousRunningRef = React.useRef(false);
+  React.useEffect(() => {
+    if (isRunning && !previousRunningRef.current) {
+      setUserToggled(null);
+    }
+    previousRunningRef.current = isRunning;
+  }, [isRunning]);
+  const cardExpanded = isRunning ? (userToggled ?? true) : (userToggled ?? false);
 
   return (
     <div className={`${styles.card} ${styles.delegateTo} ${styles[effectiveStatus]}`} data-tool-call-id={id}>
@@ -57,7 +68,7 @@ export const DelegateToCard: React.FC<DelegateToCardProps> = React.memo(function
           {isRunning && (
             <>
               <Loader2 size={12} className={styles.spinning} />
-              <span>子代理执行中</span>
+              <span>执行中</span>
             </>
           )}
           {!isRunning && status === 'success' && (
@@ -75,62 +86,85 @@ export const DelegateToCard: React.FC<DelegateToCardProps> = React.memo(function
           {duration !== undefined && (
             <span className={styles.duration}>{duration}ms</span>
           )}
-          {(subagentActivities?.length ?? 0) > 0 && (
-            <button
-              type="button"
-              className={styles.expandBtn}
-              onClick={() => setExpanded(v => !v)}
-              aria-label={expanded ? '收起详情' : '展开详情'}
-            >
-              {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-            </button>
-          )}
+          <button
+            type="button"
+            className={styles.expandBtn}
+            onClick={() => setUserToggled(v => !(v ?? cardExpanded))}
+            aria-label={cardExpanded ? '收起详情' : '展开详情'}
+          >
+            {cardExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+          </button>
         </div>
       </div>
 
-      {/* Sub-agent activities rendered inside the card */}
-      {subagentActivities && subagentActivities.length > 0 && (
-        <div className={styles.subagentActivities}>
-          {subagentActivities.map((activity) => (
-            <SubagentActivityItem
-              key={activity.id}
-              activity={activity}
-              onToggle={onToggleSubagentActivity ? () => onToggleSubagentActivity(activity.id) : undefined}
-            />
-          ))}
-        </div>
-      )}
+      {/* 展开后的详细内容 */}
+      {cardExpanded && (
+        <>
+          {/* 任务（提示词）- 默认折叠 */}
+          <PromptSection task={task} />
 
-      {/* Task preview / result */}
-      {expanded && (
-        <div className={styles.previewSection}>
-          <div className={styles.previewContainer}>
-            <div className={styles.previewContent}>
-              <div style={{ marginBottom: 8 }}>
-                <strong>任务：</strong>
-                <pre style={{ whiteSpace: 'pre-wrap', marginTop: 4 }}>{task}</pre>
-              </div>
-              {result && !error && (
-                <div>
-                  <strong>最终结果：</strong>
-                  <pre style={{ whiteSpace: 'pre-wrap', marginTop: 4 }}>{result}</pre>
-                </div>
-              )}
-              {error && (
-                <div className={styles.error}>
-                  <span className={styles.errorLabel}>错误:</span>
-                  <pre className={styles.errorContent}>{error}</pre>
-                </div>
-              )}
+          {/* 子代理活动 */}
+          {subagentActivities && subagentActivities.length > 0 && (
+            <div className={styles.subagentActivities}>
+              {subagentActivities.map((activity) => (
+                <SubagentActivityItem
+                  key={activity.id}
+                  activity={activity}
+                  onToggle={onToggleSubagentActivity ? () => onToggleSubagentActivity(activity.id) : undefined}
+                />
+              ))}
             </div>
-          </div>
+          )}
+
+          {/* 结果 */}
+          {result && !error && (
+            <div className={styles.delegateResult}>
+              <strong>结果：</strong>
+              <pre style={{ whiteSpace: 'pre-wrap', marginTop: 4, fontSize: '12px' }}>{result}</pre>
+            </div>
+          )}
+
+          {error && (
+            <div className={styles.error}>
+              <span className={styles.errorLabel}>错误:</span>
+              <pre className={styles.errorContent}>{error}</pre>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+});
+
+// 任务（提示词）区域 - 默认折叠
+interface PromptSectionProps {
+  task: string;
+}
+
+const PromptSection: React.FC<PromptSectionProps> = React.memo(function PromptSection({ task }) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div className={styles.promptSection}>
+      <button
+        type="button"
+        className={styles.promptToggle}
+        onClick={() => setExpanded(v => !v)}
+      >
+        {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+        <FileText size={12} />
+        <span>任务详情</span>
+      </button>
+      {expanded && (
+        <div className={styles.promptContent}>
+          <pre style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{task}</pre>
         </div>
       )}
     </div>
   );
 });
 
-// Internal component for rendering sub-agent activity items
+// 子代理活动条目
 interface SubagentActivityItemProps {
   activity: SubagentActivityType;
   onToggle?: () => void;
@@ -146,26 +180,77 @@ const SubagentActivityItem: React.FC<SubagentActivityItemProps> = React.memo(fun
 
   return (
     <div className={`${styles.subagentItem} ${styles[activity.status]}`}>
-      <div className={styles.subagentHeader} onClick={onToggle} style={{ cursor: onToggle ? 'pointer' : 'default' }}>
+      {/* 子代理头部 - 点击可折叠展开 */}
+      <div
+        className={styles.subagentHeader}
+        onClick={onToggle}
+        style={{ cursor: onToggle ? 'pointer' : 'default' }}
+      >
         <Bot size={12} />
         <span className={styles.subagentLabel}>{activity.label}</span>
         {isRunning && <Loader2 size={10} className={styles.spinning} />}
         {isCompleted && <Check size={10} />}
         {isError && <X size={10} />}
-        {onToggle && (activity.expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />)}
+        {onToggle && (
+          activity.expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />
+        )}
       </div>
 
-      {/* Output items rendered inline */}
-      {activity.outputItems.map((item, idx) => (
-        <SubagentOutputItem key={idx} item={item} />
-      ))}
+      {/* 子代理展开内容 */}
+      {activity.expanded && (
+        <>
+          {/* 子代理任务 */}
+          <SubagentTask task={activity.task} />
 
-      {/* Summary on completion */}
-      {isCompleted && activity.summary && (
-        <div className={styles.subagentSummary}>
-          <pre style={{ whiteSpace: 'pre-wrap', fontSize: '11px', margin: 0 }}>
-            {activity.summary.length > 300 ? activity.summary.slice(0, 300) + '...' : activity.summary}
-          </pre>
+          {/* 输出项 */}
+          {activity.outputItems.map((item, idx) => (
+            <SubagentOutputItem key={idx} item={item} />
+          ))}
+
+          {/* 总结 */}
+          {isCompleted && activity.summary && (
+            <div className={styles.subagentSummary}>
+              <pre style={{ whiteSpace: 'pre-wrap', fontSize: '11px', margin: 0 }}>
+                {activity.summary.length > 300 ? activity.summary.slice(0, 300) + '...' : activity.summary}
+              </pre>
+            </div>
+          )}
+
+          {/* 错误 */}
+          {isError && activity.error && (
+            <div className={styles.error}>
+              <span className={styles.errorLabel}>错误:</span>
+              <pre className={styles.errorContent}>{activity.error}</pre>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+});
+
+// 子代理任务区域 - 默认折叠
+interface SubagentTaskProps {
+  task: string;
+}
+
+const SubagentTask: React.FC<SubagentTaskProps> = React.memo(function SubagentTask({ task }) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div className={styles.subagentTask}>
+      <button
+        type="button"
+        className={styles.taskToggle}
+        onClick={() => setExpanded(v => !v)}
+      >
+        {expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+        <FileText size={10} />
+        <span>任务</span>
+      </button>
+      {expanded && (
+        <div className={styles.taskContent}>
+          <pre style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{task}</pre>
         </div>
       )}
     </div>
@@ -190,7 +275,7 @@ const SubagentOutputItem: React.FC<SubagentOutputItemProps> = React.memo(functio
     return (
       <div className={styles.subagentReasoning}>
         <BrainCircuit size={10} />
-        <span>思考过程: {item.content.length > 100 ? item.content.slice(0, 100) + '...' : item.content}</span>
+        <span>思考: {item.content.length > 100 ? item.content.slice(0, 100) + '...' : item.content}</span>
       </div>
     );
   }
@@ -223,18 +308,12 @@ const SubagentOutputItem: React.FC<SubagentOutputItemProps> = React.memo(functio
 });
 
 /**
- * Tiny inline indicator for `get_tool_help`. Shows only that a category of
- * help was loaded into the agent's context — NOT the spec contents.
- * Spec text is internal infrastructure (injected into LLM context);
- * exposing it to users would leak prompt engineering details and feel
- * noisy in the chat stream.
+ * Tiny inline indicator for `get_tool_help`.
  */
 export const GetToolHelpCard: React.FC<{
   id: string;
   spec: string;
   status: 'pending' | 'executing' | 'success' | 'error';
-  /** Internal LLM context — not rendered. Kept on the type so callers
-   *  can keep passing it; we just don't read it here. */
   result?: string;
   duration?: number;
 }> = React.memo(function GetToolHelpCard({ id, spec, status, duration }) {
