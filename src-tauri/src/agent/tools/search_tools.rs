@@ -1,9 +1,13 @@
 //! Search tools: list_dir, glob, grep
 
+use glob::Pattern;
 use serde_json::Value;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::{ToolDefinition, ToolError, ToolParameters, validate_workspace_path};
+
+const MAX_GLOB_DEPTH: usize = 20;
+const GLOB_MAX_RESULTS: usize = 1000;
 
 pub struct ListDirTool;
 
@@ -89,28 +93,59 @@ impl GlobTool {
 
         validate_workspace_path(base_dir, &workspace)?;
 
-        let matches = glob::glob(
-            &if pattern.starts_with('/') {
-                pattern.to_string()
-            } else {
-                format!("{}/{}", base_dir.trim_end_matches('/'), pattern)
-            },
-        )
-        .map_err(|e| ToolError::ExecutionError(format!("Glob error: {}", e)))?;
+        let base = Path::new(base_dir);
+        let pattern_for_match = Pattern::new(pattern)
+            .map_err(|e| ToolError::ExecutionError(format!("Invalid glob pattern: {}", e)))?;
 
         let mut files: Vec<String> = Vec::new();
+        let mut dirs_to_visit: Vec<PathBuf> = vec![base.to_path_buf()];
 
-        for entry in matches {
-            match entry {
-                Ok(path) => {
-                    if let Ok(rel) = path.strip_prefix(base_dir) {
-                        files.push(rel.to_string_lossy().trim_start_matches('/').to_string());
-                    } else {
-                        files.push(path.to_string_lossy().to_string());
-                    }
+        while let Some(current_dir) = dirs_to_visit.pop() {
+            if files.len() >= GLOB_MAX_RESULTS {
+                files.push(format!("[... truncated: {} files omitted ...]", files.len()));
+                break;
+            }
+
+            let mut dir = match tokio::fs::read_dir(&current_dir).await {
+                Ok(d) => d,
+                Err(_) => continue, // Skip directories we can't read
+            };
+
+            while let Some(entry) = dir.next_entry().await.map_err(|e| ToolError::IoError(e.to_string()))? {
+                let path = entry.path();
+                let name = entry.file_name().to_string_lossy().to_string();
+
+                // Skip hidden files and common exclusions
+                if name.starts_with('.') || name == "node_modules" || name == "target" {
+                    continue;
                 }
-                Err(e) => {
-                    tracing::warn!("Glob match error: {}", e);
+
+                let file_type = match entry.file_type().await {
+                    Ok(ft) => ft,
+                    Err(_) => continue,
+                };
+
+                // Skip symlinks to avoid loops (especially Steam's wine paths)
+                if file_type.is_symlink() {
+                    continue;
+                }
+
+                if file_type.is_dir() {
+                    // Only descend if within depth limit
+                    if current_dir.components().count() < base.components().count() + MAX_GLOB_DEPTH {
+                        dirs_to_visit.push(path.clone());
+                    }
+                } else if file_type.is_file() {
+                    // For non-absolute patterns, match against the relative path from base_dir
+                    let rel_path: String = if let Ok(stripped) = path.strip_prefix(base_dir) {
+                        stripped.to_string_lossy().trim_start_matches('/').to_string()
+                    } else {
+                        path.to_string_lossy().trim_start_matches('/').to_string()
+                    };
+
+                    if pattern_for_match.matches(&rel_path) {
+                        files.push(rel_path);
+                    }
                 }
             }
         }

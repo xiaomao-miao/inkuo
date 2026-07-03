@@ -338,6 +338,121 @@ const createToolCallSlice: AIPanelStateCreator<Pick<AIPanelState, 'addToolCall' 
     })),
 });
 
+/** Sub-agent activity slice */
+interface SubagentActivitySlice {
+  addSubagentActivity: (
+    sessionId: string,
+    messageId: string,
+    activity: import('../types').SubagentActivity,
+  ) => void;
+  addOutputToSubagentActivity: (
+    sessionId: string,
+    parentMessageId: string,
+    subagentId: string,
+    outputItem: OutputItem,
+  ) => void;
+  completeSubagentActivity: (
+    sessionId: string,
+    parentMessageId: string,
+    subagentId: string,
+    status: 'completed' | 'error',
+    summary?: string,
+    error?: string,
+  ) => void;
+  toggleSubagentActivityExpanded: (
+    sessionId: string,
+    parentMessageId: string,
+    subagentId: string,
+  ) => void;
+}
+
+const createSubagentSlice: AIPanelStateCreator<SubagentActivitySlice> = (set) => ({
+  addSubagentActivity: (sessionId, messageId, activity) =>
+    set((state) => ({
+      sessions: updateSessions(state.sessions, sessionId, (session) => ({
+        ...session,
+        messages: session.messages.map((msg) =>
+          msg.id === messageId
+            ? {
+                ...msg,
+                subagentActivities: [
+                  ...(msg.subagentActivities ?? []),
+                  activity,
+                ],
+              }
+            : msg,
+        ),
+      })),
+    })),
+
+  addOutputToSubagentActivity: (sessionId, parentMessageId, subagentId, outputItem) =>
+    set((state) => ({
+      sessions: updateSessions(state.sessions, sessionId, (session) => ({
+        ...session,
+        messages: session.messages.map((msg) =>
+          msg.id === parentMessageId
+            ? {
+                ...msg,
+                subagentActivities: msg.subagentActivities?.map((activity) =>
+                  activity.id === subagentId
+                    ? {
+                        ...activity,
+                        outputItems: [...activity.outputItems, outputItem],
+                      }
+                    : activity,
+                ),
+              }
+            : msg,
+        ),
+      })),
+    })),
+
+  completeSubagentActivity: (sessionId, parentMessageId, subagentId, status, summary, error) =>
+    set((state) => ({
+      sessions: updateSessions(state.sessions, sessionId, (session) => ({
+        ...session,
+        messages: session.messages.map((msg) =>
+          msg.id === parentMessageId
+            ? {
+                ...msg,
+                subagentActivities: msg.subagentActivities?.map((activity) =>
+                  activity.id === subagentId
+                    ? {
+                        ...activity,
+                        status,
+                        summary,
+                        error,
+                        // Auto-collapse on completion
+                        expanded: false,
+                      }
+                    : activity,
+                ),
+              }
+            : msg,
+        ),
+      })),
+    })),
+
+  toggleSubagentActivityExpanded: (sessionId, parentMessageId, subagentId) =>
+    set((state) => ({
+      sessions: updateSessions(state.sessions, sessionId, (session) => ({
+        ...session,
+        messages: session.messages.map((msg) =>
+          msg.id === parentMessageId
+            ? {
+                ...msg,
+                subagentActivities: msg.subagentActivities?.map((activity) =>
+                  activity.id === subagentId
+                    ? { ...activity, expanded: !activity.expanded }
+                    : activity,
+                ),
+              }
+            : msg,
+        ),
+      })),
+    })),
+});
+
 const createDiffSlice = (
   applyDiffActions: DiffApplicationActions,
 ): AIPanelStateCreator<Pick<AIPanelState, 'setCurrentDiff' | 'setMessageDiff' | 'setPendingDiff' | 'setDiffFromToolResult' | 'acceptHunk' | 'rejectHunk' | 'acceptAllHunks' | 'rejectAllHunks'>> => (set) => ({
@@ -411,7 +526,7 @@ const createDiffSlice = (
     })),
 });
 
-export const useAIPanelStore = create<AIPanelState>()(
+export const useAIPanelStore = create<AIPanelState & SubagentActivitySlice>()(
   persist(
     (...args) => ({
       ...createUiSlice(...args),
@@ -419,6 +534,7 @@ export const useAIPanelStore = create<AIPanelState>()(
       ...createMessageSlice(...args),
       ...createToolCallSlice(...args),
       ...createDiffSlice(editorDiffActions)(...args),
+      ...createSubagentSlice(...args),
     }),
     {
       name: 'inkuo-ai-panel',

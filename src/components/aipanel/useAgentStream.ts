@@ -18,6 +18,9 @@ interface UseAgentStreamArgs {
 export function useAgentStream({ mode }: UseAgentStreamArgs) {
   const clearToolCalls = useAIPanelStore((state) => state.clearToolCalls);
   const setPendingDiff = useAIPanelStore((state) => state.setPendingDiff);
+  const addSubagentActivity = useAIPanelStore((state) => state.addSubagentActivity);
+  const addOutputToSubagentActivity = useAIPanelStore((state) => state.addOutputToSubagentActivity);
+  const completeSubagentActivity = useAIPanelStore((state) => state.completeSubagentActivity);
 
   const unlistenRef = useRef<(() => void) | null>(null);
   const modeRef = useRef(mode);
@@ -77,6 +80,9 @@ export function useAgentStream({ mode }: UseAgentStreamArgs) {
           handleToolCallStart,
           handleToolCallArgsDelta,
           setPendingDiff,
+          addSubagentActivity,
+          addOutputToSubagentActivity,
+          completeSubagentActivity,
         });
       });
       if (disposed) {

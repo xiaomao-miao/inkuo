@@ -104,6 +104,16 @@ export interface StreamPayload {
   office_file_modified?: OfficeFileModifiedPayload;
 }
 
+/** Payload for subagent_start event */
+export interface SubagentStartPayload {
+  session_id: string;
+  parent_message_id: string;
+  sub_message_id: string;
+  expert: string;
+  label: string;
+  task: string;
+}
+
 // AI types
 export interface AIEditRequest {
   instruction: string;
@@ -212,7 +222,9 @@ export type StreamEventType =
   | 'error'
   | 'tool_call_start'
   | 'tool_result'
-  | 'done';
+  | 'done'
+  | 'subagent_start'
+  | 'subagent_end';
 
 /** Agent session configuration */
 export interface AgentConfig {
@@ -359,6 +371,33 @@ export interface ChatMessage {
   toolResult?: MessageToolResult;
   diff?: CurrentDiff;
   searchResults?: SearchResult[];
+  /**
+   * Nested sub-agent activity blocks. Rendered as collapsible sections
+   * under the delegate_to card.
+   */
+  subagentActivities?: SubagentActivity[];
+}
+
+/** Represents a sub-agent's nested activity block */
+export interface SubagentActivity {
+  /** Unique ID for this sub-agent run */
+  id: string;
+  /** The expert name (e.g., "office_word_expert") */
+  expert: string;
+  /** Display label (e.g., "Word Document Expert") */
+  label: string;
+  /** The task given to the sub-agent */
+  task: string;
+  /** Current status */
+  status: 'running' | 'completed' | 'error';
+  /** Final summary when completed */
+  summary?: string;
+  /** Error message if failed */
+  error?: string;
+  /** Whether the activity block is expanded */
+  expanded?: boolean;
+  /** Nested output items from the sub-agent */
+  outputItems: OutputItem[];
 }
 
 export interface KnowledgeBase {

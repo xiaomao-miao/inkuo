@@ -584,7 +584,7 @@ impl AgentExecutor {
         context: Option<&'a str>,
         parent_session: &'a AgentSession,
         session_id: &'a str,
-        _parent_message_id: &'a str,
+        parent_message_id: &'a str,
         on_event: F,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, AgentError>> + Send + 'a>>
     where
@@ -602,17 +602,36 @@ impl AgentExecutor {
 
             let sub_message_id = format!("sub:{}:{}", profile.name, uuid::Uuid::new_v4());
 
+            // Notify the frontend that a sub-agent is starting. The frontend uses
+            // this to render a collapsible "nested" activity block under the
+            // delegate_to card and to route the subsequent stream events (which
+            // carry sub_message_id as their message_id) into that block.
+            on_event(StreamPayload::subagent_start(
+                session_id,
+                parent_message_id,
+                &sub_message_id,
+                &profile.name,
+                &profile.label,
+                &task,
+            ));
+
             // Run nested. The same callback channel is reused; the on_event
             // listener (frontend) should distinguish via message_id.
             let summary = self
-                .run(&mut sub_session, &task_message, session_id, &sub_message_id, on_event)
-                .await?;
+                .run(&mut sub_session, &task_message, session_id, &sub_message_id, on_event.clone())
+                .await;
 
-            Ok(format!(
-                "[{} completed]\n\n{}",
-                profile.label,
-                summary
-            ))
+            // Notify the frontend that the sub-agent has finished.
+            on_event(StreamPayload::subagent_end(session_id, parent_message_id, &sub_message_id));
+
+            match summary {
+                Ok(s) => Ok(format!(
+                    "[{} completed]\n\n{}",
+                    profile.label,
+                    s
+                )),
+                Err(e) => Err(e),
+            }
         })
     }
 

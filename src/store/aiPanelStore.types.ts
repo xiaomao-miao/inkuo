@@ -137,7 +137,8 @@ export type AIPanelState =
   & AIPanelSessionSlice
   & AIPanelMessageSlice
   & AIPanelToolCallSlice
-  & AIPanelDiffSlice;
+  & AIPanelDiffSlice
+  & SubagentActivitySlice;
 
 export type AIPanelStateCreator<T> = StateCreator<
   AIPanelState,
@@ -145,3 +146,31 @@ export type AIPanelStateCreator<T> = StateCreator<
   [],
   T
 >;
+
+/** Sub-agent activity slice interface */
+export interface SubagentActivitySlice {
+  addSubagentActivity: (
+    sessionId: string,
+    messageId: string,
+    activity: import('../types').SubagentActivity,
+  ) => void;
+  addOutputToSubagentActivity: (
+    sessionId: string,
+    parentMessageId: string,
+    subagentId: string,
+    outputItem: OutputItem,
+  ) => void;
+  completeSubagentActivity: (
+    sessionId: string,
+    parentMessageId: string,
+    subagentId: string,
+    status: 'completed' | 'error',
+    summary?: string,
+    error?: string,
+  ) => void;
+  toggleSubagentActivityExpanded: (
+    sessionId: string,
+    parentMessageId: string,
+    subagentId: string,
+  ) => void;
+}

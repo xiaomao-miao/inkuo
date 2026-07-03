@@ -496,3 +496,11 @@
   margin-right: 6px;
   vertical-align: middle;
 }
+
+/* Subagent activities container */
+.subagentActivitiesContainer {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}

@@ -476,3 +476,308 @@
   color: var(--fg-muted);
   font-family: var(--font-mono);
 }
+
+/* Subagent Activity styles */
+.subagent {
+  margin-top: 8px;
+  margin-left: 16px;
+  border-left: 2px solid var(--accent-primary);
+  border-radius: 8px;
+}
+
+.subagent .header {
+  background-color: var(--accent-subtle);
+}
+
+.subagent.running {
+  border-color: var(--accent-primary);
+}
+
+.subagent.completed {
+  border-color: #22c55e;
+}
+
+.subagent.error {
+  border-color: #ef4444;
+}
+
+.subagent .icon {
+  background-color: var(--accent-primary);
+  color: white;
+}
+
+.subagent.running .icon {
+  background-color: var(--accent-primary);
+  color: white;
+}
+
+.subagent.completed .icon {
+  background-color: rgba(34, 197, 94, 0.2);
+  color: #22c55e;
+}
+
+.subagent.error .icon {
+  background-color: rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+}
+
+.subagentActivity {
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.subagentText {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--fg-secondary);
+  background-color: var(--bg-tertiary);
+  border-radius: 4px;
+}
+
+.subagentText svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+  color: var(--fg-muted);
+}
+
+.subagentReasoning {
+  padding: 4px 8px;
+}
+
+.reasoningToggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: none;
+  border: none;
+  color: var(--fg-muted);
+  font-size: 11px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background-color 0.15s;
+}
+
+.reasoningToggle:hover {
+  background-color: var(--bg-hover);
+  color: var(--fg-secondary);
+}
+
+.reasoningContent {
+  margin: 4px 0 0 20px;
+  padding: 8px;
+  background-color: var(--bg-tertiary);
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--fg-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.subagentToolCall {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  font-size: 11px;
+  color: var(--fg-secondary);
+  background-color: var(--bg-tertiary);
+  border-radius: 4px;
+}
+
+.subagentToolCall svg {
+  color: var(--accent-primary);
+}
+
+.subagentToolResult {
+  margin-left: 20px;
+  padding: 4px 8px;
+  background-color: var(--bg-tertiary);
+  border-radius: 4px;
+  border-left: 2px solid #22c55e;
+}
+
+.subagentToolResult.error {
+  border-left-color: #ef4444;
+}
+
+.toolResultHeader {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--fg-muted);
+  margin-bottom: 2px;
+}
+
+.toolResultContent {
+  margin: 0;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--fg-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 100px;
+  overflow: hidden;
+}
+
+.subagentSummary {
+  margin: 8px 12px;
+  padding: 8px;
+  background-color: rgba(34, 197, 94, 0.1);
+  border-radius: 4px;
+  border-left: 2px solid #22c55e;
+}
+
+.subagentSummary strong {
+  font-size: 11px;
+  color: #22c55e;
+}
+
+/* Inline subagent items within DelegateToCard */
+.delegateTo {
+  border-color: var(--accent-primary);
+}
+
+.delegateTo .subagentActivities {
+  padding: 6px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background-color: var(--bg-primary);
+  border-top: 1px solid var(--border-color);
+}
+
+.subagentItem {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background-color: var(--bg-secondary);
+  font-size: 11px;
+}
+
+.subagentItem.running {
+  border-left: 2px solid var(--accent-primary);
+}
+
+.subagentItem.completed {
+  border-left: 2px solid #22c55e;
+}
+
+.subagentItem.error {
+  border-left: 2px solid #ef4444;
+}
+
+.subagentHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg-secondary);
+}
+
+.subagentHeader svg:first-child {
+  color: var(--accent-primary);
+}
+
+.subagentLabel {
+  flex: 1;
+  font-weight: 500;
+  font-size: 11px;
+}
+
+.expandBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  background: none;
+  border: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background-color 0.15s;
+}
+
+.expandBtn:hover {
+  background-color: var(--bg-hover);
+  color: var(--fg-secondary);
+}
+
+.subagentText {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 2px 0 2px 18px;
+  font-size: 10px;
+  color: var(--fg-muted);
+}
+
+.subagentText svg {
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.subagentReasoning {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0 2px 18px;
+  font-size: 10px;
+  color: var(--fg-muted);
+}
+
+.subagentReasoning svg {
+  color: var(--accent-primary);
+  flex-shrink: 0;
+}
+
+.subagentToolCall {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0 2px 18px;
+  font-size: 10px;
+  color: var(--fg-secondary);
+}
+
+.subagentToolCall svg {
+  color: var(--accent-primary);
+  flex-shrink: 0;
+}
+
+.subagentToolResult {
+  margin-left: 18px;
+  padding: 2px 4px;
+  border-left: 2px solid #22c55e;
+}
+
+.subagentToolResult.error {
+  border-left-color: #ef4444;
+}
+
+.toolResultLabel {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 9px;
+  color: var(--fg-muted);
+}
+
+.subagentToolResult .toolResultLabel svg {
+  color: #22c55e;
+}
+
+.subagentToolResult.error .toolResultLabel svg {
+  color: #ef4444;
+}

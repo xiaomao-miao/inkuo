@@ -29,45 +29,46 @@ export const AssistantMessageBody: React.FC<AssistantMessageBodyProps> = ({
   const hasOutputItems = message.outputItems && message.outputItems.length > 0;
   const workspacePath = useSidebarStore((s) => s.workspacePath);
   const openWorkspaceFile = useSidebarStore((s) => s.openWorkspaceFile);
+  const toggleSubagentActivityExpanded = useAIPanelStore((s) => s.toggleSubagentActivityExpanded);
 
   const handleFileClick = React.useCallback((filePath: string) => {
     openWorkspaceFile(filePath, { forceNew: true });
   }, [openWorkspaceFile]);
 
-  if (hasOutputItems) {
-    return (
-      <>
-        {message.outputItems.map((item, idx) => (
-          <OutputItemView
-            key={idx}
-            item={item}
-            message={message}
-            sessionId={sessionId}
-            isThisStreaming={isThisStreaming}
-            isLastItem={idx === message.outputItems.length - 1}
-            onFileClick={handleFileClick}
-            workspacePath={workspacePath ?? undefined}
-          />
-        ))}
-      </>
-    );
-  }
+  const handleSubagentToggle = React.useCallback((subagentId: string) => {
+    toggleSubagentActivityExpanded(sessionId, message.id, subagentId);
+  }, [sessionId, message.id, toggleSubagentActivityExpanded]);
 
-  if (message.content) {
-    return (
-      <LegacyMessageContent
-        message={message}
-        sessionId={sessionId}
-        isThisStreaming={isThisStreaming}
-        mode={mode}
-        activeToolCalls={activeToolCalls}
-        onFileClick={handleFileClick}
-        workspacePath={workspacePath ?? undefined}
-      />
-    );
-  }
-
-  return null;
+  return (
+    <>
+      {hasOutputItems && message.outputItems.map((item, idx) => (
+        <OutputItemView
+          key={idx}
+          item={item}
+          message={message}
+          sessionId={sessionId}
+          isThisStreaming={isThisStreaming}
+          isLastItem={idx === message.outputItems.length - 1}
+          onFileClick={handleFileClick}
+          workspacePath={workspacePath ?? undefined}
+          onSubagentToggle={handleSubagentToggle}
+        />
+      ))}
+      {/* Legacy content path */}
+      {!hasOutputItems && message.content && (
+        <LegacyMessageContent
+          message={message}
+          sessionId={sessionId}
+          isThisStreaming={isThisStreaming}
+          mode={mode}
+          activeToolCalls={activeToolCalls}
+          onFileClick={handleFileClick}
+          workspacePath={workspacePath ?? undefined}
+          onSubagentToggle={handleSubagentToggle}
+        />
+      )}
+    </>
+  );
 };
 
 interface OutputItemViewProps {
@@ -78,6 +79,7 @@ interface OutputItemViewProps {
   isLastItem: boolean;
   onFileClick?: (filePath: string) => void;
   workspacePath?: string;
+  onSubagentToggle?: (subagentId: string) => void;
 }
 
 const OutputItemView: React.FC<OutputItemViewProps> = ({
@@ -88,6 +90,7 @@ const OutputItemView: React.FC<OutputItemViewProps> = ({
   isLastItem,
   onFileClick,
   workspacePath,
+  onSubagentToggle,
 }) => {
   if (item.type === 'text') {
     return (
@@ -115,6 +118,10 @@ const OutputItemView: React.FC<OutputItemViewProps> = ({
     // Specialized renderers for sub-agent meta tools.
     if (item.toolName === 'delegate_to') {
       const args = item.arguments || {};
+      // Find subagent activities for this delegate_to call
+      const subagentActivities = message.subagentActivities?.filter(
+        a => a.expert === (args.expert as string)
+      );
       return (
         <ToolOutputItem
           isCompact={false}
@@ -128,6 +135,8 @@ const OutputItemView: React.FC<OutputItemViewProps> = ({
               status={status}
               result={item.result}
               duration={item.duration}
+              subagentActivities={subagentActivities}
+              onToggleSubagentActivity={subagentActivities?.length ? onSubagentToggle : undefined}
             />
           }
         />
@@ -346,6 +355,7 @@ interface LegacyMessageContentProps {
   activeToolCalls: ActiveToolCall[];
   onFileClick?: (filePath: string) => void;
   workspacePath?: string;
+  onSubagentToggle?: (subagentId: string) => void;
 }
 
 const LegacyMessageContent: React.FC<LegacyMessageContentProps> = ({
@@ -356,6 +366,7 @@ const LegacyMessageContent: React.FC<LegacyMessageContentProps> = ({
   activeToolCalls,
   onFileClick,
   workspacePath,
+  onSubagentToggle,
 }) => {
   return (
     <>
@@ -398,6 +409,9 @@ const LegacyMessageContent: React.FC<LegacyMessageContentProps> = ({
         const toolName = toolCall?.name || 'unknown';
         if (toolName === 'delegate_to') {
           const args = toolCall?.arguments || {};
+          const subagentActivities = message.subagentActivities?.filter(
+            a => a.expert === (args.expert as string)
+          );
           return (
             <div key={`tool-${result.toolCallId}`} className={styles.toolResultItem}>
               <DelegateToCard
@@ -408,6 +422,8 @@ const LegacyMessageContent: React.FC<LegacyMessageContentProps> = ({
                 result={result.result}
                 error={result.isError ? result.result : undefined}
                 duration={result.duration}
+                subagentActivities={subagentActivities}
+                onToggleSubagentActivity={subagentActivities?.length ? onSubagentToggle : undefined}
               />
             </div>
           );

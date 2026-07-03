@@ -217,6 +217,44 @@ impl StreamPayload {
             })
     }
 
+    /// Sub-agent start event. Emitted before the sub-agent's first stream event
+    /// so the frontend can initialize a collapsible "nested" message block.
+    pub fn subagent_start(
+        session_id: &str,
+        parent_message_id: &str,
+        sub_message_id: &str,
+        expert: &str,
+        label: &str,
+        task: &str,
+    ) -> Self {
+        Self::default()
+            .with_ids(session_id, parent_message_id)
+            .with_event("subagent_start")
+            .with(|p| {
+                p.content = Some(task.to_string());
+                p.final_content = Some(sub_message_id.to_string());
+                p.summary = Some(expert.to_string());
+                p.tool_args = Some(label.to_string());
+                p.done = false;
+            })
+    }
+
+    /// Sub-agent end event. Emitted when a sub-agent completes so the frontend
+    /// can finalize the nested message block.
+    pub fn subagent_end(
+        session_id: &str,
+        parent_message_id: &str,
+        sub_message_id: &str,
+    ) -> Self {
+        Self::default()
+            .with_ids(session_id, parent_message_id)
+            .with_event("subagent_end")
+            .with(|p| {
+                p.content = Some(sub_message_id.to_string());
+                p.done = false;
+            })
+    }
+
     fn with(mut self, f: impl FnOnce(&mut Self)) -> Self {
         f(&mut self);
         self
