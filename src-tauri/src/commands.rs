@@ -154,6 +154,16 @@ pub enum AppCommandError {
     ParseWorkspaceSnapshots(String),
     #[error("Invalid workspace snapshots path: {0}")]
     InvalidWorkspaceSnapshotsPath(String),
+    #[error("Snapshot not found: {0}")]
+    SnapshotNotFound(String),
+    #[error("Snapshot manifest corrupt: {0}")]
+    SnapshotCorrupt(String),
+    #[error("Workspace path is not absolute: {0}")]
+    InvalidWorkspacePath(String),
+    #[error("Snapshot write failed: {0}")]
+    SnapshotWriteFailed(String),
+    #[error("Snapshot read failed: {0}")]
+    SnapshotReadFailed(String),
 }
 
 pub struct AppState {
@@ -527,6 +537,22 @@ pub struct ApiConfig {
     pub max_tokens: Option<u32>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SnapshotSettings {
+    #[serde(default = "default_snapshot_max_count")]
+    pub max_count: usize,
+    #[serde(default = "default_snapshot_auto_baseline")]
+    pub auto_baseline: bool,
+}
+
+fn default_snapshot_max_count() -> usize {
+    50
+}
+
+fn default_snapshot_auto_baseline() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub theme: String,
@@ -541,6 +567,8 @@ pub struct Settings {
     pub embedding_model_path: Option<String>,
     pub chunk_size: usize,
     pub chunk_overlap: usize,
+    #[serde(default)]
+    pub snapshot: SnapshotSettings,
 }
 
 impl Default for Settings {
@@ -571,6 +599,7 @@ impl Default for Settings {
             embedding_model_path: None,
             chunk_size: 500,
             chunk_overlap: 50,
+            snapshot: SnapshotSettings::default(),
         }
     }
 }
@@ -1334,5 +1363,347 @@ pub async fn load_workspace_snapshot(
         touch_snapshot(&path);
     }
     Ok(value)
+}
+
+// =============================================================================
+// Workspace file-content snapshots
+// =============================================================================
+//
+// These commands back the "Workspace Snapshots" UI panel: a manual +
+// AI-triggered safety net that stores whole-file copies of every tracked
+// document and supports preview + restore of an entire workspace.
+//
+// The on-disk layout is documented in `snapshots.rs`.  All public commands
+// here delegate to that module.
+
+/// Enumerate every file (recursively) under `workspace_path`, skipping
+/// derived directories (node_modules, target, etc.), and return each file's
+/// raw bytes base64-encoded together with its relative path.  Used by the
+/// frontend when creating a workspace snapshot.
+#[tauri::command]
+pub async fn collect_workspace_files_cmd(
+    workspace_path: String,
+) -> Result<Vec<WorkspaceFilePayload>, AppCommandError> {
+    let path = std::path::PathBuf::from(&workspace_path);
+    if !path.is_absolute() {
+        return Err(AppCommandError::InvalidWorkspacePath(workspace_path));
+    }
+
+    let skip_dirs = [
+        "node_modules",
+        ".git",
+        "target",
+        "dist",
+        "build",
+        ".next",
+        ".cache",
+        ".turbo",
+        "out",
+    ];
+
+    fn walk(
+        dir: &std::path::Path,
+        prefix: &str,
+        skip_dirs: &[&str],
+        out: &mut Vec<WorkspaceFilePayload>,
+    ) -> Result<(), AppCommandError> {
+        let entries = std::fs::read_dir(dir).map_err(|e| AppCommandError::ReadDocument(e.to_string()))?;
+        for entry in entries.flatten() {
+            let file_type = match entry.file_type() {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            let name = entry.file_name().to_string_lossy().to_string();
+            let entry_path = entry.path();
+            if file_type.is_dir() {
+                if skip_dirs.contains(&name.as_str()) {
+                    continue;
+                }
+                let new_prefix = if prefix.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{}/{}", prefix, name)
+                };
+                walk(&entry_path, &new_prefix, skip_dirs, out)?;
+            } else if file_type.is_file() {
+                let rel = if prefix.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{}/{}", prefix, name)
+                };
+                let bytes = match std::fs::read(&entry_path) {
+                    Ok(b) => b,
+                    Err(_) => continue, // skip unreadable files
+                };
+                out.push(WorkspaceFilePayload {
+                    rel_path: rel,
+                    content_base64: base64_encode(&bytes),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    let mut out: Vec<WorkspaceFilePayload> = Vec::new();
+    walk(&path, "", &skip_dirs, &mut out)?;
+    Ok(out)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceFilePayload {
+    pub rel_path: String,
+    pub content_base64: String,
+}
+
+/// Read a single file's raw bytes (base64-encoded) so the frontend can pass
+/// them to the snapshot command.  Mirrors `read_document` but works for
+/// binary files too.
+#[tauri::command]
+pub async fn read_file_bytes_cmd(
+    path: String,
+) -> Result<String, AppCommandError> {
+    let bytes = std::fs::read(&path)
+        .map_err(|e| AppCommandError::ReadDocument(e.to_string()))?;
+    Ok(base64_encode(&bytes))
+}
+
+/// Read a single file's *text* content from a workspace snapshot.  Returns
+/// `Ok(None)` if the file doesn't exist in the snapshot or is binary.
+#[tauri::command]
+pub async fn read_snapshot_file_cmd(
+    workspace_path: String,
+    snapshot_id: String,
+    rel_path: String,
+) -> Result<Option<String>, AppCommandError> {
+    let path = crate::snapshots::snapshot_dir(&workspace_path, &snapshot_id)
+        .join("files")
+        .join(&rel_path);
+    if !path.exists() {
+        return Ok(None);
+    }
+    match std::fs::read_to_string(&path) {
+        Ok(text) => Ok(Some(text)),
+        Err(_) => Ok(None), // binary file
+    }
+}
+
+fn base64_encode(input: &[u8]) -> String {
+    const ALPHA: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    let mut i = 0;
+    while i + 3 <= input.len() {
+        let n = ((input[i] as u32) << 16)
+            | ((input[i + 1] as u32) << 8)
+            | (input[i + 2] as u32);
+        out.push(ALPHA[((n >> 18) & 0x3F) as usize] as char);
+        out.push(ALPHA[((n >> 12) & 0x3F) as usize] as char);
+        out.push(ALPHA[((n >> 6) & 0x3F) as usize] as char);
+        out.push(ALPHA[(n & 0x3F) as usize] as char);
+        i += 3;
+    }
+    let rem = input.len() - i;
+    if rem == 1 {
+        let n = (input[i] as u32) << 16;
+        out.push(ALPHA[((n >> 18) & 0x3F) as usize] as char);
+        out.push(ALPHA[((n >> 12) & 0x3F) as usize] as char);
+        out.push('=');
+        out.push('=');
+    } else if rem == 2 {
+        let n = ((input[i] as u32) << 16) | ((input[i + 1] as u32) << 8);
+        out.push(ALPHA[((n >> 18) & 0x3F) as usize] as char);
+        out.push(ALPHA[((n >> 12) & 0x3F) as usize] as char);
+        out.push(ALPHA[((n >> 6) & 0x3F) as usize] as char);
+        out.push('=');
+    }
+    out
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateSnapshotArgs {
+    pub workspace_path: String,
+    pub label: Option<String>,
+    #[serde(default = "default_trigger")]
+    pub trigger: String,
+    /// Vector of `(rel_path, base64_bytes)` tuples, sent from the frontend so
+    /// the backend doesn't need a separate "enumerate workspace files"
+    /// command.  Base64 keeps the IPC payload JSON-safe.
+    pub files: Vec<SnapshotFilePayload>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnapshotFilePayload {
+    pub rel_path: String,
+    /// Raw file bytes, base64-encoded.
+    pub content_base64: String,
+}
+
+fn default_trigger() -> String {
+    "manual".to_string()
+}
+
+#[tauri::command]
+pub async fn create_workspace_snapshot_cmd(
+    args: CreateSnapshotArgs,
+) -> Result<crate::snapshots::SnapshotManifest, AppCommandError> {
+    let CreateSnapshotArgs {
+        workspace_path,
+        label,
+        trigger,
+        files,
+    } = args;
+
+    let mut decoded: Vec<(String, Vec<u8>)> = Vec::with_capacity(files.len());
+    for f in files {
+        let bytes = base64_decode(&f.content_base64)
+            .map_err(|e| AppCommandError::SnapshotWriteFailed(format!("base64 decode: {}", e)))?;
+        decoded.push((f.rel_path, bytes));
+    }
+
+    crate::snapshots::create_workspace_snapshot(&workspace_path, label, &trigger, decoded)
+        .map_err(|e| AppCommandError::SnapshotWriteFailed(e.to_string()))
+}
+
+#[tauri::command]
+pub async fn list_workspace_snapshots_cmd(
+    workspace_path: String,
+) -> Result<Vec<crate::snapshots::SnapshotIndexEntry>, AppCommandError> {
+    crate::snapshots::list_workspace_snapshots(&workspace_path)
+        .map_err(|e| AppCommandError::SnapshotReadFailed(e.to_string()))
+}
+
+#[tauri::command]
+pub async fn delete_workspace_snapshot_cmd(
+    workspace_path: String,
+    snapshot_id: String,
+) -> Result<(), AppCommandError> {
+    crate::snapshots::delete_workspace_snapshot(&workspace_path, &snapshot_id)
+        .map_err(|e| AppCommandError::SnapshotWriteFailed(e.to_string()))
+}
+
+#[tauri::command]
+pub async fn preview_workspace_snapshot_restore_cmd(
+    workspace_path: String,
+    snapshot_id: String,
+) -> Result<Vec<crate::snapshots::FileDiffPreview>, AppCommandError> {
+    crate::snapshots::preview_workspace_snapshot_restore(&workspace_path, &snapshot_id)
+        .map_err(|e| AppCommandError::SnapshotReadFailed(e.to_string()))
+}
+
+#[tauri::command]
+pub async fn restore_workspace_snapshot_cmd(
+    workspace_path: String,
+    snapshot_id: String,
+    app_handle: TauriAppHandle,
+) -> Result<Vec<String>, AppCommandError> {
+    crate::snapshots::restore_workspace_snapshot(&workspace_path, &snapshot_id, &app_handle)
+        .map_err(|e| AppCommandError::SnapshotWriteFailed(e.to_string()))
+}
+
+/// Minimal base64 decoder so we don't pull in the `base64` crate just for
+/// this.  Returns an error on invalid input.
+fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
+    const ALPHA: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut lookup = [255u8; 256];
+    for (i, &c) in ALPHA.iter().enumerate() {
+        lookup[c as usize] = i as u8;
+    }
+
+    let cleaned: Vec<u8> = input.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
+    if cleaned.len() % 4 != 0 {
+        return Err("length not a multiple of 4".into());
+    }
+
+    let mut out = Vec::with_capacity(cleaned.len() / 4 * 3);
+    let chunks = cleaned.chunks_exact(4);
+    let remainder = chunks.remainder();
+    for chunk in chunks {
+        let padding = chunk.iter().filter(|&&c| c == b'=').count();
+        let mut vals = [0u8; 4];
+        for (i, &c) in chunk.iter().enumerate() {
+            let v = if c == b'=' { 0 } else { lookup[c as usize] };
+            if c != b'=' && v == 255 {
+                return Err(format!("invalid char {:?}", c as char));
+            }
+            vals[i] = v;
+        }
+        out.push((vals[0] << 2) | (vals[1] >> 4));
+        if padding < 2 {
+            out.push((vals[1] << 4) | (vals[2] >> 2));
+        }
+        if padding < 1 {
+            out.push((vals[2] << 6) | vals[3]);
+        }
+    }
+    if !remainder.is_empty() {
+        let mut vals = [0u8; 4];
+        for (i, &c) in remainder.iter().enumerate() {
+            let v = if c == b'=' { 0 } else { lookup[c as usize] };
+            if c != b'=' && v == 255 {
+                return Err(format!("invalid char {:?}", c as char));
+            }
+            vals[i] = v;
+        }
+        let padding = remainder.iter().filter(|&&c| c == b'=').count();
+        out.push((vals[0] << 2) | (vals[1] >> 4));
+        if padding < 2 {
+            out.push((vals[1] << 4) | (vals[2] >> 2));
+        }
+        if padding < 1 {
+            out.push((vals[2] << 6) | vals[3]);
+        }
+    }
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn base64_round_trip() {
+        let original = b"hello world".to_vec();
+        let encoded = base64_encode(&original);
+        let decoded = base64_decode(&encoded).unwrap();
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn base64_decode_known_vector() {
+        assert_eq!(base64_decode("aGVsbG8=").unwrap(), b"hello");
+        assert_eq!(base64_decode("aGVsbG8gd29ybGQ=").unwrap(), b"hello world");
+        assert_eq!(base64_decode("").unwrap(), b"");
+    }
+
+    fn base64_encode(input: &[u8]) -> String {
+        const ALPHA: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = String::new();
+        let mut i = 0;
+        while i + 3 <= input.len() {
+            let n = ((input[i] as u32) << 16) | ((input[i + 1] as u32) << 8) | (input[i + 2] as u32);
+            out.push(ALPHA[((n >> 18) & 0x3F) as usize] as char);
+            out.push(ALPHA[((n >> 12) & 0x3F) as usize] as char);
+            out.push(ALPHA[((n >> 6) & 0x3F) as usize] as char);
+            out.push(ALPHA[(n & 0x3F) as usize] as char);
+            i += 3;
+        }
+        let rem = input.len() - i;
+        if rem == 1 {
+            let n = (input[i] as u32) << 16;
+            out.push(ALPHA[((n >> 18) & 0x3F) as usize] as char);
+            out.push(ALPHA[((n >> 12) & 0x3F) as usize] as char);
+            out.push('=');
+            out.push('=');
+        } else if rem == 2 {
+            let n = ((input[i] as u32) << 16) | ((input[i + 1] as u32) << 8);
+            out.push(ALPHA[((n >> 18) & 0x3F) as usize] as char);
+            out.push(ALPHA[((n >> 12) & 0x3F) as usize] as char);
+            out.push(ALPHA[((n >> 6) & 0x3F) as usize] as char);
+            out.push('=');
+        }
+        out
+    }
 }
 

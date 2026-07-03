@@ -75,7 +75,7 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onWorkspaceSelected })
             <span className={styles.logoIcon}>I</span>
           </div>
           <h1 className={styles.title}>inkuo</h1>
-          <p className={styles.subtitle}>本地优先 AI 文档编辑器</p>
+          <p className={styles.subtitle}>AI 文档编辑器</p>
         </div>
 
         <div className={styles.actions}>

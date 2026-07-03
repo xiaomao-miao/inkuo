@@ -78,6 +78,10 @@ const defaultSettings: Settings = {
   embedding_model_path: null,
   chunk_size: 500,
   chunk_overlap: 50,
+  snapshot: {
+    maxCount: 50,
+    autoBaseline: true,
+  },
 };
 
 export const useSettingsStore = create<SettingsState>()(

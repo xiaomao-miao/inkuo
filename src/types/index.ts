@@ -519,6 +519,10 @@ export interface Settings {
   embedding_model_path: string | null;
   chunk_size: number;
   chunk_overlap: number;
+  snapshot: {
+    maxCount: number;
+    autoBaseline: boolean;
+  };
 }
 
 /** Supported embedding models */

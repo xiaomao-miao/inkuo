@@ -36,6 +36,7 @@
 ## 6. 安全、权限与可靠性
 - `security/key-storage.md`：keyring/secret-service、前端不接触明文 key。
 - `security/workspace-write-guard.md`：Workspace 写入保护、二次确认、只读模式。
+- `snapshots-design.md`：工作区快照与回滚（手动 + AI baseline 联动 + 还原预览）。
 - `quality/performance.md`：性能目标与测试口径。
 - `quality/observability.md`：日志、脱敏导出、可观测性。
 

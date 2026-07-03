@@ -20,6 +20,7 @@ mod openai_stream;
 mod file_watcher;
 mod inline_complete;
 mod office;
+mod snapshots;
 pub mod agent;
 pub mod knowledge;
 
@@ -60,6 +61,11 @@ pub fn run() {
             // startup. All subsequent reads/writes happen in-memory; the
             // disk file is updated atomically whenever a snapshot changes.
             commands::init_workspace_snapshots(&app.handle());
+
+            // Background cleanup for file-content snapshots: scans
+            // `~/.inkuo/snapshots/` every few minutes for orphan directories
+            // (e.g. half-deleted snapshots) and prunes them.
+            snapshots::init_snapshot_cleanup_task();
 
             // Register shared vector store cache so both KB commands and agent tools
             // use the same cache, avoiding WAL lock conflicts.
@@ -119,6 +125,14 @@ pub fn run() {
             commands::create_new_window,
             commands::save_workspace_snapshot,
             commands::load_workspace_snapshot,
+            commands::create_workspace_snapshot_cmd,
+            commands::list_workspace_snapshots_cmd,
+            commands::delete_workspace_snapshot_cmd,
+            commands::preview_workspace_snapshot_restore_cmd,
+            commands::restore_workspace_snapshot_cmd,
+            commands::collect_workspace_files_cmd,
+            commands::read_file_bytes_cmd,
+            commands::read_snapshot_file_cmd,
         ])
         .run(tauri::generate_context!())
         .expect("error while running inkuo application");

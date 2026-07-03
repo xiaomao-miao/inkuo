@@ -8,14 +8,23 @@ import {
   Sparkles,
   Info,
   AlertCircle,
-  Brain
+  Brain,
+  History,
 } from 'lucide-react';
 import { useSettingsStore, useInlineCompleteStore } from '../../store';
 import { ModelsSettings, KnowledgeSettings } from './index';
+import { SnapshotsSettings } from './SnapshotsSettings';
 import { Select } from './Select';
 import styles from './SettingsPanel.module.css';
 
-type SettingsTab = 'models' | 'knowledge' | 'editor' | 'ai' | 'appearance' | 'about';
+type SettingsTab =
+  | 'models'
+  | 'knowledge'
+  | 'editor'
+  | 'ai'
+  | 'snapshots'
+  | 'appearance'
+  | 'about';
 
 export const SettingsPanel = () => {
   const settings = useSettingsStore((state) => state.settings);
@@ -31,6 +40,7 @@ export const SettingsPanel = () => {
     { id: 'knowledge', label: '知识库', icon: <Brain size={14} /> },
     { id: 'editor', label: '编辑器', icon: <Type size={14} /> },
     { id: 'ai', label: 'AI', icon: <Sparkles size={14} /> },
+    { id: 'snapshots', label: '快照', icon: <History size={14} /> },
     { id: 'appearance', label: '外观', icon: <Palette size={14} /> },
     { id: 'about', label: '关于', icon: <Info size={14} /> },
   ];
@@ -304,6 +314,8 @@ export const SettingsPanel = () => {
             </div>
           </div>
         );
+      case 'snapshots':
+        return <SnapshotsSettings />;
       case 'about':
         return (
           <div className={styles.tabContent}>
@@ -314,7 +326,7 @@ export const SettingsPanel = () => {
               <h2 className={styles.appName}>Inkuo</h2>
               <p className={styles.appVersion}>版本 1.0.0</p>
               <p className={styles.appDescription}>
-                Inkuo 是一个本地优先的 AI 文档编辑器，帮助你更高效地编辑和管理文档。
+                Inkuo 是一个 AI 文档编辑器，帮助你更高效地编辑和管理文档。
               </p>
 
               <div className={styles.aboutLinks}>

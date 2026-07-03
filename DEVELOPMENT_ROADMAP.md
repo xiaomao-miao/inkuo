@@ -218,7 +218,7 @@
 
 **让 AI 真正动手写，而不是只动嘴。**
 
-inkuo 是一个本地优先的 AI 文档编辑器。不同于普通的 AI 对话工具，inkuo 的 AI Agent 可以：
+inkuo 是一个 AI 文档编辑器。不同于普通的 AI 对话工具，inkuo 的 AI Agent 可以：
 - 读取、搜索、创建、修改你的文件
 - 自主规划论文大纲并逐章节写作
 - 基于你的项目代码生成完整方案
@@ -281,7 +281,7 @@ inkuo 是一个本地优先的 AI 文档编辑器。不同于普通的 AI 对话
 3. **现有方案**：通用 AI 的局限（只能给建议，不能动手做事）
 4. **解决方案**：inkuo 的核心价值主张
 5. **产品演示**：3 张截图
-6. **技术架构**：本地优先 + AI Agent + 隐私
+6. **技术架构**：本地可选 + AI Agent + 隐私
 7. **商业模式**： Freemium → Pro 订阅
 8. **市场规模**：知识工作工具市场
 9. **竞争分析**：vs Cursor / Claude Code / Notion AI
@@ -304,6 +304,21 @@ inkuo 是一个本地优先的 AI 文档编辑器。不同于普通的 AI 对话
 - 工具调用时：显示当前正在执行的操作（"正在搜索资料...", "正在写入文件..."）
 - Diff 预览：添加"AI 做了什么"的中文总结（而非纯 diff）
 - 工作进度：展示"第 3/8 章节"等进度指示
+
+#### 5.3 工作区快照与回滚（已完成）✅
+
+详见 [`docs/snapshots-design.md`](docs/snapshots-design.md)。
+
+- **手动快照**：左侧 Sidebar 新增"快照"视图入口（ActivityBar 图标），支持创建 / 列出 / 预览 / 还原 / 删除。
+- **整文件副本**：快照存于 `~/.inkuo/snapshots/{workspaceHash}/{snapshotId}/files/`，对 .docx / .pptx 等二进制文件同样字节级安全。
+- **LRU 上限**：默认每工作区 50 份，可在设置面板调整；超出后最旧条目自动裁剪。
+- **全局清理任务**：每 5 分钟扫描一次，清理 index 不再引用的孤儿目录。
+- **还原预览对话框**：文本文件展示 `compute_diff` 行级 diff（绿 + / 红 −），二进制文件展示大小变化；二次确认后才执行；还原前自动备份到 `~/.inkuo/backups/`。
+- **AI 面板联动**：Agent 模式发指令时自动打 baseline；用户编辑并重发该 user message 时自动还原到 baseline + 截断消息流。Baseline 异常路径（流被 stop / 报错）保留，下次重发仍能正确回滚。
+
+新增 / 修改文件：
+- 后端：`src-tauri/src/snapshots.rs`（新建）、`src-tauri/src/commands.rs`、`src-tauri/src/lib.rs`
+- 前端：`src/services/snapshots.ts`、`src/store/baselineStore.ts`、`src/components/snapshots/{SnapshotPanel,SnapshotRestoreDialog,useSnapshotActions}.tsx`、`src/components/settings/SnapshotsSettings.tsx`、`src/components/aipanel/useChatSessionActions.ts`、`src/types/index.ts`、`src/store/settingsStore.ts`
 
 ---
 

@@ -13,6 +13,7 @@ export { useSettingsStore } from './settingsStore';
 export { useCmdKStore } from './cmdKStore';
 export { useInlineCompleteStore } from './inlineCompleteStore';
 export { useNotificationStore } from './notificationStore';
+export { useBaselineStore } from './baselineStore';
 export { useClipboardStore, type ClipboardMode, type ClipboardState } from './clipboardStore';
 export {
   useContextMenuStore,

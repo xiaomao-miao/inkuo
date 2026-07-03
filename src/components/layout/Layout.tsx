@@ -3,6 +3,8 @@ import { TitleBar } from '../titlebar/TitleBar';
 import { ActivityBar } from '../activitybar/ActivityBar';
 import { Sidebar } from '../sidebar/Sidebar';
 import { KnowledgeView } from '../sidebar/KnowledgeView';
+import { ConfirmDialog } from '../sidebar/ConfirmDialog';
+import { SnapshotPanel } from '../snapshots/SnapshotPanel';
 import { ResizableHandle } from '../resizable';
 import { Editor } from '../editor/Editor';
 import { TabBar } from '../editor/TabBar';
@@ -77,9 +79,11 @@ export const Layout = () => {
                 <Sidebar />
               ) : activeView === 'knowledge' ? (
                 <KnowledgeView />
+              ) : activeView === 'snapshots' ? (
+                <SnapshotPanel />
               ) : (
                 <div className={styles.placeholder} aria-live="polite">
-                  <p>{DISABLED_VIEW_LABELS[activeView]}</p>
+                  <p>{DISABLED_VIEW_LABELS[activeView as keyof typeof DISABLED_VIEW_LABELS]}</p>
                   <span>该视图暂未开放，当前以禁用状态展示。</span>
                 </div>
               )}
@@ -102,6 +106,10 @@ export const Layout = () => {
           </>
         )}
       </div>
+
+      {/* Global dialog portals — must be rendered outside the sidebar
+          tree so they're available from any view (files, snapshots, etc.). */}
+      <ConfirmDialog />
     </div>
   );
 };

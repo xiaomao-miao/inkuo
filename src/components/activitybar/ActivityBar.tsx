@@ -5,12 +5,13 @@ import {
   GitBranch,
   BookOpen,
   Brain,
+  History,
   PanelLeft
 } from 'lucide-react';
 import { useSidebarStore } from '../../store/sidebarStore';
 import styles from './ActivityBar.module.css';
 
-export type ViewType = 'files' | 'search' | 'git' | 'extensions' | 'knowledge';
+export type ViewType = 'files' | 'search' | 'git' | 'extensions' | 'knowledge' | 'snapshots';
 
 const EXTENSIONS_BADGE_COUNT = 0;
 
@@ -33,6 +34,7 @@ export const ActivityBar = ({
     { id: 'search', icon: <Search size={22} />, label: '搜索' },
     { id: 'git', icon: <GitBranch size={22} />, label: '源代码管理' },
     { id: 'knowledge', icon: <Brain size={22} />, label: '知识库' },
+    { id: 'snapshots', icon: <History size={22} />, label: '快照' },
     { id: 'extensions', icon: <BookOpen size={22} />, label: '扩展' },
   ];
 
