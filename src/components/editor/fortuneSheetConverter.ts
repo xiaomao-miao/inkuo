@@ -221,8 +221,6 @@ export function rustSheetToFortuneSheet(sheet: RustXlsxSheet): FortuneSheetCoreS
       rowlen[key] = Math.round(value * 1.333);
     }
   }
-  console.log('[converter] row heights: Rust =', sheet.row_heights, '-> FortuneSheet =', rowlen);
-
   // Build column widths map: key = column index string, value = width in pixels
   // Excel stores width in character units; pixel display = Truncate(charWidth * MDW) + 5px padding
   // (MDW = Maximum Digit Width = 7 for Calibri 11pt default font).
@@ -232,8 +230,6 @@ export function rustSheetToFortuneSheet(sheet: RustXlsxSheet): FortuneSheetCoreS
       columnlen[key] = Math.round(value * 7) + 5;
     }
   }
-  console.log('[converter] col widths: Rust =', sheet.col_widths, '-> FortuneSheet =', columnlen);
-
   // Build the config object
   const config: Record<string, unknown> = {};
   if (Object.keys(mergeConfig).length > 0) config.merge = mergeConfig;
@@ -646,9 +642,6 @@ function buildStylesXml(uniqueStyleKeys: string[]): string {
 function fortuneCellToSheetJS(v: FortuneCell): object {
   const result: Record<string, unknown> = {};
 
-  // DEBUG: Log style fields
-  console.log('[converter] fortuneCellToSheetJS: v.bg =', v.bg, ', v.bl =', v.bl, ', v.fc =', v.fc);
-
   // ── Value (computed result) ────────────────────────────────────────────────
   const raw = v.v;
 
@@ -765,29 +758,22 @@ async function fortuneSheetToSheetJSWorksheet(
     });
   }
 
-  console.log('[converter] fortuneSheetToSheetJSWorksheet: input sheet config =', sheet.config);
-
   // Build row heights (!rows) - FortuneSheet uses pixels, SheetJS uses hpx
   const rows: { hpx?: number }[] = [];
   const rowlen = sheet.config?.rowlen ?? {};
-  console.log('[converter] rowlen =', rowlen);
   for (const [key, heightPx] of Object.entries(rowlen)) {
     const rowIdx = parseInt(key, 10);
     while (rows.length <= rowIdx) rows.push({});
     rows[rowIdx] = { hpx: Math.round(heightPx) };
   }
-  console.log('[converter] !rows =', rows);
-
   // Build column widths (!cols) - FortuneSheet uses pixels, SheetJS uses wpx
   const cols: { wpx?: number }[] = [];
   const columnlen = sheet.config?.columnlen ?? {};
-  console.log('[converter] columnlen =', columnlen);
   for (const [key, widthPx] of Object.entries(columnlen)) {
     const colIdx = parseInt(key, 10);
     while (cols.length <= colIdx) cols.push({});
     cols[colIdx] = { wpx: Math.round(widthPx) };
   }
-  console.log('[converter] !cols =', cols);
 
   let minRow = Infinity, maxRow = 0, minCol = Infinity, maxCol = 0;
   for (const key of sparseMap.keys()) {

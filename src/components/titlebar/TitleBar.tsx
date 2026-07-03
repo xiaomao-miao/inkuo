@@ -3,7 +3,6 @@ import {
   Minus,
   Square,
   X,
-  Copy,
   Settings
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
@@ -13,6 +12,17 @@ import { applyWorkspaceDirectoryLoad, openWorkspaceDirectory, switchWorkspace } 
 import { persistDocument } from '../../services/documentSave';
 import { reportError } from '../../utils/errors';
 import { openSettingsTab } from '../../utils/openSettingsTab';
+
+// Custom icon: two offset rectangles — the standard "restore / not-maximized"
+// symbol used on Windows and many cross-platform window chrome libraries.
+const RestoreIcon = () => (
+  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
+    {/* Bottom-left outline — the non-maximized window outline */}
+    <rect x="1.5" y="2.5" width="7" height="7" rx="0.5" />
+    {/* Top-right solid fill — overlapped portion implied by offset */}
+    <rect x="3.5" y="0.5" width="7" height="7" rx="0.5" />
+  </svg>
+);
 import { isTauriRuntime } from '../../utils/tauri';
 import styles from './TitleBar.module.css';
 
@@ -341,7 +351,7 @@ export const TitleBar = () => {
               onClick={handleMaximize}
               title={isMaximized ? '还原' : '最大化'}
             >
-              {isMaximized ? <Copy size={12} /> : <Square size={12} />}
+              {isMaximized ? <RestoreIcon /> : <Square size={12} />}
             </button>
             <button
               className={`${styles.actionButton} ${styles.close}`}

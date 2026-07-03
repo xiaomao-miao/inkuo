@@ -61,6 +61,10 @@ export const ModelsSettings = ({ onClose }: ModelsSettingsProps) => {
         title: '连接测试成功',
         message: result.message,
       });
+      setTestResults((prev) => ({
+        ...prev,
+        [config.id]: { success: true, message: result.message },
+      }));
     } catch (err) {
       const message = reportError('models-settings-test-connection', err);
       setTestResults((prev) => ({

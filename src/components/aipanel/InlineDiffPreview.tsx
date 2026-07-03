@@ -1,7 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { useAIPanelStore } from '../../store';
-import { useSidebarStore } from '../../store';
-import { useEditorStore, useInlineCompleteStore } from '../../store';
+import { useAIPanelStore, useEditorStore, useInlineCompleteStore } from '../../store';
 import styles from './InlineDiffPreview.module.css';
 
 interface InlineDiffPreviewProps {
@@ -17,65 +15,65 @@ export const InlineDiffPreview = ({
   sessionId,
   isStreaming = false,
 }: InlineDiffPreviewProps) => {
+  // Auto-accept when streaming completes.
+  //
+  // History: the previous implementation did a full-document
+  // `indexOf(originalText)` and replaced the first hit with `newText`. That
+  // silently corrupted documents whenever the same selection appeared
+  // elsewhere in the file (e.g. boilerplate code, repeated sentences), and
+  // its first-line fallback dropped `originalText.length` bytes from the
+  // wrong position when the exact match wasn't found.
+  //
+  // The fix routes the application through the editor store's diff
+  // machinery, which uses accurate hunk offsets. For CmdK-driven diffs the
+  // hunks were already pushed via `editorStore.setDiffHunks`, so calling
+  // `acceptAllHunks` is enough. For agent-mode diffs (stream payload with
+  // `original_content` / `new_content`), the hunks live on `pendingDiff`
+  // but haven't been pushed to the editor store yet — we sync them first
+  // so the same apply path works for both call sites.
   const hasAutoAccepted = useRef(false);
-  const storedDiffRef = useRef({
-    originalText,
-    newText,
-    filePath: '',
-  });
+  const lastSyncedKey = useRef<string | null>(null);
 
   useEffect(() => {
-    storedDiffRef.current = {
-      originalText,
-      newText,
-      filePath: useSidebarStore.getState().selectedFile || '',
-    };
-  }, [originalText, newText]);
+    if (isStreaming) return;
 
-  // Auto-accept when streaming completes
-  useEffect(() => {
-    if (isStreaming || hasAutoAccepted.current) return;
+    // Sync pendingDiff hunks into the editor store exactly once per diff.
+    // We only push to the store on the first non-streaming render for a
+    // given diff identity so we don't clobber state when subsequent
+    // re-renders fire with the same props.
+    const session = useAIPanelStore.getState().sessions.find((s) => s.id === sessionId);
+    const pendingDiff = session?.pendingDiff;
+    if (!pendingDiff || !pendingDiff.filePath) return;
 
-    const filePath = storedDiffRef.current.filePath;
-    if (!filePath) return;
-
-    hasAutoAccepted.current = true;
-
-    // Replace the selected text in place, preserving the rest of the file
-    const currentDoc = useEditorStore.getState().documentContents[filePath];
-    if (!currentDoc) return;
-
-    const fullContent = currentDoc.metadata.content;
-    const origText = storedDiffRef.current.originalText;
-    const newTxt = storedDiffRef.current.newText;
-
-    // Find and replace the original selection in the full file content
-    let replacedContent: string;
-    const idx = fullContent.indexOf(origText);
-    if (idx !== -1) {
-      // Found exact match - replace in place
-      replacedContent = fullContent.slice(0, idx) + newTxt + fullContent.slice(idx + origText.length);
-    } else {
-      // Fallback: try to match the first line of the selection
-      const firstLine = origText.split('\n')[0];
-      const fallbackIdx = fullContent.indexOf(firstLine);
-      if (fallbackIdx !== -1) {
-        const endIdx = fallbackIdx + origText.length;
-        replacedContent = fullContent.slice(0, fallbackIdx) + newTxt + fullContent.slice(endIdx);
-      } else {
-        // Cannot locate the original text - do not replace
-        replacedContent = fullContent;
-      }
+    const syncKey = `${sessionId}::${pendingDiff.filePath}::${pendingDiff.hunks.length}`;
+    if (lastSyncedKey.current !== syncKey) {
+      lastSyncedKey.current = syncKey;
+      // In agent mode, `originalText` IS the full file (the stream emits
+      // original_content/new_content as full-file snapshots). Hunks from
+      // `compute_diff(oldText, newText)` are relative to that full
+      // snapshot, so the editor-store's `originalOffset` should be 0.
+      // In CmdK mode the hunks were already pushed to the editor store by
+      // `CmdK.handleSubmit`, but pushing them again here is a no-op (the
+      // apply path tolerates re-syncs).
+      useEditorStore.getState().setDiffHunks(
+        pendingDiff.filePath,
+        pendingDiff.hunks,
+        pendingDiff.originalText,
+        0,
+      );
     }
 
-    // Apply replaced content to editor
-    useEditorStore.getState().setContent(filePath, replacedContent);
-    // AI directly changed content; should not immediately trigger inline complete
-    useInlineCompleteStore.getState().clearCompletion();
+    if (hasAutoAccepted.current) return;
+    hasAutoAccepted.current = true;
 
-    // Clear the diff from the session
+    // Apply hunks through the editor store. This uses the offsets we just
+    // synced instead of doing another `indexOf` on the full document.
     useAIPanelStore.getState().acceptAllHunks(sessionId);
-  }, [isStreaming, sessionId]);
+
+    // AI just replaced the document content; suppress any inline-complete
+    // ghost suggestion that might have been queued for the cursor position.
+    useInlineCompleteStore.getState().clearCompletion();
+  }, [isStreaming, sessionId, originalText, newText]);
 
   return (
     <div className={`${styles.container} ${isStreaming ? styles.streaming : ''}`}>
