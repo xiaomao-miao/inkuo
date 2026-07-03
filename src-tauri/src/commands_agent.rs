@@ -153,6 +153,10 @@ fn convert_message(msg: &FrontendMessage) -> Result<Option<Message>, AgentComman
 }
 
 #[tauri::command]
+/// Hard cap on the number of LLM ↔ tool loops the Agent will perform before
+/// giving up with a `MaxIterationsReached` error. `None` falls back to the
+/// session default (currently 50). Surfaced from the frontend's settings
+/// panel so power users can tune it without recompiling.
 pub async fn ai_agent_stream(
     session_id: String,
     message_id: String,
@@ -160,6 +164,7 @@ pub async fn ai_agent_stream(
     workspace_path: Option<String>,
     read_only: bool,
     history: Vec<FrontendMessage>,
+    max_iterations: Option<usize>,
     config_input: AIConfigInput,
     app: AppHandle,
 ) -> Result<(), AgentCommandError> {
@@ -183,6 +188,9 @@ pub async fn ai_agent_stream(
         get_full_tool_registry(&app).await
     };
     let mut session = AgentSession::new(tool_registry);
+    if let Some(n) = max_iterations {
+        session = session.with_max_iterations(n);
+    }
 
     // Use different system prompt based on mode
     let mut system_prompt = if read_only {

@@ -82,6 +82,7 @@ const defaultSettings: Settings = {
     maxCount: 50,
     autoBaseline: true,
   },
+  agent_max_iterations: 50,
 };
 
 export const useSettingsStore = create<SettingsState>()(
@@ -269,6 +270,18 @@ export const useSettingsStore = create<SettingsState>()(
           editor_line_numbers: typeof persistedSettings?.editor_line_numbers === 'boolean'
             ? persistedSettings.editor_line_numbers
             : currentState.settings.editor_line_numbers,
+          // Naively copy any unknown fields onto the merged settings — covers
+          // forward-compatible additions without forcing a store migration.
+          // Number fields below still get explicit type guards so a corrupted
+          // persisted blob (e.g. a string in place of a number) falls back to
+          // the current default instead of crashing the panel.
+          ...persistedSettings,
+          agent_max_iterations: typeof persistedSettings?.agent_max_iterations === 'number'
+            && Number.isFinite(persistedSettings.agent_max_iterations)
+            && persistedSettings.agent_max_iterations >= 1
+            && persistedSettings.agent_max_iterations <= 200
+              ? persistedSettings.agent_max_iterations
+              : currentState.settings.agent_max_iterations,
         };
 
         return {

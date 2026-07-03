@@ -148,7 +148,7 @@ const EmptyState: React.FC = () => (
       <div className={styles.noFileHint}>
         <Sparkles size={24} className={styles.hintIcon} />
         <span className={styles.hintText}>
-          选择一个文件开始编辑，或按 <kbd>Ctrl</kbd>+<kbd>K</kbd> 调用 AI 助手
+          选择一个文件开始编辑，或按 <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd> 调用 AI 助手
         </span>
       </div>
     </div>

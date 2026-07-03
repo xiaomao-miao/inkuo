@@ -99,7 +99,7 @@ export function useChatSessionActions({
     clearToolCalls(sessionId);
 
     const workspacePath = useSidebarStore.getState().workspacePath || undefined;
-    const { apiConfigs, activeApiConfigId, snapshot } = useSettingsStore.getState().settings;
+    const { apiConfigs, activeApiConfigId, snapshot, agent_max_iterations } = useSettingsStore.getState().settings;
     const activeConfig = apiConfigs.find((config) => config.id === activeApiConfigId) ?? apiConfigs[0];
     const conversationHistory = buildConversationHistory(messages);
 
@@ -193,6 +193,9 @@ export function useChatSessionActions({
         instruction,
         workspacePath,
         readOnly: mode !== 'agent',
+        // Forward the user-configured agent loop cap. The Rust side clamps
+        // / defaults internally; we just send the raw value (1–200).
+        maxIterations: agent_max_iterations,
         history: conversationHistory,
         configInput: {
           provider: activeConfig.provider,

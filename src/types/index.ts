@@ -523,6 +523,13 @@ export interface Settings {
     maxCount: number;
     autoBaseline: boolean;
   };
+  /**
+   * Hard cap on the Agent's tool-calling loop. Roughly the upper bound on
+   * how many "round trips" between the LLM and the tool registry the main
+   * Agent session will perform before giving up with a `MaxIterationsReached`
+   * error. 1–200, default 50 (matches the Rust default).
+   */
+  agent_max_iterations: number;
 }
 
 /** Supported embedding models */

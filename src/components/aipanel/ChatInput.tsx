@@ -41,7 +41,7 @@ export const ChatInput = ({
           className={styles.input}
           placeholder={
             mode === 'agent'
-              ? '输入指令... (例如：帮我创建一个 README.md)'
+              ? '输入指令... (例如：帮我创建一个文档)'
               : mode === 'knowledge'
               ? '搜索工作区知识库...'
               : `输入消息... (Enter 发送，Shift+Enter 换行)`

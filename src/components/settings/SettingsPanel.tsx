@@ -253,6 +253,45 @@ export const SettingsPanel = () => {
                 </div>
               </div>
             </div>
+
+            <div className={styles.section}>
+              <h4 className={styles.sectionTitle}>Agent 执行</h4>
+              <p className={styles.sectionDescription}>
+                Agent 模式下 LLM 与工具的多轮对话上限。达到上限后会返回
+                「Maximum iterations reached」并中止。值越大单轮任务能做的
+                步骤越多，但 token 与耗时也会显著上涨。
+              </p>
+
+              <div className={styles.field}>
+                <label className={styles.label} htmlFor="agent-max-iterations">
+                  工具调用循环上限
+                </label>
+                <div className={styles.rangeWrapper}>
+                  <input
+                    id="agent-max-iterations"
+                    type="range"
+                    min={1}
+                    max={200}
+                    step={1}
+                    value={settings.agent_max_iterations}
+                    onChange={(e) => {
+                      void updateSettingAndPersist(
+                        'agent_max_iterations',
+                        parseInt(e.target.value, 10)
+                      );
+                    }}
+                    className={styles.range}
+                  />
+                  <span className={styles.rangeValue}>
+                    {settings.agent_max_iterations} 次
+                  </span>
+                </div>
+                <p className={styles.fieldHelp}>
+                  范围 1–200，默认 50。仅影响主 Agent 会话；调用 delegate_to
+                  派生的子 Agent 仍按各自 profile 的上限执行（10–25）。
+                </p>
+              </div>
+            </div>
           </div>
         );
       }
