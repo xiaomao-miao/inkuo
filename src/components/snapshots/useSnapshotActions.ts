@@ -18,6 +18,8 @@ import {
   listSnapshots,
   previewRestore,
   restoreSnapshot,
+  type RestoreSnapshotOptions,
+  type RestoreSnapshotResult,
   type SnapshotIndexEntry,
   type SnapshotManifest,
 } from '../../services/snapshots';
@@ -109,16 +111,27 @@ export function useSnapshotActions() {
   );
 
   const restore = useCallback(
-    async (id: string): Promise<string[]> => {
-      if (!workspacePath) return [];
+    async (
+      id: string,
+      options: RestoreSnapshotOptions = {}
+    ): Promise<RestoreSnapshotResult | null> => {
+      if (!workspacePath) return null;
       try {
-        const restoredFiles = await restoreSnapshot(workspacePath, id);
+        const result = await restoreSnapshot(workspacePath, id, options);
+        const restoredCount = result.restored.length;
+        const deletedCount = result.deleted.length;
+        const parts: string[] = [];
+        if (restoredCount > 0) parts.push(`还原 ${restoredCount} 个文件`);
+        if (deletedCount > 0) parts.push(`删除 ${deletedCount} 个新增文件`);
         pushNotification({
           kind: 'success',
           title: '已回滚到快照',
-          message: `共还原 ${restoredFiles.length} 个文件`,
+          message:
+            parts.length > 0
+              ? `${parts.join('，')}（已备份到 ${result.backupPath}）`
+              : `无文件变更（已备份到 ${result.backupPath}）`,
         });
-        return restoredFiles;
+        return result;
       } catch (err) {
         reportError('restoreSnapshot', err);
         pushNotification({
@@ -126,7 +139,7 @@ export function useSnapshotActions() {
           title: '回滚失败',
           message: err instanceof Error ? err.message : String(err),
         });
-        return [];
+        return null;
       }
     },
     [pushNotification, workspacePath]

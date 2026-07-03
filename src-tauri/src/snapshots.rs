@@ -108,6 +108,20 @@ pub struct WorkspaceSnapshotIndex {
     pub snapshots: Vec<SnapshotIndexEntry>,
 }
 
+/// Result of a restore operation.  `restored` lists files overwritten by the
+/// snapshot contents; `deleted` lists files removed when
+/// `delete_extra_files = true`.  `backup_path` is the absolute path of the
+/// timestamped directory where pre-restore copies were written.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestoreResult {
+    #[serde(default)]
+    pub restored: Vec<String>,
+    #[serde(default)]
+    pub deleted: Vec<String>,
+    pub backup_path: String,
+}
+
 impl Default for WorkspaceSnapshotIndex {
     fn default() -> Self {
         Self {
@@ -576,11 +590,17 @@ pub fn preview_workspace_snapshot_restore(
 /// timestamped backup of the current files is created under
 /// `~/.inkuo/backups/`.  On success, `file-change` events are emitted for
 /// every written path so that the editor refreshes automatically.
+///
+/// `delete_extra_files` controls the destructive mode: when true, files that
+/// exist on disk but are NOT in the snapshot (i.e. files added since the
+/// snapshot was taken) are also deleted.  They are backed up first under
+/// `~/.inkuo/backups/<stamp>/<rel>` so the user can recover manually.
 pub fn restore_workspace_snapshot(
     workspace_path: &str,
     snapshot_id: &str,
+    delete_extra_files: bool,
     app_handle: &AppHandle,
-) -> Result<Vec<String>, SnapshotError> {
+) -> Result<RestoreResult, SnapshotError> {
     if !Path::new(workspace_path).is_absolute() {
         return Err(SnapshotError::InvalidWorkspacePath(
             workspace_path.to_string(),
@@ -649,7 +669,65 @@ pub fn restore_workspace_snapshot(
         });
     }
 
-    Ok(restored)
+    let mut deleted: Vec<String> = Vec::new();
+
+    // Optional destructive mode: delete files on disk that were NOT in the
+    // snapshot.  Each is backed up first to the same pre-restore backup
+    // directory so the user can recover from `~/.inkuo/backups/<stamp>/`.
+    if delete_extra_files {
+        let ws_path = Path::new(workspace_path);
+        if let Ok(tracked) = collect_tracked_files(ws_path, manifest.files.len()) {
+            for path_str in tracked {
+                // Skip anything that was in the snapshot manifest.
+                if manifest.files.iter().any(|e| e.abs_path == path_str) {
+                    continue;
+                }
+                let path = Path::new(&path_str);
+                if !path.exists() {
+                    continue;
+                }
+
+                // Back up first.
+                let rel = path
+                    .strip_prefix(workspace_path)
+                    .unwrap_or_else(|_| Path::new(&path_str));
+                let backup_dest = backup_target.join(rel);
+                if let Some(parent) = backup_dest.parent() {
+                    let _ = fs::create_dir_all(parent);
+                }
+                if let Err(e) = fs::copy(path, &backup_dest) {
+                    tracing::warn!(
+                        "Pre-delete backup failed for {}: {}",
+                        path_str,
+                        e
+                    );
+                    // If backup failed, refuse to delete — better safe than
+                    // silently losing the file.
+                    continue;
+                }
+
+                if let Err(e) = fs::remove_file(path) {
+                    tracing::warn!("Delete failed for {}: {}", path_str, e);
+                    continue;
+                }
+
+                deleted.push(path_str.clone());
+
+                emit_file_change(
+                    app_handle,
+                    FileChangeEvent::Deleted {
+                        path: path_str.clone(),
+                    },
+                );
+            }
+        }
+    }
+
+    Ok(RestoreResult {
+        restored,
+        deleted,
+        backup_path: backup_target.to_string_lossy().to_string(),
+    })
 }
 
 // ── Internal: collect tracked files for "deleted" detection ─────────────────

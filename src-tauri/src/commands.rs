@@ -1594,10 +1594,16 @@ pub async fn preview_workspace_snapshot_restore_cmd(
 pub async fn restore_workspace_snapshot_cmd(
     workspace_path: String,
     snapshot_id: String,
+    delete_extra_files: bool,
     app_handle: TauriAppHandle,
-) -> Result<Vec<String>, AppCommandError> {
-    crate::snapshots::restore_workspace_snapshot(&workspace_path, &snapshot_id, &app_handle)
-        .map_err(|e| AppCommandError::SnapshotWriteFailed(e.to_string()))
+) -> Result<crate::snapshots::RestoreResult, AppCommandError> {
+    crate::snapshots::restore_workspace_snapshot(
+        &workspace_path,
+        &snapshot_id,
+        delete_extra_files,
+        &app_handle,
+    )
+    .map_err(|e| AppCommandError::SnapshotWriteFailed(e.to_string()))
 }
 
 /// Minimal base64 decoder so we don't pull in the `base64` crate just for

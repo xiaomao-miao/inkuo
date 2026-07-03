@@ -70,6 +70,7 @@ export const SnapshotRestoreDialog = ({
   const [hunksByFile, setHunksByFile] = useState<Record<string, DiffHunk[]>>({});
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [isRestoring, setIsRestoring] = useState(false);
+  const [deleteExtraFiles, setDeleteExtraFiles] = useState(false);
 
   useEffect(() => {
     if (!workspacePath) return;
@@ -153,7 +154,7 @@ export const SnapshotRestoreDialog = ({
     if (!workspacePath) return;
     setIsRestoring(true);
     try {
-      await restoreSnapshot(workspacePath, snapshot.id);
+      await restoreSnapshot(workspacePath, snapshot.id, { deleteExtraFiles });
       onRestored();
     } catch (err) {
       pushNotification({
@@ -164,7 +165,7 @@ export const SnapshotRestoreDialog = ({
     } finally {
       setIsRestoring(false);
     }
-  }, [workspacePath, snapshot.id, onRestored, pushNotification]);
+  }, [workspacePath, snapshot.id, deleteExtraFiles, onRestored, pushNotification]);
 
   const totalChanges = counts.added + counts.modified + counts.deleted;
 
@@ -242,6 +243,23 @@ export const SnapshotRestoreDialog = ({
           )}
         </div>
 
+        {counts.deleted > 0 && (
+          <div className={styles.destructiveOption}>
+            <label className={styles.destructiveOptionLabel}>
+              <input
+                type="checkbox"
+                checked={deleteExtraFiles}
+                onChange={(e) => setDeleteExtraFiles(e.target.checked)}
+                disabled={isRestoring}
+              />
+              <span>
+                同时删除工作区新增的文件（<strong>{counts.deleted}</strong> 个），
+                会在删除前自动备份到 <code>~/.inkuo/backups/</code>
+              </span>
+            </label>
+          </div>
+        )}
+
         <div className={styles.dialogFooter}>
           <button
             className={styles.secondaryBtn}
@@ -259,7 +277,9 @@ export const SnapshotRestoreDialog = ({
                 ? '正在加载预览…'
                 : totalChanges === 0
                   ? '当前工作区与该快照完全一致（点击仍会执行）'
-                  : ''
+                  : deleteExtraFiles
+                    ? '将覆盖快照中的文件，并删除工作区中新增的文件'
+                    : ''
             }
           >
             {isRestoring ? <span className={styles.spinner} /> : <RotateCcw size={12} />}
@@ -267,7 +287,9 @@ export const SnapshotRestoreDialog = ({
               ? '回滚中…'
               : totalChanges === 0
                 ? '无变更，仍要回滚'
-                : '确认回滚'}
+                : deleteExtraFiles
+                  ? '确认回滚（含删除）'
+                  : '确认回滚'}
           </button>
         </div>
       </div>

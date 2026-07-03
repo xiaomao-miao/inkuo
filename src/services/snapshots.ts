@@ -194,14 +194,41 @@ export async function previewRestore(
   return raw.map(mapPreview);
 }
 
+export interface RestoreSnapshotResult {
+  restored: string[];
+  deleted: string[];
+  backupPath: string;
+}
+
+export interface RestoreSnapshotOptions {
+  /**
+   * When true, files that exist on disk but were NOT in the snapshot
+   * (i.e. files added since the snapshot was taken) are also removed.
+   * Each deleted file is backed up to ~/.inkuo/backups/<stamp>/ first.
+   * Default: false.
+   */
+  deleteExtraFiles?: boolean;
+}
+
 export async function restoreSnapshot(
   workspacePath: string,
-  id: string
-): Promise<string[]> {
-  return invoke<string[]>('restore_workspace_snapshot_cmd', {
+  id: string,
+  options: RestoreSnapshotOptions = {}
+): Promise<RestoreSnapshotResult> {
+  const data = await invoke<{
+    restored: string[];
+    deleted: string[];
+    backupPath: string;
+  }>('restore_workspace_snapshot_cmd', {
     workspacePath,
     snapshotId: id,
+    deleteExtraFiles: options.deleteExtraFiles ?? false,
   });
+  return {
+    restored: data.restored ?? [],
+    deleted: data.deleted ?? [],
+    backupPath: data.backupPath,
+  };
 }
 
 export interface CollectFileResult {
