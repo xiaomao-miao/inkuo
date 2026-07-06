@@ -83,15 +83,17 @@ const EditorContent: React.FC<{
 
   const inPreviewMode = selectedFile ? !!isPreviewMode[selectedFile] : false;
 
-  const editorExtensions = useMemo(() => createEditorExtensions({
-    diffDecorationsField: diffDecorationsCompartment.of(diffDecorationsField),
-    inlineCompletionKeyHandler,
-    inlineAutoTrigger,
-    autoTriggerStateRef,
-  }), [diffDecorationsField, inlineCompletionKeyHandler, inlineAutoTrigger, autoTriggerStateRef]);
+  const editorExtensions = useMemo(() => {
+    return createEditorExtensions({
+      diffDecorationsField: diffDecorationsCompartment.of(diffDecorationsField),
+      inlineCompletionKeyHandler,
+      inlineAutoTrigger,
+      autoTriggerStateRef,
+    });
+  }, [diffDecorationsField, inlineCompletionKeyHandler, inlineAutoTrigger, autoTriggerStateRef]);
 
   return (
-    <div className={styles.editorContainer} data-inline-complete-styles={inlineCompleteStyles}>
+    <div className={`${styles.editorContainer} editorContainer`} data-inline-complete-styles={inlineCompleteStyles}>
       <EditorBody
         inPreviewMode={inPreviewMode}
         currentContent={currentContent}
@@ -116,7 +118,7 @@ const EditorContent: React.FC<{
                 highlightSpecialChars: true,
                 history: false,
                 foldGutter: true,
-                drawSelection: false,
+                drawSelection: true,
                 dropCursor: true,
                 allowMultipleSelections: true,
                 indentOnInput: false,

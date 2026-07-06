@@ -187,9 +187,14 @@ pre {
 }
 
 .editorContainer .cm-editor .cm-selectionBackground {
-  background-color: var(--selection-bg);
+  background-color: var(--selection-bg) !important;
 }
 
-.editorContainer .cm-editor.cm-focused .cm-selectionBackground {
-  background-color: var(--selection-bg);
+.editorContainer .cm-editor.cm-focused .cm-selectionBackground,
+.editorContainer .cm-editor.cm-focused ::selection {
+  background-color: var(--selection-bg) !important;
+}
+
+.editorContainer .cm-editor .cm-content ::selection {
+  background-color: var(--selection-bg) !important;
 }

@@ -42,6 +42,16 @@ export function createEditorTheme() {
       backgroundColor: 'var(--bg-tertiary)',
       color: 'var(--fg-secondary)',
     },
+    '&.cm-focused .cm-selectionBackground, .cm-selectionBackground': {
+      backgroundColor: 'var(--selection-bg)',
+    },
+    '&.cm-focused .cm-cursor': {
+      borderLeftColor: 'var(--accent-primary)',
+      borderLeftWidth: '2px',
+    },
+    '&.cm-focused .cm-content ::selection': {
+      backgroundColor: 'var(--selection-bg)',
+    },
   });
 }
 
