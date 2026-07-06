@@ -5,6 +5,7 @@ import type {
   ChatMode,
   ChatSession,
   CurrentDiff,
+  FeatureToggleId,
   OutputItem,
   SearchResult,
 } from '../types';
@@ -12,9 +13,16 @@ import type {
 export interface AIPanelUiSlice {
   isOpen: boolean;
   activeTab: 'chat' | 'edit';
+  /**
+   * Whether the feature toolbar above the chat input is expanded.
+   * Pure UI state — not persisted across restarts, default false.
+   */
+  featureToolbarExpanded: boolean;
   setIsOpen: (open: boolean) => void;
   togglePanel: () => void;
   setActiveTab: (tab: 'chat' | 'edit') => void;
+  setFeatureToolbarExpanded: (open: boolean) => void;
+  toggleFeatureToolbar: () => void;
 }
 
 export interface AIPanelSessionSlice {
@@ -42,6 +50,16 @@ export interface AIPanelSessionSlice {
   reopenSession: (sessionId: string) => void;
   setActiveSession: (sessionId: string) => void;
   setSessionMode: (sessionId: string, mode: ChatMode) => void;
+  /**
+   * Flip a per-session feature toggle (e.g. strict KB mode). Replaces the
+   * current value if it already exists; clears it when `enabled` is
+   * false so the on-disk shape stays compact.
+   */
+  setSessionFeatureToggle: (
+    sessionId: string,
+    toggleId: FeatureToggleId,
+    enabled: boolean,
+  ) => void;
   getSession: (sessionId: string) => ChatSession | undefined;
   updateSession: (sessionId: string, updater: (session: ChatSession) => ChatSession) => void;
 }

@@ -22,7 +22,6 @@ interface HandleStreamDoneArgs {
 
 interface HandleStreamErrorArgs {
   payload: StreamPayload;
-  currentMode: ChatMode;
   flushAllPending: () => void;
   streamingContentRef: MutableRefObject<Record<string, string>>;
 }
@@ -127,7 +126,6 @@ export function handleToolResult(
 
 export function handleStreamError({
   payload,
-  currentMode,
   flushAllPending,
   streamingContentRef,
 }: HandleStreamErrorArgs) {
@@ -138,9 +136,4 @@ export function handleStreamError({
   useAIPanelStore.setState((state) =>
     applyStreamingError(state, session_id, message_id, error ?? '发生错误')
   );
-  if (currentMode === 'knowledge') {
-    useAIPanelStore.setState((state) =>
-      applyMessageSearchResults(state, session_id, message_id, [])
-    );
-  }
 }

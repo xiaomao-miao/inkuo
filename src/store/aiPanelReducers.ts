@@ -20,6 +20,7 @@ export function createNewSession(index: number): ChatSession {
     createdAt: now,
     lastActivityAt: now,
     mode: 'ask',
+    featureToggles: {},
     messages: [],
     isStreaming: false,
     currentDiff: null,

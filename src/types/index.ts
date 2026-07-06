@@ -243,7 +243,41 @@ export type AgentStatus = 'idle' | 'thinking' | 'executing' | 'error';
 // AI panel types
 // ============================================================================
 
-export type ChatMode = 'ask' | 'plan' | 'agent' | 'knowledge';
+/** Chat mode. The legacy dedicated "knowledge" mode is gone —
+ * knowledge-base behavior is now layered on via per-message feature
+ * toggles (see `FeatureToggle` / `featureTogglesSlice`). */
+export type ChatMode = 'ask' | 'plan' | 'agent';
+
+/**
+ * Per-message feature toggles. Each toggle can be flipped on independently
+ * before sending a turn. They live on `ChatSession.featureToggles` so they
+ * survive across messages in the same conversation but reset when the user
+ * starts a new chat (we don't persist them across restarts either — the
+ * toolbar's collapsed state is the only thing that survives).
+ *
+ * Adding a new toggle:
+ *   1. Add the id below.
+ *   2. Add a prompt fragment + tool gating in the backend (see
+ *      `kb_strict.md` and the `feature_toggles` module).
+ *   3. Register an entry in `ChatInput.tsx`'s `TOGGLES` list — it owns
+ *      the composer's inline toggle rows.
+ */
+export type FeatureToggleId = 'kb_strict' | 'web_search';
+
+export interface FeatureToggleDescriptor {
+  id: FeatureToggleId;
+  label: string;
+  /** Short helper text shown under the toggle in the expanded toolbar. */
+  hint: string;
+  /** True if the toggle is currently unavailable in the active mode
+   * (e.g. KB strict is meaningless in plan mode). The toolbar greys it
+   * out and prevents enabling it. */
+  unavailable?: boolean;
+  unavailableReason?: string;
+}
+
+/** Per-turn feature flags. Missing key == off. */
+export type FeatureToggleMap = Partial<Record<FeatureToggleId, boolean>>;
 
 export interface MessageToolCall {
   id: string;
@@ -432,6 +466,13 @@ export interface ChatSession {
   title: string;
   createdAt: number;
   mode: ChatMode;
+  /**
+   * Per-session feature toggle state (e.g. "strict KB mode"). Lives on
+   * the session so it survives across messages in the same conversation;
+   * not persisted across restarts — the toolbar's collapsed state is the
+   * only thing that survives (see `AIPanelUiSlice`).
+   */
+  featureToggles?: FeatureToggleMap;
   messages: ChatMessage[];
   isStreaming: boolean;
   currentDiff: CurrentDiff | null;

@@ -119,6 +119,13 @@ pub struct AgentSession {
     pub messages: Vec<Message>,
     pub max_iterations: usize,
     pub tool_registry: SharedToolRegistry,
+    /// Optional tool whitelist. When `Some`, only tools whose name is in
+    /// this list are advertised to the LLM in `tool_definitions_for_api`.
+    /// `None` (the default) advertises the whole registry, matching the
+    /// legacy behaviour of the main Agent session before feature toggles.
+    /// See `feature_toggles::effective_tool_set` for how feature toggles
+    /// (e.g. `kb_strict`) populate this.
+    pub allowed_tools: Option<Vec<String>>,
 }
 
 impl AgentSession {
@@ -127,7 +134,16 @@ impl AgentSession {
             messages: Vec::new(),
             max_iterations: DEFAULT_MAX_ITERATIONS,
             tool_registry,
+            allowed_tools: None,
         }
+    }
+
+    /// Restrict the tools advertised to the LLM. Does not change which
+    /// tools the registry will *execute* — that's a separate concern.
+    /// Pass `None` (or use `new`) to advertise everything.
+    pub fn with_allowed_tools(mut self, allowed: Option<Vec<String>>) -> Self {
+        self.allowed_tools = allowed;
+        self
     }
 
     /// Construct a sub-agent session driven by `profile`.
@@ -149,6 +165,11 @@ impl AgentSession {
             messages: vec![Message::system(profile.system_prompt)],
             max_iterations: max_iters,
             tool_registry,
+            allowed_tools: if profile.allowed_tools.is_empty() {
+                None
+            } else {
+                Some(profile.allowed_tools)
+            },
         }
     }
 
@@ -256,11 +277,13 @@ impl AgentExecutor {
         // Add user message
         session.add_message(Message::user(user_request));
 
-        // Get tool definitions for API call
-        let tools = session.tool_registry.read().await.get_all_definitions();
+        // Get tool definitions for API call. When the session carries an
+        // explicit `allowed_tools` whitelist (set by feature toggles like
+        // strict-KB), use that; otherwise expose the whole registry.
+        let tools = session.tool_definitions_for_api(session.allowed_tools.as_deref()).await;
         let tools_json: Vec<Value> = tools
-            .iter()
-            .map(|t| serde_json::to_value(t).map_err(|e| AgentError::AIError(format!("Tool serialization failed: {}", e))))
+            .into_iter()
+            .map(|t| serde_json::to_value(&t).map_err(|e| AgentError::AIError(format!("Tool serialization failed: {}", e))))
             .collect::<Result<Vec<_>, _>>()?;
 
         // Run the agent loop

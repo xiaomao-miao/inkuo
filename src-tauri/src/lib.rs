@@ -10,6 +10,7 @@
 mod backup;
 mod document;
 mod diff;
+mod feature_toggles;
 mod ai;
 mod ai_config;
 mod commands;
@@ -84,7 +85,6 @@ pub fn run() {
             commands::search_directory,
             commands::compute_diff,
             commands::ai_edit,
-            commands_stream::ai_chat_stream,
             commands_stream::ai_edit_stream,
             commands_stream::ai_stream_cancel,
             commands_agent::ai_agent_stream,

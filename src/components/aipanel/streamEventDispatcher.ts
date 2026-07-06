@@ -417,7 +417,6 @@ export async function dispatchStreamEvent({
   if (event_type === 'error') {
     handleStreamError({
       payload,
-      currentMode,
       flushAllPending: () => flushAllPending(session_id),
       streamingContentRef,
     });

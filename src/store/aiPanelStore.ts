@@ -7,6 +7,8 @@ import type {
   ChatMode,
   ChatSession,
   CurrentDiff,
+  FeatureToggleId,
+  FeatureToggleMap,
   MessageRole,
   MessageToolCall,
   MessageToolResult,
@@ -72,15 +74,19 @@ function pickPersistedUiBits(
   };
 }
 
-const createUiSlice: AIPanelStateCreator<Pick<AIPanelState, 'isOpen' | 'activeTab' | 'setIsOpen' | 'togglePanel' | 'setActiveTab'>> = (set) => ({
+const createUiSlice: AIPanelStateCreator<Pick<AIPanelState, 'isOpen' | 'activeTab' | 'featureToolbarExpanded' | 'setIsOpen' | 'togglePanel' | 'setActiveTab' | 'setFeatureToolbarExpanded' | 'toggleFeatureToolbar'>> = (set) => ({
   isOpen: true,
   activeTab: 'chat',
+  featureToolbarExpanded: false,
   setIsOpen: (open) => set({ isOpen: open }),
   togglePanel: () => set((state) => ({ isOpen: !state.isOpen })),
   setActiveTab: (tab) => set({ activeTab: tab }),
+  setFeatureToolbarExpanded: (open) => set({ featureToolbarExpanded: open }),
+  toggleFeatureToolbar: () =>
+    set((state) => ({ featureToolbarExpanded: !state.featureToolbarExpanded })),
 });
 
-const createSessionSlice: AIPanelStateCreator<Pick<AIPanelState, 'sessions' | 'activeSessionId' | 'createSession' | 'deleteSession' | 'closeSession' | 'reopenSession' | 'setActiveSession' | 'setSessionMode' | 'getSession' | 'updateSession'>> = (set, get) => {
+const createSessionSlice: AIPanelStateCreator<Pick<AIPanelState, 'sessions' | 'activeSessionId' | 'createSession' | 'deleteSession' | 'closeSession' | 'reopenSession' | 'setActiveSession' | 'setSessionMode' | 'setSessionFeatureToggle' | 'getSession' | 'updateSession'>> = (set, get) => {
   const initialSession = createNewSession(1);
 
   return {
@@ -163,6 +169,23 @@ const createSessionSlice: AIPanelStateCreator<Pick<AIPanelState, 'sessions' | 'a
     setSessionMode: (sessionId, mode) =>
       set((state) => ({
         sessions: updateSessionState(state.sessions, sessionId, { mode }),
+      })),
+    setSessionFeatureToggle: (sessionId, toggleId, enabled) =>
+      set((state) => ({
+        sessions: updateSessions(state.sessions, sessionId, (session) => {
+          const current: FeatureToggleMap = { ...(session.featureToggles ?? {}) };
+          if (enabled) {
+            current[toggleId] = true;
+          } else {
+            // Drop the key so the on-disk shape stays compact — a session
+            // with every toggle off shouldn't carry an empty `{}` either.
+            delete current[toggleId];
+          }
+          return {
+            ...session,
+            featureToggles: Object.keys(current).length > 0 ? current : undefined,
+          };
+        }),
       })),
     getSession: (sessionId) => get().sessions.find((session) => session.id === sessionId),
     updateSession: (sessionId, updater) =>
@@ -597,6 +620,8 @@ export type {
   ChatMode,
   ChatSession,
   CurrentDiff,
+  FeatureToggleId,
+  FeatureToggleMap,
   MessageRole,
   MessageToolCall,
   MessageToolResult,

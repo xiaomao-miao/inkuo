@@ -135,8 +135,10 @@ export function useChatSessionActions({
           recordBaseline.current(userMessageId, manifest.snapshotId);
         }
       } catch (err) {
-        // Best-effort: log and continue.
-        // eslint-disable-next-line no-console
+        // Best-effort: log and continue. console.warn is the right tool here
+        // because a snapshot failure is a real diagnostic signal — the user
+        // has `auto-baseline` on and the call failed, which they should see
+        // in the devtools console even though it doesn't break the turn.
         console.warn('[snapshot] baseline creation failed', err);
       }
     }
@@ -171,30 +173,13 @@ export function useChatSessionActions({
     }
 
     try {
-      if (mode === 'knowledge') {
-        invoke('ai_chat_stream', {
-          sessionId,
-          messageId: assistantMessageId,
-          mode,
-          instruction,
-          originalText: '',
-          workspacePath,
-          configInput: {
-            provider: activeConfig.provider,
-            api_key: activeConfig.apiKey,
-            base_url: activeConfig.baseUrl,
-            model: activeConfig.model,
-            temperature: activeConfig.temperature,
-            max_tokens: activeConfig.maxTokens,
-          },
-        }).catch((err) => {
-          useAIPanelStore
-            .getState()
-            .setErrorMessage(sessionId, assistantMessageId, `抱歉，发生了错误：${extractErrorMessage(err)}`);
-          setIsStreaming(sessionId, false);
-        });
-        return;
-      }
+      const featureToggles = activeSession.featureToggles ?? {};
+      // Strict KB toggles are NOT silently consumed — every prompt layer
+      // and tool gate we apply is keyed off the explicit list below, so
+      // future toggles can be added without touching the send path.
+      const enabledToggles = Object.entries(featureToggles)
+        .filter(([, on]) => Boolean(on))
+        .map(([id]) => id);
 
       invoke('ai_agent_stream', {
         sessionId,
@@ -206,6 +191,11 @@ export function useChatSessionActions({
         // / defaults internally; we just send the raw value (1–200).
         maxIterations: agent_max_iterations,
         history: conversationHistory,
+        // Feature toggles that constrain the prompt and tool set on the
+        // Rust side. The Rust handler is responsible for translating each
+        // id into the appropriate fragment + tool gate; see
+        // `src-tauri/src/feature_toggles.rs` for the registry.
+        enabledToggles,
         configInput: {
           provider: activeConfig.provider,
           api_key: activeConfig.apiKey,
@@ -243,7 +233,7 @@ export function useChatSessionActions({
 
   const cycleMode = useCallback(() => {
     if (!activeSession) return;
-    const order: ChatMode[] = ['ask', 'plan', 'agent', 'knowledge'];
+    const order: ChatMode[] = ['ask', 'plan', 'agent'];
     const idx = order.indexOf(mode);
     useAIPanelStore.getState().setSessionMode(activeSession.id, order[(idx + 1) % order.length]);
   }, [activeSession, mode]);

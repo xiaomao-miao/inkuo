@@ -5,6 +5,7 @@ use crate::agent::{
 };
 use crate::agent::tools::ToolRegistry;
 use crate::ai_config::{self, AIConfigInput};
+use crate::feature_toggles::{self, ToggleId};
 use crate::streaming::{emit, StreamPayload};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -22,6 +23,8 @@ pub enum AgentCommandError {
     ToolDefinitionsSerialization(String),
     #[error("Invalid AI configuration: {0}")]
     InvalidAIConfig(String),
+    #[error("Unknown feature toggle id: {0}")]
+    UnknownFeatureToggle(String),
 }
 
 /// Shared tool registries for agent - separate for full and read-only modes
@@ -165,6 +168,7 @@ pub async fn ai_agent_stream(
     read_only: bool,
     history: Vec<FrontendMessage>,
     max_iterations: Option<usize>,
+    enabled_toggles: Option<Vec<String>>,
     config_input: AIConfigInput,
     app: AppHandle,
 ) -> Result<(), AgentCommandError> {
@@ -187,7 +191,31 @@ pub async fn ai_agent_stream(
     } else {
         get_full_tool_registry(&app).await
     };
-    let mut session = AgentSession::new(tool_registry);
+
+    // Parse the frontend toggle list. Unknown ids are an explicit error —
+    // they imply a desync between `src/types/index.ts` and the Rust
+    // registry, and silently dropping them would mask bugs.
+    let enabled_toggles_raw = enabled_toggles.unwrap_or_default();
+    let mut parsed_toggles: Vec<ToggleId> = Vec::with_capacity(enabled_toggles_raw.len());
+    for raw in &enabled_toggles_raw {
+        match ToggleId::from_str(raw) {
+            Some(id) => parsed_toggles.push(id),
+            None => return Err(AgentCommandError::UnknownFeatureToggle(raw.clone())),
+        }
+    }
+
+    // Compute the effective tool allowlist. Start from the current
+    // registry's full set, then let `effective_tool_set` narrow it down
+    // based on the toggles (currently only `kb_strict` does this).
+    let allowed_tools: Option<Vec<String>> = if parsed_toggles.is_empty() {
+        None
+    } else {
+        let registry = tool_registry.read().await;
+        let base = registry.tool_names();
+        Some(feature_toggles::effective_tool_set(&base, &parsed_toggles))
+    };
+
+    let mut session = AgentSession::new(tool_registry).with_allowed_tools(allowed_tools);
     if let Some(n) = max_iterations {
         session = session.with_max_iterations(n);
     }
@@ -198,6 +226,16 @@ pub async fn ai_agent_stream(
     } else {
         get_agent_system_prompt()
     };
+
+    // Layer feature-toggle prompt fragments AFTER the mode's base prompt
+    // so the toggle's rules take precedence on conflicts. Each fragment
+    // already includes its own preamble / heading so the LLM treats them
+    // as a distinct section.
+    let fragment = feature_toggles::enabled_fragment(&parsed_toggles);
+    if !fragment.is_empty() {
+        system_prompt.push_str("\n\n---\n\n");
+        system_prompt.push_str(&fragment);
+    }
 
     // Add workspace context if provided
     if let Some(ws_path) = &workspace_path {

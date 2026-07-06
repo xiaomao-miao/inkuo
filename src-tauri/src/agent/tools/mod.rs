@@ -484,6 +484,15 @@ impl ToolRegistry {
         self.definitions.values().cloned().collect()
     }
 
+    /// Return the names of every registered tool, in insertion order.
+    /// Used by `commands_agent::ai_agent_stream` to compute the
+    /// `allowed_tools` allowlist when feature toggles (e.g. strict-KB)
+    /// are enabled. We don't iterate the registry twice — one pass over
+    /// `definitions` keys is enough.
+    pub fn tool_names(&self) -> Vec<String> {
+        self.definitions.keys().cloned().collect()
+    }
+
     pub fn has_tool(&self, name: &str) -> bool {
         self.executors.contains_key(name)
     }

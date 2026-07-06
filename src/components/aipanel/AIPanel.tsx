@@ -3,8 +3,6 @@ import { ChatHeader } from './ChatHeader';
 import { ChatInput } from './ChatInput';
 import { ChatView } from './ChatView';
 import { HistorySidebar } from './HistorySidebar';
-import { KnowledgeBuildToolCard } from './KnowledgeBuildToolCard';
-import { KnowledgeToolbar } from './KnowledgeToolbar';
 import { useAgentStream } from './useAgentStream';
 import { useChatComposer } from './useChatComposer';
 import { useAIPanelController } from './useAIPanelController';
@@ -23,16 +21,11 @@ export const AIPanel: React.FC = () => {
     pendingDiff,
     mode,
     activeToolCalls,
-    buildProgress,
-    knowledgeToolCall,
-    knowledgeStatusLabel,
-    knowledgeToolbar,
     createSession,
     deleteSession,
     closeSession,
     reopenSession,
     setActiveSession,
-    clearMessages,
     closePanel,
   } = useAIPanelController();
 
@@ -86,14 +79,6 @@ export const AIPanel: React.FC = () => {
       />
 
       <div className={layoutStyles.panelBody}>
-        {mode === 'knowledge' && (
-          <KnowledgeToolbar
-            statusLabel={knowledgeStatusLabel}
-            primaryAction={knowledgeToolbar.primaryAction}
-            secondaryAction={knowledgeToolbar.secondaryAction}
-          />
-        )}
-
         <div className={layoutStyles.chatArea}>
           {historyOpen && (
             <HistorySidebar
@@ -121,12 +106,6 @@ export const AIPanel: React.FC = () => {
               onSaveEdit={handleSaveEdit}
               onSetEditingContent={setEditingContent}
               onSetInput={setInput}
-              footer={mode === 'knowledge' && knowledgeToolCall ? (
-                <KnowledgeBuildToolCard
-                  toolCall={knowledgeToolCall}
-                  buildProgress={buildProgress}
-                />
-              ) : undefined}
             />
           </div>
         </div>
@@ -137,10 +116,10 @@ export const AIPanel: React.FC = () => {
         setInput={setInput}
         mode={mode}
         isStreaming={isStreaming}
-        hasMessages={messages.length > 0}
+        sessionId={activeSessionId}
+        featureToggles={activeSession?.featureToggles}
         onSend={handleSend}
         onStop={handleStop}
-        onClear={() => activeSession && clearMessages(activeSession.id)}
         onCycleMode={cycleMode}
       />
     </aside>
