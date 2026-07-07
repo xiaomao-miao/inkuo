@@ -6,6 +6,8 @@ import type {
   OutputItem,
 } from '../types';
 
+import { parseStreamingPlan } from '../components/aipanel/planStream';
+
 export type OutputItemMatchKey = { toolCallId: string } | { contentContains: string };
 
 export function createSessionTitle(index: number) {
@@ -240,6 +242,80 @@ export function patchMessageOutputState(
   return updateMessages(session, messageId, (message) =>
     patchMessageOutputItems(message, matchKey, patch)
   );
+}
+
+/**
+ * Append `delta` to the trailing plan OutputItem of `messageId` and
+ * recompute the parsed `plan` / `parseError` fields.
+ *
+ * If the message has no trailing plan item yet, this is a no-op — the
+ * caller is expected to first create the plan item via `addMessageOutputItem`
+ * (see `useTextStreaming` which does both: detect ```plan in accumulated
+ * text → create plan item → route subsequent deltas here).
+ *
+ * Returns the session unchanged when no plan item exists.
+ */
+export function appendPlanDeltaToMessage(
+  session: ChatSession,
+  messageId: string,
+  delta: string,
+): ChatSession {
+  if (!delta) return session;
+  return updateMessages(session, messageId, (message) => {
+    const items = message.outputItems;
+    let lastIdx = items.length - 1;
+    while (lastIdx >= 0 && items[lastIdx].type !== 'plan') {
+      lastIdx -= 1;
+    }
+    if (lastIdx < 0) return message;
+    const last = items[lastIdx];
+    if (last.type !== 'plan') return message;
+
+    const rawText = last.rawText + delta;
+    const parsed = parseStreamingPlan(rawText);
+    const nextItem: OutputItem = {
+      type: 'plan',
+      rawText,
+      plan: parsed.plan,
+      ...(parsed.parseError ? { parseError: parsed.parseError } : { parseError: undefined }),
+      isStreaming: last.isStreaming ?? true,
+    };
+    const nextItems = items.slice();
+    nextItems[lastIdx] = nextItem;
+    return { ...message, outputItems: nextItems };
+  });
+}
+
+/**
+ * Convert the trailing text OutputItem (if any) of `messageId` into a plan
+ * OutputItem seeded with `rawText`. Used when the streaming text buffer
+ * first crosses the ```plan threshold — we keep the already-streamed
+ * Markdown inside `rawText` so the PlanCard can render the details.
+ *
+ * If there is no trailing text item, this is a no-op (the caller should
+ * still add a fresh plan item).
+ */
+export function convertTrailingTextToPlanItem(
+  session: ChatSession,
+  messageId: string,
+  rawText: string,
+): ChatSession {
+  return updateMessages(session, messageId, (message) => {
+    const items = message.outputItems;
+    const lastIdx = items.length - 1;
+    if (lastIdx < 0) return message;
+    const last = items[lastIdx];
+    if (last.type !== 'text') return message;
+    const planItem: OutputItem = {
+      type: 'plan',
+      rawText: last.content + rawText,
+      plan: null,
+      isStreaming: true,
+    };
+    const nextItems = items.slice();
+    nextItems[lastIdx] = planItem;
+    return { ...message, outputItems: nextItems };
+  });
 }
 
 export function updatePendingDiffHunks(

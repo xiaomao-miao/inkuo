@@ -1,7 +1,7 @@
 use crate::agent::{
     create_agent_executor,
-    get_agent_system_prompt, get_ask_system_prompt, AgentError, AgentSession, Message,
-    SharedToolRegistry, ToolCallFunction, ToolCallMessage,
+    get_agent_system_prompt, get_ask_system_prompt, get_plan_system_prompt, AgentError,
+    AgentSession, Message, SharedToolRegistry, ToolCallFunction, ToolCallMessage,
 };
 use crate::agent::tools::ToolRegistry;
 use crate::ai_config::{self, AIConfigInput};
@@ -165,7 +165,7 @@ pub async fn ai_agent_stream(
     message_id: String,
     instruction: String,
     workspace_path: Option<String>,
-    read_only: bool,
+    mode: String,
     history: Vec<FrontendMessage>,
     max_iterations: Option<usize>,
     enabled_toggles: Option<Vec<String>>,
@@ -185,11 +185,29 @@ pub async fn ai_agent_stream(
 
     let executor = create_agent_executor(ai_config);
 
-    // Use different tool registry based on mode
-    let tool_registry = if read_only {
-        get_read_only_tool_registry(&app).await
-    } else {
-        get_full_tool_registry(&app).await
+    // Use different tool registry and system prompt based on mode
+    let (tool_registry, mut system_prompt) = match mode.as_str() {
+        "plan" => {
+            let registry = get_read_only_tool_registry(&app).await;
+            let prompt = get_plan_system_prompt();
+            (registry, prompt)
+        }
+        "ask" => {
+            let registry = get_read_only_tool_registry(&app).await;
+            let prompt = get_ask_system_prompt();
+            (registry, prompt)
+        }
+        "agent" => {
+            let registry = get_full_tool_registry(&app).await;
+            let prompt = get_agent_system_prompt();
+            (registry, prompt)
+        }
+        other => {
+            tracing::warn!("Unknown mode '{}', defaulting to agent", other);
+            let registry = get_full_tool_registry(&app).await;
+            let prompt = get_agent_system_prompt();
+            (registry, prompt)
+        }
     };
 
     // Parse the frontend toggle list. Unknown ids are an explicit error —
@@ -219,13 +237,6 @@ pub async fn ai_agent_stream(
     if let Some(n) = max_iterations {
         session = session.with_max_iterations(n);
     }
-
-    // Use different system prompt based on mode
-    let mut system_prompt = if read_only {
-        get_ask_system_prompt()
-    } else {
-        get_agent_system_prompt()
-    };
 
     // Layer feature-toggle prompt fragments AFTER the mode's base prompt
     // so the toggle's rules take precedence on conflicts. Each fragment

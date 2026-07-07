@@ -293,6 +293,72 @@ export interface MessageToolResult {
   diffSummary?: StreamDiffSummary;
 }
 
+export type PlanFileIntent = 'read' | 'create' | 'modify' | 'delete' | 'rename';
+export type PlanRisk = 'low' | 'medium' | 'high';
+
+export interface PlanFileTouch {
+  path: string;
+  intent: PlanFileIntent;
+  reason: string;
+}
+
+export interface PlanOutput {
+  plan_summary: string;
+  files_to_touch: PlanFileTouch[];
+  risk: PlanRisk;
+  risk_reason?: string;
+  needs_confirmation: boolean;
+}
+
+/**
+ * One row in the AI's task checklist. Mirrors the `TodoItem` Rust type
+ * emitted by the `update_todo` tool. `status` is normalised on read
+ * (unknown values fall back to `'pending'`) so a typo doesn't crash the
+ * panel.
+ */
+export type TodoStatus = 'pending' | 'in_progress' | 'completed';
+
+export interface TodoItem {
+  id: string;
+  content: string;
+  status: TodoStatus;
+}
+
+/**
+ * The freshest published todo list per session. Derived state — see
+ * `selectActiveTodoSnapshot` in `useAIPanelStore`. Empty list means the
+ * model cleared the panel (or never published one).
+ */
+export interface TodoSnapshot {
+  items: TodoItem[];
+  /**
+   * Id of the `update_todo` tool call that produced this snapshot. Lets
+   * the UI debug a stale panel by jumping to the source message.
+   */
+  toolCallId: string;
+  /** Wall-clock millis when the snapshot landed. */
+  updatedAt: number;
+}
+
+/**
+ * The three actions the `update_todo` tool understands in v2.
+ *
+ *   - `set` — publish a fresh list. Used at the *start* of a multi-step
+ *     task. `items` is a list of one-line strings; the frontend numbers
+ *     them and renders the first one as `in_progress`, the rest as
+ *     `pending`.
+ *
+ *   - `advance` — atomic "I just finished the current step, move on".
+ *     Flips the current `in_progress` row to `completed` and the first
+ *     remaining `pending` row to `in_progress`. This is the workhorse
+ *     call — produced once per finished step.
+ *
+ *   - `complete_current` — flip the current `in_progress` row to
+ *     `completed` without promoting the next one. Rare; `advance`
+ *     covers the common path.
+ */
+export type TodoAction = 'set' | 'advance' | 'complete_current';
+
 export type OutputItem =
   | { type: 'text'; content: string; isPendingMarkdown?: boolean; truncatedPrefix?: string }
   | {
@@ -335,7 +401,33 @@ export type OutputItem =
       duration?: number;
       diffSummary?: StreamDiffSummary;
     }
-  | { type: 'tool_error'; toolCallId: string; error: string };
+  | { type: 'tool_error'; toolCallId: string; error: string }
+  | {
+      type: 'plan';
+      /**
+       * Model's raw output text (Markdown prose + ```plan JSON block).
+       * Used for fallback display when plan parsing fails.
+       */
+      rawText: string;
+      /**
+       * Parsed structured plan data. `null` while still collecting
+       * or if JSON parsing failed.
+       */
+      plan: PlanOutput | null;
+      /** Set when JSON.parse threw after the ```plan block was closed. */
+      parseError?: string;
+      /** True while the model is still streaming the plan output. */
+      isStreaming?: boolean;
+      /**
+       * Plan id (filename stem) under `<workspace>/.inkuo/plans/<planFileId>.md`
+       * once the plan has been persisted. `undefined` means not yet saved.
+       * On apply / cancel / session-close the frontend asks Rust to delete
+       * this file if present.
+       */
+      planFileId?: string;
+      /** Absolute path to the persisted plan md on disk, if known. */
+      planFilePath?: string;
+    };
 
 export interface SearchResult {
   chunkId: string;

@@ -7,8 +7,9 @@ import type {
   FileEntry,
   NewEntryPayload,
   RenamePathResult,
+  TodoSnapshot,
 } from '../types';
-import type { WorkspaceSnapshot } from '../store/sidebarStore';
+import type { ChatSession, WorkspaceSnapshot } from '../store/sidebarStore';
 
 // Single-flight queue for workspace switches. Without this, two calls to
 // `switchWorkspace` that fire in rapid succession (e.g. user picks "A",
@@ -35,6 +36,28 @@ function withSwitchLock<T>(task: () => Promise<T>): Promise<T> {
     () => undefined,
   );
   return next;
+}
+
+/**
+ * Drop todo snapshots whose session id is no longer in `sessions`.
+ * Sessions are normally what outlives the snapshot (and vice versa) —
+ * but `loadSnapshot` doesn't guarantee the two arrays match perfectly
+ * if a partial write from an older app version survives in
+ * `workspace_snapshots.json`. A leftover `todoSnapshotBySession[id]`
+ * would just dangle harmlessly in the map, but pruning keeps the
+ * hydrated store shape consistent with the in-memory invariant.
+ */
+function pruneTodoSnapshotsToSessions(
+  snapshots: Record<string, TodoSnapshot> | undefined,
+  sessions: ChatSession[],
+): Record<string, TodoSnapshot> {
+  if (!snapshots) return {};
+  const sessionIds = new Set(sessions.map((s) => s.id));
+  const pruned: Record<string, TodoSnapshot> = {};
+  for (const [id, snap] of Object.entries(snapshots)) {
+    if (sessionIds.has(id)) pruned[id] = snap;
+  }
+  return pruned;
 }
 
 /**
@@ -103,7 +126,14 @@ export async function switchWorkspace(targetPath: string): Promise<void> {
     //    we are on the welcome page), which is not an error.
     if (sidebar.workspacePath) {
       try {
-        await saveCurrentSnapshot(sidebar.workspacePath, sidebar.openTabs, sidebar.activeTabId, aiPanel.sessions, aiPanel.activeSessionId);
+        await saveCurrentSnapshot(
+          sidebar.workspacePath,
+          sidebar.openTabs,
+          sidebar.activeTabId,
+          aiPanel.sessions,
+          aiPanel.activeSessionId,
+          aiPanel.todoSnapshotBySession,
+        );
       } catch (err) {
         console.warn('Failed to save current workspace snapshot before switch:', err);
       }
@@ -133,6 +163,13 @@ export async function switchWorkspace(targetPath: string): Promise<void> {
       useAIPanelStore.setState({
         sessions: targetSessions,
         activeSessionId: resolvedActiveId,
+        // Restore the in-flight todo chip. Pruned to only sessions that
+        // survived the round-trip above so stale ids can't leak back in
+        // if `aiSessions` ever drifts from `todoSnapshotBySession`.
+        todoSnapshotBySession: pruneTodoSnapshotsToSessions(
+          snapshot.todoSnapshotBySession,
+          targetSessions,
+        ),
       });
     } else {
       // Fresh workspace — reset everything to empty/default.
@@ -142,6 +179,7 @@ export async function switchWorkspace(targetPath: string): Promise<void> {
       useAIPanelStore.setState({
         sessions: [fresh],
         activeSessionId: fresh.id,
+        todoSnapshotBySession: {},
       });
     }
   });
@@ -151,6 +189,12 @@ export async function switchWorkspace(targetPath: string): Promise<void> {
  * Persist the current workspace's tabs + AI sessions as its snapshot.
  * Exposed for callers that want to flush state to disk outside of a
  * workspace switch (e.g. on window close).
+ *
+ * `todoSnapshotBySession` is persisted alongside the sessions so the
+ * `update_todo` chip can repopulate after a restart. We deliberately
+ * don't prune sessions here — `loadSnapshot` handles that defensively
+ * in case a snapshot ever references a session id that no longer
+ * exists (e.g. partial write from an older app version).
  */
 export async function saveCurrentSnapshot(
   workspacePath: string,
@@ -158,8 +202,15 @@ export async function saveCurrentSnapshot(
   activeTabId: WorkspaceSnapshot['activeTabId'],
   aiSessions: WorkspaceSnapshot['aiSessions'],
   activeSessionId: WorkspaceSnapshot['activeSessionId'],
+  todoSnapshotBySession?: WorkspaceSnapshot['todoSnapshotBySession'],
 ): Promise<void> {
-  const snapshot: WorkspaceSnapshot = { openTabs, activeTabId, aiSessions, activeSessionId };
+  const snapshot: WorkspaceSnapshot = {
+    openTabs,
+    activeTabId,
+    aiSessions,
+    activeSessionId,
+    todoSnapshotBySession,
+  };
   await invoke('save_workspace_snapshot', {
     path: workspacePath,
     snapshot: snapshot as unknown as Record<string, unknown>,

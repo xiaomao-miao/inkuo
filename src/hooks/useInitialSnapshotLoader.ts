@@ -4,6 +4,7 @@ import { useAIPanelStore } from '../store';
 import { createNewSession } from '../store/aiPanelReducers';
 import { loadSnapshot } from '../services/workspace';
 import type { WorkspaceSnapshot } from '../store/sidebarStore';
+import type { TodoSnapshot } from '../types';
 
 /**
  * On app startup, the sidebarStore is hydrated from localStorage with a
@@ -42,9 +43,21 @@ export function useInitialSnapshotLoader(): void {
           ? activeId
           : sessions.find((s) => !s.archived)?.id ?? sessions[0].id;
 
+        // Restore the in-flight `update_todo` chip — same defensive
+        // prune as `switchWorkspace`, since the snapshot could
+        // (theoretically) reference a session id we no longer have.
+        const sessionIds = new Set(sessions.map((s) => s.id));
+        const todoSnapshotBySession: Record<string, TodoSnapshot> = {};
+        if (snapshot.todoSnapshotBySession) {
+          for (const [id, snap] of Object.entries(snapshot.todoSnapshotBySession)) {
+            if (sessionIds.has(id)) todoSnapshotBySession[id] = snap;
+          }
+        }
+
         useAIPanelStore.setState({
           sessions,
           activeSessionId: resolvedActiveId,
+          todoSnapshotBySession,
         });
       } catch (err) {
         console.warn('[useInitialSnapshotLoader] failed to restore sessions:', err);

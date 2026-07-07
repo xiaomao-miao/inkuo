@@ -34,7 +34,7 @@ export interface OpenTab {
   isSettings?: boolean;
 }
 
-export type { KnowledgeBase, BuildProgress };
+export type { KnowledgeBase, BuildProgress, ChatSession };
 
 /**
  * Per-workspace snapshot of state that the user expects to "come back" when
@@ -53,6 +53,14 @@ export interface WorkspaceSnapshot {
   activeTabId: string | null;
   aiSessions: ChatSession[];
   activeSessionId: string | null;
+  /**
+   * Latest published `update_todo` snapshot per session. Survives
+   * restarts so the chip above the chat input still shows the in-flight
+   * task list when the user reopens the workspace. Keyed by
+   * `ChatSession.id`. Sessions whose id is no longer present in
+   * `aiSessions` are pruned at load time.
+   */
+  todoSnapshotBySession?: Record<string, import('../types').TodoSnapshot>;
 }
 
 interface PersistedSidebarState {

@@ -10,6 +10,7 @@ import {
   finalizeStreamingMessage,
 } from './messageStreamActions';
 import { applyToolResultToState } from './toolCallStreamActions';
+import { syncTodoSnapshotFromToolCall } from './todoSync';
 
 interface HandleStreamDoneArgs {
   payload: StreamPayload;
@@ -51,9 +52,22 @@ export async function handleStreamDone({
   }
 
   if (effectiveContent) {
-    useAIPanelStore.setState((state) =>
-      finalizeStreamingMessage(state, session_id, message_id, effectiveContent)
-    );
+    // If the message has a plan OutputItem, the structured card is the
+    // canonical rendering — don't overwrite its rawText with the model's
+    // (now stale) final_content. Just flip isStreaming off on the plan
+    // item and finalise the session state without touching message.content.
+    const messageHasPlan = useAIPanelStore.getState().sessions
+      .find((s) => s.id === session_id)
+      ?.messages.find((m) => m.id === message_id)
+      ?.outputItems.some((it) => it.type === 'plan');
+    if (messageHasPlan) {
+      useAIPanelStore.getState().finishPlanItem(session_id, message_id);
+      useAIPanelStore.getState().updateSession(session_id, (session) => ({ ...session, isStreaming: false }));
+    } else {
+      useAIPanelStore.setState((state) =>
+        finalizeStreamingMessage(state, session_id, message_id, effectiveContent)
+      );
+    }
   } else {
     useAIPanelStore.getState().updateSession(session_id, (session) => ({ ...session, isStreaming: false }));
   }
@@ -115,6 +129,16 @@ export function handleToolResult(
     outputItems: [],
   });
 
+  // `update_todo` is a special case: its tool_call_start OutputItem
+  // holds the published todo list in `arguments.items`. After the
+  // tool result lands we copy that list into the AIPanelStore's
+  // todoSnapshotBySession map so the TodoPanel can render it without
+  // having to scan the message history. Done here (rather than in the
+  // tool_call_start handler) so we only commit a *complete* snapshot
+  // — partial JSON parse failures during streaming would otherwise
+  // surface a half-list to the user.
+  syncTodoSnapshotFromToolCall(session_id, message_id, tool_call_id);
+
   if (office_file_modified) {
     const { path } = office_file_modified;
     const { invalidateOfficeBuffer } = useEditorStore.getState();
@@ -133,6 +157,18 @@ export function handleStreamError({
 
   flushAllPending();
   delete streamingContentRef.current[message_id];
+  // If the message has a plan item, mark it as no longer streaming so the
+  // user sees a static (not spinner) plan card. applyStreamingError will
+  // then write the error string as the message's `content` — the plan
+  // item itself stays intact in `outputItems` so the user can still see
+  // what was parsed.
+  const messageHasPlan = useAIPanelStore.getState().sessions
+    .find((s) => s.id === session_id)
+    ?.messages.find((m) => m.id === message_id)
+    ?.outputItems.some((it) => it.type === 'plan');
+  if (messageHasPlan) {
+    useAIPanelStore.getState().finishPlanItem(session_id, message_id);
+  }
   useAIPanelStore.setState((state) =>
     applyStreamingError(state, session_id, message_id, error ?? '发生错误')
   );

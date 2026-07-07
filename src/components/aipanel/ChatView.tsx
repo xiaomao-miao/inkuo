@@ -24,6 +24,21 @@ interface ChatViewProps {
   onSaveEdit: () => void;
   onSetEditingContent: (v: string) => void;
   onSetInput: (v: string) => void;
+  /**
+   * Apply a structured plan. Receives the messageId so the action handler
+   * can locate the trailing plan item and tear down its persisted `.md`
+   * artifact before dispatching the agent-mode follow-up.
+   */
+  onApplyPlan?: (messageId: string, plan: import('../../store').PlanOutput) => void;
+  /** Adjust a structured plan: refill the input with a hint. Same messageId forwarding. */
+  onAdjustPlan?: (messageId: string, plan: import('../../store').PlanOutput) => void;
+  /**
+   * Persist the trailing plan OutputItem's raw text to
+   * `<workspace>/.inkuo/plans/<id>.md`. Implemented in
+   * `useChatSessionActions.handleSavePlan`. Receives the messageId so it
+   * can route the resulting `planFileId` back to the right plan item.
+   */
+  onSavePlan?: (messageId: string) => Promise<void>;
   footer?: React.ReactNode;
 }
 
@@ -56,6 +71,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onSaveEdit,
   onSetEditingContent,
   onSetInput,
+  onApplyPlan,
+  onAdjustPlan,
+  onSavePlan,
   footer,
 }) => {
   const contentRef = useRef<HTMLDivElement>(null);
@@ -316,7 +334,6 @@ export const ChatView: React.FC<ChatViewProps> = ({
             key={message.id}
             message={message}
             isStreaming={isStreaming}
-            mode={mode}
             activeToolCalls={activeToolCalls}
             activeSession={activeSession}
             editingMessageId={editingMessageId}
@@ -326,6 +343,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
             onSaveEdit={onSaveEdit}
             onSetEditingContent={onSetEditingContent}
             onSetInput={onSetInput}
+            onApplyPlan={onApplyPlan}
+            onAdjustPlan={onAdjustPlan}
+            onSavePlan={onSavePlan}
           />
         ))}
 

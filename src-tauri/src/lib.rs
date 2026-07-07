@@ -16,6 +16,7 @@ mod ai_config;
 mod commands;
 mod commands_stream;
 mod commands_agent;
+mod commands_plan;
 mod streaming;
 mod openai_stream;
 mod file_watcher;
@@ -90,6 +91,9 @@ pub fn run() {
             commands_agent::ai_agent_stream,
             commands_agent::ai_agent_cancel,
             commands_agent::get_available_tools,
+            commands_plan::plan_save,
+            commands_plan::plan_read,
+            commands_plan::plan_delete,
             commands::get_settings,
             commands::save_settings,
             commands::test_api_config,

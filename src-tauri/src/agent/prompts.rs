@@ -32,6 +32,7 @@ pub const PROFILES: &[ProfileDescriptor] = &[
             "list_dir", "glob", "grep",
             "database_search",
             "get_tool_help", "delegate_to",
+            "update_todo",
         ],
         max_iterations: 50,
     },

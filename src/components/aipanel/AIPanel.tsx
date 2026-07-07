@@ -3,6 +3,7 @@ import { ChatHeader } from './ChatHeader';
 import { ChatInput } from './ChatInput';
 import { ChatView } from './ChatView';
 import { HistorySidebar } from './HistorySidebar';
+import { TodoPanel } from './TodoPanel';
 import { useAgentStream } from './useAgentStream';
 import { useChatComposer } from './useChatComposer';
 import { useAIPanelController } from './useAIPanelController';
@@ -41,6 +42,10 @@ export const AIPanel: React.FC = () => {
     handleStartEdit,
     handleCancelEdit,
     handleSaveEdit,
+    handleApplyPlan,
+    handleAdjustPlan,
+    handleSavePlan,
+    destroySessionPlanFiles,
   } = useChatComposer({
     activeSession,
     mode,
@@ -65,6 +70,18 @@ export const AIPanel: React.FC = () => {
     setHistoryOpen(false);
   };
 
+  /**
+   * Wrap the store's `deleteSession` with a plan-file sweep so the
+   * `.inkuo/plans/<id>.md` artifacts don't outlive the conversation
+   * they came from. The Rust `plan_delete` calls run in parallel and
+   * are best-effort — they're allowed to fail (e.g. workspace already
+   * closed) without blocking the UI removal.
+   */
+  const handleDeleteSession = (sessionId: string) => {
+    void destroySessionPlanFiles(sessionId);
+    deleteSession(sessionId);
+  };
+
   return (
     <aside className={layoutStyles.panel}>
       <ChatHeader
@@ -86,7 +103,7 @@ export const AIPanel: React.FC = () => {
               activeSessionId={activeSessionId}
               onActivate={handleHistoryActivate}
               onNewChat={handleHistoryNewChat}
-              onDelete={deleteSession}
+              onDelete={handleDeleteSession}
               onClose={() => setHistoryOpen(false)}
             />
           )}
@@ -106,10 +123,17 @@ export const AIPanel: React.FC = () => {
               onSaveEdit={handleSaveEdit}
               onSetEditingContent={setEditingContent}
               onSetInput={setInput}
+              onApplyPlan={handleApplyPlan}
+              onAdjustPlan={handleAdjustPlan}
+              onSavePlan={handleSavePlan}
             />
           </div>
         </div>
       </div>
+
+      {/* Task chip lives directly above the chat input. Renders nothing
+          for sessions that haven't published an `update_todo` snapshot. */}
+      <TodoPanel sessionId={activeSessionId} />
 
       <ChatInput
         input={input}

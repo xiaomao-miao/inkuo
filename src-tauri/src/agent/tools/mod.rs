@@ -272,6 +272,7 @@ mod search_tools;
 mod office_tools;
 mod database_tools;
 mod meta_tools; // get_tool_help + delegate_to
+mod todo_tools; // update_todo (read-only meta-tool; see agent_loop::try_handle_meta_tool)
 
 pub use file_tools::{ReadFileTool, WriteFileTool, EditFileTool, CreateDirTool, MoveFileTool};
 pub use search_tools::{ListDirTool, GlobTool, GrepTool};
@@ -281,6 +282,7 @@ pub use office_tools::{
 };
 pub use database_tools::DatabaseSearchTool;
 pub use meta_tools::{GetToolHelpTool, DelegateToTool};
+pub use todo_tools::{UpdateTodoTool, TodoItem};
 
 /// Unified executor enum combining all tool implementations
 pub enum ToolExecutor {
@@ -303,6 +305,7 @@ pub enum ToolExecutor {
     // if reached directly).
     GetToolHelp(meta_tools::GetToolHelpTool),
     DelegateTo(meta_tools::DelegateToTool),
+    UpdateTodo(todo_tools::UpdateTodoTool),
 }
 
 impl ToolExecutor {
@@ -325,6 +328,7 @@ impl ToolExecutor {
             ToolExecutor::DatabaseSearch(_) => "database_search",
             ToolExecutor::GetToolHelp(_) => "get_tool_help",
             ToolExecutor::DelegateTo(_) => "delegate_to",
+            ToolExecutor::UpdateTodo(_) => "update_todo",
         }
     }
 
@@ -347,6 +351,7 @@ impl ToolExecutor {
             ToolExecutor::DatabaseSearch(t) => t.definition(),
             ToolExecutor::GetToolHelp(t) => t.definition(),
             ToolExecutor::DelegateTo(t) => t.definition(),
+            ToolExecutor::UpdateTodo(t) => t.definition(),
         }
     }
 
@@ -369,6 +374,7 @@ impl ToolExecutor {
             ToolExecutor::DatabaseSearch(t) => t.execute(arguments, workspace).await,
             ToolExecutor::GetToolHelp(t) => t.execute(arguments, workspace).await,
             ToolExecutor::DelegateTo(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::UpdateTodo(t) => t.execute(arguments, workspace).await,
         }
     }
 }
@@ -406,6 +412,13 @@ impl ToolRegistry {
             ToolExecutor::Glob(GlobTool),
             ToolExecutor::Grep(GrepTool),
             ToolExecutor::ReadOfficeFile(ReadOfficeFileTool),
+            // `update_todo` is a meta-tool — its registry stub always
+            // errors out, and the actual implementation lives in
+            // `agent_loop::try_handle_meta_tool`. Registering it here
+            // makes it visible to the model in Plan / Ask mode so the
+            // user can see planning progress, even though Plan mode
+            // never actually executes the listed steps.
+            ToolExecutor::UpdateTodo(UpdateTodoTool),
         ];
 
         for tool in tools {

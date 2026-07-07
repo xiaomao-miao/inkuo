@@ -36,6 +36,5 @@ export {
   isFileModificationTool,
   extractFileNameFromPath,
 } from './toolUtils';
-export { parsePlanBlocks } from './planRender';
 export { buildConversationHistory, normalizeSearchResults } from './messageTransform';
 export type { StreamPayload, StreamDiffSummary, OfficeFileModifiedPayload, WireSearchResult } from './streamTypes';

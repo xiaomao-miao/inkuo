@@ -22,6 +22,7 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   // Meta / sub-agent tools
   get_tool_help: '加载工具帮助',
   delegate_to: '委派子代理',
+  update_todo: '更新任务列表',
 };
 
 const EXPERT_DISPLAY_NAMES: Record<string, string> = {

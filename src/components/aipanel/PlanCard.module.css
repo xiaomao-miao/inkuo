@@ -1,0 +1,451 @@
+/* Plan card — Cursor-style structured plan output */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background-color: var(--bg-primary);
+  margin: 8px 0;
+  overflow: hidden;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.streaming {
+  border-style: dashed;
+}
+
+.parsed {
+  border-color: var(--accent-primary, #3b82f6);
+}
+
+.failed {
+  border-color: #ef4444;
+}
+
+/* Header */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 12px;
+  background-color: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.headerLeft {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+.headerRight {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 5px;
+  background-color: var(--bg-tertiary);
+  color: var(--fg-secondary);
+  flex-shrink: 0;
+}
+
+.iconPlanning {
+  background-color: rgba(59, 130, 246, 0.12);
+  color: #3b82f6;
+}
+
+.iconError {
+  background-color: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
+
+.titleBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-primary);
+}
+
+.summary {
+  font-size: 12px;
+  color: var(--fg-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.spinning {
+  animation: spin 1s linear infinite;
+  color: var(--fg-muted);
+  margin-left: 4px;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Risk badge */
+.riskBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-weight: 500;
+}
+
+.riskBadge_low {
+  background-color: var(--bg-tertiary);
+  color: var(--fg-muted);
+}
+
+.riskBadge_medium {
+  background-color: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+}
+
+.riskBadge_high {
+  background-color: rgba(239, 68, 68, 0.15);
+  color: #ef4444;
+}
+
+/* Body */
+.body {
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.fileSummary {
+  font-size: 12px;
+  color: var(--fg-secondary);
+  font-weight: 500;
+}
+
+.fileList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fileRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background-color: var(--bg-secondary);
+  font-size: 12px;
+}
+
+.fileRowDestructive {
+  background-color: rgba(239, 68, 68, 0.06);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+.fileIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  background-color: var(--bg-tertiary);
+  color: var(--fg-secondary);
+  flex-shrink: 0;
+}
+
+.intentRead .fileIcon { color: #64748b; }
+.intentCreate .fileIcon { color: #22c55e; }
+.intentModify .fileIcon { color: #3b82f6; }
+.intentDelete .fileIcon { color: #ef4444; }
+.intentRename .fileIcon { color: #a855f7; }
+
+.filePath {
+  background: none;
+  border: none;
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-primary);
+  cursor: pointer;
+  text-align: left;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.filePath:hover {
+  text-decoration: underline;
+  color: var(--accent-primary, #3b82f6);
+}
+
+.intentTag {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background-color: var(--bg-tertiary);
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.intentRead .intentTag { color: #64748b; }
+.intentCreate .intentTag {
+  background-color: rgba(34, 197, 94, 0.12);
+  color: #16a34a;
+}
+.intentModify .intentTag {
+  background-color: rgba(59, 130, 246, 0.12);
+  color: #2563eb;
+}
+.intentDelete .intentTag {
+  background-color: rgba(239, 68, 68, 0.12);
+  color: #dc2626;
+}
+.intentRename .intentTag {
+  background-color: rgba(168, 85, 247, 0.12);
+  color: #9333ea;
+}
+
+.fileReason {
+  color: var(--fg-secondary);
+  font-size: 11px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.destructiveIcon {
+  color: #ef4444;
+  flex-shrink: 0;
+}
+
+/* Risk note */
+.riskNote {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  padding: 6px 8px;
+  border-radius: 5px;
+}
+
+.riskNote_low {
+  background-color: var(--bg-tertiary);
+  color: var(--fg-muted);
+}
+
+.riskNote_medium {
+  background-color: rgba(245, 158, 11, 0.08);
+  color: #b45309;
+}
+
+.riskNote_high {
+  background-color: rgba(239, 68, 68, 0.08);
+  color: #b91c1c;
+}
+
+/* Details */
+.details {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-top: 1px dashed var(--border-color);
+  padding-top: 8px;
+}
+
+.detailsToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--fg-muted);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  align-self: flex-start;
+}
+
+.detailsToggle:hover {
+  color: var(--fg-secondary);
+}
+
+.detailsContent {
+  font-size: 12px;
+  color: var(--fg-secondary);
+  padding: 4px 0 0;
+}
+
+/* Actions */
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background-color: var(--bg-secondary);
+  border-top: 1px solid var(--border-color);
+}
+
+.applyButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  padding: 7px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: white;
+  background-color: var(--accent-primary, #3b82f6);
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.applyButton:hover:not(:disabled) {
+  background-color: var(--accent-primary-hover, #2563eb);
+}
+
+.applyButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.adjustButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 7px 12px;
+  font-size: 12px;
+  color: var(--fg-secondary);
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.adjustButton:hover:not(:disabled) {
+  background-color: var(--bg-secondary);
+}
+
+.adjustButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.saveButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 7px 10px;
+  font-size: 12px;
+  color: var(--fg-secondary);
+  background-color: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.saveButton:hover:not(:disabled) {
+  background-color: var(--bg-tertiary);
+}
+
+.saveButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.savedPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--fg-secondary);
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  cursor: default;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.saveError {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 9px;
+  font-size: 11px;
+  color: #b91c1c;
+  background-color: rgba(239, 68, 68, 0.08);
+  border: 1px solid #ef4444;
+  border-radius: 6px;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Failed state */
+.errorText {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #b91c1c;
+  font-size: 12px;
+  padding: 6px 8px;
+  background-color: rgba(239, 68, 68, 0.08);
+  border-radius: 5px;
+}
+
+.rawFallback {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-muted);
+  background-color: var(--bg-tertiary);
+  padding: 8px 10px;
+  border-radius: 5px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow: auto;
+  margin: 0;
+}

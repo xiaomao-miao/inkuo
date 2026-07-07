@@ -9,6 +9,7 @@ import {
   type ChatMessage,
   type ChatMode,
   type ChatSession,
+  type PlanOutput,
 } from '../../store';
 import { buildConversationHistory } from './messageTransform';
 import { extractErrorMessage } from '../../utils/errors';
@@ -17,6 +18,11 @@ import {
   createSnapshot,
   restoreSnapshot,
 } from '../../services/snapshots';
+import {
+  deletePlanFile,
+  generatePlanId,
+  savePlanToFile,
+} from '../../services/planFiles';
 import { useNotificationStore } from '../../store/notificationStore';
 
 interface UseChatSessionActionsArgs {
@@ -58,11 +64,119 @@ export function useChatSessionActions({
   const clearToolCalls = useAIPanelStore((state) => state.clearToolCalls);
   const hardCollapseHistory = useAIPanelStore((state) => state.hardCollapseHistory);
   const collapseOldMessages = useAIPanelStore((state) => state.collapseOldMessages);
+  const setPlanItemFile = useAIPanelStore((state) => state.setPlanItemFile);
+  const clearPlanItemFile = useAIPanelStore((state) => state.clearPlanItemFile);
   const pushNotification = useNotificationStore((s) => s.pushNotification);
 
   // Keep references so event listeners can read the latest values.
   const recordBaseline = useRef(useBaselineStore.getState().recordBaseline);
   const consumeBaseline = useRef(useBaselineStore.getState().consumeBaseline);
+
+  /**
+   * Locate the trailing plan OutputItem (if any) on `messageId`. Used by
+   * the save / destroy flows to read and patch the same item.
+   */
+  const findTrailingPlanItem = useCallback(
+    (sessionId: string, messageId: string) => {
+      const session = useAIPanelStore
+        .getState()
+        .sessions.find((s) => s.id === sessionId);
+      const message = session?.messages.find((m) => m.id === messageId);
+      if (!message) return undefined;
+      const items = message.outputItems;
+      for (let i = items.length - 1; i >= 0; i -= 1) {
+        const it = items[i];
+        if (it.type === 'plan') return it;
+      }
+      return undefined;
+    },
+    [],
+  );
+
+  /**
+   * Helper: best-effort destroy a single plan file. Swallows errors so a
+   * missing or already-deleted file never blocks user actions (apply,
+   * cancel, close).
+   */
+  const destroyPlanFileSilently = useCallback(
+    async (workspacePath: string, planFileId: string) => {
+      try {
+        await deletePlanFile(workspacePath, planFileId);
+      } catch (err) {
+        // Don't surface — the file may have been removed manually, or
+        // the workspace was closed. Either way, "best effort".
+        console.warn('[plan-destroy] failed:', err);
+      }
+    },
+    [],
+  );
+
+  /**
+   * Persist a plan OutputItem's raw text to `<workspace>/.inkuo/plans/<id>.md`
+   * and stamp the resulting `planFileId` / `planFilePath` back onto the
+   * item. Throws on failure so the PlanCard surface can show the error
+   * inline.
+   */
+  const handleSavePlan = useCallback(
+    async (messageId: string) => {
+      if (!activeSession) throw new Error('No active session');
+      const workspacePath = useSidebarStore.getState().workspacePath;
+      if (!workspacePath) {
+        throw new Error('No workspace path — open a workspace first.');
+      }
+      const item = findTrailingPlanItem(activeSession.id, messageId);
+      if (!item || item.type !== 'plan') {
+        throw new Error('No plan in this message.');
+      }
+      // Re-use an existing planFileId if the user clicks Save again after
+      // an edit. Otherwise generate a fresh one. The Rust side sanitizes
+      // and atomically writes the file.
+      const planFileId = item.planFileId ?? generatePlanId();
+      const { path } = await savePlanToFile(
+        workspacePath,
+        planFileId,
+        item.rawText,
+      );
+      setPlanItemFile(activeSession.id, messageId, planFileId, path);
+    },
+    [activeSession, findTrailingPlanItem, setPlanItemFile],
+  );
+
+  /**
+   * Sweep every plan `planFileId` recorded on this session's plan items
+   * and dispatch `plan_delete` for each. Used by the delete-session flow
+   * in AIPanel (when the user permanently removes a conversation).
+   *
+   * Best-effort: errors are logged and swallowed. We also clear the
+   * in-memory `planFileId` / `planFilePath` on the store so re-opening
+   * the session (in case the store is hydrated from localStorage) won't
+   * double-delete the same id.
+   */
+  const destroySessionPlanFiles = useCallback(
+    async (sessionId: string) => {
+      const workspacePath = useSidebarStore.getState().workspacePath;
+      if (!workspacePath) return;
+      const session = useAIPanelStore
+        .getState()
+        .sessions.find((s) => s.id === sessionId);
+      if (!session) return;
+      const ids = new Set<string>();
+      for (const message of session.messages) {
+        for (const item of message.outputItems) {
+          if (item.type === 'plan' && item.planFileId) {
+            ids.add(item.planFileId);
+            // Clear local state so re-opening (if it's archived, not
+            // deleted) doesn't show a "saved" pill for an absent file.
+            clearPlanItemFile(sessionId, message.id);
+          }
+        }
+      }
+      await Promise.all(
+        Array.from(ids).map((id) => destroyPlanFileSilently(workspacePath, id)),
+      );
+    },
+    [destroyPlanFileSilently, clearPlanItemFile],
+  );
 
   const sendMessage = useCallback(async (instructionOverride?: string) => {
     const instruction = (instructionOverride ?? input).trim();
@@ -186,7 +300,11 @@ export function useChatSessionActions({
         messageId: assistantMessageId,
         instruction,
         workspacePath,
-        readOnly: mode !== 'agent',
+        // `mode` replaces the old `readOnly` flag. Rust dispatches:
+        //   "plan" → plan prompt + no-tools constraint
+        //   "ask"  → ask prompt + read-only registry
+        //   "agent"→ agent prompt + full registry
+        mode,
         // Forward the user-configured agent loop cap. The Rust side clamps
         // / defaults internally; we just send the raw value (1–200).
         maxIterations: agent_max_iterations,
@@ -238,6 +356,75 @@ export function useChatSessionActions({
     useAIPanelStore.getState().setSessionMode(activeSession.id, order[(idx + 1) % order.length]);
   }, [activeSession, mode]);
 
+  /**
+   * Build a follow-up instruction from a structured plan and dispatch it
+   * in agent mode. The session's `mode` is flipped to `agent` first so
+   * the `sendMessage` snapshot-baseline branch fires (auto-baseline only
+   * triggers in agent mode).
+   *
+   * Before dispatching, the plan's persisted file (`.inkuo/plans/<id>.md`)
+   * is destroyed via `plan_delete` — Cursor-style ephemeral plans: once
+   * the user commits them, the on-disk artifact is consumed. The
+   * `messageId` is provided by PlanCard so we know which plan item to
+   * read the `planFileId` from.
+   */
+  const handleApplyPlan = useCallback(
+    async (messageId: string, plan: PlanOutput) => {
+      if (!activeSession || isStreaming) return;
+      const workspacePath = useSidebarStore.getState().workspacePath;
+      // Tear down the .md on disk if it was saved. We capture the
+      // planFileId BEFORE flipping modes so the lookup sees the same
+      // store snapshot.
+      const item = findTrailingPlanItem(activeSession.id, messageId);
+      const planFileId = item && item.type === 'plan' ? item.planFileId : undefined;
+      if (planFileId && workspacePath) {
+        void destroyPlanFileSilently(workspacePath, planFileId);
+        clearPlanItemFile(activeSession.id, messageId);
+      }
+
+      const fileList = plan.files_to_touch
+        .map((f: PlanOutput['files_to_touch'][number]) => `- ${f.path} (${f.intent}): ${f.reason}`)
+        .join('\n');
+      const instruction = [
+        `请按照以下计划执行：${plan.plan_summary}`,
+        '',
+        '涉及文件：',
+        fileList,
+        '',
+        plan.risk_reason ? `风险说明：${plan.risk_reason}` : '',
+        '请按顺序处理每个文件，对每个 delete/rename 操作先和我确认。',
+      ]
+        .filter(Boolean)
+        .join('\n');
+      // Flip the session to agent mode BEFORE calling sendMessage so the
+      // auto-baseline path inside sendMessage activates.
+      useAIPanelStore.getState().setSessionMode(activeSession.id, 'agent');
+      setInput(instruction);
+      await sendMessage(instruction);
+    },
+    [activeSession, isStreaming, sendMessage, setInput, findTrailingPlanItem, destroyPlanFileSilently, clearPlanItemFile],
+  );
+
+  /**
+   * Refill the chat input with a hint pointing the user back at the
+   * plan for refinement, without firing the run.
+   */
+  const handleAdjustPlan = useCallback((_messageId: string, plan: PlanOutput) => {
+    if (!activeSession) return;
+    const fileList = plan.files_to_touch
+      .map((f: PlanOutput['files_to_touch'][number]) => `- ${f.path} (${f.intent}): ${f.reason}`)
+      .join('\n');
+    const prompt = [
+      `请调整计划："${plan.plan_summary}"`,
+      '',
+      '当前涉及文件：',
+      fileList,
+      '',
+      '请告诉我需要怎么调整。',
+    ].join('\n');
+    setInput(prompt);
+  }, [activeSession, setInput]);
+
   const handleSaveEdit = useCallback(async () => {
     if (!activeSession || !editingMessageId || !editingContent.trim() || isStreaming) return;
 
@@ -274,5 +461,9 @@ export function useChatSessionActions({
     handleStop,
     cycleMode,
     handleSaveEdit,
+    handleApplyPlan,
+    handleAdjustPlan,
+    handleSavePlan,
+    destroySessionPlanFiles,
   };
 }

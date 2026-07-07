@@ -35,10 +35,14 @@ export function useWorkspaceSnapshotAutosave(): void {
 
     // Subscribe to AI sessions. `sessions` is a new array reference whenever
     // a message/tool call is appended, so reference comparison is enough.
+    // `todoSnapshotBySession` is updated in place on every `update_todo`
+    // tool call — its top-level reference also changes, so the same
+    // subscription fires for both.
     const unsubAi = useAIPanelStore.subscribe((state, prev) => {
       if (
         state.sessions !== prev.sessions ||
-        state.activeSessionId !== prev.activeSessionId
+        state.activeSessionId !== prev.activeSessionId ||
+        state.todoSnapshotBySession !== prev.todoSnapshotBySession
       ) {
         scheduleSave();
       }
@@ -63,6 +67,7 @@ export function useWorkspaceSnapshotAutosave(): void {
           sidebar.activeTabId,
           aiPanel.sessions,
           aiPanel.activeSessionId,
+          aiPanel.todoSnapshotBySession,
         );
       } catch (err) {
         console.warn('Workspace snapshot autosave failed:', err);
@@ -107,6 +112,7 @@ export async function flushPendingSnapshotSave(): Promise<void> {
       sidebar.activeTabId,
       aiPanel.sessions,
       aiPanel.activeSessionId,
+      aiPanel.todoSnapshotBySession,
     );
   } catch (err) {
     console.warn('Final workspace snapshot flush failed:', err);

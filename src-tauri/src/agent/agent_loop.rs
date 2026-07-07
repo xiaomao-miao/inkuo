@@ -590,6 +590,53 @@ impl AgentExecutor {
                         Err(e) => Some(ToolResult::error(&tool_call.id, format!("[{}] {}", expert, e))),
                     }
                 }
+                "update_todo" => {
+                    // The TodoList is rendered to the user via the normal
+                    // tool-call stream, so the ToolResult we hand back to
+                    // the LLM just needs to confirm the update landed —
+                    // but we DO want to surface the action the model
+                    // chose, because (a) it tells the model that the
+                    // call was accepted as the right action type, and
+                    // (b) the model's "did I just do this?" loop
+                    // benefits from explicit confirmation rather than a
+                    // generic "OK" string it has to correlate by
+                    // toolCallId alone.
+                    let action = tool_call
+                        .arguments
+                        .get("action")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("set"); // v1 callers didn't pass `action`; treat as `set`.
+                    let items_arr = tool_call
+                        .arguments
+                        .get("items")
+                        .and_then(|v| v.as_array());
+                    let count = items_arr.map(|a| a.len()).unwrap_or(0);
+                    let summary = match action {
+                        "set" => {
+                            if count == 0 {
+                                "Todo list cleared.".to_string()
+                            } else {
+                                format!(
+                                    "Todo list set ({} items). Step 1 marked in_progress — call action='advance' after finishing it.",
+                                    count
+                                )
+                            }
+                        }
+                        "advance" => {
+                            "Current step marked completed; next pending step promoted to in_progress.".to_string()
+                        }
+                        "complete_current" => {
+                            "Current step marked completed (no promotion).".to_string()
+                        }
+                        // Unknown action: the frontend will reject it,
+                        // but at least tell the model what we saw so
+                        // the next attempt can self-correct.
+                        other => {
+                            format!("Ignored unknown action '{}'.", other)
+                        }
+                    };
+                    Some(ToolResult::success(&tool_call.id, summary))
+                }
                 _ => None,
             }
         })

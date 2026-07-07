@@ -6,25 +6,50 @@ import { ToolCallCard } from './ToolCallCard';
 import { CompactToolCard } from './CompactToolCard';
 import { DelegateToCard, GetToolHelpCard } from './DelegateToCard';
 import { COMPACT_TOOLS } from './toolUtils';
-import { parsePlanBlocks, type PlanBlock } from './planRender';
+import { PlanCard } from './PlanCard';
 import { useAIPanelStore, useSidebarStore } from '../../store';
-import type { ActiveToolCall, ChatMessage, ChatMode, OutputItem } from '../../store';
+import type {
+  ActiveToolCall,
+  ChatMessage,
+  OutputItem,
+  PlanOutput,
+} from '../../store';
 import styles from './AIPanelMessage.module.css';
 
 interface AssistantMessageBodyProps {
   message: ChatMessage;
   isThisStreaming: boolean;
-  mode: ChatMode;
   activeToolCalls: ActiveToolCall[];
   sessionId: string;
+  /**
+   * Apply a structured plan: flips session to agent mode and tears down
+   * the plan's `.inkuo/plans/<id>.md` artifact before dispatching the
+   * follow-up turn. Receives the messageId so the action handler can
+   * locate the right plan item to destroy.
+   */
+  onApplyPlan?: (messageId: string, plan: PlanOutput) => void;
+  /**
+   * Adjust a structured plan: refill the input with a hint pointing the
+   * user at the plan for refinement. Currently unused (kept in reserve)
+   * but kept symmetric to `onApplyPlan`.
+   */
+  onAdjustPlan?: (messageId: string, plan: PlanOutput) => void;
+  /**
+   * Persist the trailing plan OutputItem's content to
+   * `<workspace>/.inkuo/plans/<id>.md`. Returns once Rust has written the
+   * file (and stamped `planFileId` / `planFilePath` back onto the item).
+   */
+  onSavePlan?: (messageId: string) => Promise<void>;
 }
 
 export const AssistantMessageBody: React.FC<AssistantMessageBodyProps> = ({
   message,
   isThisStreaming,
-  mode,
   activeToolCalls,
   sessionId,
+  onApplyPlan,
+  onAdjustPlan,
+  onSavePlan,
 }) => {
   const hasOutputItems = message.outputItems && message.outputItems.length > 0;
   const workspacePath = useSidebarStore((s) => s.workspacePath);
@@ -52,6 +77,9 @@ export const AssistantMessageBody: React.FC<AssistantMessageBodyProps> = ({
           onFileClick={handleFileClick}
           workspacePath={workspacePath ?? undefined}
           onSubagentToggle={handleSubagentToggle}
+          onApplyPlan={onApplyPlan}
+          onAdjustPlan={onAdjustPlan}
+          onSavePlan={onSavePlan}
         />
       ))}
       {/* Legacy content path */}
@@ -60,7 +88,6 @@ export const AssistantMessageBody: React.FC<AssistantMessageBodyProps> = ({
           message={message}
           sessionId={sessionId}
           isThisStreaming={isThisStreaming}
-          mode={mode}
           activeToolCalls={activeToolCalls}
           onFileClick={handleFileClick}
           workspacePath={workspacePath ?? undefined}
@@ -80,6 +107,9 @@ interface OutputItemViewProps {
   onFileClick?: (filePath: string) => void;
   workspacePath?: string;
   onSubagentToggle?: (subagentId: string) => void;
+  onApplyPlan?: (messageId: string, plan: PlanOutput) => void;
+  onAdjustPlan?: (messageId: string, plan: PlanOutput) => void;
+  onSavePlan?: (messageId: string) => Promise<void>;
 }
 
 const OutputItemView: React.FC<OutputItemViewProps> = ({
@@ -91,6 +121,9 @@ const OutputItemView: React.FC<OutputItemViewProps> = ({
   onFileClick,
   workspacePath,
   onSubagentToggle,
+  onApplyPlan,
+  onAdjustPlan,
+  onSavePlan,
 }) => {
   if (item.type === 'text') {
     return (
@@ -251,6 +284,38 @@ const OutputItemView: React.FC<OutputItemViewProps> = ({
     );
   }
 
+  if (item.type === 'plan') {
+    const handleSaveClick = async () => {
+      if (!onSavePlan) return;
+      try {
+        await onSavePlan(message.id);
+      } catch (err) {
+        // Surface save failures as a chat notification so the user can
+        // retry — silently dropping them leaves the card in an ambiguous
+        // "should I have a file?" state. The error boundary is in
+        // useChatSessionActions.handleSavePlan.
+        console.warn('[plan-save] failed:', err);
+      }
+    };
+    return (
+      <div className={styles.outputTextItem}>
+        <PlanCard
+          rawText={item.rawText}
+          plan={item.plan}
+          parseError={item.parseError}
+          isStreaming={item.isStreaming ?? isThisStreaming}
+          messageId={message.id}
+          onApply={onApplyPlan}
+          onAdjust={onAdjustPlan}
+          onSave={onSavePlan ? handleSaveClick : undefined}
+          onFileClick={onFileClick}
+          workspacePath={workspacePath}
+          savedFilePath={item.planFilePath}
+        />
+      </div>
+    );
+  }
+
   if (item.type === 'tool_error') {
     return (
       <div className={styles.toolErrorItem}>
@@ -351,7 +416,6 @@ interface LegacyMessageContentProps {
   message: ChatMessage;
   sessionId: string;
   isThisStreaming: boolean;
-  mode: ChatMode;
   activeToolCalls: ActiveToolCall[];
   onFileClick?: (filePath: string) => void;
   workspacePath?: string;
@@ -362,7 +426,6 @@ const LegacyMessageContent: React.FC<LegacyMessageContentProps> = ({
   message,
   sessionId,
   isThisStreaming,
-  mode,
   activeToolCalls,
   onFileClick,
   workspacePath,
@@ -382,16 +445,7 @@ const LegacyMessageContent: React.FC<LegacyMessageContentProps> = ({
           <span>正在执行工具...</span>
         </div>
       )}
-      {mode === 'plan' && message.content ? (
-        <div className={styles.planBlocks}>
-          {parsePlanBlocks(message.content).map((b: PlanBlock, idx: number) => (
-            <div key={idx} className={styles.planBlock}>
-              <div className={styles.planTitle}>{b.title}</div>
-              <pre className={styles.planBody}>{b.lines.join('\n')}</pre>
-            </div>
-          ))}
-        </div>
-      ) : message.content ? (
+      {message.content ? (
         <LazyTextContent
           messageId={message.id}
           sessionId={sessionId}

@@ -17,12 +17,14 @@ import type {
 } from '../types';
 import {
   addMessageOutputItem,
+  appendPlanDeltaToMessage,
   appendSessionMessage,
   appendSessionToolCall,
   clearSessionToolCalls,
   clearSessionConversation,
   collapseMessageHead,
   collapseOldSessionMessages,
+  convertTrailingTextToPlanItem,
   createNewSession,
   expandCollapsedSessionMessages,
   finishSessionMessageStreaming,
@@ -86,12 +88,13 @@ const createUiSlice: AIPanelStateCreator<Pick<AIPanelState, 'isOpen' | 'activeTa
     set((state) => ({ featureToolbarExpanded: !state.featureToolbarExpanded })),
 });
 
-const createSessionSlice: AIPanelStateCreator<Pick<AIPanelState, 'sessions' | 'activeSessionId' | 'createSession' | 'deleteSession' | 'closeSession' | 'reopenSession' | 'setActiveSession' | 'setSessionMode' | 'setSessionFeatureToggle' | 'getSession' | 'updateSession'>> = (set, get) => {
+const createSessionSlice: AIPanelStateCreator<Pick<AIPanelState, 'sessions' | 'activeSessionId' | 'todoSnapshotBySession' | 'createSession' | 'deleteSession' | 'closeSession' | 'reopenSession' | 'setActiveSession' | 'setSessionMode' | 'setSessionFeatureToggle' | 'getSession' | 'updateSession' | 'setSessionTodoSnapshot' | 'clearSessionTodoSnapshot'>> = (set, get) => {
   const initialSession = createNewSession(1);
 
   return {
     sessions: [initialSession],
     activeSessionId: initialSession.id,
+    todoSnapshotBySession: {},
     createSession: () => {
       const index = get().sessions.length + 1;
       const session = createNewSession(index);
@@ -113,9 +116,17 @@ const createSessionSlice: AIPanelStateCreator<Pick<AIPanelState, 'sessions' | 'a
         const nextActiveId =
           state.activeSessionId === sessionId ? safeRemaining[0].id : state.activeSessionId;
 
+        // Also drop the todo panel snapshot for this session — the panel
+        // is keyed on session.id, so a leftover snapshot for a deleted
+        // session would resurrect in the UI if the user later creates a
+        // new session with the same id (we use crypto.randomUUID, so
+        // this is mostly defensive, but keeping the map clean avoids
+        // confusion during debugging).
+        const { [sessionId]: _drop, ...rest } = state.todoSnapshotBySession;
         return {
           sessions: safeRemaining,
           activeSessionId: nextActiveId,
+          todoSnapshotBySession: rest,
         };
       });
     },
@@ -192,10 +203,27 @@ const createSessionSlice: AIPanelStateCreator<Pick<AIPanelState, 'sessions' | 'a
       set((state) => ({
         sessions: updateSessions(state.sessions, sessionId, updater),
       })),
+    setSessionTodoSnapshot: (sessionId, toolCallId, items) =>
+      set((state) => ({
+        todoSnapshotBySession: {
+          ...state.todoSnapshotBySession,
+          [sessionId]: {
+            items,
+            toolCallId,
+            updatedAt: Date.now(),
+          },
+        },
+      })),
+    clearSessionTodoSnapshot: (sessionId) =>
+      set((state) => {
+        if (!(sessionId in state.todoSnapshotBySession)) return state;
+        const { [sessionId]: _drop, ...rest } = state.todoSnapshotBySession;
+        return { todoSnapshotBySession: rest };
+      }),
   };
 };
 
-const createMessageSlice: AIPanelStateCreator<Pick<AIPanelState, 'addMessage' | 'updateMessage' | 'appendMessageContent' | 'setIsStreaming' | 'clearMessages' | 'truncateMessagesAfter' | 'getMessage' | 'updateMessageOutput' | 'addOutputToMessage' | 'patchOutputItem' | 'finishMessageStreaming' | 'setErrorMessage' | 'setMessageSearchResults' | 'expandMessagePrefix' | 'collapseMessagePrefix' | 'toggleReasoningExpansion' | 'autoExpandTruncatedPrefixes' | 'collapseOldMessages' | 'expandCollapsedHistory' | 'hardCollapseHistory'>> = (set, get) => ({
+const createMessageSlice: AIPanelStateCreator<Pick<AIPanelState, 'addMessage' | 'updateMessage' | 'appendMessageContent' | 'setIsStreaming' | 'clearMessages' | 'truncateMessagesAfter' | 'getMessage' | 'updateMessageOutput' | 'addOutputToMessage' | 'patchOutputItem' | 'finishMessageStreaming' | 'setErrorMessage' | 'setMessageSearchResults' | 'expandMessagePrefix' | 'collapseMessagePrefix' | 'toggleReasoningExpansion' | 'autoExpandTruncatedPrefixes' | 'collapseOldMessages' | 'expandCollapsedHistory' | 'hardCollapseHistory' | 'convertTrailingTextToPlanItem' | 'appendPlanDelta' | 'finishPlanItem' | 'setPlanItemFile' | 'clearPlanItemFile'>> = (set, get) => ({
   addMessage: (sessionId, message) =>
     set((state) => ({
       // Every new message — user prompt or assistant reply — counts as
@@ -366,6 +394,76 @@ const createMessageSlice: AIPanelStateCreator<Pick<AIPanelState, 'addMessage' | 
       sessions: updateSessions(state.sessions, sessionId, (session) =>
         hardCollapseSessionHistory(session)
       ),
+    })),
+  convertTrailingTextToPlanItem: (sessionId, messageId, rawText) =>
+    set((state) => {
+      const sessions = updateSessions(state.sessions, sessionId, (session) =>
+        convertTrailingTextToPlanItem(session, messageId, rawText)
+      );
+      // If the message's trailing item wasn't a text item, fall back to
+      // appending a fresh plan item. This keeps the streaming buffer
+      // robust against re-ordering or first-chunk arrivals where the
+      // initial text item never existed.
+      const session = sessions.find((s) => s.id === sessionId);
+      const message = session?.messages.find((m) => m.id === messageId);
+      const hasPlanItem = message?.outputItems.some((it) => it.type === 'plan');
+      if (hasPlanItem) return { sessions };
+      return {
+        sessions: updateSessions(sessions, sessionId, (s) =>
+          addMessageOutputItem(s, messageId, {
+            type: 'plan',
+            rawText,
+            plan: null,
+            isStreaming: true,
+          })
+        ),
+      };
+    }),
+  appendPlanDelta: (sessionId, messageId, delta) =>
+    set((state) => ({
+      sessions: updateSessions(state.sessions, sessionId, (session) =>
+        appendPlanDeltaToMessage(session, messageId, delta)
+      ),
+    })),
+  finishPlanItem: (sessionId, messageId) =>
+    set((state) => ({
+      sessions: updateSessionMessage(state.sessions, sessionId, messageId, (message) => ({
+        ...message,
+        outputItems: message.outputItems.map((item) =>
+          item.type === 'plan' ? { ...item, isStreaming: false } : item
+        ),
+      })),
+    })),
+  /**
+   * Stamp the trailing plan OutputItem with the `planFileId` /
+   * `planFilePath` returned from `plan_save`. Lets later destroy flows
+   * (apply, cancel, session close) identify which `<workspace>/.inkuo/plans/`
+   * file to delete.
+   */
+  setPlanItemFile: (sessionId, messageId, planFileId, planFilePath) =>
+    set((state) => ({
+      sessions: updateSessionMessage(state.sessions, sessionId, messageId, (message) => ({
+        ...message,
+        outputItems: message.outputItems.map((item) =>
+          item.type === 'plan' ? { ...item, planFileId, planFilePath } : item
+        ),
+      })),
+    })),
+  /**
+   * Clear `planFileId` / `planFilePath` on the trailing plan OutputItem.
+   * Called after the plan has been applied (or destroyed for any other
+   * reason) so the UI no longer claims the file is on disk.
+   */
+  clearPlanItemFile: (sessionId, messageId) =>
+    set((state) => ({
+      sessions: updateSessionMessage(state.sessions, sessionId, messageId, (message) => {
+        const next = message.outputItems.map((item) => {
+          if (item.type !== 'plan') return item;
+          const { planFileId: _id, planFilePath: _path, ...rest } = item;
+          return rest;
+        });
+        return { ...message, outputItems: next };
+      }),
     })),
 });
 
