@@ -435,6 +435,10 @@ impl ToolRegistry {
             // as `update_todo`: the registry stub errors out, and
             // `agent_loop::try_handle_meta_tool` does the real work.
             ToolExecutor::CreatePlan(plan_tools::CreatePlanTool),
+            // `ask_user` is a meta-tool that suspends the agent loop until
+            // the user picks an answer from the UI. Same pattern: registry
+            // stub errors, real work in `agent_loop::try_handle_meta_tool`.
+            ToolExecutor::AskUser(AskUserTool),
         ];
 
         for tool in tools {
