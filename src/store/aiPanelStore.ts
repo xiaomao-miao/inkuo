@@ -507,7 +507,16 @@ const createMessageSlice: AIPanelStateCreator<Pick<AIPanelState, 'addMessage' | 
       sessions: updateSessions(
         updateSessionMessage(state.sessions, sessionId, messageId, (message) => ({
           ...message,
-          outputItems: [...message.outputItems, planItem],
+          // PlanCard is rendered as the FINAL element of the AI message.
+          // Strip out any prior plan items (in case the LLM called
+          // `create_plan` more than once, or a previous turn left one
+          // behind) so we never end up with multiple PlanCards stacked
+          // in the middle of the message — always exactly one, pinned
+          // to the very end.
+          outputItems: [
+            ...message.outputItems.filter((it) => it.type !== 'plan'),
+            planItem,
+          ],
         })),
         sessionId,
         touchSession,

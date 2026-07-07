@@ -64,16 +64,27 @@ export const AssistantMessageBody: React.FC<AssistantMessageBodyProps> = ({
     toggleSubagentActivityExpanded(sessionId, message.id, subagentId);
   }, [sessionId, message.id, toggleSubagentActivityExpanded]);
 
+  // Plan item is rendered separately at the very end of the message so it
+  // never sits in the middle of a tool-call sequence. `addPlanItem`
+  // already enforces "one plan item, always last" by filtering prior
+  // plans, so the trailing pick here is just a safety net.
+  const nonPlanItems = message.outputItems.filter((it) => it.type !== 'plan');
+  const trailingPlanItem =
+    message.outputItems.length > 0 &&
+    message.outputItems[message.outputItems.length - 1].type === 'plan'
+      ? message.outputItems[message.outputItems.length - 1]
+      : null;
+
   return (
     <>
-      {hasOutputItems && message.outputItems.map((item, idx) => (
+      {hasOutputItems && nonPlanItems.map((item, idx) => (
         <OutputItemView
           key={idx}
           item={item}
           message={message}
           sessionId={sessionId}
           isThisStreaming={isThisStreaming}
-          isLastItem={idx === message.outputItems.length - 1}
+          isLastItem={idx === nonPlanItems.length - 1 && !trailingPlanItem}
           onFileClick={handleFileClick}
           workspacePath={workspacePath ?? undefined}
           onSubagentToggle={handleSubagentToggle}
@@ -92,6 +103,22 @@ export const AssistantMessageBody: React.FC<AssistantMessageBodyProps> = ({
           onFileClick={handleFileClick}
           workspacePath={workspacePath ?? undefined}
           onSubagentToggle={handleSubagentToggle}
+        />
+      )}
+      {trailingPlanItem && (
+        <OutputItemView
+          key="trailing-plan"
+          item={trailingPlanItem}
+          message={message}
+          sessionId={sessionId}
+          isThisStreaming={isThisStreaming}
+          isLastItem={true}
+          onFileClick={handleFileClick}
+          workspacePath={workspacePath ?? undefined}
+          onSubagentToggle={handleSubagentToggle}
+          onApplyPlan={onApplyPlan}
+          onAdjustPlan={onAdjustPlan}
+          onSavePlan={onSavePlan}
         />
       )}
     </>
