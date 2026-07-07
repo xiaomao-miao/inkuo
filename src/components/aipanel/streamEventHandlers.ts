@@ -51,19 +51,28 @@ export async function handleStreamDone({
     );
   }
 
+  // Plan messages have their plan OutputItem created via the `plan_result`
+  // stream event (from the `create_plan` tool). When the AI's turn ends:
+  // - always call finishPlanItem so the PlanCard promotes from the
+  //   "正在整理计划" placeholder to the full card, regardless of whether
+  //   the AI emitted any text after create_plan.
+  // - if there's also trailing text content, normalise it; otherwise just
+  //   flip the session out of streaming mode.
+  const planItem = useAIPanelStore.getState().sessions
+    .find((s) => s.id === session_id)
+    ?.messages.find((m) => m.id === message_id)
+    ?.outputItems.find((it) => it.type === 'plan');
+
+  if (planItem) {
+    useAIPanelStore.getState().finishPlanItem(session_id, message_id);
+  }
+
   if (effectiveContent) {
-    // Plan messages have their OutputItem created via the `plan_result`
-    // stream event (from the `create_plan` tool). Here we just finalize
-    // the session state without touching the message.
-    const messageHasPlan = useAIPanelStore.getState().sessions
-      .find((s) => s.id === session_id)
-      ?.messages.find((m) => m.id === message_id)
-      ?.outputItems.some((it) => it.type === 'plan');
-    if (messageHasPlan) {
-      // Plan item was created via `plan_result` but kept in streaming
-      // state so the full PlanCard stays hidden until the AI's turn is
-      // complete. Flip it to the final state now that we're `done`.
-      useAIPanelStore.getState().finishPlanItem(session_id, message_id);
+    if (planItem) {
+      // PlanCard already live at the end. Just stop the session-level
+      // streaming flag — don't run `finalizeStreamingMessage`, which
+      // would re-derive outputItems from `message.content` and could
+      // inadvertently shadow the plan item we just promoted.
       useAIPanelStore.getState().updateSession(session_id, (session) => ({ ...session, isStreaming: false }));
     } else {
       useAIPanelStore.setState((state) =>
