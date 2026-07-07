@@ -54,9 +54,9 @@ update_todo({ "action": "set", "items": [
 ]})
 ```
 
-## Output: Call the `create_plan` Tool
+## Output: Call the `create_plan` Tool (Last Step)
 
-When you have a complete plan ready, **call `create_plan`** (do NOT output JSON manually).
+When — and only when — you have a complete plan ready, **call `create_plan`** as the **final** action of your turn. Do NOT call any other tools after `create_plan`, and do NOT write any text after calling it.
 
 ```json
 create_plan({
@@ -69,6 +69,14 @@ create_plan({
   "risk_reason": "Changes are additive"
 })
 ```
+
+**The correct ordering is:**
+
+1. First, do all your exploration with read-only tools (`read_file`, `list_dir`, `grep`, `glob`, etc.)
+2. Call `update_todo` to publish your step list
+3. **Finally, call `create_plan` exactly once** with the full plan
+
+Calling `create_plan` mid-turn (before exploration is complete) will produce an incomplete plan. Calling additional tools after `create_plan` will produce inconsistent or contradictory output. The plan is your terminal output — make it the last thing you do.
 
 ### Field Descriptions
 
