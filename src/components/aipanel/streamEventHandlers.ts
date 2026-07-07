@@ -60,7 +60,10 @@ export async function handleStreamDone({
       ?.messages.find((m) => m.id === message_id)
       ?.outputItems.some((it) => it.type === 'plan');
     if (messageHasPlan) {
-      // Plan item already rendered via plan_result; just stop streaming.
+      // Plan item was created via `plan_result` but kept in streaming
+      // state so the full PlanCard stays hidden until the AI's turn is
+      // complete. Flip it to the final state now that we're `done`.
+      useAIPanelStore.getState().finishPlanItem(session_id, message_id);
       useAIPanelStore.getState().updateSession(session_id, (session) => ({ ...session, isStreaming: false }));
     } else {
       useAIPanelStore.setState((state) =>

@@ -494,7 +494,11 @@ const createMessageSlice: AIPanelStateCreator<Pick<AIPanelState, 'addMessage' | 
       type: 'plan',
       rawText: data.content,
       plan: planOutput,
-      isStreaming: false,
+      // Start as streaming so the PlanCard stays hidden until the AI's
+      // turn finishes (`done` event). The card is rendered as a tiny
+      // tool-call placeholder during streaming, then promoted to the full
+      // card by `finishPlanItem` in `handleStreamDone`.
+      isStreaming: true,
       planFileId,
       planFilePath,
     };
