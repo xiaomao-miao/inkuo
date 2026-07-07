@@ -454,6 +454,28 @@ export async function dispatchStreamEvent({
     return;
   }
 
+  // `ask_user` — the agent loop is suspended waiting for the user to
+  // pick an option or type a custom answer. Create an `ask_user`
+  // OutputItem so the card renders immediately.
+  if (event_type === 'ask_user' && payload.ask_user) {
+    const { question, options, allow_custom } = payload.ask_user;
+    const toolCallId = payload.tool_call_id ?? '';
+    const PAGE_SIZE = 5;
+    const totalPages = Math.ceil((options?.length ?? 0) / PAGE_SIZE) || 1;
+    const outputItem: import('../../types').OutputItem = {
+      type: 'ask_user',
+      toolCallId,
+      question,
+      options: options ?? [],
+      allowCustom: allow_custom ?? true,
+      optionPage: 0,
+      totalPages,
+      isPending: true,
+    };
+    useAIPanelStore.getState().addOutputToMessage(session_id, message_id, outputItem);
+    return;
+  }
+
   if (event_type === 'reasoning') {
     if (typeof content === 'string' && content.length > 0) {
       appendReasoningDelta(message_id, content);

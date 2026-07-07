@@ -380,3 +380,15 @@ pub async fn get_available_tools(app: AppHandle) -> Result<Vec<serde_json::Value
         .collect::<Result<Vec<_>, _>>()?;
     Ok(tools_json)
 }
+
+#[tauri::command]
+/// Deliver the user's answer back to a suspended `ask_user` tool call.
+/// `tool_call_id` must match the id that was emitted with the `ask_user`
+/// stream event. `answer` is the user's selected or typed response.
+pub async fn answer_ask_user(
+    tool_call_id: String,
+    answer: String,
+) -> Result<(), String> {
+    crate::agent::tools::ask_user_tools::deliver_answer(&tool_call_id, answer)
+        .map_err(|e| e.to_string())
+}

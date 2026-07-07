@@ -103,6 +103,14 @@ export interface StreamPayload {
   diff_summary?: StreamDiffSummary;
   office_file_modified?: OfficeFileModifiedPayload;
   plan_result?: PlanResultData;
+  ask_user?: AskUserPayload;
+}
+
+/** Payload for the ask_user stream event. */
+export interface AskUserPayload {
+  question: string;
+  options: string[];
+  allow_custom: boolean;
 }
 
 /** Payload for subagent_start event */
@@ -226,7 +234,8 @@ export type StreamEventType =
   | 'done'
   | 'subagent_start'
   | 'subagent_end'
-  | 'plan_result';
+  | 'plan_result'
+  | 'ask_user';
 
 /** Agent session configuration */
 export interface AgentConfig {
@@ -425,6 +434,24 @@ export type OutputItem =
       diffSummary?: StreamDiffSummary;
     }
   | { type: 'tool_error'; toolCallId: string; error: string }
+  | {
+      type: 'ask_user';
+      toolCallId: string;
+      /** The question the AI wants to ask the user. */
+      question: string;
+      /** Suggested options (can be empty). */
+      options: string[];
+      /** Page index for "换一批" (load next batch of options). */
+      optionPage: number;
+      /** Total pages of options available (for showing/hiding the refresh button). */
+      totalPages: number;
+      /** `true` while waiting for the user's answer. */
+      isPending: boolean;
+      /** Whether the user can type a free-form custom answer. */
+      allowCustom: boolean;
+      /** The chosen answer once submitted. */
+      answer?: string;
+    }
   | {
       type: 'plan';
       /**

@@ -7,6 +7,7 @@ import { CompactToolCard } from './CompactToolCard';
 import { DelegateToCard, GetToolHelpCard } from './DelegateToCard';
 import { COMPACT_TOOLS } from './toolUtils';
 import { PlanCard } from './PlanCard';
+import { AskUserCard } from './AskUserCard';
 import { useAIPanelStore, useSidebarStore } from '../../store';
 import type {
   ActiveToolCall,
@@ -143,6 +144,20 @@ const OutputItemView: React.FC<OutputItemViewProps> = ({
 
   if (item.type === 'reasoning') {
     return <ReasoningItemView item={item} messageId={message.id} sessionId={sessionId} />;
+  }
+
+  if (item.type === 'ask_user') {
+    return (
+      <AskUserCard
+        sessionId={sessionId}
+        messageId={message.id}
+        toolCallId={item.toolCallId}
+        question={item.question}
+        options={item.options}
+        allowCustom={item.allowCustom ?? true}
+        answer={item.answer}
+      />
+    );
   }
 
   if (item.type === 'tool_call_start') {

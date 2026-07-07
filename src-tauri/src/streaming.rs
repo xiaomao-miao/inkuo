@@ -86,6 +86,11 @@ pub struct StreamPayload {
     /// Carries the parsed PlanOutput JSON + the workspace path of the saved file.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plan_result: Option<PlanResultData>,
+
+    /// Structured ask_user payload (for ask_user tool events).
+    /// The frontend renders an interactive option-picker card.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ask_user: Option<AskUserStreamPayload>,
 }
 
 /// Parsed plan data emitted via the `plan_result` stream event.
@@ -116,6 +121,20 @@ pub struct PlanFileTouchItem {
 pub struct OfficeFileModified {
     pub path: String,
     pub format: String,
+}
+
+/// Payload for the `ask_user` stream event.
+/// The frontend renders an interactive option-picker card; the agent loop
+/// suspends until the user picks an option or types a custom answer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AskUserStreamPayload {
+    /// The question text shown to the user.
+    pub question: String,
+    /// All available options (the frontend paginates them).
+    pub options: Vec<String>,
+    /// Whether the user is allowed to type a free-form answer
+    /// in addition to choosing from the listed options.
+    pub allow_custom: bool,
 }
 
 impl StreamPayload {
@@ -300,6 +319,25 @@ impl StreamPayload {
                 let result_clone = result.clone();
                 p.plan_result = Some(result_clone);
                 p.content = Some(serde_json::to_string(&result).unwrap_or_default());
+                p.done = false;
+            })
+    }
+
+    /// Ask-user interaction event. Emitted when the agent calls `ask_user`
+    /// so the frontend can render an interactive choice card and suspend the
+    /// loop until the user picks an option or types a custom answer.
+    pub fn ask_user(
+        session_id: &str,
+        message_id: &str,
+        tool_call_id: &str,
+        payload: AskUserStreamPayload,
+    ) -> Self {
+        Self::default()
+            .with_ids(session_id, message_id)
+            .with_event("ask_user")
+            .with(|p| {
+                p.tool_call_id = Some(tool_call_id.to_string());
+                p.ask_user = Some(payload);
                 p.done = false;
             })
     }

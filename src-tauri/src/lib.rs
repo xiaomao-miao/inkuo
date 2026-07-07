@@ -91,6 +91,7 @@ pub fn run() {
             commands_agent::ai_agent_stream,
             commands_agent::ai_agent_cancel,
             commands_agent::get_available_tools,
+            commands_agent::answer_ask_user,
             commands_plan::plan_save,
             commands_plan::plan_read,
             commands_plan::plan_delete,

@@ -22,7 +22,8 @@ use super::tools::{ToolCall, ToolResult, SharedToolRegistry};
 // lint. Same goes for `list_profiles` and `resolve_profile`.
 use crate::ai::{AIConfig, AIProvider};
 use crate::diff;
-use crate::streaming::{StreamPayload, FileDiffSummary, StreamDiffHunk, StreamDiffChange, OfficeFileModified, PlanResultData, PlanFileTouchItem};
+use crate::streaming::{StreamPayload, FileDiffSummary, StreamDiffHunk, StreamDiffChange, OfficeFileModified, PlanResultData, PlanFileTouchItem, AskUserStreamPayload};
+use crate::agent::tools::ask_user_tools::{register_pending, cancel_pending};
 
 /// Check if a session has been cancelled
 fn is_session_cancelled(session_id: &str) -> bool {
@@ -471,6 +472,7 @@ impl AgentExecutor {
                     diff_summary,
                     office_file_modified,
                     plan_result: None,
+                    ask_user: None,
                 });
 
                 // Add tool result to message history
@@ -756,6 +758,79 @@ impl AgentExecutor {
                         format!("Plan saved to {}", saved_path),
                     ))
                 }
+                "ask_user" => {
+                    let args = &tool_call.arguments;
+                    let question = args
+                        .get("question")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let options: Vec<String> = args
+                        .get("options")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let allow_custom = args
+                        .get("allow_custom")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true);
+
+                    // Register a oneshot channel so the frontend can wake us up.
+                    let rx = register_pending(&tool_call.id);
+
+                    // Emit the ask_user stream event so the frontend renders the card.
+                    on_event(StreamPayload::ask_user(
+                        session_id,
+                        message_id,
+                        &tool_call.id,
+                        AskUserStreamPayload {
+                            question: question.clone(),
+                            options: options.clone(),
+                            allow_custom,
+                        },
+                    ));
+
+                    // Suspend until the user responds or the session is cancelled.
+                    // Use `&mut rx` so the oneshot receiver is not consumed on
+                    // the first poll — the sleep branch may fire many times
+                    // before the user answers, and we need rx to remain valid.
+                    let mut rx = rx;
+                    let answer = loop {
+                        tokio::select! {
+                            biased;
+                            _ = tokio::time::sleep(tokio::time::Duration::from_millis(250)) => {
+                                if is_session_cancelled(session_id) {
+                                    clear_cancellation(session_id);
+                                    cancel_pending(&tool_call.id);
+                                    return Some(ToolResult::error(
+                                        &tool_call.id,
+                                        "ask_user cancelled by user",
+                                    ));
+                                }
+                            }
+                            result = &mut rx => {
+                                match result {
+                                    Ok(ans) => break ans,
+                                    Err(_) => {
+                                        return Some(ToolResult::error(
+                                            &tool_call.id,
+                                            "ask_user cancelled: sender dropped",
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    };
+
+                    // Safety: make sure no stale entry is left around.
+                    cancel_pending(&tool_call.id);
+
+                    Some(ToolResult::success(&tool_call.id, answer))
+                }
                 _ => None,
             }
         })
@@ -1018,6 +1093,7 @@ impl AgentExecutor {
                                     diff_summary: None,
                                     office_file_modified: None,
                                     plan_result: None,
+                                    ask_user: None,
                                 });
                             }
                             // Also handle reasoning_content (DeepSeek's thinking).
@@ -1046,6 +1122,7 @@ impl AgentExecutor {
                                         diff_summary: None,
                                         office_file_modified: None,
                                         plan_result: None,
+                                        ask_user: None,
                                     });
                                 }
                             }
@@ -1137,6 +1214,7 @@ impl AgentExecutor {
                                             diff_summary: None,
                                             office_file_modified: None,
                                             plan_result: None,
+                                            ask_user: None,
                                         });
                                     } else if id_updated || name_updated || arg_delta.is_some() {
                                         // Subsequent chunk for the same tool call index.
@@ -1175,6 +1253,7 @@ impl AgentExecutor {
                                                 diff_summary: None,
                                                 office_file_modified: None,
                                                 plan_result: None,
+                                                ask_user: None,
                                             });
                                         } else {
                                             // Mark that we owe a delta so the *next* chunk
@@ -1247,6 +1326,7 @@ impl AgentExecutor {
                     diff_summary: None,
                     office_file_modified: None,
                     plan_result: None,
+                    ask_user: None,
                 });
             }
         }

@@ -274,6 +274,7 @@ mod database_tools;
 mod meta_tools; // get_tool_help + delegate_to
 mod todo_tools; // update_todo (read-only meta-tool; see agent_loop::try_handle_meta_tool)
 mod plan_tools;  // create_plan  (read-only meta-tool; see agent_loop::try_handle_meta_tool)
+pub mod ask_user_tools; // ask_user   (meta-tool; see agent_loop::try_handle_meta_tool)
 
 pub use file_tools::{ReadFileTool, WriteFileTool, EditFileTool, CreateDirTool, MoveFileTool};
 pub use search_tools::{ListDirTool, GlobTool, GrepTool};
@@ -285,6 +286,7 @@ pub use database_tools::DatabaseSearchTool;
 pub use meta_tools::{GetToolHelpTool, DelegateToTool};
 pub use todo_tools::{UpdateTodoTool, TodoItem};
 pub use plan_tools::{CreatePlanTool, CreatePlanArgs, PlanFileTouch};
+pub use ask_user_tools::AskUserTool;
 
 /// Unified executor enum combining all tool implementations
 pub enum ToolExecutor {
@@ -309,6 +311,7 @@ pub enum ToolExecutor {
     DelegateTo(meta_tools::DelegateToTool),
     UpdateTodo(todo_tools::UpdateTodoTool),
     CreatePlan(plan_tools::CreatePlanTool),
+    AskUser(ask_user_tools::AskUserTool),
 }
 
 impl ToolExecutor {
@@ -333,6 +336,7 @@ impl ToolExecutor {
             ToolExecutor::DelegateTo(_) => "delegate_to",
             ToolExecutor::UpdateTodo(_) => "update_todo",
             ToolExecutor::CreatePlan(_) => "create_plan",
+            ToolExecutor::AskUser(_) => "ask_user",
         }
     }
 
@@ -357,6 +361,7 @@ impl ToolExecutor {
             ToolExecutor::DelegateTo(t) => t.definition(),
             ToolExecutor::UpdateTodo(t) => t.definition(),
             ToolExecutor::CreatePlan(t) => t.definition(),
+            ToolExecutor::AskUser(t) => t.definition(),
         }
     }
 
@@ -381,6 +386,7 @@ impl ToolExecutor {
             ToolExecutor::DelegateTo(t) => t.execute(arguments, workspace).await,
             ToolExecutor::UpdateTodo(t) => t.execute(arguments, workspace).await,
             ToolExecutor::CreatePlan(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::AskUser(t) => t.execute(arguments, workspace).await,
         }
     }
 }
@@ -482,6 +488,7 @@ impl ToolRegistry {
             // they appear in tool catalogs and can be schema-validated).
             ToolExecutor::GetToolHelp(GetToolHelpTool),
             ToolExecutor::DelegateTo(DelegateToTool),
+            ToolExecutor::AskUser(ask_user_tools::AskUserTool),
         ];
 
         for tool in tools {
