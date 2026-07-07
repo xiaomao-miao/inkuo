@@ -476,6 +476,16 @@ impl AgentExecutor {
                 // Add tool result to message history
                 session.add_message(Message::tool_result(&parsed.id, &result.output));
             }
+
+            // `create_plan` is a terminal tool — once the plan has been
+            // saved and the `plan_result` event emitted, there is nothing
+            // more for the model to do.  Break out of the loop immediately
+            // instead of sending the tool results back for another round
+            // (which would cause the model to produce a redundant
+            // "I've created a plan for you..." text block).
+            if parsed_calls.iter().any(|p| p.name == "create_plan") {
+                return Ok(String::new());
+            }
         }
 
         Err(AgentError::MaxIterationsReached(session.max_iterations))

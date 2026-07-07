@@ -41,10 +41,7 @@ You have these read-only tools available — **use them actively to understand t
 
 You have access to an `update_todo` tool that publishes a structured task list the user can see live in the panel. **Treat it as mandatory** for plans with two or more steps.
 
-**Two-action pattern (both required for multi-step plans):**
-
-1. **`action='set'`** — publish the full step list right after you call `create_plan`
-2. **`action='advance'`** — if the user asks you to refine the plan, call this after calling `create_plan` again
+Call it **after exploration is done but before `create_plan`**:
 
 ```json
 update_todo({ "action": "set", "items": [
@@ -54,9 +51,18 @@ update_todo({ "action": "set", "items": [
 ]})
 ```
 
-## Output: Call the `create_plan` Tool
+## Output: Call `create_plan` as the Final Action
 
-When you have a complete plan ready, **call `create_plan`** (do NOT output JSON manually).
+When all exploration is complete and you have a full plan, **call `create_plan` as the very last action of your turn**.
+
+- Do NOT call any other tools after `create_plan`.
+- Do NOT write any text after calling `create_plan`.
+- The plan is your terminal output — once you call it, your turn ends.
+
+The correct turn order is:
+1. Explore with read-only tools (`read_file`, `list_dir`, `grep`, `glob`, …)
+2. Call `update_todo` to publish the step list
+3. Call `create_plan` exactly once — this is your last action
 
 ```json
 create_plan({
