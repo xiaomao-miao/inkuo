@@ -3,6 +3,7 @@ import type {
   OfficeFileModifiedPayload,
   StreamDiffSummary,
   StreamPayload,
+  PlanResultData,
 } from '../../types';
 
 export const TOOL_CALL_CLEAR_DELAY_MS = 2000;
@@ -12,4 +13,5 @@ export type {
   StreamDiffSummary,
   StreamPayload,
   WireSearchResult,
+  PlanResultData,
 };

@@ -22,7 +22,7 @@ use super::tools::{ToolCall, ToolResult, SharedToolRegistry};
 // lint. Same goes for `list_profiles` and `resolve_profile`.
 use crate::ai::{AIConfig, AIProvider};
 use crate::diff;
-use crate::streaming::{StreamPayload, FileDiffSummary, StreamDiffHunk, StreamDiffChange, OfficeFileModified};
+use crate::streaming::{StreamPayload, FileDiffSummary, StreamDiffHunk, StreamDiffChange, OfficeFileModified, PlanResultData, PlanFileTouchItem};
 
 /// Check if a session has been cancelled
 fn is_session_cancelled(session_id: &str) -> bool {
@@ -470,6 +470,7 @@ impl AgentExecutor {
                     new_content: result.new_content.clone(),
                     diff_summary,
                     office_file_modified,
+                    plan_result: None,
                 });
 
                 // Add tool result to message history
@@ -636,6 +637,114 @@ impl AgentExecutor {
                         }
                     };
                     Some(ToolResult::success(&tool_call.id, summary))
+                }
+                "create_plan" => {
+                    // Plan mode: parse the plan JSON, write it to disk,
+                    // and emit a `plan_result` stream event so the frontend
+                    // can render the PlanCard immediately (without needing
+                    // to parse a ```plan fence from streaming text).
+                    let args = tool_call
+                        .arguments
+                        .clone();
+                    let content = args
+                        .get("content")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let plan_summary = args
+                        .get("plan_summary")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let risk = args
+                        .get("risk")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("low")
+                        .to_string();
+                    let risk_reason = args
+                        .get("risk_reason")
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
+                    let files_to_touch_raw = args
+                        .get("files_to_touch")
+                        .and_then(|v| v.as_array())
+                        .cloned()
+                        .unwrap_or_default();
+                    let files_to_touch: Vec<PlanFileTouchItem> = files_to_touch_raw
+                        .iter()
+                        .filter_map(|v| {
+                            serde_json::from_value::<PlanFileTouchItem>(v.clone()).ok()
+                        })
+                        .collect();
+
+                    let workspace = session.tool_registry.read().await.get_workspace().cloned();
+
+                    // Build the Markdown content to write to disk.
+                    let file_list_md = if files_to_touch.is_empty() {
+                        String::new()
+                    } else {
+                        files_to_touch
+                            .iter()
+                            .map(|f| format!("- [{}] {}: {}", f.intent, f.path, f.reason))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    };
+                    let risk_md = risk_reason
+                        .as_ref()
+                        .map(|r| format!("**Risk**: {}\n", r))
+                        .unwrap_or_default();
+                    let plan_md = format!(
+                        "# Plan\n\n{}\n\n## Summary\n{}\n\n## Files\n{}\n\n## Risk\n- Level: **{}**\n{}",
+                        content,
+                        plan_summary,
+                        file_list_md,
+                        risk,
+                        risk_md
+                    );
+
+                    // Generate plan id and save.
+                    let plan_id = generate_plan_id_for_session();
+                    let saved_path = match &workspace {
+                        Some(ws) => {
+                            match save_plan_to_workspace(ws, &plan_id, &plan_md).await {
+                                Ok(path) => path,
+                                Err(e) => {
+                                    tracing::error!("create_plan: failed to save plan: {}", e);
+                                    return Some(ToolResult::error(
+                                        &tool_call.id,
+                                        format!("Failed to save plan: {}", e),
+                                    ));
+                                }
+                            }
+                        }
+                        None => {
+                            return Some(ToolResult::error(
+                                &tool_call.id,
+                                "No workspace open. Cannot save plan file.".to_string(),
+                            ));
+                        }
+                    };
+
+                    // Emit the plan_result event so the frontend renders the PlanCard.
+                    let plan_data = PlanResultData {
+                        content,
+                        plan_summary,
+                        files_to_touch,
+                        risk,
+                        risk_reason,
+                        saved_path: saved_path.clone(),
+                    };
+                    on_event(StreamPayload::plan_result(
+                        session_id,
+                        message_id,
+                        &tool_call.id,
+                        plan_data,
+                    ));
+
+                    Some(ToolResult::success(
+                        &tool_call.id,
+                        format!("Plan saved to {}", saved_path),
+                    ))
                 }
                 _ => None,
             }
@@ -898,6 +1007,7 @@ impl AgentExecutor {
                                     new_content: None,
                                     diff_summary: None,
                                     office_file_modified: None,
+                                    plan_result: None,
                                 });
                             }
                             // Also handle reasoning_content (DeepSeek's thinking).
@@ -925,6 +1035,7 @@ impl AgentExecutor {
                                         new_content: None,
                                         diff_summary: None,
                                         office_file_modified: None,
+                                        plan_result: None,
                                     });
                                 }
                             }
@@ -1015,6 +1126,7 @@ impl AgentExecutor {
                                             new_content: None,
                                             diff_summary: None,
                                             office_file_modified: None,
+                                            plan_result: None,
                                         });
                                     } else if id_updated || name_updated || arg_delta.is_some() {
                                         // Subsequent chunk for the same tool call index.
@@ -1052,6 +1164,7 @@ impl AgentExecutor {
                                                 new_content: None,
                                                 diff_summary: None,
                                                 office_file_modified: None,
+                                                plan_result: None,
                                             });
                                         } else {
                                             // Mark that we owe a delta so the *next* chunk
@@ -1123,6 +1236,7 @@ impl AgentExecutor {
                     new_content: None,
                     diff_summary: None,
                     office_file_modified: None,
+                    plan_result: None,
                 });
             }
         }
@@ -1386,6 +1500,102 @@ struct DeltaToolCall {
 struct DeltaFunction {
     name: Option<String>,
     arguments: Option<String>,
+}
+
+/// Format: `plan-YYYYMMDD-HHmmss-<6-char-base36>` — stable across sessions.
+fn generate_plan_id_for_session() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let secs = now.as_secs();
+    let t = chrono_from_timestamp(secs);
+    let pad = |n: u64| format!("{:02}", n);
+    let stamp = format!(
+        "{}{}{}-{}-{}{}",
+        t.0, pad(t.1), pad(t.2),
+        pad(t.3), pad(t.4), pad(t.5)
+    );
+    let suffix = (secs % (36u64.pow(6)))
+        .to_string()
+        .chars()
+        .map(|c| {
+            let v = c.to_digit(10).unwrap_or(0);
+            "0123456789abcdefghijklmnopqrstuvwxyz"
+                .chars()
+                .nth(v as usize)
+                .unwrap_or('0')
+        })
+        .collect::<String>();
+    format!("plan-{}-{}", stamp, suffix)
+}
+
+fn chrono_from_timestamp(secs: u64) -> (u64, u64, u64, u64, u64, u64) {
+    // (year, month, day, hour, min, sec) using simple calendar math
+    let mut rem = secs;
+    let sec = rem % 60; rem /= 60;
+    let min = rem % 60; rem /= 60;
+    let hour = rem % 24; rem /= 24;
+    // Days since epoch; approximate year/month
+    let mut year = 1970u64;
+    let mut year_days = 365;
+    while rem >= year_days {
+        rem -= year_days;
+        year += 1;
+        year_days = if is_leap_year(year) { 366 } else { 365 };
+    }
+    let mut month = 1u64;
+    let month_days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    while rem >= month_days[(month - 1) as usize] {
+        rem -= month_days[(month - 1) as usize];
+        if month == 2 && is_leap_year(year) && rem > 0 {
+            rem -= 1;
+        }
+        month += 1;
+    }
+    let day = rem + 1;
+    (year, month, day, hour, min, sec)
+}
+
+fn is_leap_year(year: u64) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
+}
+
+const PLANS_DIR: &str = ".inkuo";
+const PLANS_SUBDIR: &str = "plans";
+
+/// Write plan markdown to `<workspace>/.inkuo/plans/<plan_id>.md`.
+async fn save_plan_to_workspace(
+    workspace: &str,
+    plan_id: &str,
+    content: &str,
+) -> Result<String, String> {
+    let ws_dir = std::path::Path::new(workspace);
+    if !ws_dir.is_dir() {
+        return Err(format!("Workspace not found: {}", workspace));
+    }
+    let plans_dir = ws_dir.join(PLANS_DIR).join(PLANS_SUBDIR);
+    tokio::fs::create_dir_all(&plans_dir)
+        .await
+        .map_err(|e| format!("create plans dir: {}", e))?;
+
+    let safe_id: String = plan_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let safe_id = if safe_id.is_empty() { "plan" } else { &safe_id };
+    let path = plans_dir.join(format!("{}.md", safe_id));
+
+    tokio::fs::write(&path, content)
+        .await
+        .map_err(|e| format!("write plan file: {}", e))?;
+
+    Ok(path.to_string_lossy().to_string())
 }
 
 /// Create a new agent executor

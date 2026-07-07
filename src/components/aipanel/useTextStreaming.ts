@@ -79,25 +79,6 @@ type SessionTextPending = {
   flushTimer: ReturnType<typeof setTimeout> | null;
 };
 
-/**
- * Tracks per-message streaming routing. When the accumulating text for a
- * message contains the ```plan fence we switch the message's trailing
- * OutputItem to a plan item and route all subsequent text deltas to that
- * plan item's `rawText` instead of the regular text item's `content`.
- *
- * The flag survives across flush cycles for the duration of a single
- * streaming session (until `resetTextStreaming` is called) so re-flushes
- * of partial plan content keep going to the right place.
- */
-type MessageRouting = {
-  /** true once we've switched this message from text → plan routing. */
-  planItemStarted: boolean;
-  /** Pending text that arrived before the ```plan fence was detected. */
-  preFencePending: string;
-};
-
-const PLAN_FENCE = '```plan';
-
 export function useTextStreaming() {
   // Accumulated content per messageId (flat: messageId → text)
   // This shape is required by handleStreamDone / handleStreamError (they access by messageId).
@@ -107,24 +88,11 @@ export function useTextStreaming() {
   const sessionPendingRef = useRef<Record<string, SessionTextPending>>({});
   const flushTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Per-message plan routing state
-  const routingRef = useRef<Record<string, MessageRouting>>({});
-
   const getOrCreateSession = (_sessionId: string): SessionTextPending => {
     if (!sessionPendingRef.current[_sessionId]) {
       sessionPendingRef.current[_sessionId] = { deltas: {}, flushTimer: null };
     }
     return sessionPendingRef.current[_sessionId];
-  };
-
-  const getOrCreateRouting = (messageId: string): MessageRouting => {
-    if (!routingRef.current[messageId]) {
-      routingRef.current[messageId] = {
-        planItemStarted: false,
-        preFencePending: '',
-      };
-    }
-    return routingRef.current[messageId];
   };
 
   /**
@@ -143,66 +111,28 @@ export function useTextStreaming() {
     return { ...item, content: full.slice(trim), truncatedPrefix: newPrefix };
   }, []);
 
-  /**
-   * Partition a batch of pending deltas into:
-   *   - textDeltas: still-going-to-text deltas (per-messageId)
-   *   - planEntries: [{messageId, delta}] for messages that have been
-   *     routed to a plan item.
-   *
-   * A message transitions from text → plan when its accumulated text
-   * first contains the ```plan fence. Once a message is in plan mode,
-   * all of its deltas (including the one that triggered the switch)
-   * route to the plan item.
-   */
-  const partitionDeltas = useCallback(() => {
-    const textDeltas: Array<[string, string]> = [];
-    const planEntries: Array<{ messageId: string; delta: string }> = [];
-
-    for (const pending of Object.values(sessionPendingRef.current)) {
-      for (const [messageId, delta] of Object.entries(pending.deltas)) {
-        if (!delta) continue;
-        const routing = getOrCreateRouting(messageId);
-        if (routing.planItemStarted) {
-          planEntries.push({ messageId, delta });
-          continue;
-        }
-        // Look for the fence in this delta. If found, split the delta:
-        //   - pre-fence text → keep as a text delta (will land in a text item
-        //     that we then immediately convert to a plan item)
-        //   - post-fence text → route to the new plan item
-        const fenceIdx = delta.indexOf(PLAN_FENCE);
-        if (fenceIdx !== -1) {
-          const preFence = delta.slice(0, fenceIdx);
-          const postFence = delta.slice(fenceIdx);
-          routing.planItemStarted = true;
-          routing.preFencePending = '';
-          if (preFence) textDeltas.push([messageId, preFence]);
-          planEntries.push({ messageId, delta: postFence });
-        } else {
-          textDeltas.push([messageId, delta]);
-        }
-      }
-    }
-    return { textDeltas, planEntries };
-  }, []);
-
   const flushTextDeltas = useCallback(() => {
     const allPending = sessionPendingRef.current;
     const hasAny = Object.values(allPending).some((p) => Object.keys(p.deltas).length > 0);
     if (!hasAny) return;
 
-    const { textDeltas, planEntries } = partitionDeltas();
+    const pending = Object.values(allPending);
+    const textDeltas: Array<[string, string]> = [];
+    for (const p of pending) {
+      for (const [msgId, delta] of Object.entries(p.deltas)) {
+        if (delta) textDeltas.push([msgId, delta]);
+      }
+    }
 
     // Reset all pending deltas
-    for (const pending of Object.values(allPending)) {
-      pending.deltas = {};
+    for (const p of Object.values(allPending)) {
+      p.deltas = {};
     }
     if (flushTimeoutRef.current !== null) {
       clearTimeout(flushTimeoutRef.current);
       flushTimeoutRef.current = null;
     }
 
-    // First, route text deltas to the trailing text items as usual.
     if (textDeltas.length > 0) {
       useAIPanelStore.setState((state) => {
         const deltaMap = new Map(textDeltas);
@@ -219,24 +149,7 @@ export function useTextStreaming() {
         );
       });
     }
-
-    // Then, for messages that crossed into plan mode, convert their
-    // trailing text item into a plan item and append the post-fence deltas.
-    if (planEntries.length > 0) {
-      // For each unique messageId that has a plan entry, do the conversion
-      // using the FULL text we just wrote into the trailing text item.
-      const planMessageIds = Array.from(new Set(planEntries.map((e) => e.messageId)));
-      for (const messageId of planMessageIds) {
-        useAIPanelStore.getState().convertTrailingTextToPlanItem('', messageId, '');
-        // Note: convertTrailingTextToPlanItem reads the existing trailing
-        // text item's content and copies it into rawText, so we don't need
-        // to re-pass the pre-fence text.
-      }
-      for (const { messageId, delta } of planEntries) {
-        useAIPanelStore.getState().appendPlanDelta('', messageId, delta);
-      }
-    }
-  }, [partitionDeltas, truncateTextItem]);
+  }, [truncateTextItem]);
 
   const scheduleFlush = useCallback(() => {
     // Total pending chars across all sessions — drives the adaptive interval.
@@ -302,7 +215,6 @@ export function useTextStreaming() {
     }
     sessionPendingRef.current = {};
     streamingContentRef.current = {};
-    routingRef.current = {};
   }, []);
 
   return {

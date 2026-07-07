@@ -223,7 +223,7 @@ const createSessionSlice: AIPanelStateCreator<Pick<AIPanelState, 'sessions' | 'a
   };
 };
 
-const createMessageSlice: AIPanelStateCreator<Pick<AIPanelState, 'addMessage' | 'updateMessage' | 'appendMessageContent' | 'setIsStreaming' | 'clearMessages' | 'truncateMessagesAfter' | 'getMessage' | 'updateMessageOutput' | 'addOutputToMessage' | 'patchOutputItem' | 'finishMessageStreaming' | 'setErrorMessage' | 'setMessageSearchResults' | 'expandMessagePrefix' | 'collapseMessagePrefix' | 'toggleReasoningExpansion' | 'autoExpandTruncatedPrefixes' | 'collapseOldMessages' | 'expandCollapsedHistory' | 'hardCollapseHistory' | 'convertTrailingTextToPlanItem' | 'appendPlanDelta' | 'finishPlanItem' | 'setPlanItemFile' | 'clearPlanItemFile'>> = (set, get) => ({
+const createMessageSlice: AIPanelStateCreator<Pick<AIPanelState, 'addMessage' | 'updateMessage' | 'appendMessageContent' | 'setIsStreaming' | 'clearMessages' | 'truncateMessagesAfter' | 'getMessage' | 'updateMessageOutput' | 'addOutputToMessage' | 'patchOutputItem' | 'finishMessageStreaming' | 'setErrorMessage' | 'setMessageSearchResults' | 'expandMessagePrefix' | 'collapseMessagePrefix' | 'toggleReasoningExpansion' | 'autoExpandTruncatedPrefixes' | 'collapseOldMessages' | 'expandCollapsedHistory' | 'hardCollapseHistory' | 'convertTrailingTextToPlanItem' | 'appendPlanDelta' | 'finishPlanItem' | 'setPlanItemFile' | 'clearPlanItemFile' | 'addPlanItem'>> = (set, get) => ({
   addMessage: (sessionId, message) =>
     set((state) => ({
       // Every new message — user prompt or assistant reply — counts as
@@ -465,6 +465,51 @@ const createMessageSlice: AIPanelStateCreator<Pick<AIPanelState, 'addMessage' | 
         return { ...message, outputItems: next };
       }),
     })),
+  /**
+   * Create a complete plan OutputItem from a `plan_result` stream event.
+   * Converts the Rust `PlanResultData` (intent/intent strings) to the frontend
+   * `PlanOutput` shape (intent: PlanFileIntent, needs_confirmation: true).
+   * The `saved_path` is used to derive `planFileId` / `planFilePath`.
+   */
+  addPlanItem: (sessionId, messageId, data) => {
+    // Derive planFileId from saved_path: ".../.inkuo/plans/<id>.md" → "<id>"
+    const parts = data.saved_path.split('/');
+    const filename = parts[parts.length - 1]; // "<id>.md"
+    const planFileId = filename.replace(/\.md$/, '');
+    const planFilePath = data.saved_path;
+
+    const planOutput = {
+      plan_summary: data.plan_summary,
+      files_to_touch: data.files_to_touch.map((f) => ({
+        path: f.path,
+        intent: f.intent as import('../types').PlanFileIntent,
+        reason: f.reason,
+      })),
+      risk: data.risk as import('../types').PlanRisk,
+      risk_reason: data.risk_reason,
+      needs_confirmation: true,
+    };
+
+    const planItem: OutputItem = {
+      type: 'plan',
+      rawText: data.content,
+      plan: planOutput,
+      isStreaming: false,
+      planFileId,
+      planFilePath,
+    };
+
+    set((state) => ({
+      sessions: updateSessions(
+        updateSessionMessage(state.sessions, sessionId, messageId, (message) => ({
+          ...message,
+          outputItems: [...message.outputItems, planItem],
+        })),
+        sessionId,
+        touchSession,
+      ),
+    }));
+  },
 });
 
 const createToolCallSlice: AIPanelStateCreator<Pick<AIPanelState, 'addToolCall' | 'updateToolCall' | 'removeToolCall' | 'clearToolCalls'>> = (set) => ({

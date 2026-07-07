@@ -211,6 +211,12 @@ export interface AIPanelMessageSlice {
    * session close) so the UI doesn't claim the file is still there.
    */
   clearPlanItemFile: (sessionId: string, messageId: string) => void;
+  /**
+   * Create a complete plan OutputItem from a `plan_result` stream event.
+   * Converts the Rust `PlanResultData` to the frontend `PlanOutput` shape
+   * and stamps `planFileId` / `planFilePath` from `saved_path`.
+   */
+  addPlanItem: (sessionId: string, messageId: string, data: import('../types').PlanResultData) => void;
 }
 
 export interface AIPanelToolCallSlice {

@@ -52,16 +52,15 @@ export async function handleStreamDone({
   }
 
   if (effectiveContent) {
-    // If the message has a plan OutputItem, the structured card is the
-    // canonical rendering — don't overwrite its rawText with the model's
-    // (now stale) final_content. Just flip isStreaming off on the plan
-    // item and finalise the session state without touching message.content.
+    // Plan messages have their OutputItem created via the `plan_result`
+    // stream event (from the `create_plan` tool). Here we just finalize
+    // the session state without touching the message.
     const messageHasPlan = useAIPanelStore.getState().sessions
       .find((s) => s.id === session_id)
       ?.messages.find((m) => m.id === message_id)
       ?.outputItems.some((it) => it.type === 'plan');
     if (messageHasPlan) {
-      useAIPanelStore.getState().finishPlanItem(session_id, message_id);
+      // Plan item already rendered via plan_result; just stop streaming.
       useAIPanelStore.getState().updateSession(session_id, (session) => ({ ...session, isStreaming: false }));
     } else {
       useAIPanelStore.setState((state) =>
@@ -157,11 +156,8 @@ export function handleStreamError({
 
   flushAllPending();
   delete streamingContentRef.current[message_id];
-  // If the message has a plan item, mark it as no longer streaming so the
-  // user sees a static (not spinner) plan card. applyStreamingError will
-  // then write the error string as the message's `content` — the plan
-  // item itself stays intact in `outputItems` so the user can still see
-  // what was parsed.
+
+  // If a plan item exists, mark it as no longer streaming.
   const messageHasPlan = useAIPanelStore.getState().sessions
     .find((s) => s.id === session_id)
     ?.messages.find((m) => m.id === message_id)

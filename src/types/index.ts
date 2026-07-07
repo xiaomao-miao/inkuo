@@ -102,6 +102,7 @@ export interface StreamPayload {
   new_content?: string;
   diff_summary?: StreamDiffSummary;
   office_file_modified?: OfficeFileModifiedPayload;
+  plan_result?: PlanResultData;
 }
 
 /** Payload for subagent_start event */
@@ -224,7 +225,8 @@ export type StreamEventType =
   | 'tool_result'
   | 'done'
   | 'subagent_start'
-  | 'subagent_end';
+  | 'subagent_end'
+  | 'plan_result';
 
 /** Agent session configuration */
 export interface AgentConfig {
@@ -300,6 +302,27 @@ export interface PlanFileTouch {
   path: string;
   intent: PlanFileIntent;
   reason: string;
+}
+
+/**
+ * Parsed plan data carried in the `plan_result` stream event, emitted by
+ * the Rust `create_plan` tool handler after writing the plan file to disk.
+ */
+export interface PlanResultData {
+  /** Markdown prose describing the plan. */
+  content: string;
+  /** One-sentence summary shown as the card subtitle. */
+  plan_summary: string;
+  /** Files the plan touches. */
+  files_to_touch: Array<{
+    path: string;
+    intent: string;
+    reason: string;
+  }>;
+  risk: string;
+  risk_reason?: string;
+  /** Absolute path to the saved plan file. */
+  saved_path: string;
 }
 
 export interface PlanOutput {

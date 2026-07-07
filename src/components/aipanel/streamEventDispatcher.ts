@@ -1,5 +1,6 @@
 import { handleStreamDone, handleStreamError, handleToolResult } from './streamEventHandlers';
 import type { MutableRefObject } from 'react';
+import { useAIPanelStore } from '../../store';
 import type { ChatMode } from '../../store';
 import type { StreamPayload } from './streamTypes';
 import type { OutputItem } from '../../types';
@@ -442,6 +443,14 @@ export async function dispatchStreamEvent({
     handleToolResult(payload, () => flushAllPending(session_id));
     // tool_result transitions back to text for any subsequent deltas.
     lastCategoryByMessage.set(message_id, 'text');
+    return;
+  }
+
+  // `create_plan` tool result — create the plan OutputItem directly from
+  // the structured payload. No need to wait for `done`; the plan file
+  // is already written by Rust.
+  if (event_type === 'plan_result' && payload.plan_result) {
+    useAIPanelStore.getState().addPlanItem(session_id, message_id, payload.plan_result);
     return;
   }
 
