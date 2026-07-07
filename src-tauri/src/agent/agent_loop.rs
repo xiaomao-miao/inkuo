@@ -126,6 +126,10 @@ pub struct AgentSession {
     /// See `feature_toggles::effective_tool_set` for how feature toggles
     /// (e.g. `kb_strict`) populate this.
     pub allowed_tools: Option<Vec<String>>,
+    /// Plan mode only: set to `true` after `create_plan` succeeds. Any
+    /// subsequent tool call (from the same assistant turn) is rejected and
+    /// the loop terminates immediately with a `done` event.
+    pub plan_completed: bool,
 }
 
 impl AgentSession {
@@ -135,6 +139,7 @@ impl AgentSession {
             max_iterations: DEFAULT_MAX_ITERATIONS,
             tool_registry,
             allowed_tools: None,
+            plan_completed: false,
         }
     }
 
@@ -170,6 +175,7 @@ impl AgentSession {
             } else {
                 Some(profile.allowed_tools)
             },
+            plan_completed: false,
         }
     }
 
@@ -287,10 +293,16 @@ impl AgentExecutor {
             .collect::<Result<Vec<_>, _>>()?;
 
         // Run the agent loop
-        for iteration in 0..session.max_iterations {
+        let mut iteration = 0;
+        let mut plan_ended = false;
+        'outer: loop {
+            if iteration >= session.max_iterations {
+                break;
+            }
+            iteration += 1;
             tracing::debug!(
                 "Agent iteration {}/{}",
-                iteration + 1,
+                iteration,
                 session.max_iterations
             );
 
@@ -300,6 +312,10 @@ impl AgentExecutor {
                 clear_cancellation(session_id);
                 return Err(AgentError::Cancelled);
             }
+
+            // Reset per-turn state. `plan_completed` from a previous turn must
+            // not leak into this turn.
+            session.plan_completed = false;
 
             // Build request
             let messages = session.get_messages_for_api();
@@ -323,14 +339,12 @@ impl AgentExecutor {
                 }
             };
 
-            // Parse and execute tool calls
+            // Parse tool calls
             let parsed_calls: Vec<ParsedToolCall> = tool_calls
                 .iter()
                 .filter_map(|tc| {
                     let name = tc.function.name.clone();
                     let id = tc.id.clone();
-
-                    // Parse arguments JSON
                     let arguments: Value = match serde_json::from_str(&tc.function.arguments) {
                         Ok(arguments) => arguments,
                         Err(error) => {
@@ -343,17 +357,19 @@ impl AgentExecutor {
                             serde_json::json!({})
                         }
                     };
-
-                    Some(ParsedToolCall {
-                        id,
-                        name,
-                        arguments,
-                    })
+                    Some(ParsedToolCall { id, name, arguments })
                 })
                 .collect();
 
             // Execute each tool call
             for parsed in &parsed_calls {
+                // Plan mode: after `create_plan` succeeds no further tools are
+                // permitted. Break out of both the inner and outer loop.
+                if session.plan_completed {
+                    plan_ended = true;
+                    break 'outer;
+                }
+
                 let tool_call = ToolCall {
                     id: parsed.id.clone(),
                     name: parsed.name.clone(),
@@ -478,7 +494,18 @@ impl AgentExecutor {
             }
         }
 
-        Err(AgentError::MaxIterationsReached(session.max_iterations))
+        // Plan mode: `create_plan` succeeded and we broke out of the loop.
+        // Emit `done` so the frontend finalises the stream.
+        if plan_ended {
+            on_event(StreamPayload::done(
+                session_id,
+                message_id,
+                Some("计划已创建完毕"),
+            ));
+            Ok(String::new())
+        } else {
+            Err(AgentError::MaxIterationsReached(session.max_iterations))
+        }
     }
 
     /// Intercept meta-tools (`get_tool_help`, `delegate_to`) so the loop
@@ -496,7 +523,7 @@ impl AgentExecutor {
     fn try_handle_meta_tool<'a, F>(
         &'a self,
         tool_call: &'a ToolCall,
-        session: &'a AgentSession,
+        session: &'a mut AgentSession,
         session_id: &'a str,
         message_id: &'a str,
         on_event: F,
@@ -740,6 +767,9 @@ impl AgentExecutor {
                         &tool_call.id,
                         plan_data,
                     ));
+
+                    // Mark the plan as complete — no more tool calls allowed.
+                    session.plan_completed = true;
 
                     Some(ToolResult::success(
                         &tool_call.id,
