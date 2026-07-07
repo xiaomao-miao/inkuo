@@ -6,6 +6,7 @@ import {
   isFileModificationTool,
   PREVIEW_STRING_KEYS,
   extractFileNameFromPath,
+  formatArgumentsForDisplay,
 } from './toolUtils';
 import styles from './ToolCallCard.module.css';
 
@@ -65,9 +66,17 @@ function resolveToolPreview(
     }
   }
 
-  if (rawArguments && rawArguments.length > 0) {
-    return { key: 'raw', text: rawArguments };
+  // Use human-readable formatting instead of raw JSON
+  const hasParsedArgs = args && Object.keys(args).length > 0;
+  const formatted = formatArgumentsForDisplay(
+    name,
+    hasParsedArgs ? args : null,
+    rawArguments
+  );
+  if (formatted) {
+    return { key: 'args', text: formatted };
   }
+
   return null;
 }
 
@@ -151,7 +160,9 @@ const ToolCardPreview: React.FC<{
         <span>
           {preview.key === 'content' || preview.key === 'new_text' || preview.key === 'json_content'
             ? '内容预览'
-            : '参数预览'}
+            : preview.key === 'args'
+              ? '参数'
+              : '参数预览'}
           {preview.text.length > 0 && (
             <span className={styles.previewSize}>
               {' · '}
