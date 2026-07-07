@@ -323,12 +323,14 @@ impl AgentExecutor {
                 }
             };
 
-            // Parse tool calls
+            // Parse and execute tool calls
             let parsed_calls: Vec<ParsedToolCall> = tool_calls
                 .iter()
                 .filter_map(|tc| {
                     let name = tc.function.name.clone();
                     let id = tc.id.clone();
+
+                    // Parse arguments JSON
                     let arguments: Value = match serde_json::from_str(&tc.function.arguments) {
                         Ok(arguments) => arguments,
                         Err(error) => {
@@ -341,7 +343,12 @@ impl AgentExecutor {
                             serde_json::json!({})
                         }
                     };
-                    Some(ParsedToolCall { id, name, arguments })
+
+                    Some(ParsedToolCall {
+                        id,
+                        name,
+                        arguments,
+                    })
                 })
                 .collect();
 

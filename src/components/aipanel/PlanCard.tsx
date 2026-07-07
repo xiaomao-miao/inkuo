@@ -174,25 +174,6 @@ export const PlanCard: React.FC<PlanCardProps> = ({
     );
   }
 
-  // Pending state: plan has been finalised by the `create_plan` tool but
-  // the AI's turn isn't done yet. Don't reveal the full card yet — wait
-  // for the `done` event (`finishPlanItem` flips isStreaming=false).
-  if (plan && isStreaming) {
-    return (
-      <div className={`${styles.card} ${styles.streaming}`}>
-        <div className={styles.header}>
-          <div className={styles.headerLeft}>
-            <div className={`${styles.icon} ${styles.iconPlanning}`}>
-              <Sparkles size={14} />
-            </div>
-            <span className={styles.title}>正在整理计划</span>
-            <Loader2 size={12} className={styles.spinning} />
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   // Streaming state: no plan yet, but the model is still emitting.
   if (!plan) {
     return (
