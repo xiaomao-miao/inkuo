@@ -2523,20 +2523,10 @@ mod tests {
         
         // Read back
         let read_doc = read_word_document(&buf.into_inner()).expect("read should succeed");
-        
-        // Debug: check parsed document
-        println!("\nAfter read_word_document:");
-        println!("  paragraphs count: {}", read_doc.paragraphs.len());
-        for (i, p) in read_doc.paragraphs.iter().enumerate() {
-            println!("    [{}] id={}, text={:?}", i, p.id, p.text);
-        }
-        println!("  tables count: {}", read_doc.tables.len());
-        for (i, t) in read_doc.tables.iter().enumerate() {
-            println!("    [{}] id={}", i, t.id);
-        }
-        
         let read_elements = read_doc.to_elements();
-        let read_elements = read_doc.to_elements();
+        
+        // Verify order: paragraph A, table, paragraph B
+        assert_eq!(read_elements.len(), 3, "Should have 3 elements");
         
         assert!(matches!(&read_elements[0], DocElement::Paragraph { text, .. } if text == "段落A"),
             "First element should be paragraph A");
@@ -2544,5 +2534,75 @@ mod tests {
             "Second element should be table");
         assert!(matches!(&read_elements[2], DocElement::Paragraph { text, .. } if text == "段落B"),
             "Third element should be paragraph B");
+    }
+
+    /// Test multiple tables in sequence
+    #[test]
+    fn test_multiple_tables_inline_positions() {
+        let elements = vec![
+            DocElement::Paragraph { id: "p1".to_string(), text: "P1".to_string(), omit_text: false, style: None, runs: None, numbering: None },
+            DocElement::Table { id: "t0".to_string(), position: 0, header: vec![TableCell::plain("T1".to_string())], rows: vec![] },
+            DocElement::Paragraph { id: "p2".to_string(), text: "P2".to_string(), omit_text: false, style: None, runs: None, numbering: None },
+            DocElement::Table { id: "t1".to_string(), position: 0, header: vec![TableCell::plain("T2".to_string())], rows: vec![] },
+            DocElement::Paragraph { id: "p3".to_string(), text: "P3".to_string(), omit_text: false, style: None, runs: None, numbering: None },
+        ];
+        
+        let doc = WordDocument::from_elements(elements);
+        
+        // Write and read
+        let mut buf = std::io::Cursor::new(Vec::new());
+        write_word_document(&doc, &mut buf, None).expect("write should succeed");
+        let read_doc = read_word_document(&buf.into_inner()).expect("read should succeed");
+        let elements = read_doc.to_elements();
+        
+        // Verify order: P1, T1, P2, T2, P3
+        assert_eq!(elements.len(), 5);
+        assert!(matches!(&elements[0], DocElement::Paragraph { text, .. } if text == "P1"));
+        assert!(matches!(&elements[1], DocElement::Table { id, .. } if id == "t0"));
+        assert!(matches!(&elements[2], DocElement::Paragraph { text, .. } if text == "P2"));
+        assert!(matches!(&elements[3], DocElement::Table { id, .. } if id == "t1"));
+        assert!(matches!(&elements[4], DocElement::Paragraph { text, .. } if text == "P3"));
+    }
+
+    /// Test that table at end is also handled correctly
+    #[test]
+    fn test_table_at_end() {
+        let elements = vec![
+            DocElement::Paragraph { id: "p1".to_string(), text: "P1".to_string(), omit_text: false, style: None, runs: None, numbering: None },
+            DocElement::Paragraph { id: "p2".to_string(), text: "P2".to_string(), omit_text: false, style: None, runs: None, numbering: None },
+            DocElement::Table { id: "t0".to_string(), position: 0, header: vec![TableCell::plain("Table".to_string())], rows: vec![] },
+        ];
+        
+        let doc = WordDocument::from_elements(elements);
+        let mut buf = std::io::Cursor::new(Vec::new());
+        write_word_document(&doc, &mut buf, None).expect("write should succeed");
+        let read_doc = read_word_document(&buf.into_inner()).expect("read should succeed");
+        let elements = read_doc.to_elements();
+        
+        assert_eq!(elements.len(), 3);
+        assert!(matches!(&elements[0], DocElement::Paragraph { text, .. } if text == "P1"));
+        assert!(matches!(&elements[1], DocElement::Paragraph { text, .. } if text == "P2"));
+        assert!(matches!(&elements[2], DocElement::Table { .. }));
+    }
+
+    /// Test that table at beginning is also handled correctly
+    #[test]
+    fn test_table_at_beginning() {
+        let elements = vec![
+            DocElement::Table { id: "t0".to_string(), position: 0, header: vec![TableCell::plain("Table".to_string())], rows: vec![] },
+            DocElement::Paragraph { id: "p1".to_string(), text: "P1".to_string(), omit_text: false, style: None, runs: None, numbering: None },
+            DocElement::Paragraph { id: "p2".to_string(), text: "P2".to_string(), omit_text: false, style: None, runs: None, numbering: None },
+        ];
+        
+        let doc = WordDocument::from_elements(elements);
+        let mut buf = std::io::Cursor::new(Vec::new());
+        write_word_document(&doc, &mut buf, None).expect("write should succeed");
+        let read_doc = read_word_document(&buf.into_inner()).expect("read should succeed");
+        let elements = read_doc.to_elements();
+        
+        assert_eq!(elements.len(), 3);
+        assert!(matches!(&elements[0], DocElement::Table { .. }));
+        assert!(matches!(&elements[1], DocElement::Paragraph { text, .. } if text == "P1"));
+        assert!(matches!(&elements[2], DocElement::Paragraph { text, .. } if text == "P2"));
     }
 }
