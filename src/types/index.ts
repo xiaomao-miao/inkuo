@@ -724,7 +724,33 @@ export interface Settings {
    * error. 1–200, default 50 (matches the Rust default).
    */
   agent_max_iterations: number;
+  /**
+   * Per-expert (sub-agent) iteration cap overrides, keyed by sub-agent
+   * profile name (e.g. `"office_excel_expert"`). The value at each key
+   * replaces the compile-time default in the corresponding profile when
+   * the main agent dispatches to that sub-agent via `delegate_to`. Missing
+   * keys fall back to each profile's compile-time default.
+   *
+   * The frontend's settings panel exposes a single "sub-agent default"
+   * slider that writes the same value into every expert entry; the
+   * per-expert entries are then the source of truth sent to the backend.
+   *
+   * Values are integers in `[1, 200]`. The backend re-clamps as a defence
+   * in depth.
+   */
+  expert_max_iterations: Record<string, number>;
 }
+
+/** Keys of the expert profile registry, mirroring `PROFILES` in
+ * `src-tauri/src/agent/prompts.rs`. Kept in sync manually; the backend
+ * drops unknown keys so a stale value here is safe. */
+export type ExpertProfileName =
+  | 'office_word_expert'
+  | 'office_excel_expert'
+  | 'md_writer'
+  | 'researcher'
+  | 'batch_editor'
+  | 'code_expert';
 
 /** Supported embedding models */
 export type EmbeddingModelType =

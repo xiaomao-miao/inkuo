@@ -45,7 +45,7 @@ pub const PROFILES: &[ProfileDescriptor] = &[
             "list_dir", "glob", "grep",
             "read_office_file", "create_word_doc", "inspect_office", "compare_word_docs",
         ],
-        max_iterations: 15,
+        max_iterations: 50,
     },
     ProfileDescriptor {
         name: "office_excel_expert",
@@ -58,7 +58,7 @@ pub const PROFILES: &[ProfileDescriptor] = &[
             "create_excel", "modify_excel",
             "inspect_office",
         ],
-        max_iterations: 15,
+        max_iterations: 50,
     },
     ProfileDescriptor {
         name: "md_writer",
@@ -69,7 +69,7 @@ pub const PROFILES: &[ProfileDescriptor] = &[
             "list_dir", "glob", "grep",
             "database_search",
         ],
-        max_iterations: 20,
+        max_iterations: 50,
     },
     ProfileDescriptor {
         name: "researcher",
@@ -78,7 +78,7 @@ pub const PROFILES: &[ProfileDescriptor] = &[
         tools: &[
             "read_file", "list_dir", "glob", "grep", "database_search",
         ],
-        max_iterations: 10,
+        max_iterations: 50,
     },
     ProfileDescriptor {
         name: "batch_editor",
@@ -90,7 +90,7 @@ pub const PROFILES: &[ProfileDescriptor] = &[
             "read_office_file", "inspect_office",
             "create_word_doc", "modify_excel",
         ],
-        max_iterations: 25,
+        max_iterations: 50,
     },
     ProfileDescriptor {
         name: "code_expert",
@@ -101,7 +101,7 @@ pub const PROFILES: &[ProfileDescriptor] = &[
             "list_dir", "glob", "grep",
             "database_search",
         ],
-        max_iterations: 20,
+        max_iterations: 50,
     },
 ];
 
@@ -172,12 +172,24 @@ fn cached_profiles() -> &'static Vec<(&'static str, AgentProfile)> {
 
 /// Resolve a profile name into a fully-owned `AgentProfile` ready to drive
 /// `AgentSession::new_with_profile`.
-pub fn resolve_profile(name: &str) -> Option<AgentProfile> {
+///
+/// If `override_max_iterations` is `Some`, the resolved profile's
+/// `max_iterations` is replaced with that value (clamped to `[1, 200]`).
+/// This is how the per-expert setting from the UI overrides the compile-time
+/// default. Pass `None` to use the compile-time default.
+pub fn resolve_profile(name: &str, override_max_iterations: Option<usize>) -> Option<AgentProfile> {
     let entries = cached_profiles();
+    let n = override_max_iterations.unwrap_or(0).clamp(1, 200);
     entries
         .iter()
-        .find(|(n, _)| *n == name)
-        .map(|(_, p)| p.clone())
+        .find(|(profile_name, _)| *profile_name == name)
+        .map(|(_, p)| {
+            let mut profile = p.clone();
+            if override_max_iterations.is_some() && n > 0 {
+                profile.max_iterations = n;
+            }
+            profile
+        })
 }
 
 // ---------------------------------------------------------------------------

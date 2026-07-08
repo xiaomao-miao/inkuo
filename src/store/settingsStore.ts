@@ -83,7 +83,62 @@ const defaultSettings: Settings = {
     autoBaseline: true,
   },
   agent_max_iterations: 50,
+  // Per-sub-agent iteration cap overrides. Every expert gets the same
+  // default of 50 (was 15/20/25 in the compile-time defaults; lifted so
+  // sub-agents can comfortably run full read-modify-read loops). Missing
+  // keys would fall back to the profile's compile-time default on the
+  // backend, but we pre-populate them so the UI sliders can render a value
+  // for every expert.
+  expert_max_iterations: {
+    office_word_expert: 50,
+    office_excel_expert: 50,
+    md_writer: 50,
+    researcher: 50,
+    batch_editor: 50,
+    code_expert: 50,
+  },
 };
+
+/** Range that mirrors the backend's `clamp(1, 200)`. */
+const MIN_EXPERT_ITERATIONS = 1;
+const MAX_EXPERT_ITERATIONS = 200;
+
+/** Allowed keys for `expert_max_iterations`. Any other key would be
+ * dropped by the backend's sanitiser, so we pre-filter here to keep
+ * the persisted settings tidy. */
+const ALLOWED_EXPERT_KEYS = [
+  'office_word_expert',
+  'office_excel_expert',
+  'md_writer',
+  'researcher',
+  'batch_editor',
+  'code_expert',
+] as const;
+
+/** Sanitise a raw `expert_max_iterations` map: keep only known keys and
+ * clamp each value into `[1, 200]`. The same clamp is also applied on
+ * the backend as a defence in depth. */
+function sanitiseExpertMaxIterations(
+  raw: Partial<Record<string, number>> | undefined
+): Record<string, number> {
+  const fallback = defaultSettings.expert_max_iterations;
+  if (!raw || typeof raw !== 'object') {
+    return { ...fallback };
+  }
+  const result: Record<string, number> = {};
+  for (const key of ALLOWED_EXPERT_KEYS) {
+    const value = raw[key];
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      result[key] = Math.min(
+        MAX_EXPERT_ITERATIONS,
+        Math.max(MIN_EXPERT_ITERATIONS, Math.trunc(value))
+      );
+    } else {
+      result[key] = fallback[key];
+    }
+  }
+  return result;
+}
 
 export const useSettingsStore = create<SettingsState>()(
   persist(
@@ -282,6 +337,14 @@ export const useSettingsStore = create<SettingsState>()(
             && persistedSettings.agent_max_iterations <= 200
               ? persistedSettings.agent_max_iterations
               : currentState.settings.agent_max_iterations,
+          // Per-expert iteration overrides. Each value is sanitised into
+          // [1, 200] and only known expert keys are kept. Missing values
+          // for known keys fall back to the in-code default (50).
+          expert_max_iterations: sanitiseExpertMaxIterations(
+            persistedSettings?.expert_max_iterations as
+              | Partial<Record<string, number>>
+              | undefined
+          ),
         };
 
         return {

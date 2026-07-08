@@ -10,11 +10,14 @@ import {
   AlertCircle,
   Brain,
   History,
+  ChevronDown,
+  ChevronRight,
 } from 'lucide-react';
 import { useSettingsStore, useInlineCompleteStore } from '../../store';
 import { ModelsSettings, KnowledgeSettings } from './index';
 import { SnapshotsSettings } from './SnapshotsSettings';
 import { Select } from './Select';
+import type { ExpertProfileName } from '../../types';
 import styles from './SettingsPanel.module.css';
 
 type SettingsTab =
@@ -287,10 +290,24 @@ export const SettingsPanel = () => {
                   </span>
                 </div>
                 <p className={styles.fieldHelp}>
-                  范围 1–200，默认 50。仅影响主 Agent 会话；调用 delegate_to
-                  派生的子 Agent 仍按各自 profile 的上限执行（10–25）。
+                  范围 1–200，默认 50。仅影响主 Agent 会话；调用
+                  <code>delegate_to</code> 派生的子 Agent 由下方的
+                  「专家子 Agent 轮次上限」控制。
                 </p>
               </div>
+            </div>
+
+            <div className={styles.section}>
+              <h4 className={styles.sectionTitle}>专家子 Agent 轮次</h4>
+              <p className={styles.sectionDescription}>
+                主 Agent 在执行 Office / Markdown / 检索 / 批量 / 代码
+                类任务时，会通过 <code>delegate_to</code> 委派给专门的
+                子 Agent。每个子 Agent 都有独立的工具调用循环上限——
+                默认全部为 50（已从之前的 10–25 提升）。需要时可在下面
+                展开高级设置，单独调整每个专家的轮次。
+              </p>
+
+              <ExpertIterationsSettings />
             </div>
           </div>
         );
@@ -420,5 +437,170 @@ export const SettingsPanel = () => {
         {renderTabContent()}
       </div>
     </div>
+  );
+};
+
+/** UI labels for the per-expert sub-agent iteration cap, mirroring the
+ * `label` field in `src-tauri/src/agent/prompts.rs::PROFILES`. */
+const EXPERT_DISPLAY_INFO: Record<
+  ExpertProfileName,
+  { label: string; description: string }
+> = {
+  office_word_expert: {
+    label: 'Word 文档专家',
+    description: '创建 / 修改 .docx 文档',
+  },
+  office_excel_expert: {
+    label: 'Excel 表格专家',
+    description: '创建 / 修改 .xlsx 工作簿',
+  },
+  md_writer: {
+    label: 'Markdown 写作',
+    description: '长 Markdown 文档、README、设计文档',
+  },
+  researcher: {
+    label: '检索专家',
+    description: '只读搜索文件、定位内容',
+  },
+  batch_editor: {
+    label: '批量编辑',
+    description: '5+ 文件批量修改',
+  },
+  code_expert: {
+    label: '代码工程专家',
+    description: '代码 feature / 重构 / 修 bug',
+  },
+};
+
+const EXPERT_ORDER: ExpertProfileName[] = [
+  'office_word_expert',
+  'office_excel_expert',
+  'md_writer',
+  'researcher',
+  'batch_editor',
+  'code_expert',
+];
+
+const EXPERT_ITERATIONS_MIN = 1;
+const EXPERT_ITERATIONS_MAX = 200;
+const EXPERT_ITERATIONS_DEFAULT = 50;
+
+/** Per-expert iteration cap settings panel.
+ *
+ * Renders one "default for all" slider (which writes the same value
+ * into every expert) plus a collapsible "advanced" section with one
+ * slider per expert. The advanced sliders write only that expert's
+ * value, so the user can keep the unified default and tweak a single
+ * expert if needed.
+ */
+const ExpertIterationsSettings = () => {
+  const expertMaxIterations = useSettingsStore(
+    (state) => state.settings.expert_max_iterations
+  );
+  const updateSettingAndPersist = useSettingsStore(
+    (state) => state.updateSettingAndPersist
+  );
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+
+  /** True iff every expert has the same value (the slider can be
+   *  shown as "linked"). When the user diverges any one expert, this
+   *  becomes false and the unified slider moves to "—". */
+  const uniqueValues = Array.from(
+    new Set(EXPERT_ORDER.map((k) => expertMaxIterations[k]))
+  );
+  const isLinked = uniqueValues.length === 1;
+  const linkedValue = isLinked ? uniqueValues[0] : null;
+
+  const setAllExperts = (value: number) => {
+    const next: Record<string, number> = {};
+    for (const key of EXPERT_ORDER) {
+      next[key] = value;
+    }
+    void updateSettingAndPersist('expert_max_iterations', next);
+  };
+
+  const setExpert = (key: ExpertProfileName, value: number) => {
+    void updateSettingAndPersist('expert_max_iterations', {
+      ...expertMaxIterations,
+      [key]: value,
+    });
+  };
+
+  return (
+    <>
+      <div className={styles.field}>
+        <label className={styles.label} htmlFor="expert-default-iterations">
+          所有专家统一上限
+        </label>
+        <div className={styles.rangeWrapper}>
+          <input
+            id="expert-default-iterations"
+            type="range"
+            min={EXPERT_ITERATIONS_MIN}
+            max={EXPERT_ITERATIONS_MAX}
+            step={1}
+            value={linkedValue ?? EXPERT_ITERATIONS_DEFAULT}
+            onChange={(e) => {
+              const v = parseInt(e.target.value, 10);
+              if (Number.isFinite(v)) setAllExperts(v);
+            }}
+            className={styles.range}
+            disabled={!isLinked}
+          />
+          <span className={styles.rangeValue}>
+            {isLinked ? `${linkedValue} 次` : '—  单独设置'}
+          </span>
+        </div>
+        <p className={styles.fieldHelp}>
+          {isLinked
+            ? `范围 ${EXPERT_ITERATIONS_MIN}–${EXPERT_ITERATIONS_MAX}，默认 ${EXPERT_ITERATIONS_DEFAULT}。拖动此滑杆会同时更新下方所有专家的轮次。`
+            : '已为个别专家设置了不同的轮次。如需恢复统一，可展开下方高级设置后逐个调整，或拖动本滑杆后所有专家会重置为同一值。'}
+        </p>
+      </div>
+
+      <div className={styles.field}>
+        <button
+          type="button"
+          onClick={() => setAdvancedOpen((v) => !v)}
+          className={styles.advancedToggle}
+          aria-expanded={advancedOpen}
+        >
+          {advancedOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+          <span>高级设置：单独调整每个专家</span>
+        </button>
+        {advancedOpen && (
+          <div className={styles.expertList}>
+            {EXPERT_ORDER.map((key) => {
+              const info = EXPERT_DISPLAY_INFO[key];
+              const value = expertMaxIterations[key] ?? EXPERT_ITERATIONS_DEFAULT;
+              return (
+                <div key={key} className={styles.expertRow}>
+                  <div className={styles.expertRowLabel}>
+                    <span className={styles.expertRowName}>{info.label}</span>
+                    <span className={styles.expertRowDesc}>{info.description}</span>
+                  </div>
+                  <div className={styles.rangeWrapper}>
+                    <input
+                      type="range"
+                      min={EXPERT_ITERATIONS_MIN}
+                      max={EXPERT_ITERATIONS_MAX}
+                      step={1}
+                      value={value}
+                      onChange={(e) => {
+                        const v = parseInt(e.target.value, 10);
+                        if (Number.isFinite(v)) setExpert(key, v);
+                      }}
+                      className={styles.range}
+                      aria-label={`${info.label}轮次上限`}
+                    />
+                    <span className={styles.rangeValue}>{value} 次</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </>
   );
 };

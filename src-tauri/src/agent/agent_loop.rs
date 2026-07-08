@@ -14,6 +14,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use futures_util::StreamExt;
+use std::collections::HashMap;
 
 use super::profile::AgentProfile;
 use super::tools::{ToolCall, ToolResult, SharedToolRegistry};
@@ -127,6 +128,15 @@ pub struct AgentSession {
     /// See `feature_toggles::effective_tool_set` for how feature toggles
     /// (e.g. `kb_strict`) populate this.
     pub allowed_tools: Option<Vec<String>>,
+    /// Optional per-expert iteration cap overrides, keyed by sub-agent
+    /// profile name (e.g. `"office_excel_expert"`). When the main agent
+    /// dispatches to a sub-agent via `delegate_to`, the override (if any)
+    /// replaces the compile-time default in the sub-agent's profile.
+    /// Missing keys fall back to the profile's compile-time default.
+    /// Populated from the user's `expert_max_iterations` setting on the
+    /// frontend; the Tauri command sanitises and clamps values to
+    /// `[1, 200]`.
+    pub expert_max_iterations: HashMap<String, usize>,
 }
 
 impl AgentSession {
@@ -136,6 +146,7 @@ impl AgentSession {
             max_iterations: DEFAULT_MAX_ITERATIONS,
             tool_registry,
             allowed_tools: None,
+            expert_max_iterations: HashMap::new(),
         }
     }
 
@@ -145,6 +156,21 @@ impl AgentSession {
     pub fn with_allowed_tools(mut self, allowed: Option<Vec<String>>) -> Self {
         self.allowed_tools = allowed;
         self
+    }
+
+    /// Override per-expert iteration caps. The map is keyed by sub-agent
+    /// profile name (e.g. `"office_excel_expert"`). Missing keys fall
+    /// back to each profile's compile-time default.
+    pub fn with_expert_max_iterations(mut self, overrides: HashMap<String, usize>) -> Self {
+        self.expert_max_iterations = overrides;
+        self
+    }
+
+    /// Look up the iteration cap override for a given expert profile.
+    /// Returns `None` if the user didn't set a per-expert value (caller
+    /// should then use the profile's compile-time default).
+    pub fn expert_max_iterations_for(&self, expert_name: &str) -> Option<usize> {
+        self.expert_max_iterations.get(expert_name).copied()
     }
 
     /// Construct a sub-agent session driven by `profile`.
@@ -171,6 +197,7 @@ impl AgentSession {
             } else {
                 Some(profile.allowed_tools)
             },
+            expert_max_iterations: HashMap::new(),
         }
     }
 
@@ -569,7 +596,12 @@ impl AgentExecutor {
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string());
 
-                    let profile = match resolve_profile(&expert) {
+                    // Per-expert iteration cap override: if the parent
+                    // session has a user-configured override for this
+                    // expert, apply it. Otherwise use the compile-time
+                    // default baked into the profile.
+                    let override_max_iterations = session.expert_max_iterations_for(&expert);
+                    let profile = match resolve_profile(&expert, override_max_iterations) {
                         Some(p) => p,
                         None => {
                             let available: Vec<String> = list_profiles()

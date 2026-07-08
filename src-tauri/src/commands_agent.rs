@@ -1,13 +1,14 @@
 use crate::agent::{
     create_agent_executor,
-    get_agent_system_prompt, get_ask_system_prompt, get_plan_system_prompt, AgentError,
-    AgentSession, Message, SharedToolRegistry, ToolCallFunction, ToolCallMessage,
+    get_agent_system_prompt, get_ask_system_prompt, get_plan_system_prompt, list_profiles,
+    AgentError, AgentSession, Message, SharedToolRegistry, ToolCallFunction, ToolCallMessage,
 };
 use crate::agent::tools::ToolRegistry;
 use crate::ai_config::{self, AIConfigInput};
 use crate::feature_toggles::{self, ToggleId};
 use crate::streaming::{emit, StreamPayload};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use thiserror::Error;
@@ -155,11 +156,19 @@ fn convert_message(msg: &FrontendMessage) -> Result<Option<Message>, AgentComman
     }
 }
 
-#[tauri::command]
 /// Hard cap on the number of LLM ↔ tool loops the Agent will perform before
 /// giving up with a `MaxIterationsReached` error. `None` falls back to the
 /// session default (currently 50). Surfaced from the frontend's settings
 /// panel so power users can tune it without recompiling.
+///
+/// `expert_max_iterations` is an optional map of sub-agent profile name
+/// (e.g. `"office_excel_expert"`) to per-expert iteration cap. When the
+/// main agent dispatches to a sub-agent via `delegate_to`, the value (if
+/// any) overrides the compile-time default in the profile. Missing keys
+/// fall back to the profile's default. Values are clamped to `[1, 200]`.
+/// Both shapes are exposed from the frontend's settings panel under
+/// "AI → Agent 执行". See `AgentSession::with_expert_max_iterations`.
+#[tauri::command]
 pub async fn ai_agent_stream(
     session_id: String,
     message_id: String,
@@ -168,6 +177,7 @@ pub async fn ai_agent_stream(
     mode: String,
     history: Vec<FrontendMessage>,
     max_iterations: Option<usize>,
+    expert_max_iterations: Option<HashMap<String, usize>>,
     enabled_toggles: Option<Vec<String>>,
     config_input: AIConfigInput,
     app: AppHandle,
@@ -236,6 +246,24 @@ pub async fn ai_agent_stream(
     let mut session = AgentSession::new(tool_registry).with_allowed_tools(allowed_tools);
     if let Some(n) = max_iterations {
         session = session.with_max_iterations(n);
+    }
+
+    // Sanitise per-expert iteration overrides:
+    //  - Drop keys for unknown profiles (defence against frontend/backend
+    //    drift — a typo in the settings UI shouldn't silently affect
+    //    nothing and look like a success).
+    //  - Clamp values to [1, 200] (the same range the frontend uses for
+    //    the slider, kept in sync deliberately).
+    let known_profiles: std::collections::HashSet<&'static str> =
+        list_profiles().into_iter().map(|(n, _)| n).collect();
+    let sanitised_expert_overrides: HashMap<String, usize> = expert_max_iterations
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(name, _)| known_profiles.contains(name.as_str()))
+        .map(|(name, n)| (name, n.clamp(1, 200)))
+        .collect();
+    if !sanitised_expert_overrides.is_empty() {
+        session = session.with_expert_max_iterations(sanitised_expert_overrides);
     }
 
     // Layer feature-toggle prompt fragments AFTER the mode's base prompt
