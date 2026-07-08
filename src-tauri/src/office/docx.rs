@@ -98,6 +98,14 @@ pub enum DocElement {
     },
 }
 
+/// Element with insertion metadata for positioned insertions
+#[derive(Debug, Clone)]
+pub struct InsertElement {
+    pub element: DocElement,
+    pub anchor_id: Option<String>,
+    pub position: Option<String>,
+}
+
 impl WordDocument {
     /// Convert the document to a flat list of elements with stable IDs.
     /// Tables and paragraphs are interleaved by matching position markers
@@ -235,12 +243,17 @@ impl WordDocument {
     }
 
     /// Modify the document by applying a list of edit operations.
+    /// 
+    /// Bug fixes:
+    /// - Bug 2: Fixed omit_text logic - when omit_text is false and text is provided, use the new text
+    /// - Bug 3: Preserve original IDs by not calling from_elements which reassigns IDs
+    /// - Bug 4: Support "before" position for anchor insertions
+    /// - Bug 6: Support multiple elements each with their own anchor_id and position
     pub fn modify(
         &mut self,
         modifies: Vec<DocElement>,
         deletes: Vec<String>,
-        insert_after: Option<String>,
-        insert_elements: Vec<DocElement>,
+        insert_elements: Vec<InsertElement>,
     ) {
         // When a table is deleted, also delete its marker paragraph (if any).
         // Build the marker map before consuming `deletes`.
@@ -278,21 +291,25 @@ impl WordDocument {
                 let to_push = match (elem, replacement.clone()) {
                     (DocElement::Paragraph { id: _oi, text: ot, style: os, runs: ors, numbering: onum, .. },
                      DocElement::Paragraph { id: ri, text: rt, style: rs, runs: rr, numbering: rnum, omit_text }) => {
-                        // Three-way merge: keep original where the caller didn't specify.
-                        let merged_text = if omit_text { ot.clone() } else { rt };
+                        // Merge strategy:
+                        // 1. If runs provided in replacement -> use replacement runs (full override)
+                        // 2. If text provided (omit_text=false) but no runs -> use text, clear runs
+                        // 3. If nothing provided (omit_text=true, no runs) -> keep originals
+                        
                         let merged_style = rs.or(os);
-                        let merged_runs = rr.or(ors);
-                        // numbering: if replacement provides one, use it; otherwise
-                        // keep the original (so list membership survives a modify).
                         let merged_numbering = rnum.or(onum);
-                        // If AI provided runs, drop the plain text field — runs
-                        // describe the paragraph's full rich content and mixing
-                        // plain `text` with `runs` produces inconsistent XML.
-                        let (out_text, out_runs) = if merged_runs.is_some() {
-                            (String::new(), merged_runs)
+                        
+                        let (out_text, out_runs) = if rr.is_some() {
+                            // User provided runs -> use runs, ignore text field
+                            (String::new(), rr)
+                        } else if !omit_text {
+                            // User provided text but no runs -> use new text, clear runs
+                            (rt, None)
                         } else {
-                            (merged_text, None)
+                            // User provided neither -> keep originals
+                            (ot, ors)
                         };
+                        
                         DocElement::Paragraph {
                             id: ri,
                             text: out_text,
@@ -313,38 +330,69 @@ impl WordDocument {
             }
         }
 
-        // Handle insertions
-        if let Some(ref aid) = insert_after {
-            let pos = result.iter().position(|e| e.id() == aid);
-            if let Some(idx) = pos {
-                // Insert new elements after position idx
-                let insert_idx = idx + 1;
-                let mut new_items: Vec<DocElement> = Vec::new();
-                for e in insert_elements {
-                    // Don't re-insert elements that are also in modifies (already placed)
-                    if !modify_map.contains_key(e.id()) {
-                        new_items.push(e);
-                    }
-                }
-                result.splice(insert_idx..insert_idx, new_items);
-            } else {
-                // anchor not found, append
-                for e in insert_elements {
-                    if !modify_map.contains_key(e.id()) {
-                        result.push(e);
-                    }
-                }
+        // Handle insertions - each element can have its own anchor_id and position
+        for insert_elem in insert_elements {
+            // Skip if already in modifies (already placed)
+            if modify_map.contains_key(insert_elem.element.id()) {
+                continue;
             }
-        } else if !insert_elements.is_empty() {
-            for e in insert_elements {
-                if !modify_map.contains_key(e.id()) {
-                    result.push(e);
+            
+            if let Some(ref aid) = insert_elem.anchor_id {
+                // Find anchor position in current result
+                let pos = result.iter().position(|e| e.id() == aid);
+                if let Some(idx) = pos {
+                    // Insert at the specified position relative to anchor
+                    let insert_idx = match insert_elem.position.as_deref() {
+                        Some("before") => idx,      // Insert before the anchor
+                        _ => idx + 1,                // Default: insert after the anchor
+                    };
+                    result.insert(insert_idx, insert_elem.element);
+                } else {
+                    // Anchor not found, append to end
+                    result.push(insert_elem.element);
+                }
+            } else {
+                // No anchor specified, append to end
+                result.push(insert_elem.element);
+            }
+        }
+
+        // Bug fix 3: Build document manually to preserve IDs instead of using from_elements
+        // from_elements would reassign all IDs via marker paragraphs
+        let mut out_paras: Vec<WordParagraph> = Vec::new();
+        let mut tables: Vec<WordTable> = Vec::new();
+
+        for elem in result {
+            match elem {
+                DocElement::Paragraph { id, text, style, runs, numbering, .. } => {
+                    out_paras.push(WordParagraph { id, text, style, runs, numbering });
+                }
+                DocElement::Table { id, position: _, header, rows } => {
+                    // Emit a position marker whose text matches the table's ID.
+                    out_paras.push(WordParagraph {
+                        id: format!("__tbl_pos_{}__", id),
+                        text: format!("<__tbl_pos_{}__>", id),
+                        style: None,
+                        runs: None,
+                        numbering: None,
+                    });
+
+                    let mut table_rows = vec![];
+                    if !header.is_empty() {
+                        table_rows.push(super::shared::TableRow { cells: header });
+                    }
+                    for row in rows {
+                        if !row.is_empty() {
+                            table_rows.push(super::shared::TableRow { cells: row });
+                        }
+                    }
+                    tables.push(WordTable { id, rows: table_rows });
                 }
             }
         }
 
-        // Rebuild document from result
-        *self = Self::from_elements(result);
+        self.paragraphs = out_paras;
+        self.tables = tables;
     }
 }
 
@@ -608,9 +656,11 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
     let mut current_style: Option<String> = None;
     let mut current_runs: Vec<FontRun> = Vec::new();
     let mut current_numbering: Option<NumberingRef> = None;
+    let mut current_stable_id: Option<String> = None;
     let mut in_numpr = false;
     let mut pending_num_id: Option<u32> = None;
     let mut pending_ilvl: Option<u32> = None;
+    let mut is_table_marker = false;  // Tracks if current paragraph is a table position marker
 
     // ── Per-run state (reset on each <w:r>) ────────────────────────────────
     let mut in_run = false;
@@ -636,6 +686,8 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
                     current_style = None;
                     current_runs.clear();
                     current_numbering = None;
+                    current_stable_id = None;
+                    is_table_marker = false;  // Reset marker detection for new paragraph
                     in_numpr = false;
                     pending_num_id = None;
                     pending_ilvl = None;
@@ -700,6 +752,22 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
                             }
                         }
                     }
+                } else if name.as_ref() == b"id" && para_depth > 0 && tbl_cell_depth == 0 {
+                    // Read stable ID from custom inkuo:id element
+                    // Also detect table markers (format: __tbl_pos_<table_id>__)
+                    if let Some(v) = attr_value(e, b"val") {
+                        if let Ok(s) = std::str::from_utf8(v.as_ref()) {
+                            if !s.is_empty() {
+                                if s.starts_with("__tbl_pos_") && s.ends_with("__") {
+                                    // This is a table position marker
+                                    current_stable_id = Some(s.to_string());
+                                    is_table_marker = true;
+                                } else {
+                                    current_stable_id = Some(s.to_string());
+                                }
+                            }
+                        }
+                    }
                 }
             }
             Ok(quick_xml::events::Event::Empty(ref e)) => {
@@ -707,15 +775,36 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
                 if name.as_ref() == b"p" {
                     // Self-closing paragraph (e.g. empty <w:p/>).
                     para_depth = para_depth.saturating_sub(0);
-                    let id = format!("p{}", para_counter);
-                    para_counter += 1;
-                    // Keep as a placeholder so the empty paragraph's position is
-                    // preserved (esp. when it carries a style).
-                    if let Some(style) = current_style.clone() {
+                    let id = if let Some(stable_id) = current_stable_id.clone() {
+                        stable_id
+                    } else {
+                        let id = format!("p{}", para_counter);
+                        para_counter += 1;
+                        id
+                    };
+                    // Keep if has style OR is a table marker (has inkuo:id)
+                    if current_style.is_some() || is_table_marker {
+                        let text = if is_table_marker {
+                            if let Some(stable_id) = &current_stable_id {
+                                if let Some(rest) = stable_id.strip_prefix("__tbl_pos_") {
+                                    if let Some(table_id) = rest.strip_suffix("__") {
+                                        format!("<__tbl_pos_{}__>", table_id)
+                                    } else {
+                                        stable_id.clone()
+                                    }
+                                } else {
+                                    stable_id.clone()
+                                }
+                            } else {
+                                String::new()
+                            }
+                        } else {
+                            String::new()
+                        };
                         paragraphs.push(WordParagraph {
                             id,
-                            text: String::new(),
-                            style: Some(style),
+                            text,
+                            style: None,
                             runs: None,
                             numbering: None,
                         });
@@ -761,6 +850,21 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
                         if let Ok(s) = std::str::from_utf8(v.as_ref()) {
                             if let Ok(n) = s.parse::<u32>() {
                                 pending_ilvl = Some(n);
+                            }
+                        }
+                    }
+                } else if name.as_ref() == b"id" && tbl_cell_depth == 0 {
+                    // Read stable ID from custom inkuo:id element (empty tag)
+                    // This can fire even when para_depth is 0 for self-closing tags
+                    if let Some(v) = attr_value(e, b"val") {
+                        if let Ok(s) = std::str::from_utf8(v.as_ref()) {
+                            if !s.is_empty() {
+                                if s.starts_with("__tbl_pos_") && s.ends_with("__") {
+                                    current_stable_id = Some(s.to_string());
+                                    is_table_marker = true;
+                                } else if para_depth > 0 {
+                                    current_stable_id = Some(s.to_string());
+                                }
                             }
                         }
                     }
@@ -829,18 +933,46 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
                                 || r.font_size.is_some() || r.color.is_some() || r.font_name.is_some()
                                 || r.highlight.is_some()
                         });
+                        // Keep if: has content, or style, or formatting, or is a table marker
                         let keep = !current_text.is_empty()
                             || current_style.is_some()
                             || current_numbering.is_some()
                             || has_format
-                            || paragraph_saw_run;
+                            || paragraph_saw_run
+                            || is_table_marker;
                         if keep {
-                            let id = format!("p{}", para_counter);
-                            para_counter += 1;
+                            // Use stable ID if available, otherwise generate sequential ID
+                            // For table markers, use the special marker text format
+                            let id = if let Some(stable_id) = current_stable_id.clone() {
+                                stable_id
+                            } else {
+                                let id = format!("p{}", para_counter);
+                                para_counter += 1;
+                                id
+                            };
                             let runs_opt = if current_runs.is_empty() { None } else { Some(current_runs.clone()) };
+                            // For table markers, generate the marker text format
+                            let text = if is_table_marker {
+                                // Extract table ID from marker format __tbl_pos_<table_id>__
+                                if let Some(stable_id) = &current_stable_id {
+                                    if let Some(rest) = stable_id.strip_prefix("__tbl_pos_") {
+                                        if let Some(table_id) = rest.strip_suffix("__") {
+                                            format!("<__tbl_pos_{}__>", table_id)
+                                        } else {
+                                            stable_id.clone()
+                                        }
+                                    } else {
+                                        stable_id.clone()
+                                    }
+                                } else {
+                                    current_text.clone()
+                                }
+                            } else {
+                                current_text.trim().to_string()
+                            };
                             paragraphs.push(WordParagraph {
                                 id,
-                                text: current_text.trim().to_string(),
+                                text,
                                 style: current_style.clone(),
                                 runs: runs_opt,
                                 numbering: current_numbering.clone(),
@@ -1330,110 +1462,142 @@ pub fn build_document_xml(doc: &WordDocument) -> String {
     let mut xml = String::from(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
-            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+            xmlns:inkuo="http://inkuo.app/wordprocessingml/2026/main">
   <w:body>"#
     );
 
-    // Use to_elements() to preserve correct ordering of paragraphs and tables.
-    let elements = doc.to_elements();
-    for elem in &elements {
-        match elem {
-            DocElement::Paragraph { text, style, runs, numbering, .. } => {
-                xml.push_str("\n    <w:p>");
-                // Build paragraph properties: style (if any) + numbering (if any)
-                let has_ppr = style.is_some() || numbering.is_some();
-                if has_ppr {
-                    xml.push_str("<w:pPr>");
-                    if let Some(ref s) = style {
-                        xml.push_str(&format!("<w:pStyle w:val=\"{}\"/>", escape_xml(s)));
-                    }
-                    if let Some(ref num) = numbering {
-                        xml.push_str("<w:numPr>");
-                        xml.push_str(&format!("<w:ilvl w:val=\"{}\"/>", num.level));
-                        xml.push_str(&format!("<w:numId w:val=\"{}\"/>", num.num_id));
-                        xml.push_str("</w:numPr>");
-                    }
-                    xml.push_str("</w:pPr>");
-                }
+    // Build a map of table id -> table for O(1) lookup.
+    let table_map: std::collections::HashMap<&str, &WordTable> =
+        doc.tables.iter().map(|t| (t.id.as_str(), t)).collect();
 
-                if let Some(ref run_list) = runs {
-                    for run in run_list {
-                        xml.push_str(&build_run_xml(run));
-                    }
-                } else {
-                    for chunk in text.split('\n') {
-                        if !chunk.is_empty() {
-                            xml.push_str(&format!(
-                                "<w:r><w:t xml:space=\"preserve\">{}</w:t></w:r>",
-                                escape_xml(chunk)
-                            ));
-                        }
-                        xml.push_str("<w:r><w:br/></w:r>");
-                    }
+    // Track which tables have been emitted via markers to avoid double-emission
+    let mut tables_emitted: std::collections::HashSet<&str> = std::collections::HashSet::new();
+
+    // Iterate over paragraphs directly - markers contain position info
+    for para in &doc.paragraphs {
+        // Check if this is a table position marker
+        if let Some(rest) = para.text.strip_prefix("<__tbl_pos_") {
+            if let Some(end) = rest.find("__>") {
+                let tbl_id = &rest[..end];
+                if let Some(tbl) = table_map.get(tbl_id) {
+                    // Output a marker paragraph with empty content but marker ID pattern
+                    // The parser will detect this via the inkuo:id pattern
+                    xml.push_str("\n    <w:p>");
+                    xml.push_str(&format!("<w:pPr><inkuo:id w:val=\"__tbl_pos_{}__\"/></w:pPr>", escape_xml(tbl_id)));
+                    xml.push_str("</w:p>");
+                    // Also output the table immediately after
+                    xml.push_str(&build_table_xml(&tbl.id, &tbl.rows));
+                    tables_emitted.insert(tbl_id);
+                    continue;
                 }
-                xml.push_str("</w:p>");
             }
-            DocElement::Table { header, rows, .. } => {
-                xml.push_str("\n    <w:tbl>");
-                xml.push_str("\n      <w:tblPr>");
-                xml.push_str("<w:tblStyle w:val=\"TableGrid\"/>");
-                xml.push_str("<w:tblW w:type=\"auto\" w:w=\"0\"/>");
-                xml.push_str("<w:tblBorders>");
-                xml.push_str("<w:top w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
-                xml.push_str("<w:left w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
-                xml.push_str("<w:bottom w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
-                xml.push_str("<w:right w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
-                xml.push_str("<w:insideH w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
-                xml.push_str("<w:insideV w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
-                xml.push_str("</w:tblBorders>");
-                xml.push_str("</w:tblPr>");
+        }
 
-                let render_row = |xml: &mut String, cells: &[TableCell]| {
-                    xml.push_str("\n        <w:tr>");
-                    for cell in cells {
-                        let col_span = cell.col_span.max(1);
-                        let row_span = cell.row_span.max(1);
-                        xml.push_str("<w:tc><w:tcPr>");
-                        if col_span > 1 {
-                            xml.push_str(&format!("<w:gridSpan w:val=\"{}\"/>", col_span));
-                        }
-                        if row_span > 1 {
-                            xml.push_str("<w:vMerge w:val=\"restart\"/>");
-                        }
-                        xml.push_str("</w:tcPr><w:p>");
-                        let lines: Vec<&str> = cell.text.split('\n').collect();
-                        for (chunk_idx, chunk) in lines.iter().enumerate() {
-                            if !chunk.is_empty() {
-                                xml.push_str(&format!(
-                                    "<w:r><w:t xml:space=\"preserve\">{}</w:t></w:r>",
-                                    escape_xml(chunk)
-                                ));
-                            }
-                            if chunk_idx < lines.len().saturating_sub(1) {
-                                xml.push_str("<w:r><w:br/></w:r>");
-                            }
-                        }
-                        xml.push_str("</w:p></w:tc>");
-                    }
-                    xml.push_str("</w:tr>");
-                };
-
-                // Render header row first, then body rows
-                if !header.is_empty() {
-                    render_row(&mut xml, header);
-                }
-                for row in rows {
-                    if !row.is_empty() {
-                        render_row(&mut xml, row);
-                    }
-                }
-
-                xml.push_str("\n    </w:tbl>");
+        // Regular paragraph - output as normal
+        xml.push_str("\n    <w:p>");
+        // Build paragraph properties: style (if any) + numbering (if any) + stable ID
+        let has_ppr = para.style.is_some() || para.numbering.is_some() || !para.id.is_empty();
+        if has_ppr {
+            xml.push_str("<w:pPr>");
+            if let Some(ref s) = para.style {
+                xml.push_str(&format!("<w:pStyle w:val=\"{}\"/>", escape_xml(s)));
             }
+            if let Some(ref num) = para.numbering {
+                xml.push_str("<w:numPr>");
+                xml.push_str(&format!("<w:ilvl w:val=\"{}\"/>", num.level));
+                xml.push_str(&format!("<w:numId w:val=\"{}\"/>", num.num_id));
+                xml.push_str("</w:numPr>");
+            }
+            // Store stable ID as custom property to preserve across read/write cycles
+            xml.push_str(&format!("<inkuo:id w:val=\"{}\"/>", escape_xml(&para.id)));
+            xml.push_str("</w:pPr>");
+        }
+
+        // Output paragraph content
+        if let Some(ref run_list) = para.runs {
+            for run in run_list {
+                xml.push_str(&build_run_xml(run));
+            }
+        } else if !para.text.is_empty() {
+            for chunk in para.text.split('\n') {
+                if !chunk.is_empty() {
+                    xml.push_str(&format!(
+                        "<w:r><w:t xml:space=\"preserve\">{}</w:t></w:r>",
+                        escape_xml(chunk)
+                    ));
+                }
+                xml.push_str("<w:r><w:br/></w:r>");
+            }
+        }
+        xml.push_str("</w:p>");
+    }
+
+    // Output any tables that weren't emitted via markers (orphaned tables)
+    for tbl in &doc.tables {
+        if !tables_emitted.contains(tbl.id.as_str()) {
+            xml.push_str(&build_table_xml(&tbl.id, &tbl.rows));
         }
     }
 
     xml.push_str("\n  </w:body>\n</w:document>");
+    xml
+}
+
+fn build_table_xml(_table_id: &str, rows: &[TableRow]) -> String {
+    let mut xml = String::new();
+    xml.push_str("\n    <w:tbl>");
+    xml.push_str("\n      <w:tblPr>");
+    xml.push_str("<w:tblStyle w:val=\"TableGrid\"/>");
+    xml.push_str("<w:tblW w:type=\"auto\" w:w=\"0\"/>");
+    xml.push_str("<w:tblBorders>");
+    xml.push_str("<w:top w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
+    xml.push_str("<w:left w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
+    xml.push_str("<w:bottom w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
+    xml.push_str("<w:right w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
+    xml.push_str("<w:insideH w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
+    xml.push_str("<w:insideV w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
+    xml.push_str("</w:tblBorders>");
+    xml.push_str("</w:tblPr>");
+
+    let render_row = |xml: &mut String, cells: &[TableCell]| {
+        xml.push_str("\n        <w:tr>");
+        for cell in cells {
+            let col_span = cell.col_span.max(1);
+            let row_span = cell.row_span.max(1);
+            xml.push_str("<w:tc><w:tcPr>");
+            if col_span > 1 {
+                xml.push_str(&format!("<w:gridSpan w:val=\"{}\"/>", col_span));
+            }
+            if row_span > 1 {
+                xml.push_str("<w:vMerge w:val=\"restart\"/>");
+            }
+            xml.push_str("</w:tcPr><w:p>");
+            let lines: Vec<&str> = cell.text.split('\n').collect();
+            for (chunk_idx, chunk) in lines.iter().enumerate() {
+                if !chunk.is_empty() {
+                    xml.push_str(&format!(
+                        "<w:r><w:t xml:space=\"preserve\">{}</w:t></w:r>",
+                        escape_xml(chunk)
+                    ));
+                }
+                if chunk_idx < lines.len().saturating_sub(1) {
+                    xml.push_str("<w:r><w:br/></w:r>");
+                }
+            }
+            xml.push_str("</w:p></w:tc>");
+        }
+        xml.push_str("</w:tr>");
+    };
+
+    // Render all rows (first row is header, rest are body)
+    for row in rows {
+        if !row.cells.is_empty() {
+            render_row(&mut xml, &row.cells);
+        }
+    }
+
+    xml.push_str("\n    </w:tbl>");
     xml
 }
 
@@ -2152,5 +2316,233 @@ mod tests {
             "expected vMerge restart to survive round-trip; got:\n{}",
             xml
         );
+    }
+
+    /// Tables should appear between paragraphs in the correct order.
+    /// This tests that from_elements + to_elements round-trips correctly.
+    #[test]
+    fn test_table_order_preserved_in_round_trip() {
+        let elements = vec![
+            DocElement::Paragraph {
+                id: "p1".to_string(),
+                text: "段落A".to_string(),
+                omit_text: false,
+                style: None,
+                runs: None,
+                numbering: None,
+            },
+            DocElement::Table {
+                id: "t0".to_string(),
+                position: 0,
+                header: vec![TableCell::plain("列1".to_string())],
+                rows: vec![vec![TableCell::plain("数据".to_string())]],
+            },
+            DocElement::Paragraph {
+                id: "p2".to_string(),
+                text: "段落B".to_string(),
+                omit_text: false,
+                style: None,
+                runs: None,
+                numbering: None,
+            },
+        ];
+
+        let doc = WordDocument::from_elements(elements);
+        let round_trip = doc.to_elements();
+
+        // Verify table is at position 1 (between p1 and p2)
+        assert_eq!(round_trip.len(), 3);
+        match &round_trip[0] {
+            DocElement::Paragraph { text, .. } => assert_eq!(text, "段落A"),
+            _ => panic!("First should be paragraph A"),
+        }
+        match &round_trip[1] {
+            DocElement::Table { id, .. } => assert_eq!(id, "t0"),
+            _ => panic!("Second should be table"),
+        }
+        match &round_trip[2] {
+            DocElement::Paragraph { text, .. } => assert_eq!(text, "段落B"),
+            _ => panic!("Third should be paragraph B"),
+        }
+    }
+
+    /// Multiple tables should maintain their relative positions.
+    #[test]
+    fn test_multiple_tables_order_preserved() {
+        let elements = vec![
+            DocElement::Paragraph {
+                id: "p1".to_string(),
+                text: "段落1".to_string(),
+                omit_text: false,
+                style: None,
+                runs: None,
+                numbering: None,
+            },
+            DocElement::Table {
+                id: "t0".to_string(),
+                position: 0,
+                header: vec![TableCell::plain("表1".to_string())],
+                rows: vec![],
+            },
+            DocElement::Paragraph {
+                id: "p2".to_string(),
+                text: "段落2".to_string(),
+                omit_text: false,
+                style: None,
+                runs: None,
+                numbering: None,
+            },
+            DocElement::Table {
+                id: "t1".to_string(),
+                position: 0,
+                header: vec![TableCell::plain("表2".to_string())],
+                rows: vec![],
+            },
+            DocElement::Paragraph {
+                id: "p3".to_string(),
+                text: "段落3".to_string(),
+                omit_text: false,
+                style: None,
+                runs: None,
+                numbering: None,
+            },
+        ];
+
+        let doc = WordDocument::from_elements(elements);
+        let round_trip = doc.to_elements();
+
+        // Verify order: p1, t0, p2, t1, p3
+        assert_eq!(round_trip.len(), 5);
+        assert!(matches!(&round_trip[0], DocElement::Paragraph { text, .. } if text == "段落1"));
+        assert!(matches!(&round_trip[1], DocElement::Table { id, .. } if id == "t0"));
+        assert!(matches!(&round_trip[2], DocElement::Paragraph { text, .. } if text == "段落2"));
+        assert!(matches!(&round_trip[3], DocElement::Table { id, .. } if id == "t1"));
+        assert!(matches!(&round_trip[4], DocElement::Paragraph { text, .. } if text == "段落3"));
+    }
+
+    /// Table order must be preserved in the generated XML.
+    #[test]
+    fn test_table_order_in_xml_output() {
+        let elements = vec![
+            DocElement::Paragraph {
+                id: "p1".to_string(),
+                text: "段落A".to_string(),
+                omit_text: false,
+                style: None,
+                runs: None,
+                numbering: None,
+            },
+            DocElement::Table {
+                id: "t0".to_string(),
+                position: 0,
+                header: vec![TableCell::plain("表头".to_string())],
+                rows: vec![vec![TableCell::plain("数据".to_string())]],
+            },
+            DocElement::Paragraph {
+                id: "p2".to_string(),
+                text: "段落B".to_string(),
+                omit_text: false,
+                style: None,
+                runs: None,
+                numbering: None,
+            },
+        ];
+
+        let doc = WordDocument::from_elements(elements);
+        let xml = build_document_xml(&doc);
+
+        // Table should appear between the two paragraphs in XML
+        let para_a_pos = xml.find("段落A").expect("should have paragraph A");
+        let para_b_pos = xml.find("段落B").expect("should have paragraph B");
+        let table_pos = xml.find("<w:tbl>").expect("should have table");
+
+        assert!(
+            para_a_pos < table_pos && table_pos < para_b_pos,
+            "Table should be between paragraph A and B\npara_a={}, table={}, para_b={}",
+            para_a_pos, table_pos, para_b_pos
+        );
+    }
+
+    /// Full round-trip: create -> write -> read -> verify order.
+    #[test]
+    fn test_full_roundtrip_with_table() {
+        let elements = vec![
+            DocElement::Paragraph {
+                id: "p1".to_string(),
+                text: "段落A".to_string(),
+                omit_text: false,
+                style: None,
+                runs: None,
+                numbering: None,
+            },
+            DocElement::Table {
+                id: "t0".to_string(),
+                position: 0,
+                header: vec![TableCell::plain("表头列".to_string())],
+                rows: vec![vec![TableCell::plain("数据".to_string())]],
+            },
+            DocElement::Paragraph {
+                id: "p2".to_string(),
+                text: "段落B".to_string(),
+                omit_text: false,
+                style: None,
+                runs: None,
+                numbering: None,
+            },
+        ];
+
+        // Create document
+        let doc = WordDocument::from_elements(elements);
+        
+        // Debug: check document structure
+        println!("After from_elements:");
+        println!("  paragraphs count: {}", doc.paragraphs.len());
+        for (i, p) in doc.paragraphs.iter().enumerate() {
+            println!("    [{}] id={}, text={:?}", i, p.id, p.text);
+        }
+        println!("  tables count: {}", doc.tables.len());
+        
+        // Build raw XML to check
+        let xml = build_document_xml(&doc);
+        let marker_pos = xml.find("__tbl_pos_");
+        println!("\nMarker in XML: {}", if marker_pos.is_some() { "FOUND" } else { "NOT FOUND" });
+        if let Some(pos) = marker_pos {
+            let snippet = &xml[pos.saturating_sub(50)..(pos + 80).min(xml.len())];
+            println!("Marker context: {:?}", snippet);
+        } else {
+            // Print first 500 chars of XML body section
+            if let Some(body_start) = xml.find("<w:body>") {
+                let body_section = &xml[body_start..(body_start + 500).min(xml.len())];
+                println!("XML body section (first 500 chars): {}", body_section);
+            }
+        }
+        
+        // Write to bytes
+        let mut buf = std::io::Cursor::new(Vec::new());
+        write_word_document(&doc, &mut buf, None).expect("write should succeed");
+        
+        // Read back
+        let read_doc = read_word_document(&buf.into_inner()).expect("read should succeed");
+        
+        // Debug: check parsed document
+        println!("\nAfter read_word_document:");
+        println!("  paragraphs count: {}", read_doc.paragraphs.len());
+        for (i, p) in read_doc.paragraphs.iter().enumerate() {
+            println!("    [{}] id={}, text={:?}", i, p.id, p.text);
+        }
+        println!("  tables count: {}", read_doc.tables.len());
+        for (i, t) in read_doc.tables.iter().enumerate() {
+            println!("    [{}] id={}", i, t.id);
+        }
+        
+        let read_elements = read_doc.to_elements();
+        let read_elements = read_doc.to_elements();
+        
+        assert!(matches!(&read_elements[0], DocElement::Paragraph { text, .. } if text == "段落A"),
+            "First element should be paragraph A");
+        assert!(matches!(&read_elements[1], DocElement::Table { .. }),
+            "Second element should be table");
+        assert!(matches!(&read_elements[2], DocElement::Paragraph { text, .. } if text == "段落B"),
+            "Third element should be paragraph B");
     }
 }

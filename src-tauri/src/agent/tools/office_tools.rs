@@ -291,11 +291,13 @@ impl CreateWordDocTool {
                     ("elements", "array", Some(
                         "Array of element objects. Paragraph: {id?, text?, style?, runs?, position?, anchor_id?}. Table: {id?, header, rows, position?, anchor_id?}.\n\
                          Elements with id replace existing ones; without id are appended or inserted at anchor_id+position. Use action:'delete' with id to delete.\n\
-                         When modifying (id present), any field omitted from text/style/runs is preserved from the original — this is how 'edit just the text' works without losing formatting.\n\
+                         When modifying (id present), omit 'text' field to preserve original text. Providing 'text' field will update the paragraph text.\n\
+                         Omit 'runs' to keep original formatting, or provide 'runs' array to fully replace paragraph formatting.\n\
                          runs shape: array of {text, bold?, italic?, underline?, font_size? (half-points, e.g. 24=12pt), color? (hex RGB, e.g. 'FF0000'), font_name?}.\n\
-                         Supplying runs fully replaces the paragraph's run list."
+                         position can be 'before' or 'after' (default) to control where new elements are inserted relative to anchor_id.\n\
+                         Tables are auto-detected from header/rows fields, no need to specify type='table'."
                     )),
-                    ("deletes", "array", Some("Array of element IDs to delete.")),
+                    ("deletes", "array", Some("Array of element IDs to delete. Works alongside elements[] with action:'delete'.")),
                 ],
             ),
         )
@@ -446,6 +448,14 @@ impl CreateWordDocTool {
         let mut modifies = Vec::new();
         let mut new_elements = Vec::new();
         let mut deletes = Vec::new();
+        
+        // Bug fix 5: Wire up params.deletes parameter
+        if let Some(ref delete_ids) = params.deletes {
+            deletes.extend(delete_ids.iter().cloned());
+        }
+        
+        // Check if file exists to determine operation mode
+        let file_exists = path_obj.exists();
 
         if let Some(ref elems) = params.elements {
             for v in elems {
@@ -460,7 +470,14 @@ impl CreateWordDocTool {
                     continue;
                 }
 
-                let elem_type = v["type"].as_str().unwrap_or("paragraph");
+                // Bug fix 1: Infer type from presence of header/rows fields if type is not specified
+                let elem_type = v["type"].as_str().unwrap_or_else(|| {
+                    if v.get("header").is_some() || v.get("rows").is_some() {
+                        "table"
+                    } else {
+                        "paragraph"
+                    }
+                });
                 let result = if elem_type == "table" {
                     Self::parse_table(v)
                 } else {
@@ -470,12 +487,19 @@ impl CreateWordDocTool {
                 let elem = result.map_err(|e| ToolError::InvalidArguments("create_word_doc".to_string(), e))?;
 
                 if let Some(e) = elem {
-                    if has_id {
+                    // Bug fix: For new file creation, all elements go to new_elements
+                    // For existing files, elements with ID are modifications
+                    if file_exists && has_id && !has_anchor {
                         modifies.push(e);
-                    } else if has_anchor {
-                        new_elements.push(e);
                     } else {
-                        new_elements.push(e);
+                        // Store element with its anchor_id and position for positioned insertion
+                        let anchor_id = v["anchor_id"].as_str().map(|s| s.to_string());
+                        let position = v["position"].as_str().map(|s| s.to_string());
+                        new_elements.push(crate::office::InsertElement {
+                            element: e,
+                            anchor_id,
+                            position,
+                        });
                     }
                 }
             }
@@ -497,10 +521,16 @@ impl CreateWordDocTool {
                         runs: p.runs.as_ref().map(|rvec| rvec.iter().map(|r| Self::to_font_run(r.clone())).collect()),
                         numbering: p.numbering.clone().map(crate::office::NumberingRef::from),
                     };
-                    if p.id.is_some() {
+                    if file_exists && p.id.is_some() {
                         modifies.push(elem);
                     } else {
-                        new_elements.push(elem);
+                        let anchor_id = p.anchor_id.clone();
+                        let position = p.position.clone();
+                        new_elements.push(crate::office::InsertElement {
+                            element: elem,
+                            anchor_id,
+                            position,
+                        });
                     }
                 }
             }
@@ -529,17 +559,22 @@ impl CreateWordDocTool {
                         header,
                         rows,
                     };
-                    if t.id.is_some() {
+                    if file_exists && t.id.is_some() {
                         modifies.push(elem);
                     } else {
-                        new_elements.push(elem);
+                        let anchor_id = t.anchor_id.clone();
+                        let position = t.position.clone();
+                        new_elements.push(crate::office::InsertElement {
+                            element: elem,
+                            anchor_id,
+                            position,
+                        });
                     }
                 }
             }
         }
 
         // Determine if this is purely a new-file creation
-        let file_exists = path_obj.exists();
         let has_operations = !modifies.is_empty() || !deletes.is_empty() || !new_elements.is_empty();
         // New file only if: no file exists, OR no operations requested
         let is_pure_new_file = !file_exists || !has_operations;
@@ -556,8 +591,8 @@ impl CreateWordDocTool {
 
                 let mut new_paras = Vec::new();
                 let mut new_tables = Vec::new();
-                for e in new_elements {
-                    match e {
+                for insert_elem in new_elements {
+                    match insert_elem.element {
                         crate::office::DocElement::Paragraph { id, text, style, runs, numbering, .. } => {
                             new_paras.push(crate::office::WordParagraph { id, text, style, runs, numbering });
                         }
@@ -593,7 +628,8 @@ impl CreateWordDocTool {
                 .map_err(|e| ToolError::ExecutionError(format!("Failed to read existing doc: {}", e)))?;
 
             // Build a temporary document from just the new elements, then extract its parts
-            let temp_doc = crate::office::WordDocument::from_elements(new_elements);
+            let temp_elements: Vec<crate::office::DocElement> = new_elements.iter().map(|ie| ie.element.clone()).collect();
+            let temp_doc = crate::office::WordDocument::from_elements(temp_elements);
             let new_count = temp_doc.paragraphs.len() + temp_doc.tables.len();
 
             existing.paragraphs.extend(temp_doc.paragraphs);
@@ -612,18 +648,7 @@ impl CreateWordDocTool {
             let mut existing = crate::office::read_word_document(&bytes)
                 .map_err(|e| ToolError::ExecutionError(format!("Failed to read existing doc: {}", e)))?;
 
-            // Determine insert anchor from elements that have anchor_id
-            let mut anchor_id: Option<String> = None;
-            if let Some(ref arr) = params.elements {
-                for v in arr {
-                    if v["anchor_id"].is_string() {
-                        anchor_id = v["anchor_id"].as_str().map(|s| s.to_string());
-                        break;
-                    }
-                }
-            }
-
-            existing.modify(modifies, deletes, anchor_id, new_elements);
+            existing.modify(modifies, deletes, new_elements);
 
             crate::office::write_word_document_to_path(&existing, path_obj, Some(&bytes))
                 .map_err(|e| ToolError::ExecutionError(format!("Failed to write doc: {}", e)))?;
@@ -651,8 +676,8 @@ impl CreateWordDocTool {
             }
         }
 
-        for e in new_elements {
-            elements_for_new.push(e);
+        for insert_elem in new_elements {
+            elements_for_new.push(insert_elem.element);
         }
 
         let doc = crate::office::WordDocument::from_elements(elements_for_new);
