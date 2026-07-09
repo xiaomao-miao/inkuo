@@ -739,6 +739,43 @@ export interface Settings {
    * in depth.
    */
   expert_max_iterations: Record<string, number>;
+  /**
+   * Configuration for the `web_search` tool. The tool itself is always
+   * registered (so the LLM can see it in every mode); the settings here
+   * determine whether calling it actually hits the network.
+   *
+   * Provider list is forward-compatible — today only `"baike"` is
+   * implemented on the Rust side, but additional providers can be added
+   * without touching the wire format.
+   */
+  web_search: WebSearchSettings;
+}
+
+/** Per-provider configuration for the `web_search` tool. */
+export interface WebSearchProviderConfig {
+  /** Provider id. Today only `"baike"` is wired up. */
+  id: string;
+  /** Optional user-provided key (appid, api key, etc.). `null` means
+   * "use the compile-time default" — the backend may then fall back to
+   * a public key with rate limits. */
+  apiKey: string | null;
+  /** Optional override of the upstream endpoint. `null` means use the
+   * provider's compile-time default URL. */
+  baseUrl: string | null;
+  /** Per-provider kill switch. Lets the user keep their key saved but
+   * disable a specific provider without deleting it. */
+  enabled: boolean;
+}
+
+/** Top-level settings for the `web_search` tool. */
+export interface WebSearchSettings {
+  /** Master kill switch. When `false`, the tool returns a polite
+   * "disabled" message instead of hitting the network. */
+  enabled: boolean;
+  /** Per-provider configuration. Defaults to one entry: Baidu Baike. */
+  providers: WebSearchProviderConfig[];
+  /** Hard cap on results per call. Clamped to [1, 20] by the tool. */
+  maxResults: number;
 }
 
 /** Keys of the expert profile registry, mirroring `PROFILES` in

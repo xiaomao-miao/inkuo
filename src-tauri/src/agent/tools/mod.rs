@@ -275,6 +275,7 @@ mod meta_tools; // get_tool_help + delegate_to
 mod todo_tools; // update_todo (read-only meta-tool; see agent_loop::try_handle_meta_tool)
 mod plan_tools;  // create_plan  (read-only meta-tool; see agent_loop::try_handle_meta_tool)
 mod mermaid_tools; // render_mermaid  (in-process merman renderer, mermaid.js 11.15 parity)
+mod web_search_tool; // web_search (external encyclopedia lookup; today Baike)
 pub mod ask_user_tools; // ask_user   (meta-tool; see agent_loop::try_handle_meta_tool)
 
 pub use file_tools::{ReadFileTool, WriteFileTool, EditFileTool, CreateDirTool, MoveFileTool};
@@ -288,6 +289,7 @@ pub use meta_tools::{GetToolHelpTool, DelegateToTool};
 pub use todo_tools::{UpdateTodoTool, TodoItem};
 pub use plan_tools::{CreatePlanTool, CreatePlanArgs, PlanFileTouch};
 pub use mermaid_tools::RenderMermaidTool;
+pub use web_search_tool::WebSearchTool;
 pub use ask_user_tools::AskUserTool;
 
 /// Unified executor enum combining all tool implementations
@@ -308,6 +310,7 @@ pub enum ToolExecutor {
     InspectOffice(office_tools::InspectOfficeTool),
     RenderMermaid(mermaid_tools::RenderMermaidTool),
     DatabaseSearch(database_tools::DatabaseSearchTool),
+    WebSearch(web_search_tool::WebSearchTool),
     // Meta tools (intercepted by the agent loop; execute() returns an error
     // if reached directly).
     GetToolHelp(meta_tools::GetToolHelpTool),
@@ -336,6 +339,7 @@ impl ToolExecutor {
             ToolExecutor::InspectOffice(_) => "inspect_office",
             ToolExecutor::RenderMermaid(_) => "render_mermaid",
             ToolExecutor::DatabaseSearch(_) => "database_search",
+            ToolExecutor::WebSearch(_) => "web_search",
             ToolExecutor::GetToolHelp(_) => "get_tool_help",
             ToolExecutor::DelegateTo(_) => "delegate_to",
             ToolExecutor::UpdateTodo(_) => "update_todo",
@@ -362,6 +366,7 @@ impl ToolExecutor {
             ToolExecutor::InspectOffice(t) => t.definition(),
             ToolExecutor::RenderMermaid(t) => t.definition(),
             ToolExecutor::DatabaseSearch(t) => t.definition(),
+            ToolExecutor::WebSearch(t) => t.definition(),
             ToolExecutor::GetToolHelp(t) => t.definition(),
             ToolExecutor::DelegateTo(t) => t.definition(),
             ToolExecutor::UpdateTodo(t) => t.definition(),
@@ -396,6 +401,7 @@ impl ToolExecutor {
                 Ok(outcome.output)
             }
             ToolExecutor::DatabaseSearch(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::WebSearch(t) => t.execute(arguments, workspace).await,
             ToolExecutor::GetToolHelp(t) => t.execute(arguments, workspace).await,
             ToolExecutor::DelegateTo(t) => t.execute(arguments, workspace).await,
             ToolExecutor::UpdateTodo(t) => t.execute(arguments, workspace).await,
@@ -438,6 +444,14 @@ impl ToolRegistry {
             ToolExecutor::Glob(GlobTool),
             ToolExecutor::Grep(GrepTool),
             ToolExecutor::ReadOfficeFile(ReadOfficeFileTool),
+            // `web_search` is registered in every mode (ask / plan /
+            // agent) because it's a read-only lookup. Whether the LLM
+            // actually sees it is decided per-turn by the
+            // `web_search` feature toggle via
+            // `feature_toggles::effective_tool_set` — when the toggle is
+            // off, the tool is filtered out of the allowlist and the
+            // model has no way to call it.
+            ToolExecutor::WebSearch(WebSearchTool::new()),
             // `update_todo` is a meta-tool — its registry stub always
             // errors out, and the actual implementation lives in
             // `agent_loop::try_handle_meta_tool`. Registering it here
@@ -503,6 +517,7 @@ impl ToolRegistry {
             ToolExecutor::InspectOffice(InspectOfficeTool),
             ToolExecutor::RenderMermaid(RenderMermaidTool::default()),
             // DatabaseSearchTool added lazily via with_app_handle()
+            ToolExecutor::WebSearch(WebSearchTool::new()),
             // Meta tools (intercepted in agent loop, but still registered so
             // they appear in tool catalogs and can be schema-validated).
             ToolExecutor::GetToolHelp(GetToolHelpTool),

@@ -561,6 +561,85 @@ fn default_snapshot_auto_baseline() -> bool {
     true
 }
 
+/// Per-provider configuration for the `web_search` tool. Each provider
+/// owns its own key/secret so we can extend the registry (Google, Bing,
+/// Tavily, ...) without changing the wire format.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebSearchProviderConfig {
+    /// Provider id (e.g. `"baike"`). The web_search tool reads this to
+    /// dispatch to the right backend.
+    pub id: String,
+    /// Optional user-provided API key / appid / token. When `None` the
+    /// backend may fall back to a built-in default (subject to rate
+    /// limits); e.g. the Baidu Baike public endpoint accepts a default
+    /// appid when the user hasn't supplied their own.
+    #[serde(default)]
+    pub api_key: Option<String>,
+    /// Optional override for the provider's endpoint. When `None` the
+    /// tool uses the compile-time default URL for the provider. Letting
+    /// the user override is mostly there for testing / proxies.
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// Per-provider kill switch. Lets the user keep their key saved but
+    /// turn a specific provider off without deleting it.
+    #[serde(default = "default_web_search_provider_enabled")]
+    pub enabled: bool,
+}
+
+fn default_web_search_provider_enabled() -> bool {
+    true
+}
+
+impl Default for WebSearchProviderConfig {
+    fn default() -> Self {
+        Self {
+            id: "baike".to_string(),
+            api_key: None,
+            base_url: None,
+            enabled: true,
+        }
+    }
+}
+
+/// Top-level configuration for the `web_search` tool. Persisted under
+/// `settings.web_search` so the user can manage it from the settings
+/// panel and the Rust side can read it without IPC.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebSearchSettings {
+    /// Master kill switch. When `false`, the tool reports a friendly
+    /// "web search is disabled in settings" error on every call instead
+    /// of hitting the network.
+    #[serde(default = "default_web_search_enabled")]
+    pub enabled: bool,
+    /// Provider-specific configs, keyed by provider id. Today only
+    /// `"baike"` is wired up; the schema is forward-compatible with
+    /// future providers.
+    #[serde(default)]
+    pub providers: Vec<WebSearchProviderConfig>,
+    /// Hard cap on how many results the tool will surface to the LLM
+    /// per call. Clamped to `[1, 20]` by the tool itself.
+    #[serde(default = "default_web_search_max_results")]
+    pub max_results: usize,
+}
+
+fn default_web_search_enabled() -> bool {
+    true
+}
+
+fn default_web_search_max_results() -> usize {
+    5
+}
+
+impl Default for WebSearchSettings {
+    fn default() -> Self {
+        Self {
+            enabled: default_web_search_enabled(),
+            providers: vec![WebSearchProviderConfig::default()],
+            max_results: default_web_search_max_results(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub theme: String,
@@ -577,6 +656,11 @@ pub struct Settings {
     pub chunk_overlap: usize,
     #[serde(default)]
     pub snapshot: SnapshotSettings,
+    /// Optional so legacy settings files (saved before the web_search
+    /// tool existed) keep loading — the field defaults via
+    /// `Default::default()` when missing.
+    #[serde(default)]
+    pub web_search: WebSearchSettings,
 }
 
 impl Default for Settings {
@@ -608,6 +692,7 @@ impl Default for Settings {
             chunk_size: 500,
             chunk_overlap: 50,
             snapshot: SnapshotSettings::default(),
+            web_search: WebSearchSettings::default(),
         }
     }
 }
@@ -669,6 +754,16 @@ pub fn get_chunk_overlap() -> usize {
     get_settings_cached()
         .map(|s| s.chunk_overlap)
         .unwrap_or(50)
+}
+
+/// Get a snapshot of the current web search configuration. Always
+/// returns a value (defaulting when the cache is empty or the field is
+/// missing from a legacy settings file), so callers don't need to
+/// handle `Option`s.
+pub fn get_web_search_settings() -> WebSearchSettings {
+    get_settings_cached()
+        .map(|s| s.web_search)
+        .unwrap_or_default()
 }
 
 fn get_settings_path() -> std::path::PathBuf {

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { APIConfig, Settings } from '../types';
+import type { APIConfig, Settings, WebSearchProviderConfig } from '../types';
 import { saveSettings } from '../utils/saveSettings';
 
 interface SettingsState {
@@ -24,6 +24,21 @@ interface SettingsState {
   getActiveApiConfig: () => APIConfig | null;
   setDefaultApiConfig: (id: string) => Settings;
   setDefaultApiConfigAndPersist: (id: string) => Promise<Settings>;
+
+  /** Replace the entire `web_search` config. Mostly useful from the
+   * settings panel's "Reset" affordance. */
+  updateWebSearch: (next: Settings['web_search']) => Settings;
+  updateWebSearchAndPersist: (next: Settings['web_search']) => Promise<Settings>;
+  /** Patch a single provider (matched by `id`). When the provider id
+   * doesn't exist yet, it's added; when `null`, no-op. */
+  updateWebSearchProvider: (
+    providerId: string,
+    updates: Partial<Settings['web_search']['providers'][number]>
+  ) => Settings;
+  updateWebSearchProviderAndPersist: (
+    providerId: string,
+    updates: Partial<Settings['web_search']['providers'][number]>
+  ) => Promise<Settings>;
 }
 
 function createDefaultAPIConfig(): APIConfig {
@@ -38,6 +53,21 @@ function createDefaultAPIConfig(): APIConfig {
     enabled: true,
     temperature: 0.7,
     maxTokens: 16384,
+  };
+}
+
+function createDefaultWebSearchConfig(): Settings['web_search'] {
+  return {
+    enabled: true,
+    providers: [
+      {
+        id: 'baike',
+        apiKey: null,
+        baseUrl: null,
+        enabled: true,
+      },
+    ],
+    maxResults: 5,
   };
 }
 
@@ -99,6 +129,7 @@ const defaultSettings: Settings = {
     flowchart_expert: 50,
     word_image_expert: 50,
   },
+  web_search: createDefaultWebSearchConfig(),
 };
 
 /** Range that mirrors the backend's `clamp(1, 200)`. */
@@ -142,6 +173,74 @@ function sanitiseExpertMaxIterations(
     }
   }
   return result;
+}
+
+/** Range that mirrors the backend's `clamp(1, 20)` for the web_search
+ * `max_results` knob. Mirrored here so a corrupted persisted blob with
+ * a string or out-of-range value falls back to the default instead of
+ * reaching the tool with garbage. */
+const MIN_WEB_SEARCH_MAX_RESULTS = 1;
+const MAX_WEB_SEARCH_MAX_RESULTS = 20;
+
+/** Sanitise the persisted `web_search` config. Legacy settings files
+ * (saved before the tool existed) don't have the field at all; we
+ * fall back to the in-code default in that case. A partial object
+ * (e.g. one provider with no apiKey) is preserved as-is so the user's
+ * intentional edits survive an upgrade. */
+function sanitiseWebSearchConfig(
+  raw: Partial<Settings['web_search']> | undefined
+): Settings['web_search'] {
+  const fallback = defaultSettings.web_search;
+  if (!raw || typeof raw !== 'object') {
+    return { ...fallback, providers: fallback.providers.map((p) => ({ ...p })) };
+  }
+
+  const enabled = typeof raw.enabled === 'boolean' ? raw.enabled : fallback.enabled;
+
+  const maxResultsRaw = raw.maxResults;
+  const maxResults =
+    typeof maxResultsRaw === 'number' && Number.isFinite(maxResultsRaw)
+      ? Math.min(
+          MAX_WEB_SEARCH_MAX_RESULTS,
+          Math.max(MIN_WEB_SEARCH_MAX_RESULTS, Math.trunc(maxResultsRaw))
+        )
+      : fallback.maxResults;
+
+  const providers: Settings['web_search']['providers'] = Array.isArray(raw.providers)
+    ? raw.providers
+        .filter(
+          (provider): provider is Settings['web_search']['providers'][number] =>
+            !!provider && typeof provider === 'object'
+        )
+        .map((provider) => ({
+          // `id` must be a non-empty string; otherwise drop the entry
+          // (otherwise the Rust side wouldn't know which provider to
+          // dispatch to and would surface a confusing error).
+          id: typeof provider.id === 'string' && provider.id.trim()
+            ? provider.id.trim()
+            : 'baike',
+          apiKey: typeof provider.apiKey === 'string' ? provider.apiKey : null,
+          baseUrl:
+            typeof provider.baseUrl === 'string' && provider.baseUrl.trim()
+              ? provider.baseUrl
+              : null,
+          enabled: typeof provider.enabled === 'boolean' ? provider.enabled : true,
+        }))
+    : fallback.providers.map((p) => ({ ...p }));
+
+  // If sanitisation left us with no providers (e.g. the persisted list
+  // was an empty array, or every entry had a non-object shape), fall
+  // back to the default Baike entry. An empty array would silently
+  // disable web search and confuse the user.
+  if (providers.length === 0) {
+    return {
+      enabled,
+      maxResults,
+      providers: [{ ...fallback.providers[0] }],
+    };
+  }
+
+  return { enabled, maxResults, providers };
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -282,6 +381,65 @@ export const useSettingsStore = create<SettingsState>()(
         await persistSettingsSnapshot(nextSettings);
         return nextSettings;
       },
+
+      updateWebSearch: (next) => {
+        // Defensive clone so a caller can't mutate the stored array
+        // by reference after we set it.
+        const cloned: Settings['web_search'] = {
+          enabled: next.enabled,
+          maxResults: next.maxResults,
+          providers: next.providers.map((p) => ({ ...p })),
+        };
+        const nextSettings: Settings = {
+          ...get().settings,
+          web_search: cloned,
+        };
+        set({ settings: nextSettings });
+        return nextSettings;
+      },
+      updateWebSearchAndPersist: async (next) => {
+        const nextSettings = get().updateWebSearch(next);
+        await persistSettingsSnapshot(nextSettings);
+        return nextSettings;
+      },
+
+      updateWebSearchProvider: (providerId, updates) => {
+        const current = get().settings.web_search;
+        const existingIndex = current.providers.findIndex((p) => p.id === providerId);
+        const newProviders = current.providers.map((p) => ({ ...p }));
+        if (existingIndex >= 0) {
+          newProviders[existingIndex] = {
+            ...newProviders[existingIndex],
+            ...updates,
+            // Preserve the id even if the caller accidentally clears it
+            // — losing it would orphan the provider entry.
+            id: newProviders[existingIndex].id,
+          };
+        } else {
+          // Build the new provider entry from defaults, then layer the
+          // caller's updates on top, then re-assert the id. Using
+          // spread-and-restructure (instead of a literal with two `id`
+          // keys) sidesteps TS1117, which forbids duplicate property
+          // names in object literals even when the later value would
+          // win at runtime.
+          const base: WebSearchProviderConfig = {
+            id: providerId,
+            apiKey: null,
+            baseUrl: null,
+            enabled: true,
+          };
+          newProviders.push({ ...base, ...updates, id: providerId });
+        }
+        return get().updateWebSearch({
+          ...current,
+          providers: newProviders,
+        });
+      },
+      updateWebSearchProviderAndPersist: async (providerId, updates) => {
+        const nextSettings = get().updateWebSearchProvider(providerId, updates);
+        await persistSettingsSnapshot(nextSettings);
+        return nextSettings;
+      },
     }),
     {
       name: 'inkuo-settings',
@@ -347,6 +505,16 @@ export const useSettingsStore = create<SettingsState>()(
           expert_max_iterations: sanitiseExpertMaxIterations(
             persistedSettings?.expert_max_iterations as
               | Partial<Record<string, number>>
+              | undefined
+          ),
+          // Web search config: missing on legacy settings files (older
+          // than the tool itself), so we fill with the in-code default
+          // and only overlay fields the user explicitly set. The merge
+          // is intentionally per-field so a partial persisted object
+          // (e.g. one provider with no apiKey) doesn't get clobbered.
+          web_search: sanitiseWebSearchConfig(
+            persistedSettings?.web_search as
+              | Partial<Settings['web_search']>
               | undefined
           ),
         };

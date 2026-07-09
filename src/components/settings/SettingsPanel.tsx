@@ -10,11 +10,12 @@ import {
   AlertCircle,
   Brain,
   History,
+  Globe,
   ChevronDown,
   ChevronRight,
 } from 'lucide-react';
 import { useSettingsStore, useInlineCompleteStore } from '../../store';
-import { ModelsSettings, KnowledgeSettings } from './index';
+import { ModelsSettings, KnowledgeSettings, WebSearchSettings } from './index';
 import { SnapshotsSettings } from './SnapshotsSettings';
 import { Select } from './Select';
 import type { ExpertProfileName } from '../../types';
@@ -25,6 +26,7 @@ type SettingsTab =
   | 'knowledge'
   | 'editor'
   | 'ai'
+  | 'web_search'
   | 'snapshots'
   | 'appearance'
   | 'about';
@@ -43,6 +45,7 @@ export const SettingsPanel = () => {
     { id: 'knowledge', label: '知识库', icon: <Brain size={14} /> },
     { id: 'editor', label: '编辑器', icon: <Type size={14} /> },
     { id: 'ai', label: 'AI', icon: <Sparkles size={14} /> },
+    { id: 'web_search', label: '联网搜索', icon: <Globe size={14} /> },
     { id: 'snapshots', label: '快照', icon: <History size={14} /> },
     { id: 'appearance', label: '外观', icon: <Palette size={14} /> },
     { id: 'about', label: '关于', icon: <Info size={14} /> },
@@ -370,6 +373,8 @@ export const SettingsPanel = () => {
             </div>
           </div>
         );
+      case 'web_search':
+        return <WebSearchSettings />;
       case 'snapshots':
         return <SnapshotsSettings />;
       case 'about':

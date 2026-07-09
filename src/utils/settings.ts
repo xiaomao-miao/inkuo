@@ -24,6 +24,19 @@ export interface BackendSettings {
   embedding_model_path: string | null;
   chunk_size: number;
   chunk_overlap: number;
+  /** Wire shape for the `web_search` tool config. Sent on every
+   * `save_settings` IPC so the Rust side can read it from the settings
+   * cache without a second roundtrip. */
+  web_search: {
+    enabled: boolean;
+    max_results: number;
+    providers: Array<{
+      id: string;
+      api_key: string | null;
+      base_url: string | null;
+      enabled: boolean;
+    }>;
+  };
 }
 
 export function toBackendSettings(settings: Settings): BackendSettings {
@@ -51,5 +64,15 @@ export function toBackendSettings(settings: Settings): BackendSettings {
     embedding_model_path: settings.embedding_model_path,
     chunk_size: settings.chunk_size,
     chunk_overlap: settings.chunk_overlap,
+    web_search: {
+      enabled: settings.web_search.enabled,
+      max_results: settings.web_search.maxResults,
+      providers: settings.web_search.providers.map((p) => ({
+        id: p.id,
+        api_key: p.apiKey,
+        base_url: p.baseUrl,
+        enabled: p.enabled,
+      })),
+    },
   };
 }
