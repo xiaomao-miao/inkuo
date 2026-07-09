@@ -50,3 +50,9 @@ regex = "1"
 fastembed = "5"
 qdrant-edge = "0.7"
 urlencoding = "2"
+# Headless Mermaid renderer (parity-focused, targets Mermaid.js 11.15.0).
+# Zero external deps: pure Rust + resvg for PNG. Replaces the previous
+# npx + mmdc subprocess wrapper, which required Node and a Chromium
+# download on first run. Re-exports a small facade crate; the
+# `render` + `raster` features pull in layout + SVG + PNG pipelines.
+merman = { version = "0.7", features = ["render", "raster"] }
