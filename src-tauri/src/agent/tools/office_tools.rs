@@ -282,11 +282,11 @@ impl CreateWordDocTool {
             ToolDefinition::new_with_label(
                 "create_word_doc",
                 "创建 Word 文档",
-                "Create, modify, or append a Word (.docx) document. Pass elements[] with paragraph and table objects. Use IDs to modify existing content; omit IDs to append new content. Use anchor_id + position to insert at a specific location.",
+                "Create, modify, or append a Word (.docx) document. **IMPORTANT: every call must include the full absolute `path` — including repeated append calls.** The backend does not remember the path between calls. Pass elements[] with paragraph and table objects. Use IDs to modify existing content; omit IDs to append new content. Use anchor_id + position to insert at a specific location.",
             ToolParameters::new(
                 vec!["path"],
                 vec![
-                    ("path", "string", Some("Absolute path of the .docx file to create or modify")),
+                    ("path", "string", Some("**Required on every call, including append calls.** Absolute path of the .docx file to create or modify. Example: \"/Users/me/docs/report.docx\". Do not omit this field even when you are just appending more content with `append: true`.")),
                     ("title", "string", Some("Document title (for new files only; ignored when modifying existing)")),
                     ("elements", "array", Some(
                         "Array of element objects. Paragraph: {id?, text?, style?, runs?, position?, anchor_id?}. Table: {id?, header, rows, position?, anchor_id?}. Image: {type:'image', id?, path, width_emu, height_emu, anchor_id?, position?}.\n\
@@ -491,8 +491,22 @@ impl CreateWordDocTool {
     }
 
     pub async fn execute(&self, arguments: Value, workspace: Option<String>) -> Result<String, ToolError> {
-        let params: CreateWordDocParams = serde_json::from_value(arguments)
-            .map_err(|e| ToolError::InvalidArguments("create_word_doc".to_string(), format!("Invalid parameters: {}", e)))?;
+        let params: CreateWordDocParams = serde_json::from_value(arguments).map_err(|e| {
+            // serde's default "missing field `path`" message is technically
+            // correct but unhelpful: the model often thinks "I already
+            // passed the path last call" and gets stuck. Spell out exactly
+            // what went wrong so the next retry passes path.
+            let raw = e.to_string();
+            let friendly = if raw.contains("missing field `path`") {
+                "Missing required field `path`. The `path` field is required on every call \
+                 (including append calls); the backend does not remember the path from a \
+                 previous call. Please retry with the full absolute path to the .docx file."
+                    .to_string()
+            } else {
+                format!("Invalid parameters: {}", raw)
+            };
+            ToolError::InvalidArguments("create_word_doc".to_string(), friendly)
+        })?;
 
         validate_workspace_path(&params.path, &workspace)?;
 

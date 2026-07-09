@@ -6,11 +6,13 @@ Before modifying a Word document, **almost always call `read_office_file` first*
 Create, modify, append, or delete content in a .docx. A single tool covers every operation.
 
 **Parameters**:
-- `path` (required)
+- `path` (**required on every call, including append calls**)
 - `title` (optional, new files only) — document title (auto-renders as a `Title`-styled paragraph)
 - `elements` (optional array) — see below
 - `deletes` (optional, array of element ids) — batch delete by id
 - `append` (bool, optional) — when true, new elements are appended to the end
+
+> ⚠️ **`path` is stateless.** The backend does not remember the file path between tool calls. You must repeat the full absolute `path` on **every** invocation — including each `append: true` chunk in long-document generation. Omitting `path` returns an error and the call fails.
 
 **Paragraph element (`type: "paragraph"`) fields**:
 - `id` (optional) — stable id from `read_office_file`. Provided = modify that paragraph; absent = create a new one.
@@ -37,10 +39,12 @@ Create, modify, append, or delete content in a .docx. A single tool covers every
 ## Long-document incremental generation
 For documents expected to have **~2000+ characters**, build incrementally instead of all at once to keep each tool call manageable.
 
-1. `create_word_doc` with `title="..."` to create the file header.
+1. `create_word_doc` with `path` and `title="..."` to create the file header.
 2. For each section, call `create_word_doc` with `append: true` and the new `elements[]` (~1500-2000 characters of text per chunk).
 3. The first section must include a `Heading1` paragraph.
 4. Repeat for subsequent sections.
+
+> ⚠️ **The `path` field is required on every chunk above.** The backend does not store path between calls. If you forget `path` on a follow-up call you will get `Missing required field 'path'` and have to retry.
 
 ## read_office_file (Word)
 For .docx inputs returns:
