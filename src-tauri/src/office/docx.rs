@@ -65,9 +65,12 @@ pub struct WordTable {
     pub rows: Vec<TableRow>,
 }
 
-/// A document element — either a paragraph or a table.
+/// A document element — either a paragraph, a table, or an image.
 /// Tables carry `position` (index in the flattened document order) so the
-/// write path knows exactly where to insert each table.
+/// write path knows exactly where to insert each table. Images use the
+/// same marker-paragraph trick as tables: a placeholder paragraph carrying
+/// `<__img_pos_<id>__>` lets the write path splice the `<w:drawing>` run in
+/// the right spot without losing stable ordering across round-trips.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum DocElement {
@@ -96,6 +99,23 @@ pub enum DocElement {
         header: Vec<TableCell>,
         rows: Vec<Vec<TableCell>>,
     },
+    /// Inline picture. `path` points at the source image on disk at write
+    /// time; the writer copies the bytes into `word/media/image{N}.{ext}`
+    /// and rewrites `path` to that internal location. Width and height are
+    /// in EMU (914400 EMU = 1 inch; 360000 EMU = 1 cm).
+    #[serde(rename = "image")]
+    Image {
+        id: String,
+        /// Zero-based position among all document elements.
+        #[serde(default)]
+        position: usize,
+        /// Absolute path to the source image on disk (PNG / JPEG / GIF).
+        /// May also be the rewritten internal `media/...` path after a
+        /// round-trip through `read_word_document` — see `WordDocument`.
+        path: String,
+        width_emu: u32,
+        height_emu: u32,
+    },
 }
 
 /// Element with insertion metadata for positioned insertions
@@ -109,7 +129,10 @@ pub struct InsertElement {
 impl WordDocument {
     /// Convert the document to a flat list of elements with stable IDs.
     /// Tables and paragraphs are interleaved by matching position markers
-    /// to tables in sequential order.
+    /// to tables in sequential order. Images are skipped here (v1 writes
+    /// inline `<w:drawing>` runs but the read path doesn't surface them in
+    /// the element list — a future PR can add round-trip support once the
+    /// parser can match image markers to their parent paragraphs).
     pub fn to_elements(&self) -> Vec<DocElement> {
         // Build a map of table id -> table for O(1) lookup.
         let table_map: std::collections::HashMap<&str, &WordTable> =
@@ -138,6 +161,13 @@ impl WordDocument {
                     }
                     continue;
                 }
+            }
+            // Image marker paragraphs are emitted by the writer as inline
+            // `<w:drawing>` runs; here in the read path we drop the marker
+            // so it doesn't show up as a stray blank paragraph. v1: images
+            // are write-only as far as round-tripping is concerned.
+            if p.text.starts_with("<__img_pos_") {
+                continue;
             }
             elements.push(DocElement::Paragraph {
                 id: p.id.clone(),
@@ -208,6 +238,7 @@ impl WordDocument {
     pub fn from_elements(elements: Vec<DocElement>) -> Self {
         let mut out_paras: Vec<WordParagraph> = Vec::new();
         let mut tables: Vec<WordTable> = Vec::new();
+        let mut images: Vec<WordImage> = Vec::new();
 
         for elem in elements {
             match elem {
@@ -236,10 +267,34 @@ impl WordDocument {
                     }
                     tables.push(WordTable { id, rows: table_rows });
                 }
+                DocElement::Image { id, position: _, path, width_emu, height_emu } => {
+                    // Mirror the table-marker trick: a placeholder paragraph
+                    // carrying `<__img_pos_<id>__>` text lets `build_document_xml`
+                    // splice in the `<w:drawing>` run at the right spot, while
+                    // keeping the element's id stable across read/write cycles.
+                    out_paras.push(WordParagraph {
+                        id: format!("__img_pos_{}__", id),
+                        text: format!("<__img_pos_{}__>", id),
+                        style: None,
+                        runs: None,
+                        numbering: None,
+                    });
+                    // The `path` here is the *source* path on disk; the writer
+                    // overwrites this with the rewritten `word/media/imageN.ext`
+                    // path. We seed the field with the source so debug prints
+                    // are still useful before the first write.
+                    images.push(WordImage {
+                        id,
+                        path,
+                        width_emu,
+                        height_emu,
+                        internal_path: None,
+                    });
+                }
             }
         }
 
-        WordDocument { paragraphs: out_paras, tables }
+        WordDocument { paragraphs: out_paras, tables, images }
     }
 
     /// Modify the document by applying a list of edit operations.
@@ -361,6 +416,7 @@ impl WordDocument {
         // from_elements would reassign all IDs via marker paragraphs
         let mut out_paras: Vec<WordParagraph> = Vec::new();
         let mut tables: Vec<WordTable> = Vec::new();
+        let mut images: Vec<WordImage> = Vec::new();
 
         for elem in result {
             match elem {
@@ -388,11 +444,30 @@ impl WordDocument {
                     }
                     tables.push(WordTable { id, rows: table_rows });
                 }
+                DocElement::Image { id, position: _, path, width_emu, height_emu } => {
+                    // Mirror the table-marker trick so the writer can splice
+                    // the inline `<w:drawing>` run into the right paragraph.
+                    out_paras.push(WordParagraph {
+                        id: format!("__img_pos_{}__", id),
+                        text: format!("<__img_pos_{}__>", id),
+                        style: None,
+                        runs: None,
+                        numbering: None,
+                    });
+                    images.push(WordImage {
+                        id,
+                        path,
+                        width_emu,
+                        height_emu,
+                        internal_path: None,
+                    });
+                }
             }
         }
 
         self.paragraphs = out_paras;
         self.tables = tables;
+        self.images = images;
     }
 }
 
@@ -406,6 +481,7 @@ impl ElementId for DocElement {
         match self {
             DocElement::Paragraph { ref id, .. } => id,
             DocElement::Table { ref id, .. } => id,
+            DocElement::Image { ref id, .. } => id,
         }
     }
 }
@@ -414,13 +490,53 @@ impl ElementId for DocElement {
 pub struct WordDocument {
     pub paragraphs: Vec<WordParagraph>,
     pub tables: Vec<WordTable>,
+    /// Images embedded in the document. Each entry carries the (possibly
+    /// rewritten) `word/media/...` path and the EMU dimensions captured at
+    /// write time. The write path uses these to skip re-copying the bytes
+    /// if the user re-saves without touching the image.
+    #[serde(default)]
+    pub images: Vec<WordImage>,
+}
+
+/// An image embedded in the document.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WordImage {
+    /// Stable id (also embedded as the marker paragraph's stable id).
+    pub id: String,
+    /// Source image on disk (`png`/`jpeg`/`gif` bytes); the writer reads
+    /// from here at first write and copies bytes into the package. After
+    /// the document is re-read from a `.docx`, the writer remembers the
+    /// already-inline copy via `internal_path` (see below) and reads from
+    /// the preserved zip on subsequent writes instead.
+    pub path: String,
+    pub width_emu: u32,
+    pub height_emu: u32,
+    /// `Some("word/media/imageN.ext")` when this `WordImage` was
+    /// recovered from an existing .docx (rather than built fresh from a
+    /// `DocElement::Image`). Writer uses this to (a) skip re-reading the
+    /// source bytes from disk and (b) reuse the original `rId` and
+    /// `word/media/...` filename so the existing relationships in the
+    /// preserved zip survive intact.
+    ///
+    /// `None` while the entry is still pending a first write — the
+    /// model field default keeps backward compatibility with any callers
+    /// that didn't set it.
+    #[serde(default)]
+    pub internal_path: Option<String>,
 }
 
 pub fn read_word_document(bytes: &[u8]) -> Result<WordDocument, OfficeError> {
     let doc_content = read_zip_entry(bytes, "word/document.xml")?;
-    let paragraphs = parse_document_xml(&doc_content)?;
+    let rels_content = read_zip_entry(bytes, "word/_rels/document.xml.rels")
+        .unwrap_or_default();
+    let (mut paragraphs, image_markers) = parse_document_xml(&doc_content)?;
+    let images = parse_image_xml(&doc_content, &rels_content, &image_markers);
+    // `image_markers` are synthetic paragraphs each carrying the image's
+    // stable id as their `<inkuo:id>` so the writer can pair them with
+    // `WordImage` entries during `<w:drawing>` emission.
+    paragraphs.extend(image_markers);
     let tables = parse_table_xml(&doc_content)?;
-    Ok(WordDocument { paragraphs, tables })
+    Ok(WordDocument { paragraphs, tables, images })
 }
 
 pub fn word_document_to_text(doc: &WordDocument) -> String {
@@ -639,7 +755,7 @@ fn attr_value<'a>(e: &'a quick_xml::events::BytesStart, name: &[u8]) -> Option<s
     None
 }
 
-fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> {
+fn parse_document_xml(content: &str) -> Result<(Vec<WordParagraph>, Vec<WordParagraph>), OfficeError> {
     let mut paragraphs = Vec::new();
     let mut reader = quick_xml::Reader::from_str(content);
     reader.config_mut().trim_text(false);
@@ -661,6 +777,18 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
     let mut pending_num_id: Option<u32> = None;
     let mut pending_ilvl: Option<u32> = None;
     let mut is_table_marker = false;  // Tracks if current paragraph is a table position marker
+    let mut is_image_marker = false;  // Tracks if current paragraph is an image position marker
+
+    // ── Image marker state ──────────────────────────────────────────────────
+    // Image-bearing paragraphs are emitted as `<w:p><w:pPr><inkuo:id
+    // w:val="__img_pos_<img_id>__"/></w:pPr><w:r>...drawing...</w:r></w:p>`
+    // by the writer. On read we want to round-trip them back into a
+    // `WordParagraph` (id = `__img_pos_<img_id>__`, text = same shape) so
+    // the writer can re-emit the drawing next time. We also stash the
+    // marker paragraphs separately so `parse_image_xml` can pull the
+    // image id out without the marker being double-counted as a regular
+    // paragraph.
+    let mut image_markers: Vec<WordParagraph> = Vec::new();
 
     // ── Per-run state (reset on each <w:r>) ────────────────────────────────
     let mut in_run = false;
@@ -688,6 +816,7 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
                     current_numbering = None;
                     current_stable_id = None;
                     is_table_marker = false;  // Reset marker detection for new paragraph
+                    is_image_marker = false; // Reset image-marker flag for new paragraph
                     in_numpr = false;
                     pending_num_id = None;
                     pending_ilvl = None;
@@ -718,7 +847,7 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
                         current_run_text.push_str(&t.unescape().unwrap_or_default());
                     }
                 } else if name.as_ref() == b"pStyle" {
-                    if let Some(v) = attr_value(e, b"val") {
+                    if let Some(v) = attr_value_str(e, b"val") {
                         if let Ok(s) = std::str::from_utf8(v.as_ref()) {
                             if !s.is_empty() {
                                 current_style = Some(s.to_string());
@@ -737,7 +866,7 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
                     pending_num_id = None;
                     pending_ilvl = None;
                 } else if in_numpr && name.as_ref() == b"numId" {
-                    if let Some(v) = attr_value(e, b"val") {
+                    if let Some(v) = attr_value_str(e, b"val") {
                         if let Ok(s) = std::str::from_utf8(v.as_ref()) {
                             if let Ok(n) = s.parse::<u32>() {
                                 pending_num_id = Some(n);
@@ -745,7 +874,7 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
                         }
                     }
                 } else if in_numpr && name.as_ref() == b"ilvl" {
-                    if let Some(v) = attr_value(e, b"val") {
+                    if let Some(v) = attr_value_str(e, b"val") {
                         if let Ok(s) = std::str::from_utf8(v.as_ref()) {
                             if let Ok(n) = s.parse::<u32>() {
                                 pending_ilvl = Some(n);
@@ -755,13 +884,23 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
                 } else if name.as_ref() == b"id" && para_depth > 0 && tbl_cell_depth == 0 {
                     // Read stable ID from custom inkuo:id element
                     // Also detect table markers (format: __tbl_pos_<table_id>__)
-                    if let Some(v) = attr_value(e, b"val") {
+                    if let Some(v) = attr_value_str(e, b"val") {
                         if let Ok(s) = std::str::from_utf8(v.as_ref()) {
                             if !s.is_empty() {
                                 if s.starts_with("__tbl_pos_") && s.ends_with("__") {
                                     // This is a table position marker
                                     current_stable_id = Some(s.to_string());
                                     is_table_marker = true;
+                                } else if s.starts_with("__img_pos_") && s.ends_with("__") {
+                                    // This is an image position marker — the writer
+                                    // emits `<inkuo:id w:val="__img_pos_<img_id>__"/>`
+                                    // and the actual `<w:drawing>` block in the same
+                                    // paragraph. Round-tripping requires capturing the
+                                    // id here so the marker paragraph can be re-emitted
+                                    // and `parse_image_xml` can pair it with the
+                                    // `<a:blip>` rId it finds deeper in the XML.
+                                    current_stable_id = Some(s.to_string());
+                                    is_image_marker = true;
                                 } else {
                                     current_stable_id = Some(s.to_string());
                                 }
@@ -818,7 +957,7 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
                         let _ = style;
                     }
                 } else if name.as_ref() == b"pStyle" {
-                    if let Some(v) = attr_value(e, b"val") {
+                    if let Some(v) = attr_value_str(e, b"val") {
                         if let Ok(s) = std::str::from_utf8(v.as_ref()) {
                             if !s.is_empty() {
                                 current_style = Some(s.to_string());
@@ -838,7 +977,7 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
                     }
                 } else if in_numpr && name.as_ref() == b"numId" {
                     // numId is typically a self-closing element like `<w:numId w:val="2"/>`.
-                    if let Some(v) = attr_value(e, b"val") {
+                    if let Some(v) = attr_value_str(e, b"val") {
                         if let Ok(s) = std::str::from_utf8(v.as_ref()) {
                             if let Ok(n) = s.parse::<u32>() {
                                 pending_num_id = Some(n);
@@ -846,7 +985,7 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
                         }
                     }
                 } else if in_numpr && name.as_ref() == b"ilvl" {
-                    if let Some(v) = attr_value(e, b"val") {
+                    if let Some(v) = attr_value_str(e, b"val") {
                         if let Ok(s) = std::str::from_utf8(v.as_ref()) {
                             if let Ok(n) = s.parse::<u32>() {
                                 pending_ilvl = Some(n);
@@ -856,12 +995,15 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
                 } else if name.as_ref() == b"id" && tbl_cell_depth == 0 {
                     // Read stable ID from custom inkuo:id element (empty tag)
                     // This can fire even when para_depth is 0 for self-closing tags
-                    if let Some(v) = attr_value(e, b"val") {
+                    if let Some(v) = attr_value_str(e, b"val") {
                         if let Ok(s) = std::str::from_utf8(v.as_ref()) {
                             if !s.is_empty() {
                                 if s.starts_with("__tbl_pos_") && s.ends_with("__") {
                                     current_stable_id = Some(s.to_string());
                                     is_table_marker = true;
+                                } else if s.starts_with("__img_pos_") && s.ends_with("__") {
+                                    current_stable_id = Some(s.to_string());
+                                    is_image_marker = true;
                                 } else if para_depth > 0 {
                                     current_stable_id = Some(s.to_string());
                                 }
@@ -933,13 +1075,19 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
                                 || r.font_size.is_some() || r.color.is_some() || r.font_name.is_some()
                                 || r.highlight.is_some()
                         });
-                        // Keep if: has content, or style, or formatting, or is a table marker
+                        // Keep if: has content, or style, or formatting, or is a
+                        // table or image marker. Image markers carry no text and
+                        // produce no runs themselves (the run lives in a sub-parse
+                        // of `<w:drawing>` in `parse_image_xml`), but we still
+                        // want them present so the writer can re-emit the
+                        // `<w:drawing>` on the next save.
                         let keep = !current_text.is_empty()
                             || current_style.is_some()
                             || current_numbering.is_some()
                             || has_format
                             || paragraph_saw_run
-                            || is_table_marker;
+                            || is_table_marker
+                            || is_image_marker;
                         if keep {
                             // Use stable ID if available, otherwise generate sequential ID
                             // For table markers, use the special marker text format
@@ -951,7 +1099,9 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
                                 id
                             };
                             let runs_opt = if current_runs.is_empty() { None } else { Some(current_runs.clone()) };
-                            // For table markers, generate the marker text format
+                            // Markers carry a synthetic text that the writer's
+                            // build_document_xml() recognises when splicing the
+                            // `<w:tbl>` or `<w:drawing>` element back in.
                             let text = if is_table_marker {
                                 // Extract table ID from marker format __tbl_pos_<table_id>__
                                 if let Some(stable_id) = &current_stable_id {
@@ -967,16 +1117,42 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
                                 } else {
                                     current_text.clone()
                                 }
+                            } else if is_image_marker {
+                                // Mirror the writer's marker text so the next
+                                // write can splice the `<w:drawing>` back in
+                                // via `image_map.get(img_id)`.
+                                if let Some(stable_id) = &current_stable_id {
+                                    if let Some(rest) = stable_id.strip_prefix("__img_pos_") {
+                                        if let Some(img_id) = rest.strip_suffix("__") {
+                                            format!("<__img_pos_{}__>", img_id)
+                                        } else {
+                                            stable_id.clone()
+                                        }
+                                    } else {
+                                        stable_id.clone()
+                                    }
+                                } else {
+                                    current_text.clone()
+                                }
                             } else {
                                 current_text.trim().to_string()
                             };
-                            paragraphs.push(WordParagraph {
+                            let para = WordParagraph {
                                 id,
                                 text,
                                 style: current_style.clone(),
                                 runs: runs_opt,
                                 numbering: current_numbering.clone(),
-                            });
+                            };
+                            // Image markers go to the side channel so the
+                            // caller (read_word_document) can pair them
+                            // with the WordImage entries we recover in
+                            // parse_image_xml.
+                            if is_image_marker {
+                                image_markers.push(para);
+                            } else {
+                                paragraphs.push(para);
+                            }
                         }
                     }
                 }
@@ -988,7 +1164,7 @@ fn parse_document_xml(content: &str) -> Result<Vec<WordParagraph>, OfficeError> 
         buf.clear();
     }
 
-    Ok(paragraphs)
+    Ok((paragraphs, image_markers))
 }
 
 /// Raw cell as captured during streaming XML parsing. vMerge is held as the
@@ -1274,11 +1450,169 @@ pub fn write_word_document<W: std::io::Write + std::io::Seek>(
         .compression_method(zip::CompressionMethod::Deflated)
         .unix_permissions(0o644);
 
-    // Build the generated content strings once
-    let doc_xml = build_document_xml(doc);
-    let content_types = CONTENT_TYPES_XML;
+    // ── Image dedup + rels planning ────────────────────────────────────────
+    //
+    // Walk every image on `doc.images` (the high-level model) and figure out:
+    //   1. Which `imageN.ext` filename to write it under inside `word/media/`.
+    //      We scan `preserve_from` for existing media entries and continue
+    //      counting from `image<max+1>.ext` so we don't collide with the
+    //      original document's images.
+    //   2. What rels id to use (e.g. `rId6`, `rId7`, ...) — counting from
+    //      whatever ids are already in use by the original `word/_rels/document.xml.rels`.
+    //   3. What content-type to register in `[Content_Types].xml`.
+    //
+    // The result `image_writes` carries everything we need to (a) write the
+    // bytes into the zip, (b) append the right Override / Relationship rows,
+    // and (c) substitute the placeholder `rIdImgPlaceholder` in `doc_xml`
+    // with the real rels id.
+    let mut image_writes: Vec<ImageWritePlan> = Vec::new();
+    if !doc.images.is_empty() {
+        let (existing_media_max, next_rid, preserved_refs) =
+            scan_preserved_zip_for_image_state(preserve_from)?;
+        // Build a lookup table keyed by the zip-internal media path so
+        // we can quickly spot which (if any) preserved rels entry
+        // already covers a round-tripped image.
+        let mut preserved_by_path: std::collections::HashMap<String, PreservedImageRef> =
+            std::collections::HashMap::new();
+        for r in preserved_refs {
+            preserved_by_path.insert(r.target.clone(), r);
+        }
+        // Start counting fresh media filenames AFTER whatever the
+        // preserved zip already has, and start fresh rels ids AFTER
+        // whatever the preserved rels file already has. Both counters
+        // are inclusive of the next free value (i.e. `media_index = 1`
+        // means "use image1.png next"), so we add 1 here.
+        let mut media_index = existing_media_max + 1;
+        let mut next_rid_u32 = next_rid + 1;
+
+        for img in &doc.images {
+            // Two distinct code paths:
+            //
+            // 1. `internal_path = Some(...)` — the reader recovered this
+            //    image from an existing .docx and we want to round-trip
+            //    it byte-for-byte. Look up the matching preserved
+            //    relationship by media target and reuse its rId; if no
+            //    match exists (corrupt/missing rels), fall back to the
+            //    new-image path with a fresh rId.
+            //
+            // 2. `internal_path = None` — caller built a fresh image
+            //    from a disk source. Read its bytes, mint a new rId,
+            //    allocate a fresh `imageN.ext` filename.
+            if let Some(internal) = img.internal_path.as_deref() {
+                let target = internal
+                    .strip_prefix("word/")
+                    .unwrap_or(internal)
+                    .to_string();
+                if let Some(preserved_ref) = preserved_by_path.get(&target).cloned() {
+                    let mut bytes = Vec::new();
+                    if let Some(pf) = preserve_from {
+                        if let Ok(mut a) =
+                            zip::ZipArchive::new(std::io::Cursor::new(pf))
+                        {
+                            if let Ok(mut f) = a.by_name(internal) {
+                                let _ = std::io::Read::read_to_end(&mut f, &mut bytes);
+                            }
+                        }
+                    }
+                    let ext_normalised = preserved_ref
+                        .target
+                        .rsplit('.')
+                        .next()
+                        .unwrap_or("png")
+                        .to_string();
+                    let normalised = if ext_normalised == "jpg" {
+                        "jpeg".to_string()
+                    } else {
+                        ext_normalised
+                    };
+                    let content_type = match normalised.as_str() {
+                        "png" => "image/png".to_string(),
+                        "jpeg" => "image/jpeg".to_string(),
+                        "gif" => "image/gif".to_string(),
+                        _ => "image/png".to_string(),
+                    };
+                    let basename = preserved_ref
+                        .target
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or(&preserved_ref.target)
+                        .to_string();
+                    image_writes.push(ImageWritePlan {
+                        bytes,
+                        internal_path: internal.to_string(),
+                        internal_basename: basename,
+                        content_type,
+                        rid: preserved_ref.rid,
+                    });
+                    continue;
+                }
+                // Fall through to the new-image path when no preserved
+                // rel matches — we still don't want to drop the image,
+                // we just allocate it fresh.
+            }
+
+            let src_path = std::path::Path::new(&img.path);
+            let ext = match src_path.extension().and_then(|s| s.to_str()) {
+                Some(e) => e.to_ascii_lowercase(),
+                None => {
+                    return Err(OfficeError::Xml(format!(
+                        "Image '{}' has no extension; supported: png, jpeg, jpg, gif",
+                        img.path
+                    )));
+                }
+            };
+            let ext_normalised = match ext.as_str() {
+                "jpg" => "jpeg".to_string(),
+                other => other.to_string(),
+            };
+            let (content_type, _override_extension) = match ext_normalised.as_str() {
+                "png" => (
+                    "image/png",
+                    "png",
+                ),
+                "jpeg" => ("image/jpeg", "jpeg"),
+                "gif" => ("image/gif", "gif"),
+                other => {
+                    return Err(OfficeError::Xml(format!(
+                        "Unsupported image extension '.{}'; supported: png, jpeg, jpg, gif",
+                        other
+                    )));
+                }
+            };
+
+            // Read source bytes. Caller is responsible for providing an
+            // absolute path; workspace validation happens in the tool layer.
+            let bytes = std::fs::read(src_path).map_err(|e| {
+                OfficeError::Xml(format!(
+                    "Failed to read image source '{}': {}",
+                    img.path, e
+                ))
+            })?;
+
+            let internal_basename = format!("image{}.{}", media_index, ext_normalised);
+            media_index += 1;
+            let internal_path = format!("word/media/{}", internal_basename);
+
+            let rid = format!("rId{}", next_rid_u32);
+            next_rid_u32 += 1;
+
+            image_writes.push(ImageWritePlan {
+                bytes,
+                internal_path,
+                internal_basename,
+                content_type: content_type.to_string(),
+                rid,
+            });
+        }
+    }
+
+    // Build the generated content strings once. `doc_xml` is built later
+    // *after* image rels ids are known, because each image's placeholder
+    // needs to be substituted with the real rId. So we keep `doc_xml`
+    // mutable below.
+    let content_types_base = CONTENT_TYPES_XML;
     let rels = RELS_XML;
-    let word_rels = WORD_RELS_XML;
+    let word_rels_base = WORD_RELS_XML;
     let styles = STYLES_XML;
     let settings = SETTINGS_XML;
     let font_table = FONT_TABLE_XML;
@@ -1313,6 +1647,15 @@ pub fn write_word_document<W: std::io::Write + std::io::Seek>(
             let name = file.name().to_string();
             // Skip entries we'll generate fresh (they'll be overwritten below)
             if GENERATED_FILES.contains(&name.as_str()) {
+                continue;
+            }
+            // Word/media entries are written by the image planning loop
+            // below. The reader→writer round-trip reuses the original
+            // media bytes when an image is preserved (`internal_path`
+            // set), so copying these entries here would produce
+            // duplicate filenames in the resulting archive and trip the
+            // zip writer. Preserve-from never touches media.
+            if name.starts_with("word/media/") {
                 continue;
             }
             let mut content = Vec::new();
@@ -1361,6 +1704,25 @@ pub fn write_word_document<W: std::io::Write + std::io::Seek>(
         }
     }
 
+    // ── Write media entries ────────────────────────────────────────────────
+    //
+    // Even when there's no `preserve_from` (i.e. brand-new docx), image bytes
+    // need to land in the archive before document.xml so the rels forward
+    // reference resolves correctly. We write them in plan order.
+    for plan in &image_writes {
+        zip.start_file(&plan.internal_path, opts)?;
+        zip.write_all(&plan.bytes)?;
+    }
+
+    // Build the post-image doc_xml so each placeholder can be substituted.
+    let doc_xml_raw = build_document_xml(doc);
+    let doc_xml = substitute_image_placeholders(&doc_xml_raw, &image_writes);
+
+    // Compose the final `[Content_Types].xml` and `word/_rels/document.xml.rels`
+    // with image Overrides / Relationships appended.
+    let content_types = append_image_overrides(content_types_base, &image_writes);
+    let word_rels = append_image_relationships(word_rels_base, &image_writes);
+
     // Always write the generated (up-to-date) entries last so they take precedence
     zip.start_file("[Content_Types].xml", opts)?;
     zip.write_all(content_types.as_bytes())?;
@@ -1402,10 +1764,506 @@ pub fn write_word_document<W: std::io::Write + std::io::Seek>(
     Ok(())
 }
 
+/// One image's worth of writer bookkeeping: bytes, target filename inside
+/// the zip, content-type, and the rels id we minted for it.
+struct ImageWritePlan {
+    bytes: Vec<u8>,
+    /// e.g. `word/media/image1.png`.
+    internal_path: String,
+    /// e.g. `image1.png` — used for the `<Override PartName=...>` path.
+    internal_basename: String,
+    /// e.g. `image/png`.
+    content_type: String,
+    /// e.g. `rId6`.
+    rid: String,
+}
+
+/// Image reference already present in a preserved `.docx`. Re-used on
+/// rewrite so the existing rId stays stable and the corresponding media
+/// file (still inside the preserved zip) is what the writer points at.
+#[derive(Debug, Clone)]
+struct PreservedImageRef {
+    /// e.g. `rId6`.
+    rid: String,
+    /// e.g. `media/image1.png` — target path from the preserved rels.
+    target: String,
+}
+
+/// Look at the original `.docx` (if any) and figure out:
+///  - the highest `imageN.ext` index already in `word/media/`
+///  - the highest `rId` already used in `word/_rels/document.xml.rels`
+///  - the list of image relationships (`Target` paths under `media/`)
+///    already declared by the preserved rels file. The writer uses this
+///    so when an existing image is round-tripped (`WordImage` with
+///    `internal_path` set) it can reuse the original rId instead of
+///    allocating a brand new one. Without this each append would alias
+///    the preserved image's rId to a freshly allocated imageN.ext and
+///    silently orphan every previously-present `<w:drawing>` because
+///    their rIds no longer resolve to the right media file.
+///
+/// The first two numbers are then bumped by 1 in the caller to allocate
+/// fresh, non-colliding values for *new* images. Returns
+/// `(0, 6, vec![])` for a fresh document with no `preserve_from`.
+fn scan_preserved_zip_for_image_state(
+    preserve_from: Option<&[u8]>,
+) -> Result<(u32, u32, Vec<PreservedImageRef>), OfficeError> {
+    let mut max_media_index: u32 = 0;
+    let mut max_rid: u32 = 5; // matches WORD_RELS_XML: rId1..rId5
+    let mut preserved: Vec<PreservedImageRef> = Vec::new();
+    let mut rels_xml: Option<String> = None;
+    if let Some(bytes) = preserve_from {
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))?;
+        for i in 0..archive.len() {
+            let mut file = archive.by_index(i)?;
+            let name = file.name().to_string();
+            if let Some(rest) = name.strip_prefix("word/media/image") {
+                // rest looks like "12.png" — pull the integer prefix.
+                let digits: String = rest
+                    .chars()
+                    .take_while(|c| c.is_ascii_digit())
+                    .collect();
+                if !digits.is_empty() {
+                    if let Ok(n) = digits.parse::<u32>() {
+                        if n > max_media_index {
+                            max_media_index = n;
+                        }
+                    }
+                }
+            } else if name == "word/_rels/document.xml.rels" {
+                // Read up to 1 MB of rels xml (the rels file is always
+                // tiny — a few KB). We use `read_to_end` via a small
+                // take() shim because ZipFile isn't `io::Read` by value
+                // — we have to go through `read`.
+                let mut s = String::new();
+                let mut limited = file.by_ref().take(1 << 20);
+                let _ = std::io::Read::read_to_string(&mut limited, &mut s);
+                rels_xml = Some(s);
+            }
+        }
+    }
+
+    if let Some(s) = rels_xml.as_deref() {
+        // Cheap rId scanner: pull every `Id="rId<digits>"`.
+        // We scan the byte slice once, looking for the 4-byte
+        // pattern `Id="` and then verifying the next 3 bytes are
+        // `rId`. This is much more robust than sliding over the
+        // raw `rId"` because attribute value boundaries vary.
+        let bytes = s.as_bytes();
+        let mut idx = 0;
+        while idx + 8 < bytes.len() {
+            if &bytes[idx..idx + 4] == b"Id=\""
+                && &bytes[idx + 4..idx + 7] == b"rId"
+            {
+                let mut j = idx + 7;
+                let mut digits = String::new();
+                while j < bytes.len() && bytes[j].is_ascii_digit() {
+                    digits.push(bytes[j] as char);
+                    j += 1;
+                }
+                if !digits.is_empty() {
+                    let id_str = format!("rId{}", digits);
+                    if let Ok(n) = digits.parse::<u32>() {
+                        if n > max_rid {
+                            max_rid = n;
+                        }
+                    }
+                    // Hunt for the sibling `Target=` attribute on the
+                    // same Relationship element. We scan backwards/forwards
+                    // for the nearest `Target="media/..."` substring.
+                    let after_id = j;
+                    // Coarse scan — find a `Target="media/<…>"` substring
+                    // anywhere after the current rId but before the next
+                    // `Id=` (or end of buffer).
+                    let next_id = find_next_relationship_id(s, after_id);
+                    let window = &s[after_id..next_id];
+                    let target = extract_media_target(window);
+                    if let Some(t) = target {
+                        preserved.push(PreservedImageRef {
+                            rid: id_str,
+                            target: t,
+                        });
+                    }
+                    idx = next_id;
+                } else {
+                    idx += 1;
+                }
+            } else {
+                idx += 1;
+            }
+        }
+    }
+
+    Ok((max_media_index, max_rid, preserved))
+}
+
+/// Find the byte offset of the next `<… Id="…` after `from` in the
+/// rels buffer, or `s.len()` when none. Used to bound the `Target=`
+/// search window for one relationship at a time.
+fn find_next_relationship_id(s: &str, from: usize) -> usize {
+    let bytes = s.as_bytes();
+    let mut idx = from;
+    while idx + 4 < bytes.len() {
+        if &bytes[idx..idx + 4] == b"Id=\"" {
+            return idx;
+        }
+        idx += 1;
+    }
+    bytes.len()
+}
+
+/// Within a single `<Relationship …/>` (or `<Relationship …></Relationship>`)
+/// substring, pull out the value of `Target="media/…"`. Returns `None`
+/// when the relationship is not an image (`Target` doesn't start with
+/// `media/`) — non-image relationships are noise from this scanner's
+/// point of view.
+fn extract_media_target(window: &str) -> Option<String> {
+    let bytes = window.as_bytes();
+    let needle = b"Target=\"";
+    let mut idx = 0;
+    while idx + needle.len() < bytes.len() {
+        if &bytes[idx..idx + needle.len()] == needle {
+            let start = idx + needle.len();
+            if let Some(end_rel) = window[start..].find('"') {
+                let target = &window[start..start + end_rel];
+                let normalised = target
+                    .trim_start_matches('/')
+                    .strip_prefix("word/")
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| target.to_string());
+                if normalised.starts_with("media/") {
+                    return Some(normalised);
+                }
+                return None;
+            }
+            return None;
+        }
+        idx += 1;
+    }
+    None
+}
+
+/// Replace every `rIdImgPlaceholder` in `doc_xml` with the corresponding
+/// real rels id from `image_writes`. The placeholder is intentionally
+/// unique; missing rewrites show up as obvious `rIdImgPlaceholder`
+/// strings in the resulting docx and would fail Word's strict rels check.
+fn substitute_image_placeholders(doc_xml: &str, image_writes: &[ImageWritePlan]) -> String {
+    let mut out = String::with_capacity(doc_xml.len());
+    let mut idx = 0;
+    let placeholder = "rIdImgPlaceholder";
+    for plan in image_writes {
+        // No-op for empty plans — the placeholder is only injected when an
+        // image was actually emitted by `build_document_xml`.
+        if let Some(found) = doc_xml[idx..].find(placeholder) {
+            let abs = idx + found;
+            out.push_str(&doc_xml[idx..abs]);
+            out.push_str(&plan.rid);
+            idx = abs + placeholder.len();
+        } else {
+            // No more placeholders to rewrite; copy the rest verbatim.
+            out.push_str(&doc_xml[idx..]);
+            return out;
+        }
+    }
+    out.push_str(&doc_xml[idx..]);
+    out
+}
+
+/// Append an `<Override>` row for each image's media entry. The
+/// `Default Extension="png"` rows already in the base `CONTENT_TYPES_XML`
+/// cover most cases, but a brand-new `.docx` (no preserved zip) should
+/// still declare Overrides explicitly so Word's "missing part" check
+/// doesn't reject the package.
+fn append_image_overrides(base: &str, image_writes: &[ImageWritePlan]) -> String {
+    if image_writes.is_empty() {
+        return base.to_string();
+    }
+    // De-duplicate on `/word/media/<basename>`. Round-tripped images can
+    // land in `image_writes` twice (once via `internal_path` reuse, once
+    // via a fresh `DocElement::Image` sharing the same source path) —
+    // emitting the same Override twice would corrupt the resulting
+    // `[Content_Types].xml`.
+    let mut emitted: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // The base ends with `</Types>`. Inject overrides right before that.
+    let close = "</Types>";
+    let Some(pos) = base.rfind(close) else {
+        return base.to_string();
+    };
+    let mut out = String::with_capacity(base.len() + image_writes.len() * 128);
+    out.push_str(&base[..pos]);
+    for plan in image_writes {
+        if !emitted.insert(plan.internal_basename.clone()) {
+            continue;
+        }
+        out.push_str(&format!(
+            "  <Override PartName=\"/word/media/{}\" ContentType=\"{}\"/>\n",
+            escape_xml(&plan.internal_basename),
+            escape_xml(&plan.content_type),
+        ));
+    }
+    out.push_str(&base[pos..]);
+    out
+}
+
+/// Append an `<Relationship>` row for each image's media entry. Targets
+/// are relative to `word/document.xml` (i.e. just `media/image1.png`),
+/// and ids are the `rid` we minted in the planning phase.
+///
+/// When round-tripping an existing image we re-use the original rId, so
+/// the same Relationship gets re-emitted if it shows up twice in
+/// `image_writes` (one entry from `internal_path` reuse, one from a fresh
+/// `DocElement::Image`). We de-duplicate on the rId so the resulting
+/// rels file stays valid.
+fn append_image_relationships(base: &str, image_writes: &[ImageWritePlan]) -> String {
+    if image_writes.is_empty() {
+        return base.to_string();
+    }
+    let close = "</Relationships>";
+    let Some(pos) = base.rfind(close) else {
+        return base.to_string();
+    };
+    let mut out = String::with_capacity(base.len() + image_writes.len() * 192);
+    let mut emitted_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    out.push_str(&base[..pos]);
+    for plan in image_writes {
+        if !emitted_ids.insert(plan.rid.clone()) {
+            continue;
+        }
+        out.push_str(&format!(
+            "  <Relationship Id=\"{}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"media/{}\"/>\n",
+            escape_xml(&plan.rid),
+            escape_xml(&plan.internal_basename),
+        ));
+    }
+    out.push_str(&base[pos..]);
+    out
+}
+
 /// True when the document contains at least one paragraph with a numbering
 /// reference. Used to decide whether `word/numbering.xml` should be emitted.
 fn doc_has_numbering(doc: &WordDocument) -> bool {
     doc.paragraphs.iter().any(|p| p.numbering.is_some())
+}
+
+/// Recover existing `<w:drawing>` images from the document so the model
+/// can re-emit them on the next save. Without this, appending a *new*
+/// image to a docx that already embeds an older one would silently drop
+/// the older image's `<w:drawing>` and its relationship — the picture
+/// bytes would still be inside the zip, but Word would have no idea
+/// where they belong.
+///
+/// Strategy:
+///   1. Parse `word/_rels/document.xml.rels` once to build a
+///      rId → relative-path (e.g. `media/image3.png`) lookup.
+///   2. Walk `word/document.xml` for every `<a:blip
+///      r:embed="rIdN"/>` element. For each, also pick up the
+///      neighbouring `<wp:extent cx="..." cy="..."/>` for the EMU size
+///      and scan the same enclosing paragraph for an `<inkuo:id
+///      w:val="__img_pos_<img_id>__"/>` marker. The marker id is the
+///      stable id the writer uses to pair this drawing with its
+///      `WordImage` entry. When the marker is missing we synthesise a
+///      fresh id from the rId so we still surface the picture to the
+///      model.
+///
+/// Every recovered entry sets `internal_path = Some(...)` so the writer
+/// knows to reuse the existing zip bytes and rId instead of allocating
+/// a new `imageN.ext`.
+fn parse_image_xml(
+    doc_content: &str,
+    rels_content: &str,
+    _image_markers: &[WordParagraph],
+) -> Vec<WordImage> {
+    let rid_to_target = parse_image_rels(rels_content);
+    if rid_to_target.is_empty() {
+        return Vec::new();
+    }
+
+    let mut reader = quick_xml::Reader::from_str(doc_content);
+    reader.config_mut().trim_text(false);
+    let mut buf = Vec::new();
+
+    // Per-drawing state. We reset these at the start of each
+    // `<w:drawing>` element.
+    let mut in_drawing = false;
+    let mut blip_rid: Option<String> = None;
+    let mut cx: u32 = 0;
+    let mut cy: u32 = 0;
+
+    // Per-paragraph state. The writer decorates every image-bearing
+    // paragraph with a `<inkuo:id w:val="__img_pos_<img_id>__"/>`; we
+    // capture it here so the recovered entry uses the same stable id
+    // the writer will key off on the next save. The id may appear
+    // *before* the `<w:drawing>` child element inside `<w:pPr>` (Start
+    // tag) or right at the start of the paragraph (Empty tag).
+    let mut current_para_id: Option<String> = None;
+    let mut current_para_depth = 0usize;
+
+    let mut images: Vec<WordImage> = Vec::new();
+
+    loop {
+        let event = reader.read_event_into(&mut buf);
+        match event {
+            Ok(quick_xml::events::Event::Start(ref e)) | Ok(quick_xml::events::Event::Empty(ref e)) => {
+                let name = e.local_name();
+                let is_empty = matches!(event, Ok(quick_xml::events::Event::Empty(_)));
+                if name.as_ref() == b"p" {
+                    current_para_depth += 1;
+                    current_para_id = None;
+                } else if name.as_ref() == b"id" && current_para_depth > 0 {
+                    // inkuo:id inside the paragraph — could be the marker.
+                    if let Some(v) = attr_value_str(e, b"val") {
+                        if !v.is_empty() {
+                            current_para_id = Some(v);
+                        }
+                    }
+                } else if name.as_ref() == b"drawing" {
+                    in_drawing = true;
+                    blip_rid = None;
+                    cx = 0;
+                    cy = 0;
+                } else if in_drawing && name.as_ref() == b"extent" {
+                    if let Some(v) = attr_value_str(e, b"cx") {
+                        if let Ok(n) = v.parse::<u32>() {
+                            cx = n;
+                        }
+                    }
+                    if let Some(v) = attr_value_str(e, b"cy") {
+                        if let Ok(n) = v.parse::<u32>() {
+                            cy = n;
+                        }
+                    }
+                } else if in_drawing && name.as_ref() == b"blip" {
+                    if let Some(v) = attr_value_str(e, b"embed") {
+                        blip_rid = Some(v);
+                    }
+                    if is_empty {
+                        // `<a:blip ... />` is usually self-closing — flush
+                        // the recovery record now.
+                        flush_image(&mut images, &blip_rid, cx, cy, current_para_id.as_deref(), &rid_to_target);
+                        in_drawing = false;
+                        blip_rid = None;
+                    }
+                }
+            }
+            Ok(quick_xml::events::Event::End(ref e)) => {
+                let name = e.local_name();
+                if name.as_ref() == b"drawing" {
+                    // Empty / non-self-closing blip flush. `<a:blip />`
+                    // cases were flushed inside the Start handler.
+                    flush_image(&mut images, &blip_rid, cx, cy, current_para_id.as_deref(), &rid_to_target);
+                    in_drawing = false;
+                    blip_rid = None;
+                } else if name.as_ref() == b"p" && current_para_depth > 0 {
+                    current_para_depth -= 1;
+                    if current_para_depth == 0 {
+                        current_para_id = None;
+                    }
+                }
+            }
+            Ok(quick_xml::events::Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    images
+}
+
+/// Push one recovered `WordImage` onto `images` if `blip_rid` resolves
+/// to a media entry we recognise. Centralises the policy so the
+/// self-closing and balanced-tag code paths stay in lockstep.
+fn flush_image(
+    images: &mut Vec<WordImage>,
+    blip_rid: &Option<String>,
+    cx: u32,
+    cy: u32,
+    para_id: Option<&str>,
+    rid_to_target: &std::collections::HashMap<String, String>,
+) {
+    let Some(rid) = blip_rid.as_deref() else {
+        return;
+    };
+    let Some(target) = rid_to_target.get(rid) else {
+        return;
+    };
+    let internal_path = format!("word/{}", target);
+    let img_id = para_id
+        .and_then(|p| p.strip_prefix("__img_pos_"))
+        .and_then(|rest| rest.strip_suffix("__"))
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| format!("_recovered_{}", rid));
+    images.push(WordImage {
+        id: img_id,
+        path: internal_path.clone(),
+        width_emu: cx,
+        height_emu: cy,
+        internal_path: Some(internal_path),
+    });
+}
+
+/// Parse `word/_rels/document.xml.rels` and return a map from
+/// `rIdN` → `media/imageN.ext` (the path is kept *relative* to `word/`
+/// so the writer can prepend the prefix when needed).
+fn parse_image_rels(rels_content: &str) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    let mut reader = quick_xml::Reader::from_str(rels_content);
+    reader.config_mut().trim_text(false);
+    let mut buf = Vec::new();
+    loop {
+        let event = reader.read_event_into(&mut buf);
+        match event {
+            Ok(quick_xml::events::Event::Start(ref e)) | Ok(quick_xml::events::Event::Empty(ref e)) => {
+                if e.local_name().as_ref() == b"Relationship" {
+                    let id = attr_value_str(e, b"Id").unwrap_or_default();
+                    let target = attr_value_str(e, b"Target").unwrap_or_default();
+                    let ty = attr_value_str(e, b"Type").unwrap_or_default();
+                    if id.is_empty() || target.is_empty() {
+                        continue;
+                    }
+                    // Only image relationships carry forward — styles,
+                    // settings, etc. must not enter the image rels map.
+                    if !ty.contains("/image") && !ty.contains("/chart") {
+                        continue;
+                    }
+                    if !target.starts_with("media/") && !target.starts_with("/word/media/") {
+                        continue;
+                    }
+                    let normalised = target
+                        .trim_start_matches('/')
+                        .strip_prefix("word/")
+                        .map(|s| s.to_string())
+                        .unwrap_or(target);
+                    map.insert(id.to_string(), normalised);
+                }
+            }
+            Ok(quick_xml::events::Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    map
+}
+
+/// Pull a `String` out of a quick-xml attribute. Convenience wrapper
+/// over the file's existing `attr_value` (which returns a `Cow<[u8]>`)
+/// for callers that already know they want an owned `String`.
+fn attr_value_str(e: &quick_xml::events::BytesStart<'_>, attr: &[u8]) -> Option<String> {
+    for a in e.attributes().with_checks(false).flatten() {
+        let key = a.key.as_ref();
+        // quick_xml emits `inkuo:id` (namespaced) in the doc but raw
+        // `Id` / `cx` in the rels file, so match on either the full or
+        // the local part of the key.
+        let local = key
+            .iter()
+            .position(|&b| b == b':')
+            .map(|i| &key[i + 1..])
+            .unwrap_or(key);
+        if local == attr {
+            return Some(String::from_utf8_lossy(&a.value).into_owned());
+        }
+    }
+    None
 }
 
 /// Convenience wrapper that writes to a file path.
@@ -1463,6 +2321,9 @@ pub fn build_document_xml(doc: &WordDocument) -> String {
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
             xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+            xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+            xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+            xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"
             xmlns:inkuo="http://inkuo.app/wordprocessingml/2026/main">
   <w:body>"#
     );
@@ -1470,6 +2331,11 @@ pub fn build_document_xml(doc: &WordDocument) -> String {
     // Build a map of table id -> table for O(1) lookup.
     let table_map: std::collections::HashMap<&str, &WordTable> =
         doc.tables.iter().map(|t| (t.id.as_str(), t)).collect();
+
+    // Build a map of image id -> image for O(1) lookup. The image's stable id
+    // is matched against `<__img_pos_<id>__>` marker paragraphs.
+    let image_map: std::collections::HashMap<&str, &WordImage> =
+        doc.images.iter().map(|i| (i.id.as_str(), i)).collect();
 
     // Track which tables have been emitted via markers to avoid double-emission
     let mut tables_emitted: std::collections::HashSet<&str> = std::collections::HashSet::new();
@@ -1489,6 +2355,28 @@ pub fn build_document_xml(doc: &WordDocument) -> String {
                     // Also output the table immediately after
                     xml.push_str(&build_table_xml(&tbl.id, &tbl.rows));
                     tables_emitted.insert(tbl_id);
+                    continue;
+                }
+            }
+        }
+
+        // Image position marker: emit a paragraph that carries the inline
+        // `<w:drawing>` run. The image's internal `word/media/imageN.ext`
+        // path was resolved by the writer; the `rId` is looked up from
+        // the rels table the writer builds up alongside this XML. We use
+        // a placeholder `rId` here (`rIdImg<index>`) and rewrite it in
+        // `write_word_document` after the rels are finalised.
+        if let Some(rest) = para.text.strip_prefix("<__img_pos_") {
+            if let Some(end) = rest.find("__>") {
+                let img_id = &rest[..end];
+                if let Some(img) = image_map.get(img_id) {
+                    xml.push_str("\n    <w:p>");
+                    xml.push_str(&format!(
+                        "<w:pPr><inkuo:id w:val=\"__img_pos_{}__\"/></w:pPr>",
+                        escape_xml(img_id)
+                    ));
+                    xml.push_str(&build_image_drawing_xml(img));
+                    xml.push_str("</w:p>");
                     continue;
                 }
             }
@@ -1599,6 +2487,77 @@ fn build_table_xml(_table_id: &str, rows: &[TableRow]) -> String {
 
     xml.push_str("\n    </w:tbl>");
     xml
+}
+
+/// Render an inline picture run as a `<w:drawing>` element.
+///
+/// `r:embed="rIdImgPlaceholder"` is rewritten by `write_word_document` after
+/// the writer knows the final rels id (which may shift when the original
+/// document already used `rId1`, `rId2`, ... for its own styles / numbering
+/// / hyperlinks). The placeholder is deliberately unique so a missed
+/// rewrite is impossible to miss in QA.
+fn build_image_drawing_xml(img: &WordImage) -> String {
+    let cx = img.width_emu;
+    let cy = img.height_emu;
+    // Image element name (the `pic:name` is a cosmetic label — Word picks
+    // it up from the picture's own embedded metadata; we use the stable id
+    // so debug dumps correlate with `WordDocument.images`).
+    let name = escape_xml(&img.id);
+    format!(
+        concat!(
+            "<w:r><w:drawing>",
+            "<wp:inline distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\">",
+            "<wp:extent cx=\"{cx}\" cy=\"{cy}\"/>",
+            "<wp:effectExtent l=\"0\" t=\"0\" r=\"0\" b=\"0\"/>",
+            "<wp:docPr id=\"{docpr_id}\" name=\"{name}\"/>",
+            "<wp:cNvGraphicFramePr>",
+            "<a:graphicFrameLocks xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" noChangeAspect=\"1\"/>",
+            "</wp:cNvGraphicFramePr>",
+            "<a:graphic xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\">",
+            "<a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">",
+            "<pic:pic xmlns:pic=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">",
+            "<pic:nvPicPr>",
+            "<pic:cNvPr id=\"{docpr_id}\" name=\"{name}\"/>",
+            "<pic:cNvPicPr/>",
+            "</pic:nvPicPr>",
+            "<pic:blipFill>",
+            "<a:blip xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" r:embed=\"rIdImgPlaceholder\"/>",
+            "<a:stretch><a:fillRect/></a:stretch>",
+            "</pic:blipFill>",
+            "<pic:spPr>",
+            "<a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"{cx}\" cy=\"{cy}\"/></a:xfrm>",
+            "<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom>",
+            "</pic:spPr>",
+            "</pic:pic>",
+            "</a:graphicData>",
+            "</a:graphic>",
+            "</wp:inline>",
+            "</w:drawing></w:r>"
+        ),
+        cx = cx,
+        cy = cy,
+        name = name,
+        // `docPr id` and `pic:cNvPr id` are namespace-local identifiers. We
+        // derive them from the image's stable id (stable, non-negative) by
+        // hashing. For v1 we just use the count of leading hex chars of the
+        // id as a quick-and-deterministic number; collisions are harmless
+        // because Word treats the id as opaque within a document.
+        docpr_id = stable_id_to_docpr_id(&img.id),
+    )
+}
+
+/// Deterministically derive a positive integer id (1..i32::MAX) from a
+/// string stable id. Used as `wp:docPr id` and `pic:cNvPr id` for inline
+/// pictures. Stable across writes, so the docx diff stays clean.
+fn stable_id_to_docpr_id(id: &str) -> u32 {
+    // FNV-1a 32-bit; output fits in u32.
+    let mut hash: u32 = 2_166_136_261u32;
+    for b in id.as_bytes() {
+        hash ^= *b as u32;
+        hash = hash.wrapping_mul(16_777_619u32);
+    }
+    // Avoid the 0 sentinel — Word occasionally treats 0 as "no id".
+    hash.max(1)
 }
 
 pub fn escape_xml(s: &str) -> String {
@@ -1916,7 +2875,7 @@ mod tests {
     </w:p>
   </w:body>
 </w:document>"#;
-        let paragraphs = parse_document_xml(src).expect("parse should succeed");
+        let (paragraphs, _image_markers) = parse_document_xml(src).expect("parse should succeed");
         assert_eq!(paragraphs.len(), 1);
         let p = &paragraphs[0];
         assert_eq!(p.style.as_deref(), Some("Heading1"));
@@ -1944,6 +2903,7 @@ mod tests {
                 numbering: Some(NumberingRef { num_id: 1, level: 0 }),
             }],
             tables: vec![],
+            images: vec![],
         };
         let xml = build_document_xml(&doc);
         assert!(xml.contains("<w:numPr>"), "xml was: {}", xml);
@@ -1979,6 +2939,7 @@ mod tests {
                 numbering: None,
             }],
             tables: vec![],
+            images: vec![],
         };
         assert!(!doc_has_numbering(&doc_no));
 
@@ -1991,6 +2952,7 @@ mod tests {
                 numbering: Some(NumberingRef { num_id: 1, level: 0 }),
             }],
             tables: vec![],
+            images: vec![],
         };
         assert!(doc_has_numbering(&doc_yes));
     }
@@ -2018,6 +2980,7 @@ mod tests {
                 },
             ],
             tables: vec![],
+            images: vec![],
         };
         let mut buf = std::io::Cursor::new(Vec::<u8>::new());
         write_word_document(&doc, &mut buf, None).expect("write should succeed");
@@ -2144,6 +3107,7 @@ mod tests {
                     }],
                 }],
             }],
+            images: vec![],
         };
 
         let xml = build_document_xml(&doc);
@@ -2287,7 +3251,7 @@ mod tests {
         for t in tables {
             tbls.push(t);
         }
-        let doc = WordDocument { paragraphs, tables: tbls };
+        let doc = WordDocument { paragraphs, tables: tbls, images: vec![] };
         let elements = doc.to_elements();
 
         // The re-built document must round-trip without losing span info.
@@ -2304,7 +3268,7 @@ mod tests {
         assert_eq!(rebuilt.tables[0].rows[1].cells[0].row_span, 2);
 
         // Render to XML and assert the merge attributes appear.
-        let rebuilt_doc = WordDocument { paragraphs: vec![], tables: vec![rebuilt.tables.into_iter().next().unwrap()] };
+        let rebuilt_doc = WordDocument { paragraphs: vec![], tables: vec![rebuilt.tables.into_iter().next().unwrap()], images: vec![] };
         let xml = build_document_xml(&rebuilt_doc);
         assert!(
             xml.contains("<w:gridSpan w:val=\"2\"/>"),
@@ -2604,5 +3568,518 @@ mod tests {
         assert!(matches!(&elements[0], DocElement::Table { .. }));
         assert!(matches!(&elements[1], DocElement::Paragraph { text, .. } if text == "P1"));
         assert!(matches!(&elements[2], DocElement::Paragraph { text, .. } if text == "P2"));
+    }
+
+    // ─── Image insertion: dedup, drawing XML, rels / content types ──────────
+
+    /// Helper: build a Word document that embeds a single inline image and
+    /// write it through the public writer so the zip, rels and
+    /// `[Content_Types].xml` are all produced.
+    fn build_single_image_doc(
+        id: &str,
+        source: std::path::PathBuf,
+        width_emu: u32,
+        height_emu: u32,
+    ) -> WordDocument {
+        WordDocument::from_elements(vec![DocElement::Image {
+            id: id.to_string(),
+            position: 0,
+            path: source.to_string_lossy().to_string(),
+            width_emu,
+            height_emu,
+        }])
+    }
+
+    /// End-to-end: write a docx with one image, open the zip, and assert
+    /// the media file, rels entry, content-type override, and `<w:drawing>`
+    /// placeholder substitution all line up. The placeholder rewrite is
+    /// the most subtle part — if it ever silently fails, Word's "missing
+    /// rels" repair prompt kicks in.
+    #[test]
+    fn write_image_emits_media_rels_and_drawing() {
+        // Use a tiny synthetic PNG (1x1 white pixel, smallest valid PNG).
+        let png_bytes: &[u8] = &[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // signature
+            0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, // IHDR chunk
+            0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+            0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+            0x89,
+            0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, // IDAT chunk
+            0x78, 0x9C, 0x62, 0x00, 0x01, 0x00, 0x00, 0x05,
+            0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4,
+            0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, // IEND chunk
+            0xAE, 0x42, 0x60, 0x82,
+        ];
+        let tmpdir = std::env::temp_dir().join(format!("inkuo_img_{}", std::process::id()));
+        std::fs::create_dir_all(&tmpdir).expect("create tmpdir");
+        let source = tmpdir.join("pixel.png");
+        std::fs::write(&source, png_bytes).expect("write png");
+
+        // 1.65" wide × 1.24" tall — 1507215 / 1132987 EMU, no significance.
+        let doc = build_single_image_doc("img1", source.clone(), 1507215, 1132987);
+        let mut buf = std::io::Cursor::new(Vec::<u8>::new());
+        write_word_document(&doc, &mut buf, None).expect("write should succeed");
+        let bytes = buf.into_inner();
+
+        // ── 1. media entry exists in the zip ───────────────────────────────
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice()))
+            .expect("output must be a valid zip");
+        let names: Vec<String> = (0..archive.len())
+            .map(|i| archive.by_index(i).unwrap().name().to_string())
+            .collect();
+        assert!(
+            names.contains(&"word/media/image1.png".to_string()),
+            "expected word/media/image1.png in archive; got {:?}",
+            names
+        );
+
+        // ── 2. content-types override references the media part ───────────
+        let mut ct = String::new();
+        std::io::Read::read_to_string(
+            &mut archive.by_name("[Content_Types].xml").unwrap(),
+            &mut ct,
+        )
+        .unwrap();
+        assert!(
+            ct.contains("PartName=\"/word/media/image1.png\""),
+            "content types missing override: {}",
+            ct
+        );
+        assert!(
+            ct.contains("ContentType=\"image/png\""),
+            "content types missing image/png: {}",
+            ct
+        );
+
+        // ── 3. document rels has the image relationship ───────────────────
+        let mut rels = String::new();
+        std::io::Read::read_to_string(
+            &mut archive.by_name("word/_rels/document.xml.rels").unwrap(),
+            &mut rels,
+        )
+        .unwrap();
+        // The first image gets rId6 (rId1..rId5 are reserved for
+        // styles/settings/fontTable/theme/numbering).
+        assert!(
+            rels.contains("Id=\"rId6\""),
+            "rels missing rId6: {}",
+            rels
+        );
+        assert!(
+            rels.contains("Target=\"media/image1.png\""),
+            "rels missing media/image1.png target: {}",
+            rels
+        );
+        assert!(
+            rels.contains("relationships/image"),
+            "rels missing image relationship type: {}",
+            rels
+        );
+
+        // ── 4. document.xml has the inline drawing with the rId filled in ─
+        let mut doc_xml = String::new();
+        std::io::Read::read_to_string(
+            &mut archive.by_name("word/document.xml").unwrap(),
+            &mut doc_xml,
+        )
+        .unwrap();
+        assert!(
+            doc_xml.contains("<w:drawing>"),
+            "document.xml missing <w:drawing>: {}",
+            doc_xml
+        );
+        assert!(
+            doc_xml.contains("r:embed=\"rId6\""),
+            "document.xml missing r:embed=\"rId6\" (placeholder rewrite failed): {}",
+            doc_xml
+        );
+        assert!(
+            !doc_xml.contains("rIdImgPlaceholder"),
+            "placeholder should have been replaced; still present in: {}",
+            doc_xml
+        );
+        // The marker paragraph id must round-trip too so the read path
+        // can match it later.
+        assert!(
+            doc_xml.contains("__img_pos_img1__"),
+            "document.xml missing image marker: {}",
+            doc_xml
+        );
+
+        // cleanup
+        let _ = std::fs::remove_dir_all(&tmpdir);
+    }
+
+    /// Dedup: a single doc that contains two images must land in
+    /// `word/media/image1.png` and `word/media/image2.png` with rels
+    /// `rId6` and `rId7` (since rId1..rId5 are used by the boilerplate).
+    #[test]
+    fn write_two_images_increments_index_and_rid() {
+        let png_bytes: &[u8] = &[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+            0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+            0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+            0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4, 0x89,
+            0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54,
+            0x78, 0x9C, 0x62, 0x00, 0x01, 0x00, 0x00, 0x05,
+            0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4,
+            0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44,
+            0xAE, 0x42, 0x60, 0x82,
+        ];
+        let tmpdir = std::env::temp_dir().join(format!("inkuo_img2_{}", std::process::id()));
+        std::fs::create_dir_all(&tmpdir).expect("create tmpdir");
+        let src_a = tmpdir.join("a.png");
+        let src_b = tmpdir.join("b.png");
+        std::fs::write(&src_a, png_bytes).expect("write a");
+        std::fs::write(&src_b, png_bytes).expect("write b");
+
+        let doc = WordDocument::from_elements(vec![
+            DocElement::Image {
+                id: "first".into(),
+                position: 0,
+                path: src_a.to_string_lossy().to_string(),
+                width_emu: 914400,
+                height_emu: 914400,
+            },
+            DocElement::Image {
+                id: "second".into(),
+                position: 1,
+                path: src_b.to_string_lossy().to_string(),
+                width_emu: 914400,
+                height_emu: 914400,
+            },
+        ]);
+        let mut buf = std::io::Cursor::new(Vec::<u8>::new());
+        write_word_document(&doc, &mut buf, None).expect("write should succeed");
+        let bytes = buf.into_inner();
+
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
+        let names: Vec<String> = (0..archive.len())
+            .map(|i| archive.by_index(i).unwrap().name().to_string())
+            .collect();
+        assert!(names.contains(&"word/media/image1.png".to_string()));
+        assert!(names.contains(&"word/media/image2.png".to_string()));
+
+        let mut rels = String::new();
+        std::io::Read::read_to_string(
+            &mut archive.by_name("word/_rels/document.xml.rels").unwrap(),
+            &mut rels,
+        )
+        .unwrap();
+        assert!(rels.contains("Id=\"rId6\""));
+        assert!(rels.contains("Id=\"rId7\""));
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&tmpdir);
+    }
+
+    /// `from_elements` must drop a `DocElement::Image` into the right
+    /// shape: marker paragraph + `WordImage` entry. The marker paragraph
+    /// uses the same `__<kind>_pos_<id>__` convention as tables so the
+    /// existing parser doesn't have to grow.
+    #[test]
+    fn from_elements_records_image_with_marker_paragraph() {
+        let doc = WordDocument::from_elements(vec![DocElement::Image {
+            id: "img42".into(),
+            position: 0,
+            path: "/tmp/foo.png".into(),
+            width_emu: 914400,
+            height_emu: 914400,
+        }]);
+        assert_eq!(doc.images.len(), 1);
+        assert_eq!(doc.images[0].id, "img42");
+        assert_eq!(doc.images[0].path, "/tmp/foo.png");
+        // The marker paragraph carries the image id so `build_document_xml`
+        // can pair it with the `WordImage` entry.
+        assert_eq!(doc.paragraphs.len(), 1);
+        assert_eq!(doc.paragraphs[0].id, "__img_pos_img42__");
+        assert_eq!(doc.paragraphs[0].text, "<__img_pos_img42__>");
+    }
+
+    /// Round-tripping through `scan_preserved_zip_for_image_state` must
+    /// count existing `imageN.png` entries and existing rId numbers, so
+    /// fresh additions never collide.
+    #[test]
+    fn scan_preserved_zip_finds_max_image_index_and_rid() {
+        // Build a minimal docx-with-images by hand: a single
+        // `word/media/image7.png` and a rels file with `rId9`.
+        let mut zip_buf = std::io::Cursor::new(Vec::<u8>::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut zip_buf);
+            let opts = zip::write::SimpleFileOptions::default();
+            zip.start_file("word/media/image7.png", opts).unwrap();
+            zip.write_all(b"fake").unwrap();
+            zip.start_file("word/media/image3.png", opts).unwrap();
+            zip.write_all(b"fake").unwrap();
+            zip.start_file("word/_rels/document.xml.rels", opts).unwrap();
+            zip.write_all(
+                br#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+  <Relationship Id="rId9" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image7.png"/>
+</Relationships>"#,
+            )
+            .unwrap();
+            zip.finish().unwrap();
+        }
+        let bytes = zip_buf.into_inner();
+        let (max_idx, max_rid, _preserved) =
+            scan_preserved_zip_for_image_state(Some(&bytes)).expect("scan ok");
+        assert_eq!(max_idx, 7, "max image index should be 7");
+        assert_eq!(max_rid, 9, "max rId should be 9");
+    }
+
+    /// Reproduction test for "append wipes earlier images".
+    ///
+    /// Before the fix this assertion fails: read_word_document's
+    /// `parse_image_xml` was a no-op stub, so the marker paragraph and
+    /// the `WordImage` entry that the writer had emitted in round 1 were
+    /// dropped on round 2's reload, leaving only the freshly-added
+    /// image2.png live in the model.
+    #[test]
+    fn append_image_preserves_existing_image_relationships() {
+        let png_bytes: &[u8] = &[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+            0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+            0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+            0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+            0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41,
+            0x54, 0x78, 0x9C, 0x62, 0x00, 0x01, 0x00, 0x00,
+            0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00,
+            0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
+            0x42, 0x60, 0x82,
+        ];
+        let tmpdir = std::env::temp_dir().join(format!("inkuo_append_{}", std::process::id()));
+        std::fs::create_dir_all(&tmpdir).expect("tmpdir");
+        let src_a = tmpdir.join("a.png");
+        let src_b = tmpdir.join("b.png");
+        std::fs::write(&src_a, png_bytes).unwrap();
+        std::fs::write(&src_b, png_bytes).unwrap();
+
+        // Round 1: write a fresh docx containing one image.
+        let doc1 = WordDocument::from_elements(vec![
+            DocElement::Paragraph {
+                id: "p0".into(),
+                text: "intro".into(),
+                omit_text: false,
+                style: None,
+                runs: None,
+                numbering: None,
+            },
+            DocElement::Image {
+                id: "imgA".into(),
+                position: 0,
+                path: src_a.to_string_lossy().to_string(),
+                width_emu: 1000000,
+                height_emu: 1000000,
+            },
+        ]);
+        let mut buf1 = std::io::Cursor::new(Vec::<u8>::new());
+        write_word_document(&doc1, &mut buf1, None).expect("round 1 write");
+        let bytes1 = buf1.into_inner();
+
+        // Round 2: simulate "append a new image" by reading + adding a
+        // second image + writing back, preserving the original zip.
+        let mut doc2 = read_word_document(&bytes1).expect("round 2 read");
+        doc2.images.push(WordImage {
+            id: "imgB".into(),
+            // `path` is the source on disk — the writer reads this.
+            path: src_b.to_string_lossy().to_string(),
+            width_emu: 1000000,
+            height_emu: 1000000,
+            internal_path: None,
+        });
+        // Marker paragraph for the new image so it gets emitted in doc.xml.
+        doc2.paragraphs.push(WordParagraph {
+            id: "__img_pos_imgB__".into(),
+            text: "<__img_pos_imgB__>".into(),
+            style: None,
+            runs: None,
+            numbering: None,
+        });
+        let mut buf2 = std::io::Cursor::new(Vec::<u8>::new());
+        write_word_document(&doc2, &mut buf2, Some(&bytes1)).expect("round 2 write");
+        let bytes2 = buf2.into_inner();
+
+        // Now reload and check both images survived, AND both <w:drawing>
+        // runs are still in the document.
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes2.as_slice()))
+            .expect("round 2 must be a valid zip");
+        let mut doc_xml = String::new();
+        std::io::Read::read_to_string(
+            &mut archive.by_name("word/document.xml").unwrap(),
+            &mut doc_xml,
+        )
+        .unwrap();
+        assert_eq!(
+            doc_xml.matches("<w:drawing>").count(),
+            2,
+            "expected 2 inline drawings after append, got {}: {}",
+            doc_xml.matches("<w:drawing>").count(),
+            doc_xml
+        );
+
+        // The actual model must also see both images when re-read, otherwise
+        // the next round of append would silently lose one.
+        let reread = read_word_document(&bytes2).expect("reload after append");
+        assert_eq!(
+            reread.images.len(),
+            2,
+            "expected 2 images in the model after re-read, got {} (ids: {:?})",
+            reread.images.len(),
+            reread.images.iter().map(|i| &i.id).collect::<Vec<_>>()
+        );
+
+        // imgA was round-tripped through the preserved zip, so its
+        // `internal_path` must point at the existing media file so a
+        // subsequent append knows not to re-read its bytes from disk.
+        let img_a = reread.images.iter().find(|i| i.id == "imgA")
+            .expect("imgA survived the round trip");
+        assert_eq!(
+            img_a.internal_path.as_deref(),
+            Some("word/media/image1.png"),
+            "imgA.internal_path should point at the preserved media file: {:?}",
+            img_a.internal_path
+        );
+        // imgB was inserted in round 2, but after writer pass + read
+        // it now lives at `word/media/image2.png` inside the zip. The
+        // re-read is expected to surface that internal_path too, so
+        // appending a third image in round 3 will reuse its bytes
+        // rather than chancing a re-read off the (now-stale) original
+        // source path.
+        let img_b = reread.images.iter().find(|i| i.id == "imgB")
+            .expect("imgB was added in round 2");
+        assert_eq!(
+            img_b.internal_path.as_deref(),
+            Some("word/media/image2.png"),
+            "imgB.internal_path should reflect the zip path it landed in: {:?}",
+            img_b.internal_path
+        );
+
+        // And the rels file should reference both media files with distinct
+        // rIds pointing at non-colliding targets.
+        let mut rels = String::new();
+        std::io::Read::read_to_string(
+            &mut archive.by_name("word/_rels/document.xml.rels").unwrap(),
+            &mut rels,
+        )
+        .unwrap();
+        assert!(rels.contains("media/image1.png"), "missing rels for image1: {}", rels);
+        assert!(rels.contains("media/image2.png"), "missing rels for image2: {}", rels);
+
+        let _ = std::fs::remove_dir_all(&tmpdir);
+    }
+
+    /// Tighter regression: three successive appends (each read+write
+    /// cycle preserving the original zip) must keep every previously
+    /// inserted image's `<w:drawing>` and relationship intact. The bug
+    /// the prior test caught was about the *second* round; this one
+    /// walks a third round too because the failure pattern only fully
+    /// reproduces when we exercise the "reuse preserved rId" code path
+    /// on already-recovered images.
+    #[test]
+    fn three_round_appends_keep_every_image() {
+        let png_bytes: &[u8] = &[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+            0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+            0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+            0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+            0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41,
+            0x54, 0x78, 0x9C, 0x62, 0x00, 0x01, 0x00, 0x00,
+            0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00,
+            0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
+            0x42, 0x60, 0x82,
+        ];
+        let tmpdir = std::env::temp_dir().join(format!("inkuo_3r_{}", std::process::id()));
+        std::fs::create_dir_all(&tmpdir).expect("tmpdir");
+        let sources: [std::path::PathBuf; 3] = [
+            tmpdir.join("a.png"),
+            tmpdir.join("b.png"),
+            tmpdir.join("c.png"),
+        ];
+        for s in &sources {
+            std::fs::write(s, png_bytes).unwrap();
+        }
+
+        // Round 1: a single inline image.
+        let mut current_bytes = {
+            let mut buf = std::io::Cursor::new(Vec::<u8>::new());
+            let doc = WordDocument::from_elements(vec![DocElement::Image {
+                id: "imgA".into(),
+                position: 0,
+                path: sources[0].to_string_lossy().to_string(),
+                width_emu: 1000000,
+                height_emu: 1000000,
+            }]);
+            write_word_document(&doc, &mut buf, None).expect("round 1 write");
+            buf.into_inner()
+        };
+
+        // Rounds 2 and 3: read+add an image, write back. We exercise
+        // the "append after multiple existing images" path on each
+        // iteration.
+        for round_idx in 1..=2usize {
+            let next_id = if round_idx == 1 { "imgB" } else { "imgC" };
+            let next_path = &sources[round_idx];
+            let mut doc = read_word_document(&current_bytes)
+                .expect("read before append");
+            doc.images.push(WordImage {
+                id: next_id.into(),
+                path: next_path.to_string_lossy().to_string(),
+                width_emu: 1000000,
+                height_emu: 1000000,
+                internal_path: None,
+            });
+            doc.paragraphs.push(WordParagraph {
+                id: format!("__img_pos_{}__", next_id),
+                text: format!("<__img_pos_{}__>", next_id),
+                style: None,
+                runs: None,
+                numbering: None,
+            });
+            let mut buf = std::io::Cursor::new(Vec::<u8>::new());
+            write_word_document(&doc, &mut buf, Some(&current_bytes))
+                .expect("append write");
+            current_bytes = buf.into_inner();
+        }
+
+        // After all three rounds, every image must survive — both as a
+        // `<w:drawing>` run and as a record in the re-read model.
+        let mut archive =
+            zip::ZipArchive::new(std::io::Cursor::new(current_bytes.as_slice()))
+                .expect("zip");
+        let mut doc_xml = String::new();
+        std::io::Read::read_to_string(
+            &mut archive.by_name("word/document.xml").unwrap(),
+            &mut doc_xml,
+        )
+        .unwrap();
+        let drawing_count = doc_xml.matches("<w:drawing>").count();
+        assert_eq!(
+            drawing_count, 3,
+            "expected 3 inline drawings after 3 rounds of append, got {}: {}",
+            drawing_count, doc_xml
+        );
+
+        let reread = read_word_document(&current_bytes)
+            .expect("final read");
+        assert_eq!(
+            reread.images.len(),
+            3,
+            "expected 3 images in the model after 3 rounds, got {}",
+            reread.images.len()
+        );
+        // All three ids must still be present (none should have been
+        // silently aliased onto the same rId).
+        let mut ids: Vec<&str> = reread.images.iter().map(|i| i.id.as_str()).collect();
+        ids.sort();
+        assert_eq!(
+            ids,
+            vec!["imgA", "imgB", "imgC"],
+            "image ids after 3 rounds: {:?}",
+            ids
+        );
+
+        let _ = std::fs::remove_dir_all(&tmpdir);
     }
 }

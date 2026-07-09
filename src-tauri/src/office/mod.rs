@@ -7,7 +7,7 @@ mod docx;
 mod xlsx;
 
 pub use shared::{OfficeError, TableCell, TableRow};
-pub use docx::{WordDocument, WordParagraph, WordTable, FontRun, DocElement, InsertElement, NumberingRef, read_word_document, word_document_to_text, write_word_document_to_path};
+pub use docx::{WordDocument, WordParagraph, WordTable, WordImage, FontRun, DocElement, InsertElement, NumberingRef, read_word_document, word_document_to_text, write_word_document_to_path};
 pub use xlsx::{
     read_excel_workbook, excel_workbook_to_text,
     XlsxWorkbook, XlsxSheet, Cell, CellValue, MergedRange,

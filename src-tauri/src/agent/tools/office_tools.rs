@@ -289,13 +289,14 @@ impl CreateWordDocTool {
                     ("path", "string", Some("Absolute path of the .docx file to create or modify")),
                     ("title", "string", Some("Document title (for new files only; ignored when modifying existing)")),
                     ("elements", "array", Some(
-                        "Array of element objects. Paragraph: {id?, text?, style?, runs?, position?, anchor_id?}. Table: {id?, header, rows, position?, anchor_id?}.\n\
+                        "Array of element objects. Paragraph: {id?, text?, style?, runs?, position?, anchor_id?}. Table: {id?, header, rows, position?, anchor_id?}. Image: {type:'image', id?, path, width_emu, height_emu, anchor_id?, position?}.\n\
                          Elements with id replace existing ones; without id are appended or inserted at anchor_id+position. Use action:'delete' with id to delete.\n\
                          When modifying (id present), omit 'text' field to preserve original text. Providing 'text' field will update the paragraph text.\n\
                          Omit 'runs' to keep original formatting, or provide 'runs' array to fully replace paragraph formatting.\n\
                          runs shape: array of {text, bold?, italic?, underline?, font_size? (half-points, e.g. 24=12pt), color? (hex RGB, e.g. 'FF0000'), font_name?}.\n\
                          position can be 'before' or 'after' (default) to control where new elements are inserted relative to anchor_id.\n\
-                         Tables are auto-detected from header/rows fields, no need to specify type='table'."
+                         Tables are auto-detected from header/rows fields, no need to specify type='table'.\n\
+                         Images: `path` must be an absolute local path to a png/jpeg/jpg/gif file; `width_emu`/`height_emu` are in EMU (914400=1in, 360000=1cm). Only inline insertion is supported in v1."
                     )),
                     ("deletes", "array", Some("Array of element IDs to delete. Works alongside elements[] with action:'delete'.")),
                 ],
@@ -433,6 +434,62 @@ impl CreateWordDocTool {
         }))
     }
 
+    /// Parse an `{type: "image", ...}` element.
+    ///
+    /// Required: `path` (absolute path on disk to png/jpeg/gif),
+    /// `width_emu`, `height_emu`. Optional: `id` (defaults to a fresh
+    /// uuid), `anchor_id`, `position`.
+    fn parse_image(v: &serde_json::Value) -> Result<Option<crate::office::DocElement>, String> {
+        if v["action"].as_str() == Some("delete") {
+            return Err("delete action is not supported for image elements; use office_word_expert to remove them".to_string());
+        }
+
+        let path = v["path"]
+            .as_str()
+            .ok_or_else(|| "image element requires `path`".to_string())?;
+        if path.is_empty() {
+            return Err("image element requires non-empty `path`".to_string());
+        }
+        let width_emu = v["width_emu"]
+            .as_u64()
+            .ok_or_else(|| "image element requires `width_emu` (integer EMU, 914400=1in)".to_string())?
+            as u32;
+        let height_emu = v["height_emu"]
+            .as_u64()
+            .ok_or_else(|| "image element requires `height_emu` (integer EMU, 914400=1in)".to_string())?
+            as u32;
+        if width_emu == 0 || height_emu == 0 {
+            return Err("image element requires non-zero width_emu and height_emu".to_string());
+        }
+        // Validate the file extension up-front so the writer doesn't have
+        // to surface a half-broken docx; the user gets a clear "fix your
+        // payload" message instead.
+        let ext = std::path::Path::new(path)
+            .extension()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        match ext.as_str() {
+            "png" | "jpeg" | "jpg" | "gif" => {}
+            other => {
+                return Err(format!(
+                    "Unsupported image extension '.{}'; supported: png, jpeg, jpg, gif",
+                    other
+                ));
+            }
+        }
+
+        let id = v["id"].as_str().map(|s| s.to_string());
+
+        Ok(Some(crate::office::DocElement::Image {
+            id: id.unwrap_or_else(|| format!("__new_i{}", uuid_simple())),
+            position: 0,
+            path: path.to_string(),
+            width_emu,
+            height_emu,
+        }))
+    }
+
     pub async fn execute(&self, arguments: Value, workspace: Option<String>) -> Result<String, ToolError> {
         let params: CreateWordDocParams = serde_json::from_value(arguments)
             .map_err(|e| ToolError::InvalidArguments("create_word_doc".to_string(), format!("Invalid parameters: {}", e)))?;
@@ -480,6 +537,8 @@ impl CreateWordDocTool {
                 });
                 let result = if elem_type == "table" {
                     Self::parse_table(v)
+                } else if elem_type == "image" {
+                    Self::parse_image(v)
                 } else {
                     Self::parse_paragraph(v)
                 };
@@ -591,6 +650,7 @@ impl CreateWordDocTool {
 
                 let mut new_paras = Vec::new();
                 let mut new_tables = Vec::new();
+                let mut new_images = Vec::new();
                 for insert_elem in new_elements {
                     match insert_elem.element {
                         crate::office::DocElement::Paragraph { id, text, style, runs, numbering, .. } => {
@@ -608,10 +668,20 @@ impl CreateWordDocTool {
                             }
                             new_tables.push(crate::office::WordTable { id, rows: table_rows });
                         }
+                        crate::office::DocElement::Image { id, position: _, path, width_emu, height_emu } => {
+                            new_images.push(crate::office::WordImage {
+                                id,
+                                path,
+                                width_emu,
+                                height_emu,
+                                internal_path: None,
+                            });
+                        }
                     }
                 }
                 existing.paragraphs.extend(new_paras);
                 existing.tables.extend(new_tables);
+                existing.images.extend(new_images);
 
                 crate::office::write_word_document_to_path(&existing, path_obj, Some(&bytes))
                     .map_err(|e| ToolError::ExecutionError(format!("Failed to write doc: {}", e)))?;
@@ -630,10 +700,11 @@ impl CreateWordDocTool {
             // Build a temporary document from just the new elements, then extract its parts
             let temp_elements: Vec<crate::office::DocElement> = new_elements.iter().map(|ie| ie.element.clone()).collect();
             let temp_doc = crate::office::WordDocument::from_elements(temp_elements);
-            let new_count = temp_doc.paragraphs.len() + temp_doc.tables.len();
+            let new_count = temp_doc.paragraphs.len() + temp_doc.tables.len() + temp_doc.images.len();
 
             existing.paragraphs.extend(temp_doc.paragraphs);
             existing.tables.extend(temp_doc.tables);
+            existing.images.extend(temp_doc.images);
 
             crate::office::write_word_document_to_path(&existing, path_obj, Some(&bytes))
                 .map_err(|e| ToolError::ExecutionError(format!("Failed to append to doc: {}", e)))?;
