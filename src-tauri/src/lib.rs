@@ -11,6 +11,7 @@ mod backup;
 mod document;
 mod diff;
 mod feature_toggles;
+mod runtime_state;
 mod ai;
 mod ai_config;
 mod commands;

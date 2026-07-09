@@ -6,6 +6,7 @@ use crate::agent::{
 use crate::agent::tools::ToolRegistry;
 use crate::ai_config::{self, AIConfigInput};
 use crate::feature_toggles::{self, ToggleId};
+use crate::runtime_state::{self, Mode};
 use crate::streaming::{emit, StreamPayload};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -195,25 +196,30 @@ pub async fn ai_agent_stream(
 
     let executor = create_agent_executor(ai_config);
 
-    // Use different tool registry and system prompt based on mode
-    let (tool_registry, mut system_prompt) = match mode.as_str() {
-        "plan" => {
+    // Use different tool registry and system prompt based on mode.
+    //
+    // The mode string is parsed into a typed `Mode` here so the rest of
+    // the function can refer to it without re-matching. Unknown modes
+    // fall back to Agent (and get logged), but the typed `Mode::Agent`
+    // value still drives the runtime-state fragment so the LLM sees a
+    // consistent declaration.
+    let parsed_mode = Mode::from_str(&mode).unwrap_or_else(|| {
+        tracing::warn!("Unknown mode '{}', defaulting to agent", mode);
+        Mode::Agent
+    });
+
+    let (tool_registry, mut system_prompt) = match parsed_mode {
+        Mode::Plan => {
             let registry = get_read_only_tool_registry(&app).await;
             let prompt = get_plan_system_prompt();
             (registry, prompt)
         }
-        "ask" => {
+        Mode::Ask => {
             let registry = get_read_only_tool_registry(&app).await;
             let prompt = get_ask_system_prompt();
             (registry, prompt)
         }
-        "agent" => {
-            let registry = get_full_tool_registry(&app).await;
-            let prompt = get_agent_system_prompt();
-            (registry, prompt)
-        }
-        other => {
-            tracing::warn!("Unknown mode '{}', defaulting to agent", other);
+        Mode::Agent => {
             let registry = get_full_tool_registry(&app).await;
             let prompt = get_agent_system_prompt();
             (registry, prompt)
@@ -232,12 +238,14 @@ pub async fn ai_agent_stream(
         }
     }
 
-    // Compute the effective tool allowlist. Start from the current
-    // registry's full set, then let `effective_tool_set` narrow it down
-    // based on the toggles (currently only `kb_strict` does this).
-    let allowed_tools: Option<Vec<String>> = if parsed_toggles.is_empty() {
-        None
-    } else {
+    // Compute the effective tool allowlist. We ALWAYS run the base set
+    // through `effective_tool_set` — never skip on an empty toggle list
+    // — because individual toggles have *opposite* default semantics:
+    // `kb_strict` is opt-in to restrict, while `web_search` is opt-in
+    // to expose. If we returned `None` here whenever the user enabled
+    // no toggles, an opt-out tool like `web_search` would always be
+    // visible (which is the bug this guard used to have).
+    let allowed_tools: Option<Vec<String>> = {
         let registry = tool_registry.read().await;
         let base = registry.tool_names();
         Some(feature_toggles::effective_tool_set(&base, &parsed_toggles))
@@ -265,6 +273,19 @@ pub async fn ai_agent_stream(
     if !sanitised_expert_overrides.is_empty() {
         session = session.with_expert_max_iterations(sanitised_expert_overrides);
     }
+
+    // Append the runtime-state fragment next. It is the authoritative
+    // declaration of the active mode and toggles for THIS turn, so we
+    // place it after the mode's base prompt (static doc) but before the
+    // toggle usage guidance (which only matters when the toggle is on).
+    // The order in the final system prompt is therefore:
+    //   1. mode base prompt (static, mode-bound)
+    //   2. runtime state (this turn's truth)
+    //   3. toggle inventory + usage guidance
+    //   4. workspace context
+    let runtime_state = runtime_state::runtime_state_fragment(parsed_mode, &parsed_toggles);
+    system_prompt.push_str("\n\n---\n\n");
+    system_prompt.push_str(&runtime_state);
 
     // Layer feature-toggle prompt fragments AFTER the mode's base prompt
     // so the toggle's rules take precedence on conflicts. Each fragment
