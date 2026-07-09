@@ -274,6 +274,7 @@ mod database_tools;
 mod meta_tools; // get_tool_help + delegate_to
 mod todo_tools; // update_todo (read-only meta-tool; see agent_loop::try_handle_meta_tool)
 mod plan_tools;  // create_plan  (read-only meta-tool; see agent_loop::try_handle_meta_tool)
+mod mermaid_tools; // render_mermaid  (in-process merman renderer, mermaid.js 11.15 parity)
 pub mod ask_user_tools; // ask_user   (meta-tool; see agent_loop::try_handle_meta_tool)
 
 pub use file_tools::{ReadFileTool, WriteFileTool, EditFileTool, CreateDirTool, MoveFileTool};
@@ -286,6 +287,7 @@ pub use database_tools::DatabaseSearchTool;
 pub use meta_tools::{GetToolHelpTool, DelegateToTool};
 pub use todo_tools::{UpdateTodoTool, TodoItem};
 pub use plan_tools::{CreatePlanTool, CreatePlanArgs, PlanFileTouch};
+pub use mermaid_tools::RenderMermaidTool;
 pub use ask_user_tools::AskUserTool;
 
 /// Unified executor enum combining all tool implementations
@@ -304,6 +306,7 @@ pub enum ToolExecutor {
     ModifyExcel(office_tools::ModifyExcelTool),
     CreateExcel(office_tools::CreateExcelTool),
     InspectOffice(office_tools::InspectOfficeTool),
+    RenderMermaid(mermaid_tools::RenderMermaidTool),
     DatabaseSearch(database_tools::DatabaseSearchTool),
     // Meta tools (intercepted by the agent loop; execute() returns an error
     // if reached directly).
@@ -331,6 +334,7 @@ impl ToolExecutor {
             ToolExecutor::ModifyExcel(_) => "modify_excel",
             ToolExecutor::CreateExcel(_) => "create_excel",
             ToolExecutor::InspectOffice(_) => "inspect_office",
+            ToolExecutor::RenderMermaid(_) => "render_mermaid",
             ToolExecutor::DatabaseSearch(_) => "database_search",
             ToolExecutor::GetToolHelp(_) => "get_tool_help",
             ToolExecutor::DelegateTo(_) => "delegate_to",
@@ -356,6 +360,7 @@ impl ToolExecutor {
             ToolExecutor::ModifyExcel(t) => t.definition(),
             ToolExecutor::CreateExcel(t) => t.definition(),
             ToolExecutor::InspectOffice(t) => t.definition(),
+            ToolExecutor::RenderMermaid(t) => t.definition(),
             ToolExecutor::DatabaseSearch(t) => t.definition(),
             ToolExecutor::GetToolHelp(t) => t.definition(),
             ToolExecutor::DelegateTo(t) => t.definition(),
@@ -381,6 +386,15 @@ impl ToolExecutor {
             ToolExecutor::ModifyExcel(t) => t.execute(arguments, workspace).await,
             ToolExecutor::CreateExcel(t) => t.execute(arguments, workspace).await,
             ToolExecutor::InspectOffice(t) => t.execute(arguments, workspace).await,
+            // `render_mermaid` returns a richer outcome (carries the
+            // output file path so the registry can stamp `file_path` on
+            // the ToolResult and trigger the frontend's `file-written`
+            // event). Convert back to a plain String here; the registry
+            // re-stitches the file_path below in `ToolRegistry::execute`.
+            ToolExecutor::RenderMermaid(t) => {
+                let outcome = t.execute(arguments, workspace).await?;
+                Ok(outcome.output)
+            }
             ToolExecutor::DatabaseSearch(t) => t.execute(arguments, workspace).await,
             ToolExecutor::GetToolHelp(t) => t.execute(arguments, workspace).await,
             ToolExecutor::DelegateTo(t) => t.execute(arguments, workspace).await,
@@ -487,6 +501,7 @@ impl ToolRegistry {
             ToolExecutor::ModifyExcel(ModifyExcelTool),
             ToolExecutor::CreateExcel(CreateExcelTool),
             ToolExecutor::InspectOffice(InspectOfficeTool),
+            ToolExecutor::RenderMermaid(RenderMermaidTool::default()),
             // DatabaseSearchTool added lazily via with_app_handle()
             // Meta tools (intercepted in agent loop, but still registered so
             // they appear in tool catalogs and can be schema-validated).
@@ -558,6 +573,48 @@ impl ToolRegistry {
         };
 
         let workspace = self.workspace.clone();
+
+        // `render_mermaid` is a special case among file-modifying tools:
+        // its output path lives in `output_path` (not `path`) and the
+        // tool itself constructs a `RenderOutcome` carrying the path so
+        // we can stamp `file_path` on the `ToolResult` for the frontend's
+        // `file-written` event. Branch on the tool name first so we
+        // don't accidentally apply the generic `path` lookup below.
+        if tool_call.name == "render_mermaid" {
+            let output_path = tool_call
+                .arguments
+                .get("output_path")
+                .and_then(|v| v.as_str())
+                .map(String::from);
+            return match executor
+                .execute(tool_call.arguments.clone(), workspace)
+                .await
+            {
+                Ok(output) => {
+                    if let (Some(app), Some(path)) =
+                        (self.app_handle.as_ref(), output_path.as_deref())
+                    {
+                        use crate::file_watcher::{emit_file_change, FileChangeEvent};
+                        let existed = std::path::Path::new(path).exists();
+                        let event = if existed {
+                            FileChangeEvent::Modified { path: path.to_string() }
+                        } else {
+                            FileChangeEvent::Created { path: path.to_string() }
+                        };
+                        emit_file_change(app, event);
+                    }
+                    ToolResult {
+                        tool_call_id: tool_call.id.clone(),
+                        output,
+                        is_error: false,
+                        original_content: None,
+                        new_content: None,
+                        file_path: output_path,
+                    }
+                }
+                Err(e) => ToolResult::error(&tool_call.id, e.to_string()),
+            };
+        }
 
         let is_file_modification = matches!(
             tool_call.name.as_str(),
