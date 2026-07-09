@@ -103,6 +103,37 @@ pub const PROFILES: &[ProfileDescriptor] = &[
         ],
         max_iterations: 50,
     },
+    ProfileDescriptor {
+        name: "flowchart_expert",
+        label: "Flowchart Expert",
+        system_prompt: include_str!("../../prompts/subagents/flowchart_expert.md"),
+        // `render_mermaid` is in-process via the `merman` crate (pure-Rust
+        // mermaid.js 11.15 parity renderer, no Node.js / Chromium needed);
+        // `read_file`/`write_file` cover Markdown extraction and side
+        // outputs (e.g. `.mmd` source files). No delegate_to — flowchart
+        // work is self-contained.
+        tools: &[
+            "read_file", "write_file",
+            "list_dir", "glob",
+            "render_mermaid",
+        ],
+        max_iterations: 50,
+    },
+    ProfileDescriptor {
+        name: "word_image_expert",
+        label: "Word Image Expert",
+        system_prompt: include_str!("../../prompts/subagents/word_image_expert.md"),
+        // Reuses `create_word_doc` with the new `image` element type. Read-only
+        // inspection tools (`read_office_file`, `inspect_office`) are needed to
+        // resolve element ids when inserting relative to an anchor.
+        tools: &[
+            "read_file",
+            "list_dir", "glob", "grep",
+            "read_office_file", "inspect_office",
+            "create_word_doc",
+        ],
+        max_iterations: 50,
+    },
 ];
 
 /// Compile-time tool specs. Loaded on-demand by `get_tool_help`.

@@ -124,6 +124,12 @@ Your toolset has two tiers. **Tier 1 is self-explanatory; Tier 2 requires loadin
 │                      │ Can also do .docx/.xlsx edits in batch.                │
 │ code_expert          │ Code features, bug fixes, refactors, cross-file code   │
 │                      │ changes. Does NOT touch .docx/.xlsx.                   │
+│ flowchart_expert     │ Render Mermaid / Markdown diagrams to PNG/SVG via the │
+│                      │ in-process merman renderer (mermaid.js 11.15 parity). │
+│                      │ Saves into the workspace via render_mermaid.        │
+│ word_image_expert    │ Insert a local PNG / JPEG / GIF into a .docx           │
+│                      │ (single inline image per call). Does NOT create        │
+│                      │ flowcharts or AI-generated images — just attaches.     │
 └──────────────────────┴──────────────────────────────────────────────────────────┘
 ```
 

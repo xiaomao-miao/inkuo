@@ -750,7 +750,9 @@ export type ExpertProfileName =
   | 'md_writer'
   | 'researcher'
   | 'batch_editor'
-  | 'code_expert';
+  | 'code_expert'
+  | 'flowchart_expert'
+  | 'word_image_expert';
 
 /** Supported embedding models */
 export type EmbeddingModelType =

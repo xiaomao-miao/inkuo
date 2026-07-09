@@ -96,6 +96,8 @@ const defaultSettings: Settings = {
     researcher: 50,
     batch_editor: 50,
     code_expert: 50,
+    flowchart_expert: 50,
+    word_image_expert: 50,
   },
 };
 
@@ -113,6 +115,8 @@ const ALLOWED_EXPERT_KEYS = [
   'researcher',
   'batch_editor',
   'code_expert',
+  'flowchart_expert',
+  'word_image_expert',
 ] as const;
 
 /** Sanitise a raw `expert_max_iterations` map: keep only known keys and

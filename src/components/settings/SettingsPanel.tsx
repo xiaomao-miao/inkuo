@@ -470,6 +470,14 @@ const EXPERT_DISPLAY_INFO: Record<
     label: '代码工程专家',
     description: '代码 feature / 重构 / 修 bug',
   },
+  flowchart_expert: {
+    label: '流程图专家',
+    description: '从 Mermaid / Markdown 渲染流程图 PNG/SVG',
+  },
+  word_image_expert: {
+    label: 'Word 插图专家',
+    description: '将本地图片插入到 .docx 文档',
+  },
 };
 
 const EXPERT_ORDER: ExpertProfileName[] = [
@@ -479,6 +487,8 @@ const EXPERT_ORDER: ExpertProfileName[] = [
   'researcher',
   'batch_editor',
   'code_expert',
+  'flowchart_expert',
+  'word_image_expert',
 ];
 
 const EXPERT_ITERATIONS_MIN = 1;
