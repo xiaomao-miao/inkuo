@@ -69,6 +69,8 @@
 .documentContent {
   flex: 1;
   overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--fg-primary) 18%, transparent) transparent;
   padding: var(--space-lg) var(--space-xl);
 }
 

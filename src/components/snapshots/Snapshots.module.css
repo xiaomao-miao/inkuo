@@ -123,6 +123,8 @@
 .list {
   flex: 1;
   overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--fg-primary) 18%, transparent) transparent;
   padding: 4px 0;
 }
 
@@ -269,6 +271,9 @@
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--fg-primary) 18%, transparent) transparent;
+
   padding: 12px 16px;
 }
 

@@ -204,6 +204,8 @@
 .fileTree {
   flex: 1;
   overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--fg-primary) 18%, transparent) transparent;
   padding: var(--space-xs) 0;
 }
 
@@ -553,6 +555,9 @@
 .knowledgePanel {
   flex: 1;
   overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--fg-primary) 18%, transparent) transparent;
+
   padding: var(--space-sm);
   display: flex;
   flex-direction: column;
@@ -643,6 +648,9 @@
 .knowledgePanelList {
   flex: 1;
   overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--fg-primary) 18%, transparent) transparent;
+
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -679,6 +687,9 @@
 .knowledgeView {
   flex: 1;
   overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--fg-primary) 18%, transparent) transparent;
+
   padding: 12px;
   display: flex;
   flex-direction: column;

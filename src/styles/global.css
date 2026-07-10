@@ -25,7 +25,7 @@ body {
               color var(--motion-base) var(--motion-out);
 }
 
-/* Scrollbar styling */
+/* Scrollbar styling — WebKit + Firefox */
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
@@ -41,6 +41,13 @@ body {
   background: color-mix(in oklch, var(--fg-primary) 18%, transparent);
   background-clip: padding-box;
   border: 2px solid transparent;
+}
+::-webkit-scrollbar-corner { background: transparent; }
+
+/* Firefox:仅作用于根 html,内部 scroll 容器各自再加 */
+html {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--fg-primary) 18%, transparent) transparent;
 }
 
 ::selection {
