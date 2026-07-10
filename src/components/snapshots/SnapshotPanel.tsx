@@ -8,7 +8,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import { History, Plus, RotateCcw, Trash2, X, Search, Bot } from 'lucide-react';
+import { History, Plus, RotateCcw, Trash2, X, Search, Bot, Camera, FolderOpen, SearchX } from 'lucide-react';
 import { listSnapshots, type SnapshotIndexEntry } from '../../services/snapshots';
 import { useSidebarStore } from '../../store/sidebarStore';
 import { useSnapshotActions } from './useSnapshotActions';
@@ -136,7 +136,11 @@ export const SnapshotPanel = () => {
       </div>
 
       {!workspacePath && (
-        <div className={styles.empty}>请先打开一个工作区</div>
+        <div className={styles.empty}>
+          <FolderOpen size={28} className={styles.emptyIcon} />
+          <div className={styles.emptyTitle}>请先打开一个工作区</div>
+          <div className={styles.emptyHint}>打开文件夹后,这里会列出文件快照</div>
+        </div>
       )}
 
       {workspacePath && error && (
@@ -144,14 +148,29 @@ export const SnapshotPanel = () => {
       )}
 
       {workspacePath && isLoading && (
-        <div className={styles.loading}>加载中…</div>
+        <div className={styles.loading}>
+          <span className={styles.loadingDot} />
+          <span className={styles.loadingDot} />
+          <span className={styles.loadingDot} />
+          <span>加载中…</span>
+        </div>
       )}
 
       {workspacePath && !isLoading && filtered.length === 0 && (
         <div className={styles.empty}>
-          {snapshots.length === 0
-            ? '尚无快照，点击右上角 + 创建第一份。'
-            : '没有匹配的快照'}
+          {snapshots.length === 0 ? (
+            <>
+              <Camera size={28} className={styles.emptyIcon} />
+              <div className={styles.emptyTitle}>尚无快照</div>
+              <div className={styles.emptyHint}>点击右上角 + 创建第一份快照</div>
+            </>
+          ) : (
+            <>
+              <SearchX size={28} className={styles.emptyIcon} />
+              <div className={styles.emptyTitle}>没有匹配的快照</div>
+              <div className={styles.emptyHint}>试试别的关键词</div>
+            </>
+          )}
         </div>
       )}
 
