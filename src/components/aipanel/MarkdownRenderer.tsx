@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
+import { Check, Copy } from 'lucide-react';
 import styles from './MarkdownRenderer.module.css';
 
 interface MarkdownRendererProps {
@@ -52,12 +53,43 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
               );
             }
 
+            const text = String(children ?? '');
+            const [copied, setCopied] = useState(false);
+            const handleCopy = async () => {
+              try {
+                await navigator.clipboard.writeText(text);
+                setCopied(true);
+                window.setTimeout(() => setCopied(false), 1400);
+              } catch {
+                // 静默失败,旧版浏览器或权限缺失
+              }
+            };
+
             return (
-              <pre className={styles.codeBlock}>
-                <code className={match ? `language-${match[1]}` : ''} {...props}>
-                  {children}
-                </code>
-              </pre>
+              <div className={styles.codeBlockWrapper}>
+                <div className={styles.codeBlockHeader}>
+                  {match && <span className={styles.codeLang}>{match[1]}</span>}
+                  <button
+                    type="button"
+                    className={styles.copyButton}
+                    onClick={handleCopy}
+                    aria-label="复制代码"
+                    title="复制代码"
+                  >
+                    {copied ? (
+                      <Check size={12} className={styles.copyIcon} />
+                    ) : (
+                      <Copy size={12} className={styles.copyIcon} />
+                    )}
+                    <span>{copied ? '已复制' : '复制'}</span>
+                  </button>
+                </div>
+                <pre className={styles.codeBlock}>
+                  <code className={match ? `language-${match[1]}` : ''} {...props}>
+                    {children}
+                  </code>
+                </pre>
+              </div>
             );
           },
           a({ href, children, ...props }) {

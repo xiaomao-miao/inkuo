@@ -140,25 +140,86 @@
   font-family: var(--font-mono);
   font-size: 0.9em;
   padding: 0.15em 0.4em;
-  background-color: var(--bg-tertiary);
-  border-radius: 4px;
-  color: var(--accent-primary);
+  background-color: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+  color: var(--fg-secondary);
 }
 
 /* Code Blocks */
+.codeBlockWrapper {
+  position: relative;
+  margin: 0.6em 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background-color: var(--bg-surface);
+  overflow: hidden;
+  animation: motion-fade-in var(--motion-base) var(--motion-out);
+}
+
+.codeBlockHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  background-color: var(--bg-elevated);
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 11px;
+}
+
+.codeLang {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.copyButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  background-color: transparent;
+  color: var(--fg-muted);
+  font-size: 11px;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--motion-out),
+    border-color var(--motion-fast) var(--motion-out),
+    color var(--motion-fast) var(--motion-out),
+    transform var(--motion-fast) var(--motion-spring);
+}
+
+.copyButton:hover {
+  background-color: var(--bg-hover);
+  border-color: var(--accent);
+  color: var(--accent);
+  transform: translateY(-1px);
+}
+
+.copyButton:active {
+  transform: translateY(0);
+}
+
+.copyIcon {
+  flex-shrink: 0;
+}
+
 .codeBlock {
-  margin: 0.4em 0;
-  padding: 0.8em;
-  background-color: var(--bg-primary);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
+  margin: 0;
+  padding: 12px 14px;
+  background-color: var(--bg-canvas);
   overflow-x: auto;
 }
 
 .codeBlock code {
   font-family: var(--font-mono);
   font-size: 13px;
-  line-height: 1.5;
+  line-height: 1.55;
   color: var(--fg-primary);
 }
 
