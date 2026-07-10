@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Check, Loader2, X, FolderOpen, FileText, Search, FolderPlus, Move, Terminal } from 'lucide-react';
 import { getToolDisplayName, extractFileNameFromPath } from './toolUtils';
 import styles from './ToolCallCard.module.css';
@@ -9,6 +9,7 @@ interface CompactToolCardProps {
   arguments: Record<string, unknown>;
   status: 'pending' | 'executing' | 'success' | 'error';
   duration?: number;
+  error?: string;
 }
 
 function getToolIcon(name: string) {
@@ -36,6 +37,7 @@ export const CompactToolCard: React.FC<CompactToolCardProps> = React.memo(functi
   arguments: args,
   status,
   duration,
+  error,
 }) {
   const isExecuting = status === 'executing';
   const filePath = (args?.path as string | undefined) ?? (args?.file_path as string | undefined);
@@ -46,8 +48,32 @@ export const CompactToolCard: React.FC<CompactToolCardProps> = React.memo(functi
   const dirPath = (args?.dir_path as string | undefined) ?? (args?.directory as string | undefined) ?? filePath;
   const isCreateDir = name === 'create_dir';
 
+  // 完成时一次性庆祝动画:用 ref + effect 监听 executing → 非 executing 的转换,
+  // 在节点上挂 `data-just-finished` 属性 1 秒,触发 ToolCallCard.module.css
+  // 中的 success-flash / shake 动画。
+  const [justFinished, setJustFinished] = useState<'success' | 'error' | null>(null);
+  const prevExecutingRef = useRef(isExecuting);
+  useEffect(() => {
+    if (prevExecutingRef.current && !isExecuting) {
+      const next: 'success' | 'error' = error ? 'error' : 'success';
+      setJustFinished(next);
+      const t = window.setTimeout(() => setJustFinished(null), 1000);
+      prevExecutingRef.current = false;
+      return () => window.clearTimeout(t);
+    }
+    prevExecutingRef.current = isExecuting;
+  }, [isExecuting, error]);
+
+  const dataAttrs: Record<string, string | undefined> = {
+    'data-tool-call-id': id,
+    'data-status': status,
+  };
+  if (justFinished) {
+    dataAttrs['data-just-finished'] = justFinished;
+  }
+
   return (
-    <div className={`${styles.compactCard} ${styles[status]}`} data-tool-call-id={id}>
+    <div className={`${styles.compactCard} ${styles[status]}`} {...dataAttrs}>
       <div className={styles.compactLeft}>
         <div className={`${styles.compactIcon} ${isExecuting ? styles.compactIconExecuting : ''}`}>
           {getToolIcon(name)}

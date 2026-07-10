@@ -130,3 +130,48 @@
 @keyframes itemFadeIn        { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes rowSlideIn        { 0% { opacity: 0; transform: translateY(-3px); } 100% { opacity: 1; transform: translateY(0); } }
 @keyframes slideInRight      { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+/* ─────────────────────────────────────────────────────────────────────
+ *  Tool call 专用动画
+ * ───────────────────────────────────────────────────────────────────── */
+
+/* 进入 —— 从下方 6px 滑入 + 渐现,配合 stagger 形成"逐个浮起" */
+@keyframes toolcall-enter {
+  from { opacity: 0; transform: translateY(6px) scale(0.985); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* 卡片左侧的"进度条"无限横向流动 —— executing 状态专用 */
+@keyframes toolcall-progress {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(200%); }
+}
+
+/* 完成时图标的小弹跳 */
+@keyframes toolcall-success-pop {
+  0%   { transform: scale(1); }
+  35%  { transform: scale(1.18); }
+  60%  { transform: scale(0.94); }
+  100% { transform: scale(1); }
+}
+
+/* 完成时整卡一次性绿色脉冲 */
+@keyframes toolcall-success-flash {
+  0%, 100% { background-color: transparent; }
+  35%      { background-color: color-mix(in oklch, var(--success) 14%, transparent); }
+}
+
+/* 错误抖动 —— 4px × 3 次,200ms 内完成 */
+@keyframes toolcall-shake {
+  0%, 100%  { transform: translateX(0); }
+  20%       { transform: translateX(-4px); }
+  40%       { transform: translateX(4px); }
+  60%       { transform: translateX(-3px); }
+  80%       { transform: translateX(2px); }
+}
+
+/* 错误状态一次性红色脉冲 */
+@keyframes toolcall-error-flash {
+  0%, 100% { background-color: transparent; }
+  35%      { background-color: color-mix(in oklch, var(--error) 14%, transparent); }
+}

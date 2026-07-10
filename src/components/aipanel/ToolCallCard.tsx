@@ -290,13 +290,38 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = React.memo(function Too
   const finalStatus = status === 'pending' && diffSummary ? 'success' : status;
   const showCursor = isStreamingArguments && isExecuting;
 
+  // 当状态从 executing 切到 success / error 时,在节点上挂一个
+  // `data-just-finished` 属性 1 秒,触发一次性的庆祝动画。
+  const [justFinished, setJustFinished] = React.useState<
+    'success' | 'error' | null
+  >(null);
+  const prevExecutingRef = useRef(isExecuting);
+  useEffect(() => {
+    if (prevExecutingRef.current && !isExecuting) {
+      const next: 'success' | 'error' = error ? 'error' : 'success';
+      setJustFinished(next);
+      const t = window.setTimeout(() => setJustFinished(null), 1000);
+      prevExecutingRef.current = false;
+      return () => window.clearTimeout(t);
+    }
+    prevExecutingRef.current = isExecuting;
+  }, [isExecuting, error]);
+
   const preview = useMemo(
     () => resolveToolPreview(name, args, rawArguments, streamingContent),
     [name, args, rawArguments, streamingContent]
   );
 
+  const dataAttrs: Record<string, string | undefined> = {
+    'data-tool-call-id': id,
+    'data-status': finalStatus,
+  };
+  if (justFinished) {
+    dataAttrs['data-just-finished'] = justFinished;
+  }
+
   return (
-    <div className={`${styles.card} ${styles[finalStatus]}`} data-tool-call-id={id}>
+    <div className={`${styles.card} ${styles[finalStatus]}`} {...dataAttrs}>
       <ToolCardHeader
         name={name}
         fileName={fileName}

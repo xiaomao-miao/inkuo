@@ -1,21 +1,139 @@
+/* =============================================================================
+ *  ToolCallCard 动画系统
+ *
+ *  状态机:
+ *    pending   →  左侧无进度条,边框默认色
+ *    executing →  左侧进度条从下往上无限循环,边框+图标 accent 色
+ *    success   →  整卡一次绿色脉冲 + 图标弹一下
+ *    error     →  整卡横向抖动 + 一次红色脉冲
+ *
+ *  入场用 keyframe 触发,其它状态切换用 transition。状态切换时 keyframe
+ *  会重新播放(因为我们在切换时移除并重新添加 className),形成"完成"的庆祝。
+ * ============================================================================= */
+
 .card {
-  border: 1px solid var(--border-color);
-  border-radius: 10px;
+  position: relative;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
   overflow: hidden;
-  background-color: var(--bg-primary);
-  transition: border-color 0.15s ease;
+  background-color: var(--bg-canvas);
+  /* 状态切换的过渡:边框 / 背景 / box-shadow 走 220ms 的 ease-out */
+  transition:
+    border-color var(--motion-base) var(--motion-out),
+    box-shadow var(--motion-base) var(--motion-out),
+    background-color var(--motion-base) var(--motion-out);
+  /* 入场 */
+  animation: toolcall-enter var(--motion-slow) var(--motion-out) both;
+  will-change: transform, opacity;
+}
+
+/* 左侧进度条:卡片左侧 2px 宽的彩色细条,默认透明 */
+.card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background-color: var(--accent);
+  opacity: 0;
+  transition: opacity var(--motion-fast) var(--motion-out),
+              width var(--motion-fast) var(--motion-out);
+  pointer-events: none;
+}
+
+.card:hover::before {
+  width: 3px;
+}
+
+/* 左侧进度条上的"光带" —— executing 时横向往返流动 */
+.card::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in oklch, var(--accent) 70%, transparent) 50%,
+    transparent 100%
+  );
+}
+
+.card:hover::before {
+  opacity: 1;
 }
 
 .executing {
-  border-color: var(--accent-primary);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-subtle);
+}
+.executing::before { opacity: 1; background-color: var(--accent); }
+.executing::after {
+  opacity: 1;
+  animation: toolcall-progress 1.6s var(--motion-in-out) infinite;
 }
 
 .success {
-  border-color: #22c55e;
+  border-color: var(--success);
+}
+.success::before {
+  opacity: 1;
+  background-color: var(--success);
+  width: 3px;
+}
+/* 完成时的庆祝:一次性脉冲 + 图标弹一下。我们用 .success-flash 修饰符
+   在 TSX 中临时加上,1s 后再移除,这样再次完成也能重新触发动画。 */
+.success.flashing {
+  animation:
+    toolcall-enter 0s,
+    toolcall-success-flash 700ms var(--motion-out);
 }
 
 .error {
-  border-color: #ef4444;
+  border-color: var(--error);
+}
+.error::before {
+  opacity: 1;
+  background-color: var(--error);
+  width: 3px;
+}
+.error.shaking {
+  animation:
+    toolcall-enter 0s,
+    toolcall-shake 380ms var(--motion-out),
+    toolcall-error-flash 700ms var(--motion-out);
+}
+
+/* ── 数据属性驱动的"完成/错误"动画(纯 CSS 实现,无需 React 配合) ──
+ * 通过 data-just-finished="success|error" 触发,1s 后由 JS 移除
+ * 即可多次触发。
+ */
+.card[data-just-finished='success'] {
+  animation:
+    toolcall-enter 0s,
+    toolcall-success-flash 700ms var(--motion-out);
+}
+.card[data-just-finished='error'] {
+  animation:
+    toolcall-enter 0s,
+    toolcall-shake 380ms var(--motion-out),
+    toolcall-error-flash 700ms var(--motion-out);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card,
+  .card[data-just-finished],
+  .success.flashing,
+  .error.shaking {
+    animation: none;
+  }
+  .executing::after { display: none; }
 }
 
 .header {
@@ -23,14 +141,15 @@
   align-items: center;
   justify-content: space-between;
   padding: 10px 12px;
-  background-color: var(--bg-secondary);
-  border-bottom: 1px solid var(--border-color);
+  background-color: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .headerLeft {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 
 .headerRight {
@@ -47,24 +166,30 @@
   justify-content: center;
   width: 24px;
   height: 24px;
-  border-radius: 4px;
-  background-color: var(--bg-tertiary);
+  border-radius: var(--radius-sm);
+  background-color: var(--bg-elevated);
   color: var(--fg-secondary);
+  transition:
+    background-color var(--motion-base) var(--motion-out),
+    color var(--motion-base) var(--motion-out),
+    transform var(--motion-base) var(--motion-spring);
 }
 
 .executing .icon {
   background-color: var(--accent-subtle);
-  color: var(--accent-primary);
+  color: var(--accent);
 }
 
+/* success 状态触发图标弹跳 */
 .success .icon {
-  background-color: rgba(34, 197, 94, 0.15);
-  color: #22c55e;
+  background-color: var(--success-subtle);
+  color: var(--success);
+  animation: toolcall-success-pop 480ms var(--motion-spring);
 }
 
 .error .icon {
-  background-color: rgba(239, 68, 68, 0.15);
-  color: #ef4444;
+  background-color: var(--error-subtle);
+  color: var(--error);
 }
 
 .toolName {
@@ -77,8 +202,8 @@
   font-size: 11px;
   color: var(--fg-muted);
   padding: 2px 8px;
-  background-color: var(--bg-tertiary);
-  border-radius: 4px;
+  background-color: var(--bg-elevated);
+  border-radius: var(--radius-sm);
 }
 
 .duration {
@@ -87,8 +212,16 @@
   font-family: var(--font-mono);
 }
 
+/* spinner 用 motion-spring 摆动的旋转 */
 .spinning {
   animation: spin 1s linear infinite;
+  color: var(--accent);
+}
+
+.success .spinning,
+.error .spinning {
+  /* 状态切换的瞬间,spinner 退场不需要继续转 */
+  animation: none;
 }
 
 /* Line counts */
@@ -97,8 +230,8 @@
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
-  background-color: var(--bg-tertiary);
-  border-bottom: 1px solid var(--border-color);
+  background-color: var(--bg-elevated);
+  border-bottom: 1px solid var(--border-subtle);
   font-size: 12px;
   font-family: var(--font-mono);
 }
@@ -116,20 +249,31 @@
   font-family: var(--font-mono);
   color: var(--fg-secondary);
   text-align: left;
+  transition: color var(--motion-fast) var(--motion-out);
 }
 
 .diffToggle:hover {
   color: var(--fg-primary);
 }
 
-.added {
-  color: #22c55e;
+.diffToggle svg {
+  transition: transform var(--motion-fast) var(--motion-out);
+}
+
+/* +N / -N 数字滑入 */
+.added,
+.deleted {
   font-weight: 600;
+  display: inline-block;
+  animation: rowSlideIn var(--motion-base) var(--motion-spring);
+}
+
+.added {
+  color: var(--success);
 }
 
 .deleted {
-  color: #ef4444;
-  font-weight: 600;
+  color: var(--error);
 }
 
 .fileNameLabel {
@@ -143,32 +287,41 @@
   padding: 2px 8px;
   font-size: 11px;
   font-family: var(--font-mono);
-  color: var(--accent-primary);
+  color: var(--accent);
   background-color: transparent;
-  border: 1px solid var(--accent-primary);
-  border-radius: 4px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition:
+    background-color var(--motion-fast) var(--motion-out),
+    color var(--motion-fast) var(--motion-out),
+    transform var(--motion-fast) var(--motion-spring);
 }
 
 .fileNameButton:hover {
-  background-color: var(--accent-primary);
-  color: white;
+  background-color: var(--accent);
+  color: var(--accent-contrast);
+  transform: translateY(-1px);
+}
+
+.fileNameButton:active {
+  transform: translateY(0);
 }
 
 /* Diff container */
 .diffContainer {
   padding: 8px;
-  background-color: var(--bg-tertiary);
+  background-color: var(--bg-elevated);
   max-height: 400px;
   overflow-y: auto;
+  animation: motion-slide-up var(--motion-base) var(--motion-out);
 }
 
 .hunk {
   margin-bottom: 8px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   overflow: hidden;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border-subtle);
 }
 
 .hunk:last-child {
@@ -177,8 +330,8 @@
 
 .hunkHeader {
   padding: 4px 8px;
-  background-color: var(--bg-secondary);
-  border-bottom: 1px solid var(--border-color);
+  background-color: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .hunkRange {
@@ -188,24 +341,26 @@
 }
 
 .diffLines {
-  background-color: var(--bg-primary);
+  background-color: var(--bg-canvas);
 }
 
+/* 每条 diff 行滑入,加上 stagger */
 .diffLine {
   display: flex;
   font-family: var(--font-mono);
   font-size: 11px;
   line-height: 1.5;
+  animation: rowSlideIn var(--motion-fast) var(--motion-out) both;
 }
 
 .diffLine.delete {
-  background-color: rgba(239, 68, 68, 0.1);
-  color: #ef4444;
+  background-color: var(--diff-removed-bg);
+  color: var(--diff-removed-fg);
 }
 
 .diffLine.insert {
-  background-color: rgba(34, 197, 94, 0.1);
-  color: #22c55e;
+  background-color: var(--diff-added-bg);
+  color: var(--diff-added-fg);
 }
 
 .diffLine.equal {
@@ -217,17 +372,17 @@
   padding: 0 8px;
   text-align: right;
   color: var(--fg-muted);
-  background-color: var(--bg-secondary);
+  background-color: var(--bg-surface);
   user-select: none;
   flex-shrink: 0;
 }
 
 .delete .lineNumber {
-  background-color: rgba(239, 68, 68, 0.15);
+  background-color: color-mix(in oklch, var(--error) 18%, transparent);
 }
 
 .insert .lineNumber {
-  background-color: rgba(34, 197, 94, 0.15);
+  background-color: color-mix(in oklch, var(--success) 18%, transparent);
 }
 
 .linePrefix {
@@ -238,11 +393,11 @@
 }
 
 .delete .linePrefix {
-  color: #ef4444;
+  color: var(--error);
 }
 
 .insert .linePrefix {
-  color: #22c55e;
+  color: var(--success);
 }
 
 .lineContent {
@@ -254,8 +409,8 @@
 
 /* Live streaming preview of tool arguments (write_file content, etc.) */
 .previewSection {
-  border-bottom: 1px solid var(--border-color);
-  background-color: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-subtle);
+  background-color: var(--bg-surface);
 }
 
 .previewToggle {
@@ -293,26 +448,27 @@
   padding: 1px 6px;
   font-size: 10px;
   font-weight: 500;
-  color: var(--accent-primary);
+  color: var(--accent);
   background-color: var(--accent-subtle);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 
 .streamingDot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background-color: var(--accent-primary);
+  background-color: var(--accent);
   animation: streamPulse 1s ease-in-out infinite;
 }
 
 .previewContainer {
   max-height: 280px;
   overflow-y: auto;
-  background-color: var(--bg-primary);
-  border-top: 1px solid var(--border-color);
+  background-color: var(--bg-canvas);
+  border-top: 1px solid var(--border-subtle);
   scrollbar-width: thin;
   scrollbar-color: var(--fg-muted) transparent;
+  animation: motion-slide-up var(--motion-base) var(--motion-out);
 }
 
 .previewContainer::-webkit-scrollbar {
@@ -333,7 +489,7 @@
   color: var(--fg-primary);
   white-space: pre-wrap;
   word-break: break-word;
-  background-color: var(--bg-primary);
+  background-color: var(--bg-canvas);
 }
 
 .streamingCaret {
@@ -341,7 +497,7 @@
   width: 7px;
   height: 1em;
   margin-left: 1px;
-  background-color: var(--accent-primary);
+  background-color: var(--accent);
   vertical-align: text-bottom;
   animation: caretBlink 0.9s ease-in-out infinite;
 }
@@ -349,13 +505,14 @@
 /* Error */
 .error {
   padding: 10px 12px;
-  background-color: rgba(239, 68, 68, 0.05);
+  background-color: var(--error-subtle);
+  animation: motion-slide-up var(--motion-base) var(--motion-out);
 }
 
 .errorLabel {
   font-size: 11px;
   font-weight: 600;
-  color: #ef4444;
+  color: var(--error);
   display: block;
   margin-bottom: 4px;
 }
@@ -364,33 +521,74 @@
   margin: 0;
   font-family: var(--font-mono);
   font-size: 11px;
-  color: #ef4444;
+  color: var(--error);
   white-space: pre-wrap;
   word-break: break-all;
 }
 
 /* Compact card styles for non-file-modification tools */
 .compactCard {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 6px 10px;
-  border-radius: 6px;
-  background-color: var(--bg-secondary);
-  border: 1px solid var(--border-color);
-  transition: border-color 0.15s ease;
+  border-radius: var(--radius-sm);
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  overflow: hidden;
+  transition:
+    border-color var(--motion-base) var(--motion-out),
+    background-color var(--motion-base) var(--motion-out);
+  animation: toolcall-enter var(--motion-base) var(--motion-out) both;
+}
+
+.compactCard::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 2px;
+  background-color: var(--accent);
+  opacity: 0;
+  transition: opacity var(--motion-fast) var(--motion-out);
 }
 
 .compactCard.executing {
-  border-color: var(--accent-primary);
+  border-color: var(--accent);
+}
+.compactCard.executing::before {
+  opacity: 1;
+  animation: toolcall-progress 1.6s var(--motion-in-out) infinite;
 }
 
 .compactCard.success {
-  border-color: #22c55e;
+  border-color: var(--success);
+}
+.compactCard.success::before {
+  opacity: 1;
+  background-color: var(--success);
 }
 
 .compactCard.error {
-  border-color: #ef4444;
+  border-color: var(--error);
+}
+.compactCard.error::before {
+  opacity: 1;
+  background-color: var(--error);
+}
+
+.compactCard[data-just-finished='success'] {
+  animation:
+    toolcall-enter 0s,
+    toolcall-success-flash 700ms var(--motion-out);
+}
+.compactCard[data-just-finished='error'] {
+  animation:
+    toolcall-enter 0s,
+    toolcall-shake 380ms var(--motion-out),
+    toolcall-error-flash 700ms var(--motion-out);
 }
 
 .compactLeft {
@@ -405,14 +603,14 @@
   justify-content: center;
   width: 20px;
   height: 20px;
-  border-radius: 4px;
-  background-color: var(--bg-tertiary);
+  border-radius: var(--radius-sm);
+  background-color: var(--bg-elevated);
   color: var(--fg-secondary);
 }
 
 .compactIconExecuting {
   background-color: var(--accent-subtle);
-  color: var(--accent-primary);
+  color: var(--accent);
 }
 
 .compactName {
@@ -425,7 +623,7 @@
   font-size: 10px;
   color: var(--fg-muted);
   padding: 1px 6px;
-  background-color: var(--bg-tertiary);
+  background-color: var(--bg-elevated);
   border-radius: 3px;
   max-width: 150px;
   overflow: hidden;
@@ -439,7 +637,7 @@
 }
 
 .compactDest {
-  color: #22c55e;
+  color: var(--success);
 }
 
 .compactRight {
@@ -449,11 +647,11 @@
 }
 
 .compactSuccessIcon {
-  color: #22c55e;
+  color: var(--success);
 }
 
 .compactErrorIcon {
-  color: #ef4444;
+  color: var(--error);
 }
 
 .compactDuration {
@@ -466,8 +664,8 @@
 .subagent {
   margin-top: 8px;
   margin-left: 16px;
-  border-left: 2px solid var(--accent-primary);
-  border-radius: 8px;
+  border-left: 2px solid var(--accent);
+  border-radius: var(--radius-md);
 }
 
 .subagent .header {
@@ -475,35 +673,35 @@
 }
 
 .subagent.running {
-  border-color: var(--accent-primary);
+  border-color: var(--accent);
 }
 
 .subagent.completed {
-  border-color: #22c55e;
+  border-color: var(--success);
 }
 
 .subagent.error {
-  border-color: #ef4444;
+  border-color: var(--error);
 }
 
 .subagent .icon {
-  background-color: var(--accent-primary);
-  color: white;
+  background-color: var(--accent);
+  color: var(--accent-contrast);
 }
 
 .subagent.running .icon {
-  background-color: var(--accent-primary);
-  color: white;
+  background-color: var(--accent);
+  color: var(--accent-contrast);
 }
 
 .subagent.completed .icon {
-  background-color: rgba(34, 197, 94, 0.2);
-  color: #22c55e;
+  background-color: var(--success-subtle);
+  color: var(--success);
 }
 
 .subagent.error .icon {
-  background-color: rgba(239, 68, 68, 0.2);
-  color: #ef4444;
+  background-color: var(--error-subtle);
+  color: var(--error);
 }
 
 .subagentActivity {
@@ -520,8 +718,8 @@
   padding: 4px 8px;
   font-size: 12px;
   color: var(--fg-secondary);
-  background-color: var(--bg-tertiary);
-  border-radius: 4px;
+  background-color: var(--bg-elevated);
+  border-radius: var(--radius-sm);
 }
 
 .subagentText svg {
@@ -544,7 +742,7 @@
   color: var(--fg-muted);
   font-size: 11px;
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   transition: background-color 0.15s;
 }
 
@@ -556,8 +754,8 @@
 .reasoningContent {
   margin: 4px 0 0 20px;
   padding: 8px;
-  background-color: var(--bg-tertiary);
-  border-radius: 4px;
+  background-color: var(--bg-elevated);
+  border-radius: var(--radius-sm);
   font-size: 11px;
   font-family: var(--font-mono);
   color: var(--fg-secondary);
@@ -565,6 +763,7 @@
   word-break: break-word;
   max-height: 200px;
   overflow-y: auto;
+  animation: motion-slide-up var(--motion-base) var(--motion-out);
 }
 
 .subagentToolCall {
@@ -574,24 +773,25 @@
   padding: 4px 8px;
   font-size: 11px;
   color: var(--fg-secondary);
-  background-color: var(--bg-tertiary);
-  border-radius: 4px;
+  background-color: var(--bg-elevated);
+  border-radius: var(--radius-sm);
 }
 
 .subagentToolCall svg {
-  color: var(--accent-primary);
+  color: var(--accent);
 }
 
 .subagentToolResult {
   margin-left: 20px;
   padding: 4px 8px;
-  background-color: var(--bg-tertiary);
-  border-radius: 4px;
-  border-left: 2px solid #22c55e;
+  background-color: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+  border-left: 2px solid var(--success);
+  animation: motion-slide-up var(--motion-base) var(--motion-out);
 }
 
 .subagentToolResult.error {
-  border-left-color: #ef4444;
+  border-left-color: var(--error);
 }
 
 .toolResultHeader {
@@ -617,19 +817,19 @@
 .subagentSummary {
   margin: 8px 12px;
   padding: 8px;
-  background-color: rgba(34, 197, 94, 0.1);
-  border-radius: 4px;
-  border-left: 2px solid #22c55e;
+  background-color: var(--diff-added-bg);
+  border-radius: var(--radius-sm);
+  border-left: 2px solid var(--success);
 }
 
 .subagentSummary strong {
   font-size: 11px;
-  color: #22c55e;
+  color: var(--success);
 }
 
 /* Inline subagent items within DelegateToCard */
 .delegateTo {
-  border-color: var(--accent-primary);
+  border-color: var(--accent);
 }
 
 .delegateTo .subagentActivities {
@@ -637,8 +837,8 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
-  background-color: var(--bg-primary);
-  border-top: 1px solid var(--border-color);
+  background-color: var(--bg-canvas);
+  border-top: 1px solid var(--border-subtle);
 }
 
 .subagentItem {
@@ -646,21 +846,22 @@
   flex-direction: column;
   gap: 2px;
   padding: 4px 8px;
-  border-radius: 4px;
-  background-color: var(--bg-secondary);
+  border-radius: var(--radius-sm);
+  background-color: var(--bg-surface);
   font-size: 11px;
+  animation: toolcall-enter var(--motion-base) var(--motion-out) both;
 }
 
 .subagentItem.running {
-  border-left: 2px solid var(--accent-primary);
+  border-left: 2px solid var(--accent);
 }
 
 .subagentItem.completed {
-  border-left: 2px solid #22c55e;
+  border-left: 2px solid var(--success);
 }
 
 .subagentItem.error {
-  border-left: 2px solid #ef4444;
+  border-left: 2px solid var(--error);
 }
 
 .subagentHeader {
@@ -671,7 +872,7 @@
 }
 
 .subagentHeader svg:first-child {
-  color: var(--accent-primary);
+  color: var(--accent);
 }
 
 .subagentLabel {
@@ -690,7 +891,7 @@
   border: none;
   color: var(--fg-muted);
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   transition: background-color 0.15s;
 }
 
@@ -723,7 +924,7 @@
 }
 
 .subagentReasoning svg {
-  color: var(--accent-primary);
+  color: var(--accent);
   flex-shrink: 0;
 }
 
@@ -737,18 +938,18 @@
 }
 
 .subagentToolCall svg {
-  color: var(--accent-primary);
+  color: var(--accent);
   flex-shrink: 0;
 }
 
 .subagentToolResult {
   margin-left: 18px;
   padding: 2px 4px;
-  border-left: 2px solid #22c55e;
+  border-left: 2px solid var(--success);
 }
 
 .subagentToolResult.error {
-  border-left-color: #ef4444;
+  border-left-color: var(--error);
 }
 
 .toolResultLabel {
@@ -760,11 +961,11 @@
 }
 
 .subagentToolResult .toolResultLabel svg {
-  color: #22c55e;
+  color: var(--success);
 }
 
 .subagentToolResult.error .toolResultLabel svg {
-  color: #ef4444;
+  color: var(--error);
 }
 
 /* 子代理任务区域 - 默认折叠 */
@@ -793,8 +994,8 @@
 .taskContent {
   margin: 4px 0 0 18px;
   padding: 6px;
-  background-color: var(--bg-tertiary);
-  border-radius: 4px;
+  background-color: var(--bg-elevated);
+  border-radius: var(--radius-sm);
   font-size: 10px;
 }
 
@@ -807,8 +1008,8 @@
 .delegateResult {
   margin: 8px 12px;
   padding: 8px;
-  background-color: var(--bg-tertiary);
-  border-radius: 4px;
+  background-color: var(--bg-elevated);
+  border-radius: var(--radius-sm);
   font-size: 12px;
 }
 
@@ -820,7 +1021,7 @@
 /* 委派卡片提示词区域 */
 .promptSection {
   padding: 6px 12px;
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .promptToggle {
@@ -833,7 +1034,7 @@
   color: var(--fg-muted);
   font-size: 11px;
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   transition: background-color 0.15s;
 }
 
@@ -845,8 +1046,8 @@
 .promptContent {
   margin-top: 8px;
   padding: 8px;
-  background-color: var(--bg-tertiary);
-  border-radius: 4px;
+  background-color: var(--bg-elevated);
+  border-radius: var(--radius-sm);
   font-size: 11px;
 }
 
