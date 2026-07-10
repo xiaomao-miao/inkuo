@@ -10,9 +10,8 @@ export interface PlanFileSaveResult {
  * `<workspace>/.inkuo/plans/<plan_id>.md`. Returns the absolute path and
  * the sanitized plan id we actually used as the filename stem.
  *
- * Mirrors Cursor's `.cursor/plans/<plan>.md` behavior: every plan gets a
- * persistent file the user can grep / open / share, and the apply /
- * cancel hooks know exactly which file to delete.
+ * Every plan gets a persistent file the user can grep / open / share, and
+ * the apply / cancel hooks know exactly which file to delete.
  */
 export async function savePlanToFile(
   workspacePath: string,

@@ -301,7 +301,7 @@
   margin-bottom: 0;
 }
 
-/* Streaming cursor/caret for incremental rendering */
+/* Streaming caret for incremental rendering */
 .streamingCaret {
   display: inline-block;
   width: 2px;

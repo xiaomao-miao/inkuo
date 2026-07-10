@@ -59,7 +59,7 @@ function orderedForDisplay(items: TodoItem[]): TodoItem[] {
 }
 
 /**
- * Cursor-style task chip. Renders nothing when the active session has no
+ * Task chip. Renders nothing when the active session has no
  * published todo snapshot. Collapsed by default — the header shows the
  * progress count and the current in-progress item's content; click to
  * expand the full checklist.

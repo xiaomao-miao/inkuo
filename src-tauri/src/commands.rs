@@ -679,7 +679,7 @@ impl Default for Settings {
         };
 
         Self {
-            theme: "cursor-dark".to_string(),
+            theme: "inkuo-dark".to_string(),
             accent_color: "#7C5CFF".to_string(),
             editor_font_size: 14,
             editor_font_family: "JetBrains Mono, monospace".to_string(),

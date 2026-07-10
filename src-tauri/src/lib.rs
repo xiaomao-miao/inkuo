@@ -1,4 +1,4 @@
-//! inkuo - Local-First AI Document Editor
+//! inkuo - AI Document Editor
 //!
 //! Rust backend core module handling:
 //! - Document parsing and serialization

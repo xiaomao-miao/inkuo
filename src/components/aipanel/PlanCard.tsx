@@ -90,7 +90,7 @@ function summarizeFiles(files: PlanFileTouch[]): string {
 }
 
 /**
- * Cursor-style plan card. Renders the structured plan as a compact
+ * Structured plan card. Renders the plan as a compact
  * overview with a collapsible details section showing the model's free-form
  * Markdown prose. Supports three states:
  *   - "Streaming" — block open or no plan yet: render the prose as a

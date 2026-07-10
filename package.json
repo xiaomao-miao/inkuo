@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Local-First AI Document Editor",
+  "description": "AI Document Editor",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",

@@ -368,10 +368,10 @@ export function useChatSessionActions({
    * triggers in agent mode).
    *
    * Before dispatching, the plan's persisted file (`.inkuo/plans/<id>.md`)
-   * is destroyed via `plan_delete` — Cursor-style ephemeral plans: once
-   * the user commits them, the on-disk artifact is consumed. The
-   * `messageId` is provided by PlanCard so we know which plan item to
-   * read the `planFileId` from.
+   * is destroyed via `plan_delete` — ephemeral plans: once the user
+   * commits them, the on-disk artifact is consumed. The `messageId` is
+   * provided by PlanCard so we know which plan item to read the
+   * `planFileId` from.
    */
   const handleApplyPlan = useCallback(
     async (messageId: string, plan: PlanOutput) => {

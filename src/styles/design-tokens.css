@@ -1,6 +1,6 @@
 :root {
-  /* Cursor-like Design Tokens */
-  /* Base colors - Cursor Dark Theme */
+  /* inkuo Design Tokens */
+  /* Base colors - Dark Theme */
   --bg-primary: #1e1e1e;
   --bg-secondary: #252526;
   --bg-tertiary: #2d2d2d;
@@ -104,7 +104,7 @@
 }
 
 /* Light theme variant */
-[data-theme="cursor-light"] {
+[data-theme="inkuo-light"] {
   --bg-primary: #ffffff;
   --bg-secondary: #f6f6f6;
   --bg-tertiary: #ebebeb;

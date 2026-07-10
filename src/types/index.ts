@@ -806,4 +806,4 @@ export interface EmbeddingModelInfo {
   description: string;
 }
 
-export type ThemeType = 'cursor-dark' | 'cursor-light' | 'high-contrast-dark' | 'high-contrast-light';
+export type ThemeType = 'inkuo-dark' | 'inkuo-light' | 'high-contrast-dark' | 'high-contrast-light';

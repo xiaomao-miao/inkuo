@@ -225,7 +225,7 @@
   min-height: 22px;
 }
 
-/* Cursor-style left border indicator for selected item */
+/* Left border indicator for selected item */
 .fileItem::before {
   content: '';
   position: absolute;
@@ -326,7 +326,7 @@
   white-space: nowrap;
 }
 
-/* Open indicator dot (like Cursor) */
+/* Open indicator dot */
 .openIndicator {
   font-size: 8px;
   color: var(--accent-primary);

@@ -1,7 +1,7 @@
 //! Plan mode persistence: write plan output to a hidden workspace-local
 //! directory so the user can review/grep plans later, and tear those files
 //! down when the plan is consumed (applied) or abandoned (cancelled /
-//! session closed). Mirrors Cursor's `.cursor/plans/<plan-id>.md` behavior.
+//! session closed).
 
 use crate::commands::AppCommandError;
 use serde::{Deserialize, Serialize};

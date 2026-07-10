@@ -329,10 +329,10 @@ export const SettingsPanel = () => {
                 <div className={styles.themeGrid}>
                   <button
                     className={`${styles.themeOption} ${
-                      settings.theme === 'cursor-dark' ? styles.active : ''
+                      settings.theme === 'inkuo-dark' ? styles.active : ''
                     }`}
                     onClick={() => {
-                      void updateSettingAndPersist('theme', 'cursor-dark');
+                      void updateSettingAndPersist('theme', 'inkuo-dark');
                     }}
                   >
                     <div className={styles.themePreview} style={{ background: '#1e1e1e' }}>
@@ -342,10 +342,10 @@ export const SettingsPanel = () => {
                   </button>
                   <button
                     className={`${styles.themeOption} ${
-                      settings.theme === 'cursor-light' ? styles.active : ''
+                      settings.theme === 'inkuo-light' ? styles.active : ''
                     }`}
                     onClick={() => {
-                      void updateSettingAndPersist('theme', 'cursor-light');
+                      void updateSettingAndPersist('theme', 'inkuo-light');
                     }}
                   >
                     <div className={styles.themePreview} style={{ background: '#ffffff' }}>
