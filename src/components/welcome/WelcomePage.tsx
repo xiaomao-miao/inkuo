@@ -28,6 +28,7 @@ import { reportError } from '../../utils/errors';
 import { cloudApi } from '../cloud/cloudApi';
 import { MOTION_LEVELS, type MotionLevel } from '../../hooks/useMotionLevel';
 import { Wordmark } from './Wordmark';
+import { getCloudBaseUrl } from '../../utils/cloudBaseUrl';
 import styles from './WelcomePage.module.css';
 
 interface WelcomePageProps {
@@ -147,11 +148,9 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onWorkspaceSelected })
 
   // ── Cloud auth 内嵌态 ─────────────────────────────────────────────
   const hasCloudAccount = !!settings.cloud.account;
-  const initialBaseUrl =
-    settings.cloud.account?.base_url ?? 'https://cloud.inkuo.com';
+  const cloudBaseUrl = getCloudBaseUrl();
   const initialEmail = settings.cloud.account?.email ?? '';
   const [authMode, setAuthMode] = useState<AuthMode>('login');
-  const [baseUrl, setBaseUrl] = useState(initialBaseUrl);
   const [email, setEmail] = useState(initialEmail);
   const [password, setPassword] = useState('');
   const [inviteCode, setInviteCode] = useState('');
@@ -217,11 +216,6 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onWorkspaceSelected })
   const handleCloudSubmit = async () => {
     if (submitting) return;
     setAuthError(null);
-    const trimmedBaseUrl = baseUrl.trim().replace(/\/+$/, '');
-    if (!trimmedBaseUrl) {
-      setAuthError('请填写服务器地址');
-      return;
-    }
     if (!email.trim() || !password) {
       setAuthError('请填写邮箱和密码');
       return;
@@ -234,8 +228,8 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onWorkspaceSelected })
     try {
       const account =
         authMode === 'register'
-          ? await cloudApi.register(trimmedBaseUrl, inviteCode.trim(), email.trim(), password)
-          : await cloudApi.login(trimmedBaseUrl, email.trim(), password);
+          ? await cloudApi.register(cloudBaseUrl, inviteCode.trim(), email.trim(), password)
+          : await cloudApi.login(cloudBaseUrl, email.trim(), password);
       await setCloudAccountAndPersist(account);
       await cloudApi.persistAccount({
         ...settings,
@@ -437,7 +431,7 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onWorkspaceSelected })
                     {settings.cloud.account?.email}
                   </span>
                   <span className={styles.accountServer}>
-                    {settings.cloud.account?.base_url?.replace(/^https?:\/\//, '')}
+                    {cloudBaseUrl.replace(/^https?:\/\//, '')}
                   </span>
                 </div>
                 <button
@@ -471,21 +465,7 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onWorkspaceSelected })
                   </button>
                 </div>
 
-                <div className={styles.field}>
-                  <label className={styles.fieldLabel} htmlFor="welcome-baseurl">
-                    服务器
-                  </label>
-                  <input
-                    id="welcome-baseurl"
-                    className={styles.fieldInput}
-                    type="text"
-                    value={baseUrl}
-                    onChange={(e) => setBaseUrl(e.target.value)}
-                    placeholder="https://cloud.inkuo.com"
-                  />
-                </div>
-
-                <div className={styles.field}>
+                <div className={styles.emailField}>
                   <label className={styles.fieldLabel} htmlFor="welcome-email">
                     邮箱
                   </label>

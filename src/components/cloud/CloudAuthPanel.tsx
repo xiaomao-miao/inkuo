@@ -2,10 +2,10 @@ import { useState } from 'react';
 import { Cloud, LogIn, UserPlus, Loader2, AlertCircle } from 'lucide-react';
 import { useSettingsStore } from '../../store';
 import { cloudApi } from './cloudApi';
+import { getCloudBaseUrl } from '../../utils/cloudBaseUrl';
 import styles from './CloudPanel.module.css';
 
 interface CloudAuthPanelProps {
-  defaultBaseUrl?: string;
   onAuthSuccess?: () => void;
 }
 
@@ -13,20 +13,18 @@ type AuthMode = 'login' | 'register';
 
 /**
  * Email + password form, with an extra "invite code" field in register
- * mode. The current draft of the server URL is kept in local component
- * state so the user can switch between self-hosted deployments without
- * the setting being committed to disk.
+ * mode. The cloud server URL is hard-coded in `utils/cloudBaseUrl.ts`
+ * and is no longer user-editable — the previous "self-hosted" override
+ * is removed for the GA build.
  */
-export const CloudAuthPanel = ({ defaultBaseUrl, onAuthSuccess }: CloudAuthPanelProps) => {
+export const CloudAuthPanel = ({ onAuthSuccess }: CloudAuthPanelProps) => {
   const setCloudAccountAndPersist = useSettingsStore((s) => s.setCloudAccountAndPersist);
   const settings = useSettingsStore((s) => s.settings);
+  const cloudBaseUrl = getCloudBaseUrl();
 
-  const initialBaseUrl =
-    defaultBaseUrl ?? settings.cloud.account?.base_url ?? 'https://cloud.inkuo.com';
   const initialEmail = settings.cloud.account?.email ?? '';
 
   const [mode, setMode] = useState<AuthMode>('login');
-  const [baseUrl, setBaseUrl] = useState(initialBaseUrl);
   const [email, setEmail] = useState(initialEmail);
   const [password, setPassword] = useState('');
   const [inviteCode, setInviteCode] = useState('');
@@ -37,11 +35,6 @@ export const CloudAuthPanel = ({ defaultBaseUrl, onAuthSuccess }: CloudAuthPanel
     if (submitting) return;
     setError(null);
 
-    const trimmedBaseUrl = baseUrl.trim().replace(/\/+$/, '');
-    if (!trimmedBaseUrl) {
-      setError('请填写服务器地址');
-      return;
-    }
     if (!email.trim() || !password) {
       setError('请填写邮箱和密码');
       return;
@@ -55,8 +48,8 @@ export const CloudAuthPanel = ({ defaultBaseUrl, onAuthSuccess }: CloudAuthPanel
     try {
       const account =
         mode === 'register'
-          ? await cloudApi.register(trimmedBaseUrl, inviteCode.trim(), email.trim(), password)
-          : await cloudApi.login(trimmedBaseUrl, email.trim(), password);
+          ? await cloudApi.register(cloudBaseUrl, inviteCode.trim(), email.trim(), password)
+          : await cloudApi.login(cloudBaseUrl, email.trim(), password);
 
       await setCloudAccountAndPersist(account);
       await cloudApi.persistAccount({
@@ -73,7 +66,7 @@ export const CloudAuthPanel = ({ defaultBaseUrl, onAuthSuccess }: CloudAuthPanel
       } else if (message.toLowerCase().includes('unauthorized') || message.includes('401')) {
         setError('邮箱或密码错误');
       } else if (message.toLowerCase().includes('network')) {
-        setError('无法连接到云端服务器，请检查地址或网络');
+        setError('无法连接到云端服务器,请检查地址或网络');
       } else {
         setError(message);
       }
@@ -104,17 +97,6 @@ export const CloudAuthPanel = ({ defaultBaseUrl, onAuthSuccess }: CloudAuthPanel
         >
           <UserPlus size={12} /> 注册
         </button>
-      </div>
-
-      <div className={styles.field}>
-        <label className={styles.label}>服务器地址</label>
-        <input
-          className={styles.input}
-          type="text"
-          value={baseUrl}
-          onChange={(e) => setBaseUrl(e.target.value)}
-          placeholder="https://cloud.inkuo.com"
-        />
       </div>
 
       <div className={styles.field}>
