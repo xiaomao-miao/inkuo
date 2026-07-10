@@ -681,10 +681,59 @@ export const NEW_FILE_TEMPLATES: readonly NewFileTemplate[] = [
 ] as const;
 
 // ============================================================================
+// Cloud mode types (inkuo Cloud)
+// ============================================================================
+
+/** Logged-in inkuo Cloud account. Persisted into `Settings.cloud.account`
+ * so the Rust-side `build_settings_ai_config` can route chat traffic to
+ * the cloud server. */
+export interface CloudAccount {
+  base_url: string;
+  email: string;
+  user_id: string;
+  access_token: string;
+  refresh_token: string;
+  /** ISO-8601 UTC timestamp. */
+  access_expires_at: string;
+  plan_name: string | null;
+  balance_cents: number;
+}
+
+/** Single upstream model exposed by the cloud server. The `id` is the
+ * server-side model_config id (Guid) and is what we send in the `model`
+ * field of `/v1/chat/completions`. */
+export interface CloudModelEntry {
+  id: string;
+  display_name: string;
+  model_name: string;
+  provider: string;
+  /** Unit: yuan per 1 million input tokens (uncached) */
+  input_price_per_m_tokens: number;
+  /** Unit: yuan per 1 million output tokens */
+  output_price_per_m_tokens: number;
+  /** Unit: yuan per 1 million cached input tokens. The Rust side does
+   * not bill, but this is surfaced in the UI for cost estimates. */
+  cached_input_price_per_m_tokens: number;
+  description: string | null;
+  provider_kind: AIProviderType;
+}
+
+/** Cloud-mode configuration. `cloud_mode_enabled` is the user-facing
+ * toggle; when `true`, the Rust side routes all chat traffic through
+ * `account.base_url` instead of using `apiConfigs[]`. The cached
+ * model list and active selection persist across restarts. */
+export interface CloudSettings {
+  cloud_mode_enabled: boolean;
+  account: CloudAccount | null;
+  cached_models: CloudModelEntry[];
+  active_cloud_model_id: string | null;
+}
+
+// ============================================================================
 // Settings types
 // ============================================================================
 
-export type AIProviderType = 'openai' | 'ollama' | 'deepseek' | 'official';
+export type AIProviderType = 'openai' | 'ollama' | 'deepseek' | 'official' | 'cloud';
 
 /** API configuration for a single model provider */
 export interface APIConfig {
@@ -749,6 +798,9 @@ export interface Settings {
    * without touching the wire format.
    */
   web_search: WebSearchSettings;
+  /** Cloud-mode settings. Optional in legacy settings files (older than
+   * cloud mode existed) — sanitised merge falls back to defaults. */
+  cloud: CloudSettings;
 }
 
 /** Per-provider configuration for the `web_search` tool. */

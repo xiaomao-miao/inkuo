@@ -46,6 +46,53 @@
   color: var(--fg-primary);
 }
 
+.modeTabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 16px;
+  background-color: var(--bg-primary);
+  border-bottom: 1px solid var(--border-color);
+}
+
+.modeTab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background-color: transparent;
+  color: var(--fg-muted);
+  border: 1px solid transparent;
+  border-radius: 5px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.modeTab:hover {
+  background-color: var(--bg-hover);
+  color: var(--fg-primary);
+}
+
+.modeTabActive {
+  background-color: var(--accent-color, var(--bg-hover));
+  color: var(--fg-primary);
+  border-color: var(--border-color);
+}
+
+.modeTabBadge {
+  font-size: 10px;
+  padding: 1px 5px;
+  background-color: var(--bg-hover);
+  border-radius: 3px;
+  color: var(--fg-muted);
+}
+
+.modeTabActive .modeTabBadge {
+  background-color: var(--accent-color, var(--bg-primary));
+  color: var(--fg-primary);
+}
+
 .content {
   flex: 1;
   overflow-y: auto;

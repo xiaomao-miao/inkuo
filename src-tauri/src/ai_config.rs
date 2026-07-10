@@ -26,6 +26,12 @@ pub enum AIProviderKind {
     DeepSeek,
     Ollama,
     Official,
+    /// Routes through the user's inkuo Cloud account. `base_url` is
+    /// `<cloud_server>/v1` and `api_key` is the user's JWT — the
+    /// server validates the token and forwards to the upstream LLM.
+    /// Always uses the OpenAI wire protocol underneath, so this branch
+    /// is identical to `OpenAI` from `ai::AIProvider`'s point of view.
+    Cloud,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,6 +71,7 @@ impl AIProviderKind {
             Self::DeepSeek => "deepseek",
             Self::Ollama => "ollama",
             Self::Official => "official",
+            Self::Cloud => "cloud",
         }
     }
 }
@@ -86,7 +93,7 @@ pub fn build_provider(
     // surface a clear "missing API key" message to the user.
     let require_key = matches!(
         provider,
-        AIProviderKind::OpenAI | AIProviderKind::DeepSeek | AIProviderKind::Official
+        AIProviderKind::OpenAI | AIProviderKind::DeepSeek | AIProviderKind::Official | AIProviderKind::Cloud
     );
     let key_is_empty = api_key.map(str::trim).map_or(true, str::is_empty);
     if require_key && key_is_empty {
@@ -114,6 +121,17 @@ pub fn build_provider(
             base_url: resolve_base(base_url, DEFAULT_OLLAMA_BASE_URL),
         },
         AIProviderKind::Official => ai::AIProvider::Official { api_key: key },
+        // Cloud routes use the OpenAI wire protocol, just with the
+        // user's cloud server as the base URL and a JWT as the api_key.
+        // `require_key` above treats it like a cloud provider because
+        // the server returns 401 for an empty token.
+        AIProviderKind::Cloud => ai::AIProvider::OpenAI {
+            api_key: key,
+            base_url: resolve_base(
+                base_url,
+                "https://cloud.inkuo.com/v1",
+            ),
+        },
     })
 }
 
@@ -131,6 +149,43 @@ pub fn build_provider_from_api_config(config: &ApiConfig) -> Result<ai::AIProvid
 }
 
 pub fn build_settings_ai_config(settings: &Settings) -> Result<ai::AIConfig, AIConfigError> {
+    // Cloud-mode branch: when the user has opted into cloud mode AND has
+    // a logged-in account AND has selected an active cloud model, route
+    // through the inkuo Cloud Server with the user's JWT. The actual HTTP
+    // request uses the regular OpenAI wire protocol — only the base URL
+    // and auth token differ.
+    if settings.cloud.cloud_mode_enabled {
+        if let (Some(account), Some(model_id)) = (
+            settings.cloud.account.as_ref(),
+            settings.cloud.active_cloud_model_id.as_ref(),
+        ) {
+            let entry = settings
+                .cloud
+                .cached_models
+                .iter()
+                .find(|m| &m.id == model_id);
+
+            if let Some(entry) = entry {
+                return Ok(ai::AIConfig {
+                    provider: ai::AIProvider::OpenAI {
+                        api_key: account.access_token.clone(),
+                        base_url: format!(
+                            "{}/v1",
+                            account.base_url.trim_end_matches('/')
+                        ),
+                    },
+                    model: entry.id.clone(),
+                    temperature: 0.7,
+                    max_tokens: None,
+                });
+            }
+        }
+    }
+
+    // Local-mode branch (unchanged): pick the active API config and
+    // build a provider from it. The cloud branch above returns early so
+    // no existing local configuration is touched when the user is in
+    // cloud mode.
     let config = active_api_config(settings)
         .or_else(|| settings.api_configs.iter().find(|config| config.enabled))
         .or_else(|| settings.api_configs.first())

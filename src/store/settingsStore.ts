@@ -1,6 +1,13 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { APIConfig, Settings, WebSearchProviderConfig } from '../types';
+import type {
+  APIConfig,
+  CloudAccount,
+  CloudModelEntry,
+  CloudSettings,
+  Settings,
+  WebSearchProviderConfig,
+} from '../types';
 import { saveSettings } from '../utils/saveSettings';
 
 interface SettingsState {
@@ -39,6 +46,15 @@ interface SettingsState {
     providerId: string,
     updates: Partial<Settings['web_search']['providers'][number]>
   ) => Promise<Settings>;
+
+  setCloudModeEnabled: (enabled: boolean) => Settings;
+  setCloudModeEnabledAndPersist: (enabled: boolean) => Promise<Settings>;
+  setCloudAccount: (account: CloudAccount | null) => Settings;
+  setCloudAccountAndPersist: (account: CloudAccount | null) => Promise<Settings>;
+  setCloudModels: (models: CloudModelEntry[]) => Settings;
+  setCloudModelsAndPersist: (models: CloudModelEntry[]) => Promise<Settings>;
+  setActiveCloudModelId: (id: string | null) => Settings;
+  setActiveCloudModelIdAndPersist: (id: string | null) => Promise<Settings>;
 }
 
 function createDefaultAPIConfig(): APIConfig {
@@ -68,6 +84,15 @@ function createDefaultWebSearchConfig(): Settings['web_search'] {
       },
     ],
     maxResults: 5,
+  };
+}
+
+function createDefaultCloudConfig(): CloudSettings {
+  return {
+    cloud_mode_enabled: false,
+    account: null,
+    cached_models: [],
+    active_cloud_model_id: null,
   };
 }
 
@@ -130,6 +155,7 @@ const defaultSettings: Settings = {
     word_image_expert: 50,
   },
   web_search: createDefaultWebSearchConfig(),
+  cloud: createDefaultCloudConfig(),
 };
 
 /** Range that mirrors the backend's `clamp(1, 200)`. */
@@ -241,6 +267,88 @@ function sanitiseWebSearchConfig(
   }
 
   return { enabled, maxResults, providers };
+}
+
+/** Defensive sanitiser for the persisted cloud settings. Mirrors the
+ * pattern used by `sanitiseWebSearchConfig`: any field with the wrong
+ * shape falls back to the in-code default. Legacy settings files (saved
+ * before cloud mode existed) have no `cloud` field, and we want them to
+ * keep loading cleanly into local mode. */
+function sanitiseCloudConfig(
+  raw: Partial<CloudSettings> | undefined
+): CloudSettings {
+  const fallback = createDefaultCloudConfig();
+  if (!raw || typeof raw !== 'object') return fallback;
+
+  const cloud_mode_enabled =
+    typeof raw.cloud_mode_enabled === 'boolean'
+      ? raw.cloud_mode_enabled
+      : fallback.cloud_mode_enabled;
+
+  // The account is opaque to the frontend — we mostly forward it as-is
+  // so the Rust side can refresh tokens. We only sanity-check the basic
+  // shape; tokens are just opaque strings here.
+  const account: CloudAccount | null =
+    raw.account && typeof raw.account === 'object' && typeof raw.account.access_token === 'string'
+      ? (raw.account as CloudAccount)
+      : null;
+
+  // The on-disk schema for CloudModelEntry has evolved: the price unit
+  // was renamed from `*_per_1k_tokens` to `*_per_m_tokens` (and a
+  // `cached_input_price_per_m_tokens` field was added). Old settings
+  // files may still carry the `1k` fields, so migrate in-place and
+  // multiply by 1000 so previously-shown cost estimates remain
+  // numerically correct under the new unit.
+  const migrateLegacyModel = (raw: unknown): CloudModelEntry | null => {
+    if (!raw || typeof raw !== 'object') return null;
+    const r = raw as Record<string, unknown>;
+    const inputPerM =
+      typeof r.input_price_per_m_tokens === 'number'
+        ? r.input_price_per_m_tokens
+        : typeof r.input_price_per_1k_tokens === 'number'
+        ? r.input_price_per_1k_tokens * 1000
+        : 0;
+    const outputPerM =
+      typeof r.output_price_per_m_tokens === 'number'
+        ? r.output_price_per_m_tokens
+        : typeof r.output_price_per_1k_tokens === 'number'
+        ? r.output_price_per_1k_tokens * 1000
+        : 0;
+    const cachedPerM =
+      typeof r.cached_input_price_per_m_tokens === 'number' ? r.cached_input_price_per_m_tokens : 0;
+    if (typeof r.id !== 'string' || typeof r.display_name !== 'string') return null;
+    return {
+      id: r.id,
+      display_name: r.display_name,
+      model_name: typeof r.model_name === 'string' ? r.model_name : '',
+      provider: typeof r.provider === 'string' ? r.provider : '',
+      input_price_per_m_tokens: inputPerM,
+      output_price_per_m_tokens: outputPerM,
+      cached_input_price_per_m_tokens: cachedPerM,
+      description: typeof r.description === 'string' ? r.description : null,
+      provider_kind:
+        typeof r.provider_kind === 'string' ? (r.provider_kind as CloudModelEntry['provider_kind']) : 'openai',
+    };
+  };
+
+  const cached_models: CloudModelEntry[] = Array.isArray(raw.cached_models)
+    ? (raw.cached_models
+        .map(migrateLegacyModel)
+        .filter((m): m is CloudModelEntry => m !== null))
+    : fallback.cached_models;
+
+  const active_cloud_model_id =
+    typeof raw.active_cloud_model_id === 'string' &&
+    cached_models.some((m) => m.id === raw.active_cloud_model_id)
+      ? raw.active_cloud_model_id
+      : null;
+
+  return {
+    cloud_mode_enabled,
+    account,
+    cached_models,
+    active_cloud_model_id,
+  };
 }
 
 export const useSettingsStore = create<SettingsState>()(
@@ -440,6 +548,59 @@ export const useSettingsStore = create<SettingsState>()(
         await persistSettingsSnapshot(nextSettings);
         return nextSettings;
       },
+
+      setCloudModeEnabled: (enabled) => {
+        const nextSettings: Settings = {
+          ...get().settings,
+          cloud: { ...get().settings.cloud, cloud_mode_enabled: enabled },
+        };
+        set({ settings: nextSettings });
+        return nextSettings;
+      },
+      setCloudModeEnabledAndPersist: async (enabled) => {
+        const nextSettings = get().setCloudModeEnabled(enabled);
+        await persistSettingsSnapshot(nextSettings);
+        return nextSettings;
+      },
+      setCloudAccount: (account) => {
+        const nextSettings: Settings = {
+          ...get().settings,
+          cloud: { ...get().settings.cloud, account },
+        };
+        set({ settings: nextSettings });
+        return nextSettings;
+      },
+      setCloudAccountAndPersist: async (account) => {
+        const nextSettings = get().setCloudAccount(account);
+        await persistSettingsSnapshot(nextSettings);
+        return nextSettings;
+      },
+      setCloudModels: (models) => {
+        const nextSettings: Settings = {
+          ...get().settings,
+          cloud: { ...get().settings.cloud, cached_models: models },
+        };
+        set({ settings: nextSettings });
+        return nextSettings;
+      },
+      setCloudModelsAndPersist: async (models) => {
+        const nextSettings = get().setCloudModels(models);
+        await persistSettingsSnapshot(nextSettings);
+        return nextSettings;
+      },
+      setActiveCloudModelId: (id) => {
+        const nextSettings: Settings = {
+          ...get().settings,
+          cloud: { ...get().settings.cloud, active_cloud_model_id: id },
+        };
+        set({ settings: nextSettings });
+        return nextSettings;
+      },
+      setActiveCloudModelIdAndPersist: async (id) => {
+        const nextSettings = get().setActiveCloudModelId(id);
+        await persistSettingsSnapshot(nextSettings);
+        return nextSettings;
+      },
     }),
     {
       name: 'inkuo-settings',
@@ -515,6 +676,11 @@ export const useSettingsStore = create<SettingsState>()(
           web_search: sanitiseWebSearchConfig(
             persistedSettings?.web_search as
               | Partial<Settings['web_search']>
+              | undefined
+          ),
+          cloud: sanitiseCloudConfig(
+            persistedSettings?.cloud as
+              | Partial<CloudSettings>
               | undefined
           ),
         };

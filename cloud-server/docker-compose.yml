@@ -1,0 +1,79 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: inkuo
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-inkuo_dev_password}
+      POSTGRES_DB: inkuo_cloud
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U inkuo -d inkuo_cloud"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:8080
+      ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=inkuo_cloud;Username=inkuo;Password=${POSTGRES_PASSWORD:-inkuo_dev_password}
+      Jwt__Secret: ${JWT_SECRET:-change-me-to-a-long-random-string-at-least-32-chars}
+      Jwt__Issuer: inkuo-cloud
+      Jwt__Audience: inkuo-desktop
+      Jwt__AccessExpiryMinutes: 15
+      Jwt__RefreshExpiryDays: 30
+    ports:
+      - "8080:8080"
+
+  billing:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: billing
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:8081
+      ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=inkuo_cloud;Username=inkuo;Password=${POSTGRES_PASSWORD:-inkuo_dev_password}
+      Admin__Token: ${ADMIN_TOKEN:-change-me-admin-token}
+    ports:
+      - "8081:8081"
+
+  admin:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: admin
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:8082
+      ConnectionStrings__Postgres: Host=postgres;Port=5432;Database=inkuo_cloud;Username=inkuo;Password=${POSTGRES_PASSWORD:-inkuo_dev_password}
+      Jwt__Secret: ${JWT_SECRET:-change-me-to-a-long-random-string-at-least-32-chars}
+      Jwt__Issuer: inkuo-cloud
+      Jwt__AdminAudience: inkuo-admin
+      Admin__SeedUsername: ${ADMIN_SEED_USERNAME:-admin}
+      Admin__SeedPassword: ${ADMIN_SEED_PASSWORD:-admin123}
+    ports:
+      - "8082:8082"
+
+volumes:
+  pgdata:

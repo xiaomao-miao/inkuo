@@ -7,6 +7,7 @@
 //! - File system operations
 //! - Agent tool calling
 
+mod cloud;
 mod backup;
 mod document;
 mod diff;
@@ -18,6 +19,7 @@ mod commands;
 mod commands_stream;
 mod commands_agent;
 mod commands_plan;
+mod commands_cloud;
 mod streaming;
 mod openai_stream;
 mod file_watcher;
@@ -54,6 +56,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(commands::AppState::default())
+        .manage(cloud::CloudClient::new())
         .manage(file_watcher::FileWatcherState::new())
         .setup(|app| {
             tauri::async_runtime::spawn(async {
@@ -140,6 +143,12 @@ pub fn run() {
             commands::collect_workspace_files_cmd,
             commands::read_file_bytes_cmd,
             commands::read_snapshot_file_cmd,
+            commands_cloud::cloud_register,
+            commands_cloud::cloud_login,
+            commands_cloud::cloud_logout,
+            commands_cloud::cloud_fetch_models,
+            commands_cloud::cloud_fetch_account,
+            commands_cloud::cloud_persist_account,
         ])
         .run(tauri::generate_context!())
         .expect("error while running inkuo application");

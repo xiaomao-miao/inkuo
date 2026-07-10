@@ -138,3 +138,33 @@
   background-color: var(--bg-hover);
   color: var(--fg-primary);
 }
+
+.modelChip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  background-color: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 5px;
+  color: var(--fg-secondary);
+  font-size: 11px;
+  flex-shrink: 0;
+  max-width: 220px;
+}
+
+.modelName {
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--fg-primary);
+}
+
+.modelBadge {
+  font-size: 9px;
+  padding: 1px 4px;
+  background-color: var(--bg-secondary);
+  border-radius: 3px;
+  color: var(--fg-tertiary);
+}

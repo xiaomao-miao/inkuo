@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="Inkuso.Cloud.Core/Inkuso.Cloud.Core.csproj" />
+  <Project Path="Inkuso.Cloud.Api/Inkuso.Cloud.Api.csproj" />
+  <Project Path="Inkuso.Cloud.Billing/Inkuso.Cloud.Billing.csproj" />
+  <Project Path="Inkuso.Cloud.Admin/Inkuso.Cloud.Admin.csproj" />
+</Solution>

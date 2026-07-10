@@ -1,4 +1,4 @@
-import type { Settings } from '../types';
+import type { Settings, CloudAccount, CloudModelEntry } from '../types';
 
 export interface BackendSettings {
   theme: string;
@@ -37,6 +37,16 @@ export interface BackendSettings {
       enabled: boolean;
     }>;
   };
+  /** Cloud-mode settings. Sent on every `save_settings` IPC. The Rust
+   * side uses this to decide whether to route LLM calls through the
+   * user's inkuo Cloud account or through their locally-configured
+   * API configs. */
+  cloud: {
+    cloud_mode_enabled: boolean;
+    account: CloudAccount | null;
+    cached_models: CloudModelEntry[];
+    active_cloud_model_id: string | null;
+  };
 }
 
 export function toBackendSettings(settings: Settings): BackendSettings {
@@ -73,6 +83,12 @@ export function toBackendSettings(settings: Settings): BackendSettings {
         base_url: p.baseUrl,
         enabled: p.enabled,
       })),
+    },
+    cloud: {
+      cloud_mode_enabled: settings.cloud.cloud_mode_enabled,
+      account: settings.cloud.account,
+      cached_models: settings.cloud.cached_models,
+      active_cloud_model_id: settings.cloud.active_cloud_model_id,
     },
   };
 }

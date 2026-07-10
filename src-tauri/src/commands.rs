@@ -640,6 +640,27 @@ impl Default for WebSearchSettings {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CloudSettings {
+    /// Whether the cloud-mode toggle is currently active. `false` (the
+    /// default) means the user is in local-LLM mode and the existing
+    /// `api_configs[]` array is in charge.
+    #[serde(default)]
+    pub cloud_mode_enabled: bool,
+    /// The logged-in cloud account. `None` when the user has not logged in
+    /// or has explicitly logged out.
+    #[serde(default)]
+    pub account: Option<crate::cloud::CloudAccount>,
+    /// Cached list of cloud models, refreshed by the frontend on login and
+    /// every time the user reopens the settings panel.
+    #[serde(default)]
+    pub cached_models: Vec<crate::cloud::CloudModelEntry>,
+    /// The `id` (server-side model_config id) of the currently selected
+    /// cloud model. Matches `cached_models[].id`.
+    #[serde(default)]
+    pub active_cloud_model_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
     pub theme: String,
@@ -661,6 +682,11 @@ pub struct Settings {
     /// `Default::default()` when missing.
     #[serde(default)]
     pub web_search: WebSearchSettings,
+    /// Optional so legacy settings files (saved before cloud mode
+    /// existed) keep loading. When absent the user is in pure local
+    /// mode and nothing about cloud mode is even rendered.
+    #[serde(default)]
+    pub cloud: CloudSettings,
 }
 
 impl Default for Settings {
@@ -693,6 +719,7 @@ impl Default for Settings {
             chunk_overlap: 50,
             snapshot: SnapshotSettings::default(),
             web_search: WebSearchSettings::default(),
+            cloud: CloudSettings::default(),
         }
     }
 }
@@ -766,7 +793,7 @@ pub fn get_web_search_settings() -> WebSearchSettings {
         .unwrap_or_default()
 }
 
-fn get_settings_path() -> std::path::PathBuf {
+pub fn get_settings_path() -> std::path::PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| std::path::PathBuf::from("."))
         .join("inkuo")

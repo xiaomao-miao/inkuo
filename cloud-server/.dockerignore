@@ -1,0 +1,16 @@
+admin-frontend/node_modules
+admin-frontend/dist
+src/bin
+src/obj
+**/bin
+**/obj
+**/.vs
+**/.vscode
+.git
+.gitignore
+.env
+.env.local
+.env.*.local
+**/*.user
+*.swp
+.DS_Store

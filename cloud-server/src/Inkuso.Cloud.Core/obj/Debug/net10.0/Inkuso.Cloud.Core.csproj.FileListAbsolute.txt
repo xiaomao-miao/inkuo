@@ -1,0 +1,14 @@
+/home/maomao/work/inkuo/cloud-server/src/Inkuso.Cloud.Core/bin/Debug/net10.0/Inkuso.Cloud.Core.deps.json
+/home/maomao/work/inkuo/cloud-server/src/Inkuso.Cloud.Core/bin/Debug/net10.0/Inkuso.Cloud.Core.runtimeconfig.json
+/home/maomao/work/inkuo/cloud-server/src/Inkuso.Cloud.Core/bin/Debug/net10.0/Inkuso.Cloud.Core.dll
+/home/maomao/work/inkuo/cloud-server/src/Inkuso.Cloud.Core/bin/Debug/net10.0/Inkuso.Cloud.Core.pdb
+/home/maomao/work/inkuo/cloud-server/src/Inkuso.Cloud.Core/obj/Debug/net10.0/Inkuso.Cloud.Core.csproj.AssemblyReference.cache
+/home/maomao/work/inkuo/cloud-server/src/Inkuso.Cloud.Core/obj/Debug/net10.0/Inkuso.Cloud.Core.GeneratedMSBuildEditorConfig.editorconfig
+/home/maomao/work/inkuo/cloud-server/src/Inkuso.Cloud.Core/obj/Debug/net10.0/Inkuso.Cloud.Core.AssemblyInfoInputs.cache
+/home/maomao/work/inkuo/cloud-server/src/Inkuso.Cloud.Core/obj/Debug/net10.0/Inkuso.Cloud.Core.AssemblyInfo.cs
+/home/maomao/work/inkuo/cloud-server/src/Inkuso.Cloud.Core/obj/Debug/net10.0/Inkuso.Cloud.Core.csproj.CoreCompileInputs.cache
+/home/maomao/work/inkuo/cloud-server/src/Inkuso.Cloud.Core/obj/Debug/net10.0/Inkuso.Cloud.Core.dll
+/home/maomao/work/inkuo/cloud-server/src/Inkuso.Cloud.Core/obj/Debug/net10.0/refint/Inkuso.Cloud.Core.dll
+/home/maomao/work/inkuo/cloud-server/src/Inkuso.Cloud.Core/obj/Debug/net10.0/Inkuso.Cloud.Core.pdb
+/home/maomao/work/inkuo/cloud-server/src/Inkuso.Cloud.Core/obj/Debug/net10.0/Inkuso.Cloud.Core.genruntimeconfig.cache
+/home/maomao/work/inkuo/cloud-server/src/Inkuso.Cloud.Core/obj/Debug/net10.0/ref/Inkuso.Cloud.Core.dll

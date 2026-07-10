@@ -17,13 +17,16 @@ import {
   Settings2,
   X,
   ChevronDown,
-  ChevronRight
+  ChevronRight,
+  Cloud,
+  HardDrive,
 } from 'lucide-react';
 import { useNotificationStore, useSettingsStore } from '../../store';
 import { Select } from './Select';
 import type { APIConfig, AIProviderType } from '../../types';
 import styles from './ModelsSettings.module.css';
 import { reportError } from '../../utils/errors';
+import { CloudPanel } from '../cloud/CloudPanel';
 
 interface ModelsSettingsProps {
   onClose?: () => void;
@@ -36,7 +39,10 @@ export const ModelsSettings = ({ onClose }: ModelsSettingsProps) => {
   const removeApiConfigAndPersist = useSettingsStore((state) => state.removeApiConfigAndPersist);
   const setActiveApiConfigAndPersist = useSettingsStore((state) => state.setActiveApiConfigAndPersist);
   const setDefaultApiConfigAndPersist = useSettingsStore((state) => state.setDefaultApiConfigAndPersist);
+  const setCloudModeEnabledAndPersist = useSettingsStore((s) => s.setCloudModeEnabledAndPersist);
   const pushNotification = useNotificationStore((state) => state.pushNotification);
+
+  const cloudModeEnabled = settings.cloud.cloud_mode_enabled;
 
   const [testingId, setTestingId] = useState<string | null>(null);
   const [testResults, setTestResults] = useState<Record<string, { success: boolean; message: string }>>({});
@@ -183,15 +189,39 @@ export const ModelsSettings = ({ onClose }: ModelsSettingsProps) => {
         )}
       </div>
 
+      <div className={styles.modeTabs}>
+        <button
+          type="button"
+          className={`${styles.modeTab} ${!cloudModeEnabled ? styles.modeTabActive : ''}`}
+          onClick={() => setCloudModeEnabledAndPersist(false)}
+        >
+          <HardDrive size={14} />
+          本地配置
+          <span className={styles.modeTabBadge}>已有</span>
+        </button>
+        <button
+          type="button"
+          className={`${styles.modeTab} ${cloudModeEnabled ? styles.modeTabActive : ''}`}
+          onClick={() => setCloudModeEnabledAndPersist(true)}
+        >
+          <Cloud size={14} />
+          inkuo Cloud
+          <span className={styles.modeTabBadge}>云端</span>
+        </button>
+      </div>
+
       <div className={styles.content}>
-        <div className={styles.apiList}>
-          <div className={styles.listHeader}>
-            <h3>API 配置</h3>
-            <button className={styles.addBtn} onClick={handleAddConfig}>
-              <Plus size={14} />
-              添加 API
-            </button>
-          </div>
+        {cloudModeEnabled ? (
+          <CloudPanel />
+        ) : (
+          <div className={styles.apiList}>
+            <div className={styles.listHeader}>
+              <h3>API 配置</h3>
+              <button className={styles.addBtn} onClick={handleAddConfig}>
+                <Plus size={14} />
+                添加 API
+              </button>
+            </div>
 
           <div className={styles.configList}>
             {settings.apiConfigs.map((config) => {
@@ -421,6 +451,7 @@ export const ModelsSettings = ({ onClose }: ModelsSettingsProps) => {
             })}
           </div>
         </div>
+        )}
       </div>
     </div>
   );

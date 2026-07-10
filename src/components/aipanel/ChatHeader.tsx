@@ -1,6 +1,7 @@
 import React, { useRef } from 'react';
-import { PlusCircle, MessageSquare, X, History } from 'lucide-react';
+import { PlusCircle, MessageSquare, X, History, Cloud, HardDrive } from 'lucide-react';
 import type { ChatSession } from '../../store';
+import { useSettingsStore } from '../../store';
 import styles from './AIPanelHeader.module.css';
 
 const MAX_TITLE_LEN = 20;
@@ -31,6 +32,16 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   historyOpen,
 }) => {
   const sessionListRef = useRef<HTMLDivElement>(null);
+  const settings = useSettingsStore((s) => s.settings);
+  const cloudMode = settings.cloud.cloud_mode_enabled;
+  const activeCloudModel = cloudMode
+    ? settings.cloud.cached_models.find(
+        (m) => m.id === settings.cloud.active_cloud_model_id
+      )
+    : null;
+  const activeLocalConfig = !cloudMode
+    ? settings.apiConfigs.find((c) => c.id === settings.activeApiConfigId) ?? settings.apiConfigs[0]
+    : null;
 
   const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
     if (sessionListRef.current) {
@@ -89,6 +100,19 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
             </button>
           ))}
         </div>
+      </div>
+      <div className={styles.modelChip} title={cloudMode ? '当前使用 inkuo Cloud 云端模式' : '当前使用本地 LLM 配置'}>
+        {cloudMode ? <Cloud size={12} /> : <HardDrive size={12} />}
+        <span className={styles.modelName}>
+          {cloudMode
+            ? activeCloudModel
+              ? activeCloudModel.display_name
+              : '云端未选择'
+            : activeLocalConfig
+              ? `${activeLocalConfig.name}`
+              : '本地未选择'}
+        </span>
+        <span className={styles.modelBadge}>{cloudMode ? '云端' : '本地'}</span>
       </div>
       <button className={styles.closeButton} title="关闭面板" onClick={onClose} type="button">
         <PanelRightCloseIcon />

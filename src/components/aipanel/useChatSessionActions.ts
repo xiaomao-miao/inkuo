@@ -24,6 +24,7 @@ import {
   savePlanToFile,
 } from '../../services/planFiles';
 import { useNotificationStore } from '../../store/notificationStore';
+import type { AIProviderType } from '../../types';
 
 interface UseChatSessionActionsArgs {
   activeSession: ChatSession | undefined;
@@ -222,8 +223,55 @@ export function useChatSessionActions({
     clearToolCalls(sessionId);
 
     const workspacePath = useSidebarStore.getState().workspacePath || undefined;
-    const { apiConfigs, activeApiConfigId, snapshot, agent_max_iterations, expert_max_iterations } = useSettingsStore.getState().settings;
-    const activeConfig = apiConfigs.find((config) => config.id === activeApiConfigId) ?? apiConfigs[0];
+    const {
+      apiConfigs,
+      activeApiConfigId,
+      snapshot,
+      agent_max_iterations,
+      expert_max_iterations,
+      cloud,
+    } = useSettingsStore.getState().settings;
+
+    // Cloud-mode branch: pick the active cloud model from the cached
+    // list and send the JWT-bearing `base_url` + cloud `model_id` so
+    // the Rust side can route through the cloud server.
+    let configInput: {
+      provider: AIProviderType;
+      api_key: string | null;
+      base_url: string;
+      model: string;
+      temperature: number;
+      max_tokens: number | null;
+    };
+
+    if (cloud.cloud_mode_enabled && cloud.account && cloud.active_cloud_model_id) {
+      const entry = cloud.cached_models.find((m) => m.id === cloud.active_cloud_model_id);
+      if (!entry) {
+        throw new Error('所选云端模型已失效，请在设置中重新选择');
+      }
+      configInput = {
+        provider: 'cloud',
+        api_key: cloud.account.access_token,
+        base_url: `${cloud.account.base_url.replace(/\/+$/, '')}/v1`,
+        model: entry.id,
+        temperature: 0.7,
+        max_tokens: null,
+      };
+    } else {
+      const activeConfig =
+        apiConfigs.find((config) => config.id === activeApiConfigId) ?? apiConfigs[0];
+      if (!activeConfig) {
+        throw new Error('没有可用的本地 API 配置');
+      }
+      configInput = {
+        provider: activeConfig.provider,
+        api_key: activeConfig.apiKey,
+        base_url: activeConfig.baseUrl,
+        model: activeConfig.model,
+        temperature: activeConfig.temperature,
+        max_tokens: activeConfig.maxTokens,
+      };
+    }
     const conversationHistory = buildConversationHistory(messages);
 
     // Auto-baseline: when sending a brand-new (not re-edited) agent-mode
@@ -319,14 +367,7 @@ export function useChatSessionActions({
         // id into the appropriate fragment + tool gate; see
         // `src-tauri/src/feature_toggles.rs` for the registry.
         enabledToggles,
-        configInput: {
-          provider: activeConfig.provider,
-          api_key: activeConfig.apiKey,
-          base_url: activeConfig.baseUrl,
-          model: activeConfig.model,
-          temperature: activeConfig.temperature,
-          max_tokens: activeConfig.maxTokens,
-        },
+        configInput,
       }).catch((err) => {
         updateMessage(sessionId, assistantMessageId, `抱歉，发生了错误：${extractErrorMessage(err)}`);
         setIsStreaming(sessionId, false);
