@@ -127,7 +127,7 @@
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: color var(--motion-fast) var(--motion-out), background-color var(--motion-fast) var(--motion-out), border-color var(--motion-fast) var(--motion-out), box-shadow var(--motion-fast) var(--motion-out), transform var(--motion-fast) var(--motion-out), opacity var(--motion-fast) var(--motion-out);
   white-space: nowrap;
 }
 
@@ -275,7 +275,7 @@
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: color var(--motion-fast) var(--motion-out), background-color var(--motion-fast) var(--motion-out), border-color var(--motion-fast) var(--motion-out), box-shadow var(--motion-fast) var(--motion-out), transform var(--motion-fast) var(--motion-out), opacity var(--motion-fast) var(--motion-out);
 }
 
 .saveButton:hover:not(:disabled) {
@@ -315,7 +315,7 @@
   border-radius: var(--radius-sm);
   color: var(--fg-secondary);
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: color var(--motion-fast) var(--motion-out), background-color var(--motion-fast) var(--motion-out), border-color var(--motion-fast) var(--motion-out), box-shadow var(--motion-fast) var(--motion-out), transform var(--motion-fast) var(--motion-out), opacity var(--motion-fast) var(--motion-out);
   flex-shrink: 0;
 }
 

@@ -40,7 +40,7 @@
   border: none;
   border-radius: 6px;
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: color var(--motion-fast) var(--motion-out), background-color var(--motion-fast) var(--motion-out), border-color var(--motion-fast) var(--motion-out), box-shadow var(--motion-fast) var(--motion-out), transform var(--motion-fast) var(--motion-out), opacity var(--motion-fast) var(--motion-out);
 }
 
 .tab:hover {
@@ -155,7 +155,7 @@
   background: transparent;
   border: none;
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: color var(--motion-fast) var(--motion-out), background-color var(--motion-fast) var(--motion-out), border-color var(--motion-fast) var(--motion-out), box-shadow var(--motion-fast) var(--motion-out), transform var(--motion-fast) var(--motion-out), opacity var(--motion-fast) var(--motion-out);
 }
 
 .toggleBtn:hover {
@@ -210,7 +210,7 @@
   border: 1px solid var(--accent-primary);
   border-radius: 4px;
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: color var(--motion-fast) var(--motion-out), background-color var(--motion-fast) var(--motion-out), border-color var(--motion-fast) var(--motion-out), box-shadow var(--motion-fast) var(--motion-out), transform var(--motion-fast) var(--motion-out), opacity var(--motion-fast) var(--motion-out);
 }
 
 .testBtn:hover:not(:disabled) {
@@ -263,7 +263,7 @@
   border: 2px solid var(--border-color);
   border-radius: 8px;
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: color var(--motion-fast) var(--motion-out), background-color var(--motion-fast) var(--motion-out), border-color var(--motion-fast) var(--motion-out), box-shadow var(--motion-fast) var(--motion-out), transform var(--motion-fast) var(--motion-out), opacity var(--motion-fast) var(--motion-out);
 }
 
 .themeOption:hover {
@@ -352,7 +352,7 @@
   background-color: var(--bg-primary);
   border: 1px solid var(--border-color);
   border-radius: 10px;
-  transition: all var(--transition-fast);
+  transition: color var(--motion-fast) var(--motion-out), background-color var(--motion-fast) var(--motion-out), border-color var(--motion-fast) var(--motion-out), box-shadow var(--motion-fast) var(--motion-out), transform var(--motion-fast) var(--motion-out), opacity var(--motion-fast) var(--motion-out);
 }
 
 .toggleSlider::before {
@@ -364,7 +364,7 @@
   bottom: 2px;
   background-color: var(--fg-muted);
   border-radius: 50%;
-  transition: all var(--transition-fast);
+  transition: color var(--motion-fast) var(--motion-out), background-color var(--motion-fast) var(--motion-out), border-color var(--motion-fast) var(--motion-out), box-shadow var(--motion-fast) var(--motion-out), transform var(--motion-fast) var(--motion-out), opacity var(--motion-fast) var(--motion-out);
 }
 
 .toggle input:checked + .toggleSlider {
@@ -798,7 +798,7 @@
   border: 2px solid var(--border-color);
   border-radius: 8px;
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: color var(--motion-fast) var(--motion-out), background-color var(--motion-fast) var(--motion-out), border-color var(--motion-fast) var(--motion-out), box-shadow var(--motion-fast) var(--motion-out), transform var(--motion-fast) var(--motion-out), opacity var(--motion-fast) var(--motion-out);
 }
 
 .tierItem:hover {
@@ -905,7 +905,7 @@
   border: 1px solid var(--accent-primary);
   border-radius: 6px;
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: color var(--motion-fast) var(--motion-out), background-color var(--motion-fast) var(--motion-out), border-color var(--motion-fast) var(--motion-out), box-shadow var(--motion-fast) var(--motion-out), transform var(--motion-fast) var(--motion-out), opacity var(--motion-fast) var(--motion-out);
 }
 
 .downloadBtn:hover:not(:disabled) {

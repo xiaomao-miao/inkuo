@@ -325,7 +325,7 @@
   border: 1px solid var(--accent-primary);
   border-radius: 4px;
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: color var(--motion-fast) var(--motion-out), background-color var(--motion-fast) var(--motion-out), border-color var(--motion-fast) var(--motion-out), box-shadow var(--motion-fast) var(--motion-out), transform var(--motion-fast) var(--motion-out), opacity var(--motion-fast) var(--motion-out);
   margin: 2px 4px;
   vertical-align: middle;
 }

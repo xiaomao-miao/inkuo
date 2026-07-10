@@ -265,7 +265,7 @@
   font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: color var(--motion-fast) var(--motion-out), background-color var(--motion-fast) var(--motion-out), border-color var(--motion-fast) var(--motion-out), box-shadow var(--motion-fast) var(--motion-out), transform var(--motion-fast) var(--motion-out), opacity var(--motion-fast) var(--motion-out);
 }
 
 .modeButton:hover:not(:disabled) {
@@ -387,7 +387,7 @@
   background: transparent;
   border: none;
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: color var(--motion-fast) var(--motion-out), background-color var(--motion-fast) var(--motion-out), border-color var(--motion-fast) var(--motion-out), box-shadow var(--motion-fast) var(--motion-out), transform var(--motion-fast) var(--motion-out), opacity var(--motion-fast) var(--motion-out);
 }
 
 .iconBtn:hover {
@@ -443,7 +443,7 @@
   color: white;
   border: none;
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: color var(--motion-fast) var(--motion-out), background-color var(--motion-fast) var(--motion-out), border-color var(--motion-fast) var(--motion-out), box-shadow var(--motion-fast) var(--motion-out), transform var(--motion-fast) var(--motion-out), opacity var(--motion-fast) var(--motion-out);
 }
 
 .sendBtn:hover:not(:disabled) {

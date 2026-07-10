@@ -188,7 +188,7 @@
   font-weight: 500;
   border-radius: var(--radius-md);
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: color var(--motion-fast) var(--motion-out), background-color var(--motion-fast) var(--motion-out), border-color var(--motion-fast) var(--motion-out), box-shadow var(--motion-fast) var(--motion-out), transform var(--motion-fast) var(--motion-out), opacity var(--motion-fast) var(--motion-out);
 }
 
 .cancelBtn {
