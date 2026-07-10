@@ -73,6 +73,10 @@
   --overlay: oklch(8% 0.01 240 / 60%);
   --overlay-strong: oklch(8% 0.01 240 / 75%);
 
+  /* ── 语义专属:窗口关闭按钮(保持 macOS / Windows 传统红) ──────── */
+  --close-button-hover: oklch(58% 0.22 25);
+  --close-button-hover-fg: oklch(98% 0.01 25);
+
   /* ── 尺寸 ─────────────────────────────────────────────────────── */
   --sidebar-width: 260px;
   --sidebar-min-width: 180px;
