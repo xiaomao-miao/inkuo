@@ -1,27 +1,13 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef } from 'react';
 import { FileText, File, X, Circle, Settings, Cloud } from 'lucide-react';
-import { useSidebarStore } from '../../store';
+import { useSidebarStore, useConfirmDialogStore } from '../../store';
 import type { OpenTab } from '../../store';
 import styles from './TabBar.module.css';
 
 export const TabBar = () => {
   const { openTabs, activeTabId, setActiveTab, closeTab } = useSidebarStore();
-  const [confirmClosePath, setConfirmClosePath] = useState<string | null>(null);
+  const ask = useConfirmDialogStore((s) => s.ask);
   const tabBarRef = useRef<HTMLDivElement>(null);
-
-  // If the user switches tabs while the "discard changes" dialog is open,
-  // the dialog would otherwise stay mounted and display the previous tab's
-  // name (driven by `confirmClosePath`). Dismissing the dialog here keeps
-  // the UI consistent with the active tab the user just landed on.
-  useEffect(() => {
-    if (confirmClosePath) {
-      setConfirmClosePath(null);
-    }
-    // We intentionally depend only on `activeTabId` — clearing the dialog
-    // on tab switch is the only side effect we want, and including
-    // `confirmClosePath` would put us in an infinite update loop.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTabId]);
 
   const handleWheel = (e: React.WheelEvent) => {
     if (tabBarRef.current) {
@@ -33,33 +19,25 @@ export const TabBar = () => {
     setActiveTab(tab.id);
   };
 
-  const handleCloseTab = (e: React.MouseEvent, tabId: string) => {
+  const handleCloseTab = async (e: React.MouseEvent, tabId: string) => {
     e.stopPropagation();
     const tab = openTabs.find((item) => item.id === tabId);
     if (!tab || tab.isSettings || tab.isCloud) {
       closeTab(tabId);
       return;
     }
-    const isDirty = tab.isDirty;
-    if (isDirty) {
-      setConfirmClosePath(tab.path);
+    if (tab.isDirty) {
+      const confirmed = await ask({
+        title: '未保存的更改',
+        message: `${tab.name} 有未保存的更改。关闭将丢弃这些更改。`,
+        confirmLabel: '丢弃更改',
+        cancelLabel: '取消',
+        danger: true,
+      });
+      if (confirmed) closeTab(tabId);
     } else {
       closeTab(tabId);
     }
-  };
-
-  const handleConfirmClose = () => {
-    if (confirmClosePath) {
-      const tab = openTabs.find((item) => item.path === confirmClosePath);
-      if (tab) {
-        closeTab(tab.id);
-      }
-      setConfirmClosePath(null);
-    }
-  };
-
-  const handleCancelClose = () => {
-    setConfirmClosePath(null);
   };
 
   if (openTabs.length === 0) {
@@ -76,8 +54,6 @@ export const TabBar = () => {
     const isMarkdown = tab.name.endsWith('.md') || tab.name.endsWith('.markdown');
     return isMarkdown ? <FileText size={14} /> : <File size={14} />;
   };
-
-  const confirmTab = confirmClosePath ? openTabs.find((item) => item.path === confirmClosePath) : null;
 
   return (
     <>
@@ -116,25 +92,6 @@ export const TabBar = () => {
           })}
         </div>
       </div>
-
-      {confirmClosePath && confirmTab && (
-        <div className={styles.confirmOverlay} onClick={handleCancelClose}>
-          <div className={styles.confirmDialog} onClick={e => e.stopPropagation()}>
-            <div className={styles.confirmTitle}>未保存的更改</div>
-            <div className={styles.confirmMessage}>
-              <strong>{confirmTab.name}</strong> 有未保存的更改。关闭将丢弃这些更改。
-            </div>
-            <div className={styles.confirmActions}>
-              <button className={styles.cancelBtn} onClick={handleCancelClose}>
-                取消
-              </button>
-              <button className={styles.discardBtn} onClick={handleConfirmClose}>
-                丢弃更改
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </>
   );
 };
