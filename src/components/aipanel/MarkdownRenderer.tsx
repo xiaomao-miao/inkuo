@@ -5,6 +5,56 @@ import rehypeHighlight from 'rehype-highlight';
 import { Check, Copy } from 'lucide-react';
 import styles from './MarkdownRenderer.module.css';
 
+/**
+ * Standalone copyable code block. 必须独立为组件,才能在内部
+ * 使用 useState(react-hooks/rules-of-hooks 不允许在 inline render
+ * 函数里调用 hook)。
+ */
+const CopyableCodeBlock: React.FC<{
+  lang: string | null;
+  codeProps: React.HTMLAttributes<HTMLElement>;
+  children: React.ReactNode;
+}> = ({ lang, codeProps, children }) => {
+  const text = String(children ?? '');
+  const [copied, setCopied] = useState(false);
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1400);
+    } catch {
+      // 静默失败,旧版浏览器或权限缺失
+    }
+  };
+
+  return (
+    <div className={styles.codeBlockWrapper}>
+      <div className={styles.codeBlockHeader}>
+        {lang && <span className={styles.codeLang}>{lang}</span>}
+        <button
+          type="button"
+          className={styles.copyButton}
+          onClick={handleCopy}
+          aria-label="复制代码"
+          title="复制代码"
+        >
+          {copied ? (
+            <Check size={12} className={styles.copyIcon} />
+          ) : (
+            <Copy size={12} className={styles.copyIcon} />
+          )}
+          <span>{copied ? '已复制' : '复制'}</span>
+        </button>
+      </div>
+      <pre className={styles.codeBlock}>
+        <code className={lang ? `language-${lang}` : ''} {...codeProps}>
+          {children}
+        </code>
+      </pre>
+    </div>
+  );
+};
+
 interface MarkdownRendererProps {
   content: string;
   className?: string;
@@ -53,43 +103,13 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
               );
             }
 
-            const text = String(children ?? '');
-            const [copied, setCopied] = useState(false);
-            const handleCopy = async () => {
-              try {
-                await navigator.clipboard.writeText(text);
-                setCopied(true);
-                window.setTimeout(() => setCopied(false), 1400);
-              } catch {
-                // 静默失败,旧版浏览器或权限缺失
-              }
-            };
-
             return (
-              <div className={styles.codeBlockWrapper}>
-                <div className={styles.codeBlockHeader}>
-                  {match && <span className={styles.codeLang}>{match[1]}</span>}
-                  <button
-                    type="button"
-                    className={styles.copyButton}
-                    onClick={handleCopy}
-                    aria-label="复制代码"
-                    title="复制代码"
-                  >
-                    {copied ? (
-                      <Check size={12} className={styles.copyIcon} />
-                    ) : (
-                      <Copy size={12} className={styles.copyIcon} />
-                    )}
-                    <span>{copied ? '已复制' : '复制'}</span>
-                  </button>
-                </div>
-                <pre className={styles.codeBlock}>
-                  <code className={match ? `language-${match[1]}` : ''} {...props}>
-                    {children}
-                  </code>
-                </pre>
-              </div>
+              <CopyableCodeBlock
+                lang={match ? match[1] : null}
+                codeProps={props as React.HTMLAttributes<HTMLElement>}
+              >
+                {children}
+              </CopyableCodeBlock>
             );
           },
           a({ href, children, ...props }) {
