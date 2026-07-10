@@ -188,17 +188,6 @@
   animation-delay: 135ms;
 }
 
-@keyframes rowSlideIn {
-  0% {
-    opacity: 0;
-    transform: translateY(-3px);
-  }
-  100% {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
 .toggleRow:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.04);
   color: var(--fg-primary);
@@ -475,11 +464,6 @@
 .agentModeActive {
   border-color: var(--accent-primary);
   color: var(--fg-primary);
-}
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
 }
 
 /* Respect users who opted out of motion. We keep the state changes

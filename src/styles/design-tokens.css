@@ -1,51 +1,75 @@
-:root {
-  /* inkuo Design Tokens */
-  /* Base colors - Dark Theme */
-  --bg-primary: #1e1e1e;
-  --bg-secondary: #252526;
-  --bg-tertiary: #2d2d2d;
-  --bg-hover: #323232;
-  --bg-active: #37373d;
-  --bg-input: #3c3c3c;
-  
-  --fg-primary: #cccccc;
-  --fg-secondary: #9d9d9d;
-  --fg-muted: #6e6e6e;
-  --fg-disabled: #5a5a5a;
-  
-  /* Border & divider */
-  --border-color: #3c3c3c;
-  --border-active: #007acc;
-  --divider: #404040;
-  
-  /* Accent colors - Default green */
-  --accent-primary: #4ade80;
-  --accent-hover: #22c55e;
-  --accent-active: #16a34a;
-  --accent-subtle: rgba(74, 222, 128, 0.15);
-  
-  /* Diff colors */
-  --diff-added-bg: rgba(72, 199, 116, 0.15);
-  --diff-added-fg: #48c774;
-  --diff-added-border: #48c774;
-  --diff-removed-bg: rgba(241, 91, 91, 0.15);
-  --diff-removed-fg: #f15b5b;
-  --diff-removed-border: #f15b5b;
-  --diff-highlight: rgba(255, 213, 0, 0.2);
-  
-  /* Text selection */
-  --selection-bg: rgba(74, 222, 128, 0.3);
-  
-  /* Focus ring */
-  --focus-ring: rgba(124, 92, 255, 0.5);
-  
-  /* Semantic colors */
-  --success: #48c774;
-  --warning: #ffdd57;
-  --error: #f15b5b;
-  --info: #3273dc;
-  
-  /* Sizing */
+/* ============================================================================
+ * inkuo Design Tokens
+ * ----------------------------------------------------------------------------
+ * 三套主题,使用 `data-theme` 切换:
+ *   - graphite (默认):  深色低饱和,蓝灰强调,Arc/Raycast 气质
+ *   - verdant:          深色墨绿,Linear 气质
+ *   - iris:             深色紫调,Cursor 气质
+ *
+ * 颜色尽量用 OKLCH 表达,保证跨主题感知一致;subtle / hover 变体由
+ * `color-mix(in oklch, var(--accent), transparent X%)` 派生,避免散落
+ * 硬编码 alpha。
+ *
+ * 任何组件 CSS 都应只引用本文件定义的 token,不要直接写颜色字面量。
+ * ============================================================================ */
+
+:root,
+[data-theme='graphite'] {
+  /* ── 背景四档 ─────────────────────────────────────────────────── */
+  /* bg-canvas:  编辑器底色(最深)
+     bg-surface: 面板/侧边栏(中)
+     bg-elevated:弹窗/下拉(较浅)
+     bg-input:   输入框/按钮内部 */
+  --bg-canvas: #161617;
+  --bg-surface: #1d1d1f;
+  --bg-elevated: #26262a;
+  --bg-input: #2c2c31;
+
+  /* ── 文字四档 ─────────────────────────────────────────────────── */
+  --fg-primary: #e8e8ea;
+  --fg-secondary: #a9a9b0;
+  --fg-muted: #75757c;
+  --fg-disabled: #4d4d52;
+
+  /* ── 边框 ─────────────────────────────────────────────────────── */
+  --border-subtle: #2a2a2f;
+  --border-strong: #3a3a40;
+
+  /* ── 强调色:蓝灰(中性,几乎像鼠标 hover) ─────────────────────── */
+  --accent: oklch(72% 0.04 240);
+  --accent-hover: oklch(78% 0.05 240);
+  --accent-subtle: oklch(72% 0.04 240 / 14%);
+  --accent-contrast: oklch(18% 0.01 240);
+
+  /* ── 语义 ─────────────────────────────────────────────────────── */
+  --success: oklch(72% 0.13 155);
+  --success-subtle: oklch(72% 0.13 155 / 14%);
+  --warning: oklch(80% 0.14 80);
+  --warning-subtle: oklch(80% 0.14 80 / 14%);
+  --error: oklch(65% 0.18 25);
+  --error-subtle: oklch(65% 0.18 25 / 14%);
+  --info: oklch(70% 0.10 230);
+  --info-subtle: oklch(70% 0.10 230 / 14%);
+
+  /* ── Diff ─────────────────────────────────────────────────────── */
+  --diff-added-bg: oklch(72% 0.13 155 / 16%);
+  --diff-added-fg: oklch(80% 0.14 155);
+  --diff-added-border: oklch(72% 0.13 155);
+  --diff-removed-bg: oklch(65% 0.18 25 / 16%);
+  --diff-removed-fg: oklch(75% 0.17 25);
+  --diff-removed-border: oklch(65% 0.18 25);
+  --diff-highlight: oklch(80% 0.14 80 / 22%);
+
+  /* ── 文件树语义色(继承自 Arc / Linear) ──────────────────────── */
+  --file-folder: oklch(75% 0.10 80);
+  --file-markdown: oklch(68% 0.12 230);
+  --file-default: var(--fg-secondary);
+
+  /* ── 选区 / 焦点 ──────────────────────────────────────────────── */
+  --selection-bg: oklch(72% 0.04 240 / 30%);
+  --focus-ring: oklch(72% 0.04 240 / 60%);
+
+  /* ── 尺寸 ─────────────────────────────────────────────────────── */
   --sidebar-width: 260px;
   --sidebar-min-width: 180px;
   --sidebar-max-width: 400px;
@@ -54,46 +78,51 @@
   --aipanel-max-width: 600px;
   --titlebar-height: 36px;
   --statusbar-height: 24px;
-  
-  /* Spacing */
+
+  /* ── 间距 ─────────────────────────────────────────────────────── */
   --space-xs: 4px;
   --space-sm: 8px;
   --space-md: 12px;
   --space-lg: 16px;
   --space-xl: 24px;
-  
-  /* Border radius */
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
-  
-  /* Shadows */
+
+  /* ── 圆角 (从 6/8/10/12/14 收敛到 3 档) ──────────────────────── */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-pill: 999px;
+
+  /* ── 阴影 ─────────────────────────────────────────────────────── */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 4px 8px rgba(0, 0, 0, 0.4);
-  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.5);
-  --shadow-float: 0 12px 40px rgba(0, 0, 0, 0.6);
-  
-  /* Typography */
-  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace;
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.5);
+
+  /* ── 字体 ─────────────────────────────────────────────────────── */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto,
+    'Helvetica Neue', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei',
+    sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas,
+    'Menlo', monospace;
   --font-size-xs: 11px;
   --font-size-sm: 12px;
   --font-size-md: 13px;
   --font-size-lg: 14px;
   --font-size-xl: 16px;
   --font-size-2xl: 18px;
-  
-  /* Line heights */
+
   --line-height-tight: 1.3;
   --line-height-normal: 1.5;
   --line-height-relaxed: 1.7;
-  
-  /* Transitions */
-  --transition-fast: 100ms ease;
-  --transition-normal: 200ms ease;
-  --transition-slow: 300ms ease;
-  
-  /* Z-index layers */
+
+  /* ── 动画(详见 motion.css) ───────────────────────────────────── */
+  --motion-fast: 120ms;
+  --motion-base: 200ms;
+  --motion-slow: 320ms;
+  --motion-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --motion-out: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --motion-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+
+  /* ── Z-index ──────────────────────────────────────────────────── */
   --z-base: 0;
   --z-dropdown: 100;
   --z-sticky: 200;
@@ -101,49 +130,195 @@
   --z-modal: 400;
   --z-popover: 500;
   --z-tooltip: 600;
+
+  /* ── 旧 token 兼容层(将逐步迁移,期间不要新增使用) ─────────────── */
+  --bg-primary: var(--bg-canvas);
+  --bg-secondary: var(--bg-surface);
+  --bg-tertiary: var(--bg-elevated);
+  --bg-hover: color-mix(in oklch, var(--fg-primary) 6%, var(--bg-surface));
+  --bg-active: color-mix(in oklch, var(--fg-primary) 10%, var(--bg-surface));
+
+  --border-color: var(--border-subtle);
+  --divider: var(--border-strong);
+
+  --accent-primary: var(--accent);
+  --accent-active: var(--accent-hover);
+  --border-active: var(--accent);
+
+  --transition-fast: var(--motion-fast);
+  --transition-normal: var(--motion-base);
+  --transition-slow: var(--motion-slow);
+
+  --radius-md-legacy: var(--radius-md);
+
+  color-scheme: dark;
 }
 
-/* Light theme variant */
-[data-theme="inkuo-light"] {
-  --bg-primary: #ffffff;
-  --bg-secondary: #f6f6f6;
-  --bg-tertiary: #ebebeb;
-  --bg-hover: #e8e8e8;
-  --bg-active: #dcdcdc;
-  --bg-input: #f0f0f0;
-  
-  --fg-primary: #333333;
-  --fg-secondary: #616161;
-  --fg-muted: #8e8e8e;
-  --fg-disabled: #b0b0b0;
-  
-  --border-color: #e0e0e0;
-  --divider: #d4d4d4;
-  
-  --accent-primary: #7c5cff;
-  --accent-hover: #6b4ce6;
-  --accent-subtle: rgba(124, 92, 255, 0.12);
+/* ────────────────────────────────────────────────────────────────────────
+ *  Theme: Verdant  (墨绿,Linear 气质)
+ * ──────────────────────────────────────────────────────────────────────── */
+[data-theme='verdant'] {
+  --bg-canvas: #14181a;
+  --bg-surface: #1b2023;
+  --bg-elevated: #23292c;
+  --bg-input: #2a3034;
 
-  --selection-bg: rgba(124, 92, 255, 0.2);
-  
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.1);
-  --shadow-md: 0 4px 8px rgba(0, 0, 0, 0.15);
-  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.2);
-  --shadow-float: 0 12px 40px rgba(0, 0, 0, 0.25);
+  --fg-primary: #e6ecea;
+  --fg-secondary: #a4b1ad;
+  --fg-muted: #6f7b78;
+  --fg-disabled: #4a524f;
+
+  --border-subtle: #28302f;
+  --border-strong: #3a4441;
+
+  --accent: oklch(68% 0.13 155);
+  --accent-hover: oklch(74% 0.14 155);
+  --accent-subtle: oklch(68% 0.13 155 / 14%);
+  --accent-contrast: oklch(18% 0.02 155);
+
+  --success: oklch(72% 0.13 155);
+  --success-subtle: oklch(72% 0.13 155 / 14%);
+
+  --bg-primary: var(--bg-canvas);
+  --bg-secondary: var(--bg-surface);
+  --bg-tertiary: var(--bg-elevated);
+  --bg-hover: color-mix(in oklch, var(--fg-primary) 6%, var(--bg-surface));
+  --bg-active: color-mix(in oklch, var(--fg-primary) 10%, var(--bg-surface));
+  --border-color: var(--border-subtle);
+  --divider: var(--border-strong);
+  --accent-primary: var(--accent);
+  --accent-active: var(--accent-hover);
+  --border-active: var(--accent);
+
+  color-scheme: dark;
 }
 
-/* High contrast variants */
-[data-theme="high-contrast-dark"] {
-  --bg-primary: #000000;
-  --bg-secondary: #0a0a0a;
-  --bg-tertiary: #141414;
+/* ────────────────────────────────────────────────────────────────────────
+ *  Theme: Iris  (紫色,Cursor 气质)
+ * ──────────────────────────────────────────────────────────────────────── */
+[data-theme='iris'] {
+  --bg-canvas: #16151d;
+  --bg-surface: #1d1c26;
+  --bg-elevated: #272634;
+  --bg-input: #2f2e3d;
+
+  --fg-primary: #ecebf2;
+  --fg-secondary: #aaa8bd;
+  --fg-muted: #76748a;
+  --fg-disabled: #4f4d5e;
+
+  --border-subtle: #2a2937;
+  --border-strong: #3a3949;
+
+  --accent: oklch(70% 0.16 290);
+  --accent-hover: oklch(76% 0.17 290);
+  --accent-subtle: oklch(70% 0.16 290 / 16%);
+  --accent-contrast: oklch(98% 0.01 290);
+
+  --success: oklch(72% 0.13 155);
+  --warning: oklch(80% 0.14 80);
+  --error: oklch(65% 0.18 25);
+
+  --bg-primary: var(--bg-canvas);
+  --bg-secondary: var(--bg-surface);
+  --bg-tertiary: var(--bg-elevated);
+  --bg-hover: color-mix(in oklch, var(--fg-primary) 6%, var(--bg-surface));
+  --bg-active: color-mix(in oklch, var(--fg-primary) 10%, var(--bg-surface));
+  --border-color: var(--border-subtle);
+  --divider: var(--border-strong);
+  --accent-primary: var(--accent);
+  --accent-active: var(--accent-hover);
+  --border-active: var(--accent);
+  --focus-ring: var(--accent-subtle);
+
+  color-scheme: dark;
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+ *  旧 light / high-contrast 主题(保留兼容,新代码不要再写)
+ * ──────────────────────────────────────────────────────────────────────── */
+[data-theme='inkuo-light'] {
+  --bg-canvas: #fbfbfa;
+  --bg-surface: #f4f4f1;
+  --bg-elevated: #ebebe7;
+  --bg-input: #ffffff;
+
+  --fg-primary: #2a2a2c;
+  --fg-secondary: #5d5d62;
+  --fg-muted: #8e8e93;
+  --fg-disabled: #b8b8bd;
+
+  --border-subtle: #e5e5e0;
+  --border-strong: #d2d2cc;
+
+  --accent: oklch(55% 0.18 285);
+  --accent-hover: oklch(50% 0.19 285);
+  --accent-subtle: oklch(55% 0.18 285 / 12%);
+  --accent-contrast: #ffffff;
+
+  --bg-primary: var(--bg-canvas);
+  --bg-secondary: var(--bg-surface);
+  --bg-tertiary: var(--bg-elevated);
+  --bg-hover: color-mix(in oklch, var(--fg-primary) 4%, var(--bg-surface));
+  --bg-active: color-mix(in oklch, var(--fg-primary) 8%, var(--bg-surface));
+  --border-color: var(--border-subtle);
+  --divider: var(--border-strong);
+  --accent-primary: var(--accent);
+  --accent-active: var(--accent-hover);
+  --border-active: var(--accent);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.08);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.10);
+  --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.14);
+
+  color-scheme: light;
+}
+
+[data-theme='high-contrast-dark'] {
+  --bg-canvas: #000000;
+  --bg-surface: #0a0a0a;
+  --bg-elevated: #141414;
   --fg-primary: #ffffff;
-  --accent-primary: #a78bfa;
+  --accent: #a78bfa;
+  --bg-primary: var(--bg-canvas);
+  --bg-secondary: var(--bg-surface);
+  --bg-tertiary: var(--bg-elevated);
+  --accent-primary: var(--accent);
 }
 
-[data-theme="high-contrast-light"] {
-  --bg-primary: #ffffff;
-  --bg-secondary: #fafafa;
+[data-theme='high-contrast-light'] {
+  --bg-canvas: #ffffff;
+  --bg-surface: #fafafa;
   --fg-primary: #000000;
-  --accent-primary: #6d28d9;
+  --accent: #6d28d9;
+  --bg-primary: var(--bg-canvas);
+  --bg-secondary: var(--bg-surface);
+  --accent-primary: var(--accent);
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+ *  动效强度
+ *  - off:      0ms,无 keyframe
+ *  - standard: 默认
+ *  - gentle:   时序 ×1.5,无 spring
+ * ──────────────────────────────────────────────────────────────────────── */
+[data-motion='off'] {
+  --motion-fast: 0ms;
+  --motion-base: 0ms;
+  --motion-slow: 0ms;
+}
+
+[data-motion='gentle'] {
+  --motion-fast: 180ms;
+  --motion-base: 300ms;
+  --motion-slow: 480ms;
+  --motion-spring: var(--motion-out);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion-fast: 0ms;
+    --motion-base: 0ms;
+    --motion-slow: 0ms;
+  }
 }

@@ -8,17 +8,6 @@
   animation: slideIn 0.3s ease-out;
 }
 
-@keyframes slideIn {
-  from {
-    opacity: 0;
-    transform: translateY(-10px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
 .streaming {
   border-color: var(--accent-primary);
   box-shadow: 0 0 0 2px var(--accent-subtle), 0 4px 12px rgba(0, 0, 0, 0.15);
@@ -53,15 +42,6 @@
   padding: 2px 8px;
   border-radius: 10px;
   animation: pulse 1.5s infinite;
-}
-
-@keyframes pulse {
-  0%, 100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.6;
-  }
 }
 
 .diffView {

@@ -17,6 +17,7 @@ import {
 import { useSettingsStore, useInlineCompleteStore } from '../../store';
 import { ModelsSettings, KnowledgeSettings, WebSearchSettings } from './index';
 import { SnapshotsSettings } from './SnapshotsSettings';
+import { AppearanceSettings } from './AppearanceSettings';
 import { Select } from './Select';
 import type { ExpertProfileName } from '../../types';
 import styles from './SettingsPanel.module.css';
@@ -316,63 +317,7 @@ export const SettingsPanel = () => {
         );
       }
       case 'appearance':
-        return (
-          <div className={styles.tabContent}>
-            <div className={styles.section}>
-              <h4 className={styles.sectionTitle}>
-                <Palette size={14} />
-                配色方案
-              </h4>
-
-              <div className={styles.field}>
-                <label className={styles.label}>主题</label>
-                <div className={styles.themeGrid}>
-                  <button
-                    className={`${styles.themeOption} ${
-                      settings.theme === 'inkuo-dark' ? styles.active : ''
-                    }`}
-                    onClick={() => {
-                      void updateSettingAndPersist('theme', 'inkuo-dark');
-                    }}
-                  >
-                    <div className={styles.themePreview} style={{ background: '#1e1e1e' }}>
-                      <div style={{ color: '#7c5cff', fontSize: '10px' }}>Aa</div>
-                    </div>
-                    <span>深色</span>
-                  </button>
-                  <button
-                    className={`${styles.themeOption} ${
-                      settings.theme === 'inkuo-light' ? styles.active : ''
-                    }`}
-                    onClick={() => {
-                      void updateSettingAndPersist('theme', 'inkuo-light');
-                    }}
-                  >
-                    <div className={styles.themePreview} style={{ background: '#ffffff' }}>
-                      <div style={{ color: '#7c5cff', fontSize: '10px' }}>Aa</div>
-                    </div>
-                    <span>浅色</span>
-                  </button>
-                </div>
-              </div>
-
-              <div className={styles.field}>
-                <label className={styles.label}>强调色</label>
-                <div className={styles.colorPicker}>
-                  <input
-                    type="color"
-                    value={settings.accent_color}
-                    onChange={(e) => {
-                      void updateSettingAndPersist('accent_color', e.target.value);
-                    }}
-                    className={styles.colorInput}
-                  />
-                  <span className={styles.colorValue}>{settings.accent_color}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        );
+        return <AppearanceSettings />;
       case 'web_search':
         return <WebSearchSettings />;
       case 'snapshots':

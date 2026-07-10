@@ -91,11 +91,6 @@
   animation: spin 1s linear infinite;
 }
 
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-
 /* Line counts */
 .lineCounts {
   display: flex;
@@ -311,11 +306,6 @@
   animation: streamPulse 1s ease-in-out infinite;
 }
 
-@keyframes streamPulse {
-  0%, 100% { opacity: 0.4; transform: scale(0.85); }
-  50% { opacity: 1; transform: scale(1.15); }
-}
-
 .previewContainer {
   max-height: 280px;
   overflow-y: auto;
@@ -354,11 +344,6 @@
   background-color: var(--accent-primary);
   vertical-align: text-bottom;
   animation: caretBlink 0.9s ease-in-out infinite;
-}
-
-@keyframes caretBlink {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0; }
 }
 
 /* Error */

@@ -26,12 +26,13 @@
   align-items: center;
   height: 100%;
   padding: 0 12px;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   color: var(--fg-secondary);
   background: transparent;
   border: none;
   cursor: pointer;
-  transition: background-color var(--transition-fast), color var(--transition-fast);
+  transition: background-color var(--motion-fast) var(--motion-out),
+              color var(--motion-fast) var(--motion-out);
 }
 
 .menuButton:hover,
@@ -45,24 +46,13 @@
   top: 100%;
   left: 0;
   min-width: 220px;
-  background-color: var(--bg-tertiary);
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
+  background-color: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
   box-shadow: var(--shadow-lg);
-  padding: 4px 0;
+  padding: var(--space-xs) 0;
   z-index: var(--z-dropdown);
-  animation: fadeIn 0.1s ease-out;
-}
-
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(-4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+  animation: motion-fade-in var(--motion-fast) var(--motion-out);
 }
 
 .menuItem {
@@ -70,14 +60,14 @@
   align-items: center;
   justify-content: space-between;
   width: 100%;
-  padding: 8px 12px;
-  font-size: 13px;
+  padding: var(--space-sm) var(--space-md);
+  font-size: var(--font-size-md);
   color: var(--fg-primary);
   background: transparent;
   border: none;
   cursor: pointer;
   text-align: left;
-  transition: background-color var(--transition-fast);
+  transition: background-color var(--motion-fast) var(--motion-out);
 }
 
 .menuItem:hover {
@@ -114,7 +104,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   color: var(--fg-secondary);
 }
 
@@ -135,14 +125,9 @@
 }
 
 .dirty {
-  color: var(--accent-primary);
+  color: var(--accent);
   font-size: 10px;
-  animation: pulse 2s ease-in-out infinite;
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
+  animation: motion-pulse 2s ease-in-out infinite;
 }
 
 .actions {
@@ -162,7 +147,8 @@
   background: transparent;
   border: none;
   cursor: pointer;
-  transition: background-color var(--transition-fast), color var(--transition-fast);
+  transition: background-color var(--motion-fast) var(--motion-out),
+              color var(--motion-fast) var(--motion-out);
 }
 
 .actionButton:hover {

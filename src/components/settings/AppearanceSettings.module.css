@@ -1,0 +1,191 @@
+/* AppearanceSettings —— 主题卡片 + 动效卡片 */
+
+.themeGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-md);
+}
+
+@media (min-width: 720px) {
+  .themeGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.themeCard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  padding: 12px;
+  background: var(--bg-elevated);
+  border: 1.5px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    border-color var(--motion-fast) var(--motion-out),
+    background-color var(--motion-fast) var(--motion-out),
+    transform var(--motion-fast) var(--motion-spring),
+    box-shadow var(--motion-base) var(--motion-out);
+}
+
+.themeCard:hover {
+  border-color: color-mix(in oklch, var(--accent) 40%, var(--border-subtle));
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
+}
+
+.themeCardActive {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-subtle);
+}
+
+.themePreview {
+  position: relative;
+  height: 92px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  border: 1px solid color-mix(in oklch, var(--fg-primary) 6%, transparent);
+}
+
+.previewSurface {
+  position: absolute;
+  left: 10px;
+  top: 10px;
+  width: 60%;
+  height: calc(100% - 20px);
+  border-radius: 4px;
+  padding: 10px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.previewLine {
+  height: 4px;
+  border-radius: 2px;
+  opacity: 0.95;
+}
+
+.previewAccent {
+  height: 6px;
+  width: 26%;
+  margin-top: 2px;
+  border-radius: 999px;
+}
+
+.previewFg {
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  width: 28%;
+  height: 6px;
+  border-radius: 2px;
+  opacity: 0.85;
+}
+
+.themeMeta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 4px 2px;
+}
+
+.themeName {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-size-md);
+  font-weight: 600;
+  color: var(--fg-primary);
+}
+
+.themeBlurb {
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+}
+
+/* ── 动效卡 ─────────────────────────────────────────────────── */
+
+.motionGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-md);
+}
+
+@media (max-width: 600px) {
+  .motionGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.motionCard {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  background: var(--bg-elevated);
+  border: 1.5px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    border-color var(--motion-fast) var(--motion-out),
+    background-color var(--motion-fast) var(--motion-out),
+    transform var(--motion-fast) var(--motion-spring);
+}
+
+.motionCard:hover:not(:disabled) {
+  border-color: color-mix(in oklch, var(--accent) 40%, var(--border-subtle));
+  transform: translateY(-1px);
+}
+
+.motionCardActive {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-subtle);
+}
+
+.motionCard:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.motionName {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-size-md);
+  font-weight: 600;
+  color: var(--fg-primary);
+}
+
+.motionBlurb {
+  font-size: var(--font-size-xs);
+  color: var(--fg-muted);
+  min-height: 32px;
+}
+
+.motionDemo {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 18px;
+  margin-top: 4px;
+}
+
+.motionDemo span {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  animation: motion-loading-dots 1.4s ease-in-out infinite both;
+}
+
+.motionDemo[data-active='false'] span {
+  animation: none;
+  opacity: 0.4;
+}
+
+.systemFlag {
+  color: var(--warning);
+  font-weight: 500;
+}

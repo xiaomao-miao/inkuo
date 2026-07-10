@@ -1,14 +1,3 @@
-@keyframes slideInFromRight {
-  from {
-    transform: translateX(100%);
-    opacity: 0;
-  }
-  to {
-    transform: translateX(0);
-    opacity: 1;
-  }
-}
-
 .panel {
   height: 100%;
   background-color: var(--bg-secondary);

@@ -441,12 +441,6 @@
   animation: spin 0.8s linear infinite;
 }
 
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
 /* ============================================================================
    Office Loading/Error States (for wrapper)
    ============================================================================ */
@@ -506,11 +500,6 @@
 
 .loadingDot:nth-child(1) { animation-delay: -0.32s; }
 .loadingDot:nth-child(2) { animation-delay: -0.16s; }
-
-@keyframes dotPulse {
-  0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
-  40% { transform: scale(1); opacity: 1; }
-}
 
 .inlineReady,
 .inlineHint {

@@ -75,17 +75,6 @@
   box-shadow: none;
 }
 
-@keyframes dotPulse {
-  0%, 100% {
-    box-shadow: 0 0 0 0 var(--accent-subtle);
-    transform: scale(1);
-  }
-  50% {
-    box-shadow: 0 0 0 6px transparent;
-    transform: scale(1.15);
-  }
-}
-
 .headerTitle {
   font-weight: 600;
   font-size: var(--font-size-sm);
@@ -211,11 +200,6 @@
   animation-delay: calc(var(--item-index, 0) * 35ms);
 }
 
-@keyframes itemFadeIn {
-  from { opacity: 0; transform: translateY(-2px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-
 /* In-progress item — visually emphasized so the user can find
  * "what's happening right now" at a glance. */
 .itemInProgress {
@@ -263,11 +247,6 @@
 
 .itemIconPending {
   color: var(--fg-muted);
-}
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to   { transform: rotate(360deg); }
 }
 
 .itemContent {

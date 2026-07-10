@@ -292,15 +292,15 @@
 
 /* Different colors for different file types */
 .icon[data-type="folder"] {
-  color: #dcb67a;
+  color: var(--file-folder);
 }
 
 .icon[data-type="folder-open"] {
-  color: #dcb67a;
+  color: var(--file-folder);
 }
 
 .icon[data-type="markdown"] {
-  color: #519aba;
+  color: var(--file-markdown);
 }
 
 .icon[data-type="file"] {
@@ -353,31 +353,15 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background-color: var(--accent-primary);
+  background-color: var(--accent);
   flex-shrink: 0;
   margin-left: 4px;
   animation: modifiedPulse 2s ease-in-out infinite;
 }
 
-@keyframes modifiedPulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
-}
-
 .children {
   padding-left: var(--space-lg);
   animation: treeExpand 150ms ease-out;
-}
-
-@keyframes treeExpand {
-  from {
-    opacity: 0;
-    transform: translateY(-2px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
 }
 
 .loading {
@@ -386,11 +370,6 @@
   color: var(--fg-muted);
   font-size: var(--font-size-sm);
   animation: pulse 1.5s ease-in-out infinite;
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.5; }
 }
 
 /* Keyboard focus styles */
@@ -498,12 +477,6 @@
   animation: spin 1s linear infinite;
 }
 
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-
-/* Search icon active state */
 .searchIconActive {
   color: var(--accent-primary) !important;
 }
@@ -1154,11 +1127,6 @@
   .knowledgeHeroMeta {
     align-items: flex-start;
   }
-}
-
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
 }
 
 .spinning {

@@ -1,0 +1,132 @@
+/* ============================================================================
+ * inkuo 集中动画定义
+ * ----------------------------------------------------------------------------
+ * 组件 CSS 不再写 `@keyframes`,只引用这里的工具类或直接使用全局动画 token。
+ *
+ * 用法:
+ *   <div class="motion-fade-in"> ... </div>
+ *   <div class="motion-scale-in"> ... </div>
+ *
+ * 或在 CSS 里:
+ *   animation: motion-fade-in var(--motion-base) var(--motion-out) both;
+ *
+ * 为了不破坏现有组件代码,文件底部保留了"无前缀"的别名 keyframes,
+ * 这些是历史上散落在各个组件里的同义重复。后续重写组件时迁移到
+ * `motion-*` 命名即可。
+ * ============================================================================ */
+
+/* ── 关键帧(全项目主命名) ──────────────────────────────────────── */
+@keyframes motion-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes motion-fade-out {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+
+@keyframes motion-scale-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+@keyframes motion-slide-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes motion-slide-right {
+  from { opacity: 0; transform: translateX(12px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes motion-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+@keyframes motion-caret-blink {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0; }
+}
+
+@keyframes motion-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.55; }
+}
+
+@keyframes motion-loading-dots {
+  0%, 80%, 100% { transform: scale(0.7); opacity: 0.4; }
+  40%           { transform: scale(1); opacity: 1; }
+}
+
+@keyframes motion-loading-dots-large {
+  0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+  40%           { transform: scale(1); opacity: 1; }
+}
+
+/* ── 工具类 ───────────────────────────────────────────────────────── */
+.motion-fade-in {
+  animation: motion-fade-in var(--motion-base) var(--motion-out) both;
+}
+
+.motion-scale-in {
+  animation: motion-scale-in var(--motion-base) var(--motion-spring) both;
+}
+
+.motion-slide-up {
+  animation: motion-slide-up var(--motion-base) var(--motion-out) both;
+}
+
+.motion-slide-right {
+  animation: motion-slide-right var(--motion-base) var(--motion-out) both;
+}
+
+.motion-spin {
+  animation: motion-spin 1s linear infinite;
+  display: inline-block;
+}
+
+.motion-pulse {
+  animation: motion-pulse 2s ease-in-out infinite;
+}
+
+/* ── 减少动效兜底 ─────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0ms !important;
+  }
+}
+
+/* ============================================================================
+ *  历史遗留 keyframes 别名(去重)
+ * 这些原本在 9 个组件文件里被各自重复定义。这里集中保留,组件可以直接
+ * 引用同名动画名,不需要修改组件 CSS。
+ * 新写的代码请用上面的 `motion-*` 命名。
+ * ============================================================================ */
+@keyframes spin              { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+@keyframes pulse             { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+@keyframes fadeIn            { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes slideInUp         { from { transform: translateY(10px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+@keyframes slideInFromRight  { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+@keyframes contextMenuIn     { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: scale(1); } }
+@keyframes confirmFadeIn     { from { opacity: 0; } to { opacity: 1; } }
+@keyframes confirmScaleIn    { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: scale(1); } }
+@keyframes treeExpand        { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes modifiedPulse     { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+@keyframes dotPulse          { 0%, 80%, 100% { transform: scale(0.8); opacity: 0.4; } 40% { transform: scale(1.2); opacity: 1; } }
+@keyframes cursorBlink       { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+@keyframes caretBlink        { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+@keyframes blink             { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+@keyframes historyPlaceholderSpin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+@keyframes cloudPanelSpin    { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+@keyframes streamPulse       { 0%, 100% { opacity: 0.4; transform: scale(0.85); } 50% { opacity: 1; transform: scale(1.15); } }
+@keyframes slideIn           { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes itemFadeIn        { from { opacity: 0; transform: translateY(-2px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes rowSlideIn        { 0% { opacity: 0; transform: translateY(-3px); } 100% { opacity: 1; transform: translateY(0); } }
+@keyframes slideInRight      { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }

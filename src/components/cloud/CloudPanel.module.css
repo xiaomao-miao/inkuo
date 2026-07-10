@@ -283,7 +283,3 @@
   animation: cloudPanelSpin 1s linear infinite;
 }
 
-@keyframes cloudPanelSpin {
-  from { transform: rotate(0deg); }
-  to   { transform: rotate(360deg); }
-}

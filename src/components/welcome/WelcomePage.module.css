@@ -4,87 +4,105 @@
   align-items: center;
   justify-content: center;
   height: 100vh;
-  background-color: var(--bg-primary);
+  background:
+    radial-gradient(ellipse 80% 60% at 50% 0%, var(--accent-subtle), transparent 70%),
+    var(--bg-canvas);
   position: relative;
+  overflow: hidden;
+}
+
+/* 微弱的远景网格,只在 iris / verdant 主题下能看出与默认的差别 */
+.welcomePage::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(color-mix(in oklch, var(--fg-primary) 4%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in oklch, var(--fg-primary) 4%, transparent) 1px, transparent 1px);
+  background-size: 56px 56px;
+  background-position: center;
+  -webkit-mask-image: radial-gradient(ellipse 60% 50% at 50% 50%, black 30%, transparent 75%);
+          mask-image: radial-gradient(ellipse 60% 50% at 50% 50%, black 30%, transparent 75%);
+  opacity: 0.5;
+  pointer-events: none;
 }
 
 .centerContent {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: var(--space-xl);
-  animation: fadeIn 0.5s ease-out;
+  animation: motion-slide-up var(--motion-slow) var(--motion-out) both;
+  max-width: 520px;
+  padding: 0 var(--space-xl);
 }
 
-.logoSection {
-  display: flex;
-  flex-direction: column;
+.wordmark {
+  display: inline-flex;
   align-items: center;
-  gap: var(--space-md);
+  gap: 14px;
+  color: var(--accent);
 }
 
-.logo {
-  width: 80px;
-  height: 80px;
-  border-radius: var(--radius-lg);
-  background: linear-gradient(135deg, var(--accent-primary), var(--accent-hover));
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: var(--shadow-lg), 0 0 40px rgba(74, 222, 128, 0.3);
+.symbol {
+  flex-shrink: 0;
+  /* 让符号有"呼吸" —— 在 motion 标准档下缓慢浮动 */
+  animation: motion-pulse 3.2s ease-in-out infinite;
 }
 
-.logoIcon {
-  font-size: 48px;
-  font-weight: 700;
-  color: var(--bg-primary);
-  font-family: var(--font-mono);
-}
-
-.title {
-  font-size: var(--font-size-2xl);
+.wordmarkText {
+  font-size: 36px;
   font-weight: 600;
+  letter-spacing: -0.02em;
   color: var(--fg-primary);
-  margin: 0;
-  letter-spacing: -0.5px;
+  font-feature-settings: 'ss01';
 }
 
 .subtitle {
+  margin: 0;
   font-size: var(--font-size-lg);
   color: var(--fg-secondary);
-  margin: 0;
+  line-height: var(--line-height-relaxed);
+  text-align: center;
+  max-width: 420px;
 }
 
 .actions {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   gap: var(--space-md);
-  width: 280px;
+  margin-top: var(--space-md);
 }
 
 .primaryButton,
 .secondaryButton {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: var(--space-md);
-  padding: var(--space-lg) var(--space-xl);
+  padding: 12px 22px;
   border-radius: var(--radius-md);
-  font-size: var(--font-size-lg);
+  font-size: var(--font-size-md);
   font-weight: 500;
-  transition: all var(--transition-normal);
   cursor: pointer;
   border: 1px solid transparent;
+  transition:
+    background-color var(--motion-fast) var(--motion-out),
+    color var(--motion-fast) var(--motion-out),
+    border-color var(--motion-fast) var(--motion-out),
+    transform var(--motion-fast) var(--motion-spring),
+    box-shadow var(--motion-base) var(--motion-out);
 }
 
 .primaryButton {
-  background-color: var(--accent-primary);
-  color: var(--bg-primary);
+  background-color: var(--accent);
+  color: var(--accent-contrast);
 }
 
 .primaryButton:hover:not(:disabled) {
-  background-color: var(--accent-hover);
   transform: translateY(-1px);
-  box-shadow: var(--shadow-md);
+  filter: brightness(1.05);
+  box-shadow: 0 8px 24px color-mix(in oklch, var(--accent) 30%, transparent);
 }
 
 .primaryButton:active:not(:disabled) {
@@ -92,14 +110,14 @@
 }
 
 .secondaryButton {
-  background-color: var(--bg-secondary);
+  background-color: var(--bg-elevated);
   color: var(--fg-primary);
-  border-color: var(--border-color);
+  border-color: var(--border-subtle);
 }
 
 .secondaryButton:hover:not(:disabled) {
-  background-color: var(--bg-hover);
-  border-color: var(--border-active);
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .primaryButton:disabled,
@@ -109,14 +127,12 @@
 }
 
 .arrowIcon {
-  margin-left: auto;
-  opacity: 0.7;
+  margin-left: var(--space-xs);
+  transition: transform var(--motion-fast) var(--motion-out);
 }
 
-.hint {
-  margin-top: var(--space-md);
-  color: var(--fg-muted);
-  font-size: var(--font-size-sm);
+.primaryButton:hover:not(:disabled) .arrowIcon {
+  transform: translateX(3px);
 }
 
 .footer {
@@ -126,21 +142,29 @@
   right: 0;
   display: flex;
   justify-content: center;
-}
-
-.footerText {
-  color: var(--fg-muted);
+  align-items: center;
+  gap: 8px;
   font-size: var(--font-size-sm);
-  margin: 0;
+  color: var(--fg-muted);
 }
 
-.footerText kbd {
-  display: inline-block;
-  padding: 2px 6px;
+.footerHint {
+  margin-left: 8px;
+  color: var(--fg-muted);
+}
+
+.footer kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 6px;
   font-size: var(--font-size-xs);
   font-family: var(--font-mono);
-  background-color: var(--bg-secondary);
-  border: 1px solid var(--border-color);
+  color: var(--fg-secondary);
+  background-color: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-sm);
-  box-shadow: 0 1px 0 var(--border-color);
+  box-shadow: 0 1px 0 var(--border-subtle);
 }

@@ -1,18 +1,22 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect } from 'react';
 import { Layout } from './components/layout';
 import { CmdK } from './components/cmdk';
 import { WelcomePage } from './components/welcome';
 import { WorkspaceBootstrap } from './components/WorkspaceBootstrap';
 import { useInitialSnapshotLoader } from './hooks/useInitialSnapshotLoader';
-import { useSettingsStore, useEditorStore } from './store';
+import { useEditorStore } from './store';
 import { useSidebarStore } from './store/sidebarStore';
-import { adjustColor } from './utils/color';
+import { useTheme } from './hooks/useTheme';
+import { useMotionLevel } from './hooks/useMotionLevel';
 import './styles/design-tokens.css';
+import './styles/motion.css';
 import './styles/global.css';
 
 function App() {
-  const settings = useSettingsStore((state) => state.settings);
   const workspacePath = useSidebarStore((state) => state.workspacePath);
+
+  useTheme();
+  useMotionLevel();
 
   // Restore AI chat sessions from the Rust backend snapshot on startup so
   // the user sees their history without having to switch workspaces first.
@@ -72,23 +76,6 @@ function App() {
     // default empty session on a fresh webview, which is what we want for
     // the new window's welcome page.
   }, []);
-
-  const accentHover = useMemo(
-    () => adjustColor(settings.accent_color, 20),
-    [settings.accent_color],
-  );
-  const accentActive = useMemo(
-    () => adjustColor(settings.accent_color, -20),
-    [settings.accent_color],
-  );
-
-  useEffect(() => {
-    document.documentElement.setAttribute('data-theme', settings.theme);
-
-    document.documentElement.style.setProperty('--accent-primary', settings.accent_color);
-    document.documentElement.style.setProperty('--accent-hover', accentHover);
-    document.documentElement.style.setProperty('--accent-active', accentActive);
-  }, [settings.theme, settings.accent_color, accentHover, accentActive]);
 
   // No manual polling here: filesystem changes are delivered through the
   // Tauri `file-change` event (see `useWorkspaceFileWatcher`), which debounces

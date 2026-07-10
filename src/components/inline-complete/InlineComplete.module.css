@@ -29,15 +29,6 @@
   animation: pulse 1s infinite;
 }
 
-@keyframes pulse {
-  0%, 100% {
-    opacity: 0.3;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-
 .statusContainer {
   display: flex;
   align-items: center;
@@ -72,17 +63,6 @@
 
 .loadingDot:nth-child(2) {
   animation-delay: -0.16s;
-}
-
-@keyframes dotPulse {
-  0%, 80%, 100% {
-    transform: scale(0.6);
-    opacity: 0.4;
-  }
-  40% {
-    transform: scale(1);
-    opacity: 1;
-  }
 }
 
 .statusReady {

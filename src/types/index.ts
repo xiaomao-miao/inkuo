@@ -858,4 +858,12 @@ export interface EmbeddingModelInfo {
   description: string;
 }
 
-export type ThemeType = 'inkuo-dark' | 'inkuo-light' | 'high-contrast-dark' | 'high-contrast-light';
+export type ThemeType =
+  | 'graphite'
+  | 'verdant'
+  | 'iris'
+  | 'inkuo-light'
+  | 'high-contrast-dark'
+  | 'high-contrast-light'
+  /** 旧值,使用中保持向后兼容(解析时映射到 graphite)。 */
+  | 'inkuo-dark';

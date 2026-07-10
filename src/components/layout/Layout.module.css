@@ -18,6 +18,7 @@
   min-width: 180px;
   max-width: 400px;
   overflow: hidden;
+  animation: motion-slide-right var(--motion-slow) var(--motion-out);
 }
 
 .sidebar > :global(*) {
@@ -35,7 +36,7 @@
   min-width: 0;
   overflow: hidden;
   position: relative;
-  background-color: var(--bg-primary);
+  background-color: var(--bg-canvas);
 }
 
 /* Subtle gradient overlay on main area */
@@ -48,7 +49,7 @@
   height: 200px;
   background: linear-gradient(
     180deg,
-    rgba(124, 92, 255, 0.02) 0%,
+    color-mix(in oklch, var(--accent) 4%, transparent) 0%,
     transparent 100%
   );
   pointer-events: none;
@@ -60,7 +61,8 @@
   min-width: 300px;
   max-width: 600px;
   overflow: hidden;
-  border-left: 1px solid var(--border-color);
+  border-left: 1px solid var(--border-subtle);
+  animation: motion-slide-right var(--motion-base) var(--motion-out);
 }
 
 /* Placeholder for not-yet-implemented views */
