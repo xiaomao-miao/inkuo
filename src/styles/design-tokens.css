@@ -69,6 +69,10 @@
   --selection-bg: oklch(72% 0.04 240 / 30%);
   --focus-ring: oklch(72% 0.04 240 / 60%);
 
+  /* ── 遮罩 / 弹层背景 ─────────────────────────────────────────── */
+  --overlay: oklch(8% 0.01 240 / 60%);
+  --overlay-strong: oklch(8% 0.01 240 / 75%);
+
   /* ── 尺寸 ─────────────────────────────────────────────────────── */
   --sidebar-width: 260px;
   --sidebar-min-width: 180px;
@@ -190,6 +194,8 @@
   --accent-active: var(--accent-hover);
   --border-active: var(--accent);
 
+    --overlay: oklch(8% 0.01 155 / 60%);
+  --overlay-strong: oklch(8% 0.01 155 / 75%);
   color-scheme: dark;
 }
 
@@ -231,6 +237,8 @@
   --border-active: var(--accent);
   --focus-ring: var(--accent-subtle);
 
+    --overlay: oklch(8% 0.01 290 / 60%);
+  --overlay-strong: oklch(8% 0.01 290 / 75%);
   color-scheme: dark;
 }
 
@@ -271,6 +279,8 @@
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.10);
   --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.14);
 
+    --overlay: oklch(15% 0.01 285 / 45%);
+  --overlay-strong: oklch(15% 0.01 285 / 60%);
   color-scheme: light;
 }
 
@@ -284,6 +294,8 @@
   --bg-secondary: var(--bg-surface);
   --bg-tertiary: var(--bg-elevated);
   --accent-primary: var(--accent);
+  --overlay: oklch(0% 0 0 / 75%);
+  --overlay-strong: oklch(0% 0 0 / 88%);
 }
 
 [data-theme='high-contrast-light'] {
@@ -294,6 +306,8 @@
   --bg-primary: var(--bg-canvas);
   --bg-secondary: var(--bg-surface);
   --accent-primary: var(--accent);
+  --overlay: oklch(15% 0.01 285 / 60%);
+  --overlay-strong: oklch(15% 0.01 285 / 75%);
 }
 
 /* ────────────────────────────────────────────────────────────────────────
