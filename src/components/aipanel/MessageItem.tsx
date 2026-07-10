@@ -35,6 +35,12 @@ interface MessageItemProps {
   onAdjustPlan?: (messageId: string, plan: PlanOutput) => void;
   /** Persist a structured plan to `<workspace>/.inkuo/plans/<id>.md`. */
   onSavePlan?: (messageId: string) => Promise<void>;
+  /**
+   * Animation delay (ms) for the message entry animation. Used to stagger
+   * the last few messages of a freshly-arrived batch so they fade in
+   * sequentially instead of all at once. 0 disables the stagger.
+   */
+  entryDelayMs?: number;
 }
 
 export const MessageItem: React.FC<MessageItemProps> = ({
@@ -52,6 +58,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
   onApplyPlan,
   onAdjustPlan,
   onSavePlan,
+  entryDelayMs = 0,
 }) => {
   if (message.role === 'user') {
     return (
@@ -82,7 +89,10 @@ export const MessageItem: React.FC<MessageItemProps> = ({
     const hasOutputItems = message.outputItems && message.outputItems.length > 0;
 
     return (
-      <div className={`${styles.message} ${styles.assistant}`}>
+      <div
+        className={`${styles.message} ${styles.assistant}`}
+        style={entryDelayMs ? { animationDelay: `${entryDelayMs}ms` } : undefined}
+      >
         <div className={styles.messageContent}>
           {activeSession && (
             <AssistantMessageBody

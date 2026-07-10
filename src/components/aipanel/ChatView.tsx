@@ -329,7 +329,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           />
         )}
 
-        {partition.liveMessages.map((message) => (
+        {partition.liveMessages.map((message, idx) => (
           <MessageItem
             key={message.id}
             message={message}
@@ -346,6 +346,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
             onApplyPlan={onApplyPlan}
             onAdjustPlan={onAdjustPlan}
             onSavePlan={onSavePlan}
+            // 整批加载历史消息时不做 stagger(会一连串"叮叮叮"),只有
+            // 当前 session 的尾部新消息才按 30ms 一条滑入。streaming
+            // 期间也跳过,避免每 chunk 都重启动画。
+            entryDelayMs={
+              !isStreaming && idx >= Math.max(0, partition.liveMessages.length - 4)
+                ? Math.min((idx - Math.max(0, partition.liveMessages.length - 4)) * 30, 90)
+                : 0
+            }
           />
         ))}
 
