@@ -3,7 +3,7 @@ import {
   Send, StopCircle, Terminal, Loader2,
   Plus, Database, Globe,
 } from 'lucide-react';
-import { useAIPanelStore } from '../../store';
+import { useAIPanelStore, useSettingsStore } from '../../store';
 import type { ChatMode, FeatureToggleId, FeatureToggleMap } from '../../types';
 import styles from './AIPanelInput.module.css';
 
@@ -107,6 +107,110 @@ export const ComposerToggleRows: React.FC<{
         );
       })}
     </>
+  );
+};
+
+/** Unified model switcher rendered next to the mode button.
+ *
+ * Lists every model the user can route through in a single dropdown,
+ * grouped into two <optgroup>s:
+ *   - 云端模型 — only shown when a cloud account is signed in
+ *   - 本地 API  — always shown
+ *
+ * Picking any option flips `cloud_mode_enabled` accordingly and writes
+ * the right id back into settings. The current selection is
+ * highlighted by matching the `<select>` value against the active
+ * id in the currently-active mode (cloud mode → cloud id, else →
+ * local config id).
+ *
+ * If neither group has any entries (e.g. no API configs and no
+ * cloud account) we hide the switcher entirely — there's nothing
+ * meaningful the user could pick. */
+const ModelSwitcher: React.FC<{ mode: ChatMode }> = ({ mode }) => {
+  const cloudMode = useSettingsStore((s) => s.settings.cloud.cloud_mode_enabled);
+  const cloudAccount = useSettingsStore((s) => s.settings.cloud.account);
+  const cloudModels = useSettingsStore((s) => s.settings.cloud.cached_models);
+  const activeCloudModelId = useSettingsStore((s) => s.settings.cloud.active_cloud_model_id);
+  const setCloudModeEnabledAndPersist = useSettingsStore(
+    (s) => s.setCloudModeEnabledAndPersist,
+  );
+  const setActiveCloudModelIdAndPersist = useSettingsStore(
+    (s) => s.setActiveCloudModelIdAndPersist,
+  );
+  const apiConfigs = useSettingsStore((s) => s.settings.apiConfigs);
+  const activeApiConfigId = useSettingsStore((s) => s.settings.activeApiConfigId);
+  const setActiveApiConfigAndPersist = useSettingsStore(
+    (s) => s.setActiveApiConfigAndPersist,
+  );
+
+  const hasCloudOptions = !!cloudAccount && cloudModels.length > 0;
+  const hasLocalOptions = apiConfigs.length > 0;
+
+  // Hide entirely when nothing is available — both groups empty.
+  if (!hasCloudOptions && !hasLocalOptions) return null;
+
+  // Build the active value the dropdown should highlight. Match the
+  // current mode's active id; prefix so a cloud-id can never collide
+  // with a local-config-id (both happen to be strings, but their
+  // namespaces are independent — the store doesn't enforce uniqueness).
+  const currentValue = cloudMode
+    ? activeCloudModelId
+      ? `cloud:${activeCloudModelId}`
+      : ''
+    : activeApiConfigId
+      ? `local:${activeApiConfigId}`
+      : apiConfigs[0]
+        ? `local:${apiConfigs[0].id}`
+        : '';
+
+  const onChange = async (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const raw = e.target.value;
+    if (!raw) return;
+    const [kind, id] = raw.split(':', 2);
+    if (kind === 'cloud' && id) {
+      if (!cloudMode) await setCloudModeEnabledAndPersist(true);
+      await setActiveCloudModelIdAndPersist(id);
+    } else if (kind === 'local' && id) {
+      if (cloudMode) await setCloudModeEnabledAndPersist(false);
+      await setActiveApiConfigAndPersist(id);
+    }
+  };
+
+  // Title summarizes what's currently active. We only show "cloud" or
+  // "local" labels — the model name itself is rendered inside the
+  // closed dropdown.
+  const activeLabel = cloudMode
+    ? `云端 · ${cloudModels.find((m) => m.id === activeCloudModelId)?.display_name ?? '未选择'}`
+    : `本地 · ${apiConfigs.find((c) => c.id === activeApiConfigId)?.name ?? apiConfigs[0]?.name ?? '未选择'}`;
+
+  return (
+    <select
+      className={styles.modelSwitcher}
+      data-mode={mode}
+      data-cloud={cloudMode ? 'true' : undefined}
+      value={currentValue}
+      onChange={onChange}
+      title={`当前: ${activeLabel}`}
+    >
+      {hasCloudOptions && (
+        <optgroup label="☁ 云端模型">
+          {cloudModels.map((m) => (
+            <option key={`cloud:${m.id}`} value={`cloud:${m.id}`}>
+              {m.display_name}
+            </option>
+          ))}
+        </optgroup>
+      )}
+      {hasLocalOptions && (
+        <optgroup label="💻 本地 API">
+          {apiConfigs.map((c) => (
+            <option key={`local:${c.id}`} value={`local:${c.id}`}>
+              {c.name}
+            </option>
+          ))}
+        </optgroup>
+      )}
+    </select>
   );
 };
 
@@ -344,15 +448,19 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       />
 
       <div className={styles.inputBottomRow}>
-        <button
-          type="button"
-          className={`${styles.modeButton} ${mode === 'agent' ? styles.agentModeActive : ''}`}
-          onClick={onCycleMode}
-          title={MODE_HINTS[mode]}
-        >
-          {mode === 'agent' && <Terminal size={12} />}
-          {MODE_LABELS[mode]}
-        </button>
+        <div className={styles.modeGroup}>
+          <button
+            type="button"
+            className={`${styles.modeButton} ${mode === 'agent' ? styles.agentModeActive : ''}`}
+            onClick={onCycleMode}
+            title={MODE_HINTS[mode]}
+          >
+            {mode === 'agent' && <Terminal size={12} />}
+            {MODE_LABELS[mode]}
+          </button>
+
+          <ModelSwitcher mode={mode} />
+        </div>
 
         <div className={styles.inputActions}>
           <button

@@ -320,10 +320,71 @@
   gap: 8px;
 }
 
+/* Mode button + quick model switcher stay visually coupled on the
+ * left side of the bottom row; `.inputActions` on the right stays
+ * pushed to the corner. */
+.modeGroup {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .inputActions {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+/* Quick model switcher — a compact dropdown that mirrors the mode
+ * button height so they sit on the same baseline. The custom
+ * `appearance: none` + faux chevron keeps the native browser chrome
+ * out of the visual. */
+.modelSwitcher {
+  height: 30px;
+  max-width: 220px;
+  padding: 0 24px 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background-color: var(--bg-secondary)
+    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10' fill='none' stroke='%23999' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'><polyline points='2 4 5 7 8 4'/></svg>")
+    no-repeat right 8px center / 10px 10px;
+  color: var(--fg-secondary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  overflow: hidden;
+  transition: border-color var(--transition-fast), color var(--transition-fast);
+}
+
+.modelSwitcher:hover:not(:disabled) {
+  border-color: var(--accent-primary);
+  color: var(--fg-primary);
+}
+
+.modelSwitcher[data-cloud='true'] {
+  /* Subtle accent border when the user is currently in cloud mode —
+   * matches the cloud account chip at the top of the AI panel and
+   * gives an instant "you're on cloud" visual without taking up
+   * extra horizontal space. */
+  border-color: var(--accent-primary);
+  color: var(--fg-primary);
+}
+
+.modelSwitcher option {
+  color: var(--fg-primary);
+  background-color: var(--bg-secondary);
+}
+
+.modelSwitcher optgroup {
+  font-style: normal;
+  font-weight: 600;
+  color: var(--fg-secondary);
+  background-color: var(--bg-secondary);
 }
 
 .iconBtn {

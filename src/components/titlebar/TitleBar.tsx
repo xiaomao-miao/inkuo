@@ -3,15 +3,18 @@ import {
   Minus,
   Square,
   X,
-  Settings
+  Settings,
+  User,
+  UserCheck,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
-import { useSidebarStore, useEditorStore, useNotificationStore } from '../../store';
+import { useSidebarStore, useEditorStore, useNotificationStore, useSettingsStore } from '../../store';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { applyWorkspaceDirectoryLoad, openWorkspaceDirectory, switchWorkspace } from '../../services/workspace';
 import { persistDocument } from '../../services/documentSave';
 import { reportError } from '../../utils/errors';
 import { openSettingsTab } from '../../utils/openSettingsTab';
+import { openCloudTab } from '../../utils/openCloudTab';
 
 // Custom icon: two offset rectangles — the standard "restore / not-maximized"
 // symbol used on Windows and many cross-platform window chrome libraries.
@@ -39,7 +42,7 @@ interface Menu {
   items: MenuItem[];
 }
 
-export const TitleBar = () => {
+export const TitleBar: React.FC = () => {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
   const [isMaximized, setIsMaximized] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -48,6 +51,7 @@ export const TitleBar = () => {
   const selectedFile = useSidebarStore((state) => state.selectedFile);
   const workspacePath = useSidebarStore((state) => state.workspacePath);
   const pushNotification = useNotificationStore((state) => state.pushNotification);
+  const cloudAccount = useSettingsStore((s) => s.settings.cloud.account);
   const currentMetadata = useEditorStore((state) => (
     selectedFile ? state.documentContents[selectedFile]?.metadata : null
   ));
@@ -55,6 +59,10 @@ export const TitleBar = () => {
 
   const handleOpenSettings = () => {
     openSettingsTab();
+  };
+
+  const handleOpenCloud = () => {
+    openCloudTab();
   };
 
   // Check initial maximized state
@@ -330,6 +338,14 @@ export const TitleBar = () => {
       </div>
       
       <div className={styles.actions}>
+        <button
+          className={styles.actionButton}
+          onClick={handleOpenCloud}
+          title={cloudAccount ? `${cloudAccount.email} · 账号设置` : '登录 inkuo Cloud'}
+          data-signed-in={cloudAccount ? 'true' : undefined}
+        >
+          {cloudAccount ? <UserCheck size={14} /> : <User size={14} />}
+        </button>
         <button
           className={styles.actionButton}
           onClick={handleOpenSettings}

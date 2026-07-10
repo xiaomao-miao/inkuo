@@ -170,6 +170,13 @@
   color: var(--fg-primary);
 }
 
+/* Subtle accent when a cloud account is signed in — communicates
+ * "you have an active cloud session" without competing visually with
+ * the settings cog right next to it. */
+.actionButton[data-signed-in='true'] {
+  color: var(--accent-primary);
+}
+
 .actionButton.close:hover {
   background-color: #e81123;
   color: white;

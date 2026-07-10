@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { FileText, File, X, Circle, Settings } from 'lucide-react';
+import { FileText, File, X, Circle, Settings, Cloud } from 'lucide-react';
 import { useSidebarStore } from '../../store';
 import type { OpenTab } from '../../store';
 import styles from './TabBar.module.css';
@@ -36,7 +36,7 @@ export const TabBar = () => {
   const handleCloseTab = (e: React.MouseEvent, tabId: string) => {
     e.stopPropagation();
     const tab = openTabs.find((item) => item.id === tabId);
-    if (!tab || tab.isSettings) {
+    if (!tab || tab.isSettings || tab.isCloud) {
       closeTab(tabId);
       return;
     }
@@ -70,6 +70,9 @@ export const TabBar = () => {
     if (tab.isSettings) {
       return <Settings size={14} />;
     }
+    if (tab.isCloud) {
+      return <Cloud size={14} />;
+    }
     const isMarkdown = tab.name.endsWith('.md') || tab.name.endsWith('.markdown');
     return isMarkdown ? <FileText size={14} /> : <File size={14} />;
   };
@@ -82,7 +85,7 @@ export const TabBar = () => {
         <div className={styles.tabList}>
           {openTabs.map(tab => {
             const isActive = tab.id === activeTabId;
-            const isDirty = tab.isSettings ? false : tab.isDirty;
+            const isDirty = tab.isSettings || tab.isCloud ? false : tab.isDirty;
 
             return (
               <div
@@ -93,7 +96,9 @@ export const TabBar = () => {
                 <span className={styles.tabIcon}>
                   {getFileIcon(tab)}
                 </span>
-                <span className={styles.tabName}>{tab.isSettings ? '设置' : tab.name}</span>
+                <span className={styles.tabName}>
+                  {tab.isSettings ? '设置' : tab.isCloud ? 'inkuo Cloud' : tab.name}
+                </span>
                 {isDirty && (
                   <span className={styles.dirtyIndicator}>
                     <Circle size={8} fill="currentColor" />

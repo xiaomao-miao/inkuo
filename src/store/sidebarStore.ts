@@ -32,6 +32,9 @@ export interface OpenTab {
   name: string;
   isDirty: boolean;
   isSettings?: boolean;
+  /** Marks this tab as the cloud account / workspace page. Editor.tsx
+   * routes it to <CloudPage /> instead of a file editor. */
+  isCloud?: boolean;
 }
 
 export type { KnowledgeBase, BuildProgress, ChatSession };
@@ -105,6 +108,7 @@ function updateOpenTabDirtyState(openTabs: OpenTab[], path: string, isDirty: boo
 }
 
 export const SETTINGS_TAB_ID = '__settings__';
+export const CLOUD_TAB_ID = '__cloud__';
 
 /**
  * Transient UI state for the context menu's "New file / New folder / Rename"
@@ -271,10 +275,11 @@ export const useSidebarStore = create<SidebarState>()(
         set((state) => {
           const existing = state.openTabs.find((t) => t.path === tab.path);
           if (existing) {
-            return { activeTabId: existing.id, selectedFile: tab.path };
+            const newSelectedFile = tab.isSettings || tab.isCloud ? null : tab.path;
+            return { activeTabId: existing.id, selectedFile: newSelectedFile };
           }
           const newTabs = [...state.openTabs, { ...tab, isDirty: tab.isDirty ?? false }];
-          const newSelectedFile = tab.isSettings ? null : tab.path;
+          const newSelectedFile = tab.isSettings || tab.isCloud ? null : tab.path;
           return {
             openTabs: newTabs,
             activeTabId: tab.id,
@@ -351,15 +356,19 @@ export const useSidebarStore = create<SidebarState>()(
           return {
             openTabs: newTabs,
             activeTabId: newActiveId,
-            selectedFile: newActiveId
-              ? newTabs.find((t) => t.id === newActiveId)?.path || null
-              : null,
+            selectedFile: (() => {
+              if (!newActiveId) return null;
+              const next = newTabs.find((t) => t.id === newActiveId);
+              if (!next) return null;
+              if (next.isSettings || next.isCloud) return null;
+              return next.path;
+            })(),
           };
         }),
 
       requestCloseTab: (path) => {
         const state = get();
-        const tab = state.openTabs.find((t) => t.path === path && !t.isSettings);
+        const tab = state.openTabs.find((t) => t.path === path && !t.isSettings && !t.isCloud);
         if (!tab) return true;
         if (tab.isDirty) return false;
         state.closeTab(tab.id);
@@ -369,7 +378,7 @@ export const useSidebarStore = create<SidebarState>()(
       setActiveTab: (tabId) =>
         set((state) => {
           const tab = state.openTabs.find((t) => t.id === tabId);
-          const newSelectedFile = tab?.isSettings
+          const newSelectedFile = tab?.isSettings || tab?.isCloud
             ? null
             : tab?.path ?? state.selectedFile;
           return {

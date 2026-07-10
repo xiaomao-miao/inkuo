@@ -2,6 +2,7 @@ export { useEditorStore } from './editorStore';
 export {
   useSidebarStore,
   SETTINGS_TAB_ID,
+  CLOUD_TAB_ID,
   type OpenTab,
   type KnowledgeBase as SidebarKnowledgeBase,
   type BuildProgress as SidebarBuildProgress,

@@ -3,9 +3,10 @@ import { type ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import CodeMirror from '@uiw/react-codemirror';
 import { Compartment } from '@codemirror/state';
 import { Sparkles } from 'lucide-react';
-import { useEditorStore, useSidebarStore, useSettingsStore, SETTINGS_TAB_ID, type OpenTab } from '../../store';
+import { useEditorStore, useSidebarStore, useSettingsStore, SETTINGS_TAB_ID, CLOUD_TAB_ID, type OpenTab } from '../../store';
 import { DiffOverlay } from './DiffOverlay';
 import { SettingsPanel } from '../settings/SettingsPanel';
+import { CloudPage } from '../cloud/CloudPage';
 import { WordEditor, ExcelEditor } from './OfficeViewer';
 import { InlineCompleteProvider } from '../inline-complete';
 import { useDocumentLoader } from './useDocumentLoader';
@@ -163,6 +164,12 @@ const SettingsState: React.FC = () => (
   </div>
 );
 
+const CloudState: React.FC = () => (
+  <div className={styles.editorContainer}>
+    <CloudPage />
+  </div>
+);
+
 function detectFileType(path: string): 'markdown' | 'plaintext' | 'word' | 'excel' {
   const ext = path.split('.').pop()?.toLowerCase() || '';
   if (ext === 'docx') return 'word';
@@ -232,6 +239,10 @@ export const Editor: React.FC = () => {
 
   if (isSettingsTab) {
     return <SettingsState />;
+  }
+
+  if (activeTabId === CLOUD_TAB_ID) {
+    return <CloudState />;
   }
 
   if (!selectedFile) {
