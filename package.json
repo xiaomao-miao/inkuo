@@ -58,6 +58,7 @@
     "rehype-raw": "^7.0.0",
     "remark-gfm": "^4.0.1",
     "xlsx": "^0.18.5",
+    "jszip": "^3.10.1",
     "zustand": "^5.0.13"
   },
   "devDependencies": {
@@ -75,5 +76,10 @@
     "typescript-eslint": "^8.35.1",
     "vite": "^7.0.4",
     "vitest": "^3.2.4"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
   }
 }
