@@ -120,6 +120,10 @@
   animation: motion-fade-in var(--motion-base) var(--motion-out);
 }
 
+.skeletonList {
+  padding: 8px 12px;
+}
+
 .emptyIcon {
   color: var(--fg-muted);
   opacity: 0.7;

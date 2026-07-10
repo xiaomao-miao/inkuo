@@ -366,6 +366,10 @@
   animation: treeExpand 150ms ease-out;
 }
 
+.skeletonContainer {
+  padding: 4px 8px;
+}
+
 .loading {
   padding: var(--space-lg);
   text-align: center;

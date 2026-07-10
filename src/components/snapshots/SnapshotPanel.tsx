@@ -12,6 +12,7 @@ import { History, Plus, RotateCcw, Trash2, X, Search, Bot, Camera, FolderOpen, S
 import { listSnapshots, type SnapshotIndexEntry } from '../../services/snapshots';
 import { useSidebarStore } from '../../store/sidebarStore';
 import { useSnapshotActions } from './useSnapshotActions';
+import { Skeleton, SkeletonGroup } from '../common/Skeleton';
 import { SnapshotRestoreDialog } from './SnapshotRestoreDialog';
 import styles from './Snapshots.module.css';
 
@@ -183,6 +184,15 @@ export const SnapshotPanel = () => {
             onDelete={() => void handleDelete(snap.id)}
           />
         ))}
+        {workspacePath && isLoading && (
+          <SkeletonGroup className={styles.skeletonList}>
+            <Skeleton width="60%" height={11} />
+            <Skeleton width="40%" height={9} />
+            <Skeleton width="80%" height={9} />
+            <Skeleton width="50%" height={9} />
+            <Skeleton width="70%" height={9} />
+          </SkeletonGroup>
+        )}
       </div>
 
       {restoreTarget && (

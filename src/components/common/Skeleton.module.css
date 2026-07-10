@@ -1,0 +1,80 @@
+@keyframes skeletonShimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+.skeleton {
+  position: relative;
+  display: block;
+  background-color: var(--bg-elevated);
+  overflow: hidden;
+}
+
+/* shimmer 光带 */
+.skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in oklch, var(--fg-primary) 6%, transparent) 50%,
+    transparent 100%
+  );
+  animation: skeletonShimmer 1.6s ease-in-out infinite;
+  will-change: transform;
+}
+
+.rounded { border-radius: var(--radius-sm); }
+.circle  { border-radius: 50%; }
+.pill    { border-radius: var(--radius-pill); }
+.square  { border-radius: 0; }
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* 一组内的 skeleton 让动画自然错开 */
+.group .skeleton:nth-child(2)::after { animation-delay: 80ms; }
+.group .skeleton:nth-child(3)::after { animation-delay: 160ms; }
+.group .skeleton:nth-child(4)::after { animation-delay: 240ms; }
+.group .skeleton:nth-child(5)::after { animation-delay: 320ms; }
+.group .skeleton:nth-child(n+6)::after { animation-delay: 400ms; }
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+}
+
+.rowDense {
+  padding: 4px 12px;
+}
+
+.rowText {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton::after {
+    animation: none;
+    background: color-mix(in oklch, var(--fg-primary) 4%, transparent);
+  }
+}

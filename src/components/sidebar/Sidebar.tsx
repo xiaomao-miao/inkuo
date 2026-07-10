@@ -20,6 +20,7 @@ import { FileTree } from './FileTree';
 import { ContextMenu } from './ContextMenu';
 import type { FileEntry } from '../../types';
 import styles from './Sidebar.module.css';
+import { SkeletonGroup, SkeletonListItem } from '../common/Skeleton';
 
 interface SearchResultItemProps {
   entry: FileEntry;
@@ -221,11 +222,21 @@ export const Sidebar = () => {
 
           <div className={styles.fileTree}>
             {isLoading ? (
-              <div className={styles.loading}>加载中...</div>
+              <SkeletonGroup className={styles.skeletonContainer}>
+                <SkeletonListItem />
+                <SkeletonListItem />
+                <SkeletonListItem />
+                <SkeletonListItem dense />
+                <SkeletonListItem dense />
+              </SkeletonGroup>
             ) : showSearchResults ? (
               <div className={styles.searchResults}>
                 {isSearching ? (
-                  <div className={styles.loading}>搜索中...</div>
+                  <SkeletonGroup className={styles.skeletonContainer}>
+                    <SkeletonListItem dense />
+                    <SkeletonListItem dense />
+                    <SkeletonListItem dense />
+                  </SkeletonGroup>
                 ) : searchResults.length === 0 ? (
                   <div className={styles.emptyFolder}>未找到匹配文件</div>
                 ) : (
