@@ -5,6 +5,7 @@ import { useCmdKStore, useEditorStore, useSidebarStore } from '../../store';
 import type { AIEditResponse, DiffResult, EditScope } from '../../types';
 import { reportError } from '../../utils/errors';
 import { getModifierKeyLabel } from '../../utils/platform';
+import { Tooltip } from '../common/Tooltip';
 import styles from './CmdK.module.css';
 
 const SCOPE_OPTIONS = [
@@ -207,9 +208,11 @@ export const CmdK = () => {
             <Sparkles size={18} className={styles.icon} />
             <span className={styles.title}>AI 编辑</span>
           </div>
-          <button className={styles.closeButton} onClick={close}>
-            <X size={16} />
-          </button>
+          <Tooltip content="关闭" side="left" shortcut="Esc">
+            <button className={styles.closeButton} onClick={close}>
+              <X size={16} />
+            </button>
+          </Tooltip>
         </div>
         
         <div className={styles.scopeBar}>

@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { useAIPanelStore, useSettingsStore } from '../../store';
 import type { ChatMode, FeatureToggleId, FeatureToggleMap } from '../../types';
+import { Tooltip } from '../common/Tooltip';
 import styles from './AIPanelInput.module.css';
 
 const MODE_LABELS: Record<ChatMode, string> = {
@@ -474,22 +475,30 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             <Plus size={14} />
           </button>
           {isStreaming ? (
-            <button className={styles.iconBtn} onClick={onStop} title="停止生成" type="button">
-              <StopCircle size={14} />
-            </button>
+            <Tooltip content="停止生成" side="top">
+              <button className={styles.iconBtn} onClick={onStop} title="停止生成" type="button">
+                <StopCircle size={14} />
+              </button>
+            </Tooltip>
           ) : null}
-          <button
-            type="button"
-            className={styles.sendBtn}
-            onClick={onSend}
-            disabled={!input.trim() || isStreaming}
+          <Tooltip
+            content={isStreaming ? 'AI 正在回复…' : '发送消息'}
+            side="top"
+            shortcut="↵"
           >
-            {isStreaming ? (
-              <Loader2 size={16} className={styles.loadingSpinner} />
-            ) : (
-              <Send size={16} />
-            )}
-          </button>
+            <button
+              type="button"
+              className={styles.sendBtn}
+              onClick={onSend}
+              disabled={!input.trim() || isStreaming}
+            >
+              {isStreaming ? (
+                <Loader2 size={16} className={styles.loadingSpinner} />
+              ) : (
+                <Send size={16} />
+              )}
+            </button>
+          </Tooltip>
         </div>
       </div>
     </div>
