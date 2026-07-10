@@ -80,13 +80,15 @@
 .sectionTitle {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   font-size: 12px;
   font-weight: 600;
   color: var(--fg-secondary);
   margin: 0 0 12px 0;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  padding-left: 10px;
+  border-left: 2px solid var(--accent);
 }
 
 .field {
