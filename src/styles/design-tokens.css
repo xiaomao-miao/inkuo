@@ -65,6 +65,11 @@
   --file-markdown: oklch(68% 0.12 230);
   --file-default: var(--fg-secondary);
 
+  /* ── Inline code completion(紫,代表 AI 建议) ─────────────────── */
+  --inline-completion-color: oklch(58% 0.18 290);
+  --inline-completion-bg: oklch(58% 0.18 290 / 8%);
+  --inline-completion-active-color: oklch(65% 0.18 250);
+
   /* ── 选区 / 焦点 ──────────────────────────────────────────────── */
   --selection-bg: oklch(72% 0.04 240 / 30%);
   --focus-ring: oklch(72% 0.04 240 / 60%);
