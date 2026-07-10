@@ -608,10 +608,10 @@
   gap: 6px;
   padding: 8px 12px;
   font-size: 12px;
-  color: #f59e0b;
-  background-color: rgba(245, 158, 11, 0.1);
+  color: var(--warning);
+  background-color: var(--warning-subtle);
   border-radius: 6px;
-  border: 1px solid rgba(245, 158, 11, 0.3);
+  border: 1px solid color-mix(in oklch, var(--warning) 35%, transparent);
 }
 
 .activeConfigInfo {
@@ -675,8 +675,8 @@
   padding: 2px 6px;
   font-size: 10px;
   font-weight: 500;
-  color: #f59e0b;
-  background-color: rgba(245, 158, 11, 0.15);
+  color: var(--warning);
+  background-color: color-mix(in oklch, var(--warning) 18%, transparent);
   border-radius: 4px;
 }
 
@@ -751,7 +751,7 @@
 }
 
 .modelStatusItem.available .statusIcon {
-  color: #48c774;
+  color: var(--success);
 }
 
 .modelStatusItem.unavailable .statusIcon {
@@ -773,7 +773,7 @@
 }
 
 .availableLabel {
-  color: #48c774;
+  color: var(--success);
   font-weight: 500;
 }
 
@@ -889,7 +889,7 @@
   align-items: center;
   gap: 4px;
   font-size: 11px;
-  color: #48c774;
+  color: var(--success);
   font-weight: 500;
 }
 

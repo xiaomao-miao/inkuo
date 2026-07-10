@@ -200,7 +200,7 @@ export const SettingsPanel = () => {
                   </div>
                 )}
                 {!activeConfig && settings.apiConfigs.length > 0 && (
-                  <p className={styles.fieldHelp} style={{ color: '#f59e0b' }}>
+                  <p className={styles.fieldHelp} style={{ color: 'var(--warning)' }}>
                     当前没有选中的 API 配置
                   </p>
                 )}
