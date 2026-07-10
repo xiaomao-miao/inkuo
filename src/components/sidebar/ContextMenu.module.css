@@ -31,8 +31,8 @@
 }
 
 .item:hover:not(.disabled) {
-  background-color: var(--accent-primary);
-  color: white;
+  background-color: var(--accent-subtle);
+  color: var(--accent);
 }
 
 .item.disabled {
@@ -51,7 +51,7 @@
 }
 
 .item:hover:not(.disabled) .itemIcon {
-  color: white;
+  color: var(--accent);
 }
 
 .itemLabel {
@@ -69,7 +69,7 @@
 }
 
 .item:hover:not(.disabled) .itemShortcut {
-  color: rgba(255, 255, 255, 0.85);
+  color: var(--accent);
 }
 
 .itemChevron {
@@ -79,13 +79,13 @@
 }
 
 .item:hover:not(.disabled) .itemChevron {
-  color: white;
+  color: var(--accent);
 }
 
 .divider {
   height: 1px;
   margin: 4px 6px;
-  background-color: var(--border-color);
+  background-color: var(--border-subtle);
 }
 
 .submenu {
@@ -104,6 +104,11 @@
   visibility: hidden;
   pointer-events: none;
   opacity: 0;
+  transform: translateX(-4px);
+  transition:
+    opacity var(--motion-fast) var(--motion-out),
+    transform var(--motion-fast) var(--motion-out),
+    visibility 0s linear var(--motion-fast);
 }
 
 .submenuHost:hover > .submenu,
@@ -111,6 +116,11 @@
   visibility: visible;
   pointer-events: auto;
   opacity: 1;
+  transform: translateX(0);
+  transition:
+    opacity var(--motion-fast) var(--motion-out),
+    transform var(--motion-fast) var(--motion-out),
+    visibility 0s linear 0s;
 }
 
 .danger {
@@ -122,12 +132,12 @@
 }
 
 .danger:hover:not(.disabled) {
-  background-color: var(--error);
-  color: white;
+  background-color: var(--error-subtle);
+  color: var(--error);
 }
 
 .danger:hover:not(.disabled) .itemIcon {
-  color: white;
+  color: var(--error);
 }
 
 .checked {
