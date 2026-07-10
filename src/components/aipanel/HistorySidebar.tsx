@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { X, MessageSquare, PlusCircle, Search, Trash2 } from 'lucide-react';
+import { X, MessageSquare, PlusCircle, Search, Trash2, MessageSquareOff } from 'lucide-react';
 import type { ChatSession } from '../../store';
+import { EmptyState } from '../common/EmptyState';
 import styles from './HistorySidebar.module.css';
 
 interface HistorySidebarProps {
@@ -119,9 +120,11 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
 
       <div className={styles.sessionList}>
         {groups.length === 0 ? (
-          <div className={styles.empty}>
-            {search ? '没有找到匹配的对话' : '暂无历史对话'}
-          </div>
+          <EmptyState
+            icon={MessageSquareOff}
+            title={search ? '没有找到匹配的对话' : '暂无历史对话'}
+            description={search ? '试试别的关键词' : '开启一个新的对话吧'}
+          />
         ) : (
           groups.map(([dateLabel, group]) => (
             <div key={dateLabel} className={styles.group}>

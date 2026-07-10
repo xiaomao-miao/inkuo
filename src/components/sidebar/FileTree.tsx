@@ -7,6 +7,7 @@ import {
   FolderOpen as FolderOpenIcon,
   Loader2,
   BookMarked,
+  FolderX,
 } from 'lucide-react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import {
@@ -71,7 +72,7 @@ export const FileTree = ({
       onContextMenu={handleRootContextMenu}
     >
       {rootChildren.length === 0 ? (
-        <div className={styles.emptyFolder}>空文件夹</div>
+        <div className={styles.emptyFolder}><FolderX size={12} /> 空文件夹</div>
       ) : (
         <FileTreeNode
           entry={{
@@ -267,7 +268,7 @@ const FileTreeNode = ({
           />
         ) : null}
         {children.length === 0 && !isLoading && !inlineEditAsChild ? (
-          <div className={styles.emptyFolder}>空文件夹</div>
+          <div className={styles.emptyFolder}><FolderX size={12} /> 空文件夹</div>
         ) : (
           children.map((child) => (
             <FileTreeNode
@@ -343,7 +344,7 @@ const FileTreeNode = ({
                 />
               ) : null}
               {children.length === 0 && !inlineEditAsChild ? (
-                <div className={styles.emptyFolder}>空文件夹</div>
+                <div className={styles.emptyFolder}><FolderX size={12} /> 空文件夹</div>
               ) : (
                 children.map((child) => (
                   <FileTreeNode
