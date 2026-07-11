@@ -43,9 +43,15 @@ const SNAPSHOT_CLEANUP_INTERVAL_SECS: u64 = 300;
 /// Returns `~/.inkuo/snapshots/` (or the platform-appropriate config dir).
 pub fn get_snapshots_root() -> PathBuf {
     // Use Tauri's app config dir if available (gives us the right place on
-    // each OS); fall back to `dirs::config_dir()` then `$HOME/.inkuo`.
+    // each OS); fall back to `dirs::config_dir()` then $USERPROFILE (Windows)
+    // or $HOME (Unix).
     let mut base = dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from(env!("HOME")))
+        .unwrap_or_else(|| {
+            std::env::var_os("USERPROFILE")
+                .or_else(|| std::env::var_os("HOME"))
+                .map(PathBuf::from)
+                .unwrap_or_else(|| PathBuf::from("."))
+        })
         .join(".inkuo");
     base.push("snapshots");
     base
