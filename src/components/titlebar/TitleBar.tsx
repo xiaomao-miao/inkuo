@@ -6,6 +6,8 @@ import {
   Settings,
   User,
   UserCheck,
+  Maximize2,
+  Minimize2,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
 import { useSidebarStore, useEditorStore, useNotificationStore, useSettingsStore } from '../../store';
@@ -16,16 +18,6 @@ import { reportError } from '../../utils/errors';
 import { openSettingsTab } from '../../utils/openSettingsTab';
 import { openCloudTab } from '../../utils/openCloudTab';
 
-// Custom icon: two offset rectangles — the standard "restore / not-maximized"
-// symbol used on Windows and many cross-platform window chrome libraries.
-const RestoreIcon = () => (
-  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round">
-    {/* Bottom-left outline — the non-maximized window outline */}
-    <rect x="1.5" y="2.5" width="7" height="7" rx="0.5" />
-    {/* Top-right solid fill — overlapped portion implied by offset */}
-    <rect x="3.5" y="0.5" width="7" height="7" rx="0.5" />
-  </svg>
-);
 import { isTauriRuntime } from '../../utils/tauri';
 import styles from './TitleBar.module.css';
 
@@ -44,7 +36,7 @@ interface Menu {
 
 export const TitleBar: React.FC = () => {
   const [activeMenu, setActiveMenu] = useState<string | null>(null);
-  const [isMaximized, setIsMaximized] = useState(false);
+  const [windowState, setWindowState] = useState<'normal' | 'maximized' | 'fullscreen'>('normal');
   const menuRef = useRef<HTMLDivElement>(null);
   const isTauri = isTauriRuntime();
 
@@ -65,7 +57,7 @@ export const TitleBar: React.FC = () => {
     openCloudTab();
   };
 
-  // Check initial maximized state
+  // Check initial maximized/fullscreen state
   useEffect(() => {
     if (!isTauri) {
       return;
@@ -75,23 +67,34 @@ export const TitleBar: React.FC = () => {
     let disposed = false;
     let unlistenResize: (() => void) | null = null;
 
-    const syncMaximizedState = async () => {
+    const syncWindowState = async () => {
       try {
-        const maximized = await win.isMaximized();
+        const [fullscreen, maximized] = await Promise.all([
+          win.isFullscreen(),
+          win.isMaximized(),
+        ]);
         if (!disposed) {
-          setIsMaximized(maximized);
+          // Priority: fullscreen > maximized > normal — fullscreen wins when both
+          // are set so the UI matches what the user actually sees on screen.
+          if (fullscreen) {
+            setWindowState('fullscreen');
+          } else if (maximized) {
+            setWindowState('maximized');
+          } else {
+            setWindowState('normal');
+          }
         }
       } catch (err) {
-        reportError('titlebar-sync-maximized-state', err);
+        reportError('titlebar-sync-window-state', err);
       }
     };
 
     const setupListeners = async () => {
-      await syncMaximizedState();
+      await syncWindowState();
 
       try {
         const resizeUnlisten = await win.onResized(() => {
-          void syncMaximizedState();
+          void syncWindowState();
         });
 
         unlistenResize = resizeUnlisten;
@@ -201,9 +204,20 @@ export const TitleBar: React.FC = () => {
     }
 
     const win = getCurrentWindow();
-    await win.toggleMaximize();
     try {
-      setIsMaximized(await win.isMaximized());
+      // Triple state cycle: normal -> maximized -> fullscreen -> normal
+      if (windowState === 'normal') {
+        await win.maximize();
+        setWindowState('maximized');
+      } else if (windowState === 'maximized') {
+        await win.setFullscreen(true);
+        setWindowState('fullscreen');
+      } else {
+        // fullscreen: exit fullscreen first, then unmaximize so we land in 'normal'
+        await win.setFullscreen(false);
+        await win.unmaximize();
+        setWindowState('normal');
+      }
     } catch (err) {
       reportError('titlebar-toggle-maximize', err);
     }
@@ -365,9 +379,21 @@ export const TitleBar: React.FC = () => {
             <button
               className={styles.actionButton}
               onClick={handleMaximize}
-              title={isMaximized ? '还原' : '最大化'}
+              title={
+                windowState === 'fullscreen'
+                  ? '退出全屏'
+                  : windowState === 'maximized'
+                    ? '进入全屏'
+                    : '最大化'
+              }
             >
-              {isMaximized ? <RestoreIcon /> : <Square size={12} />}
+              {windowState === 'fullscreen' ? (
+                <Minimize2 size={12} />
+              ) : windowState === 'maximized' ? (
+                <Maximize2 size={12} />
+              ) : (
+                <Square size={12} />
+              )}
             </button>
             <button
               className={`${styles.actionButton} ${styles.close}`}

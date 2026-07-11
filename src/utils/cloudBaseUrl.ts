@@ -10,7 +10,7 @@
  * 临时值:`http://localhost:8080`(本地自托管)
  * TODO: 上线后改为 `https://cloud.inkuo.com`。
  */
-const INKUO_CLOUD_BASE_URL = 'http://localhost:8080';
+const INKUO_CLOUD_BASE_URL = 'http://114.215.182.32:8080';
 
 export function getCloudBaseUrl(): string {
   return INKUO_CLOUD_BASE_URL;

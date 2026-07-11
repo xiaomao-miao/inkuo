@@ -37,3 +37,32 @@ test（nogit）/
 # workspace-local inkuo runtime data (snapshots, knowledge cache, etc.)
 .inkuo/
 .incode/
+
+# SSH keys / secrets (never commit)
+*.pem
+
+# Windows installer toolchain scratch files (NSIS extracted into project root
+# on 2026-07-11 cross-compile attempt — keep out of the repo)
+$PLUGINSDIR/
+Bin/
+COPYING
+Contrib/
+Docs/
+Examples/
+Include/
+NSIS.chm
+NSIS.exe
+Plugins/
+Stubs/
+makensis.exe
+makensisw.exe
+nsisconf.nsh
+uninst-nsis.exe
+
+# WiX toolchain scratch files
+wix*.exe
+wix*.zip
+
+# Claude / AI assistant working dirs
+.claude/
+.crs/
