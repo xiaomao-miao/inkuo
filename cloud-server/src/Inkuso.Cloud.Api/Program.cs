@@ -62,9 +62,14 @@ builder.Services.ConfigureHttpJsonOptions(opt =>
 
 // HTTP client for upstream forwarding
 builder.Services.AddHttpClient("upstream");
+builder.Services.AddHttpClient("upstream-search");
 
 // LLM forwarder
 builder.Services.AddScoped<LlmForwarder>();
+// Web search forwarder: scoped (mirrors LlmForwarder) so it can pick up
+// the latest provider config from the DbContext on every call without
+// a stale-cache surprise when the operator pastes a new API key.
+builder.Services.AddScoped<WebSearchForwarder>();
 
 builder.Services.AddCors(opt => opt.AddDefaultPolicy(p =>
     p.AllowAnyHeader().AllowAnyMethod().AllowAnyOrigin()));
@@ -89,5 +94,6 @@ app.MapModelsEndpoints();
 app.MapChatEndpoints();
 app.MapAccountEndpoints();
 app.MapRedeemEndpoints();
+app.MapWebSearchEndpoints();
 
 app.Run();

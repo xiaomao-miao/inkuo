@@ -129,3 +129,4 @@
 /home/maomao/work/inkuo/cloud-server/src/Inkuso.Cloud.Billing/obj/Debug/net10.0/Inkuso.Cloud.Billing.pdb
 /home/maomao/work/inkuo/cloud-server/src/Inkuso.Cloud.Billing/obj/Debug/net10.0/Inkuso.Cloud.Billing.genruntimeconfig.cache
 /home/maomao/work/inkuo/cloud-server/src/Inkuso.Cloud.Billing/obj/Debug/net10.0/ref/Inkuso.Cloud.Billing.dll
+/home/maomao/work/inkuo/cloud-server/src/Inkuso.Cloud.Billing/obj/Debug/net10.0/Inkuso.Cloud.Billing.sourcelink.json

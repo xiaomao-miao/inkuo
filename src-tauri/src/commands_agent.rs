@@ -5,13 +5,14 @@ use crate::agent::{
 };
 use crate::agent::tools::ToolRegistry;
 use crate::ai_config::{self, AIConfigInput};
+use crate::commands::AppState;
 use crate::feature_toggles::{self, ToggleId};
 use crate::runtime_state::{self, Mode};
 use crate::streaming::{emit, StreamPayload};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, State};
 use thiserror::Error;
 use tokio::sync::RwLock;
 
@@ -63,10 +64,31 @@ async fn get_full_tool_registry(app: &AppHandle) -> SharedToolRegistry {
     registry
 }
 
-async fn get_read_only_tool_registry(_app: &AppHandle) -> SharedToolRegistry {
-    READ_ONLY_TOOL_REGISTRY
+async fn get_read_only_tool_registry(app: &AppHandle) -> SharedToolRegistry {
+    let registry = READ_ONLY_TOOL_REGISTRY
         .get_or_init(|| Arc::new(RwLock::new(ToolRegistry::new_read_only())))
-        .clone()
+        .clone();
+
+    // Same lazy-init pattern as `get_full_tool_registry`. Without
+    // this, `web_search` (which is registered as a placeholder in
+    // `ToolRegistry::new_read_only`) would never receive an
+    // AppHandle and would error out with "AppHandle missing" on
+    // every Plan / Ask mode call. The WebSearchTool now also lazy-
+    // fetches from the process-global registry as a fallback, but
+    // wiring the AppHandle eagerly here keeps the cold path off the
+    // global registry for the common case.
+    {
+        let reg = registry.read().await;
+        if !reg.has_tool("database_search") {
+            drop(reg);
+            let mut reg = registry.write().await;
+            if !reg.has_tool("database_search") {
+                reg.set_app_handle(app.clone());
+            }
+        }
+    }
+
+    registry
 }
 
 /// Update the workspace path for both tool registries. `set_workspace` is
@@ -181,6 +203,7 @@ pub async fn ai_agent_stream(
     expert_max_iterations: Option<HashMap<String, usize>>,
     enabled_toggles: Option<Vec<String>>,
     config_input: AIConfigInput,
+    state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<(), AgentCommandError> {
     tracing::info!("ai_agent_stream start - session: {}, history length: {}", session_id, history.len());
@@ -188,8 +211,12 @@ pub async fn ai_agent_stream(
     // Update workspace path for tool validation
     update_registry_workspace(workspace_path.clone()).await;
 
-    // Create AI config from input
-    let ai_config = ai_config::build_input_ai_config(config_input)
+    // Build the AIConfig. For cloud-mode inputs we route through
+    // CloudClient so a rotated access token is picked up
+    // automatically; the previous code trusted the snapshot the
+    // frontend sent, which silently went stale.
+    let ai_config = ai_config::build_input_ai_config_async(config_input, std::sync::Arc::new(state.cloud.clone()))
+        .await
         .map_err(|error| AgentCommandError::InvalidAIConfig(error.to_string()))?;
 
     tracing::info!("Using AI provider: {:?}", ai_config.provider);

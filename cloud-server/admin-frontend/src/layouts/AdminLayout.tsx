@@ -11,6 +11,7 @@ import {
   TeamOutlined,
   LogoutOutlined,
   KeyOutlined,
+  GlobalOutlined,
 } from '@ant-design/icons';
 import { useState } from 'react';
 import { AdminUser, authApi } from '../api/auth';
@@ -34,6 +35,7 @@ export default function AdminLayout({ admin, onLogout }: Props) {
     { key: '/users', icon: <UserOutlined />, label: '用户管理' },
     { key: '/plans', icon: <CrownOutlined />, label: '套餐管理' },
     { key: '/models', icon: <ApiOutlined />, label: '模型配置' },
+    { key: '/web-search-providers', icon: <GlobalOutlined />, label: '联网搜索' },
     { key: '/invite-codes', icon: <GiftOutlined />, label: '邀请码' },
     { key: '/redemption-codes', icon: <TagsOutlined />, label: '兑换码' },
     { key: '/usage', icon: <BarChartOutlined />, label: '用量记录' },

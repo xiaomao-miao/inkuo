@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { Globe, Key, Eye, EyeOff, AlertCircle, Info } from 'lucide-react';
+import { Globe, Key, Eye, EyeOff, AlertCircle, Info, Cloud, Server } from 'lucide-react';
 import { useSettingsStore } from '../../store';
-import type { WebSearchProviderConfig } from '../../types';
+import type { WebSearchProviderConfig, WebSearchRouting } from '../../types';
 import styles from './SettingsPanel.module.css';
 import panelStyles from './ModelsSettings.module.css';
 
@@ -53,6 +53,15 @@ export const WebSearchSettings = () => {
 
   const meta = PROVIDER_META[BAIKE_PROVIDER_ID];
 
+  // The cloud-routed option is only meaningful when the user is actually
+  // logged into the cloud. We surface this both by disabling the radio
+  // and by a short help line so users on a fresh install don't get
+  // confused about why the radio "doesn't work".
+  const cloudAccount = settings.cloud.account;
+  const cloudModeEnabled = settings.cloud.cloud_mode_enabled;
+  const cloudRoutingAvailable = !!cloudAccount && cloudModeEnabled;
+  const currentRouting: WebSearchRouting = settings.web_search.routing;
+
   const handleToggleMaster = (next: boolean) => {
     void updateWebSearchAndPersist({
       ...settings.web_search,
@@ -88,6 +97,19 @@ export const WebSearchSettings = () => {
     void updateWebSearchAndPersist({
       ...settings.web_search,
       maxResults: clamped,
+    });
+  };
+
+  const handleRoutingChange = (next: WebSearchRouting) => {
+    // Defensive: only honour "cloud" if the user is actually logged in.
+    // Saving it anyway would persist a state the Rust side can't honour
+    // and would silently fall back to local on the next agent turn.
+    if (next === 'cloud' && !cloudRoutingAvailable) {
+      return;
+    }
+    void updateWebSearchAndPersist({
+      ...settings.web_search,
+      routing: next,
     });
   };
 
@@ -266,6 +288,86 @@ export const WebSearchSettings = () => {
           </div>
           <p className={styles.fieldHelp}>
             范围 {MIN_MAX_RESULTS}–{MAX_MAX_RESULTS}，默认 {DEFAULT_MAX_RESULTS}。值越大返回内容越长，但会消耗更多 token。
+          </p>
+        </div>
+
+        <div className={styles.field}>
+          <label className={styles.label}>调用方式</label>
+          <div className={styles.radioGroup ?? styles.field} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: 8,
+                padding: '8px 10px',
+                border: `1px solid ${
+                  currentRouting === 'local' ? 'var(--accent-color, #4f46e5)' : 'var(--border-color)'
+                }`,
+                borderRadius: 6,
+                backgroundColor: 'var(--bg-secondary, transparent)',
+                cursor: 'pointer',
+              }}
+            >
+              <input
+                type="radio"
+                name="web-search-routing"
+                value="local"
+                checked={currentRouting === 'local'}
+                onChange={() => handleRoutingChange('local')}
+                disabled={!settings.web_search.enabled}
+                style={{ marginTop: 2 }}
+              />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <span style={{ fontWeight: 500, fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <Server size={13} />
+                  本地调用
+                </span>
+                <span style={{ fontSize: 12, color: 'var(--fg-secondary)' }}>
+                  使用你在下方「数据源」里填写的 AppBuilder API Key 直接调用百度百科。
+                </span>
+              </div>
+            </label>
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: 8,
+                padding: '8px 10px',
+                border: `1px solid ${
+                  currentRouting === 'cloud' ? 'var(--accent-color, #4f46e5)' : 'var(--border-color)'
+                }`,
+                borderRadius: 6,
+                backgroundColor: 'var(--bg-secondary, transparent)',
+                opacity: cloudRoutingAvailable ? 1 : 0.55,
+                cursor: cloudRoutingAvailable ? 'pointer' : 'not-allowed',
+              }}
+            >
+              <input
+                type="radio"
+                name="web-search-routing"
+                value="cloud"
+                checked={currentRouting === 'cloud'}
+                onChange={() => handleRoutingChange('cloud')}
+                disabled={!settings.web_search.enabled || !cloudRoutingAvailable}
+                style={{ marginTop: 2 }}
+              />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <span style={{ fontWeight: 500, fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <Cloud size={13} />
+                  通过云端转发
+                </span>
+                <span style={{ fontSize: 12, color: 'var(--fg-secondary)' }}>
+                  {cloudRoutingAvailable
+                    ? '由云端服务器使用运营者在管理后台配置的共享 API Key 调用，你无需自己申请密钥。'
+                    : '需要先在「云端模式」中登录并开启云端模式后才能使用。'}
+                </span>
+              </div>
+            </label>
+          </div>
+          <p className={styles.fieldHelp}>
+            {cloudRoutingAvailable
+              ? '云端转发会按云端服务器的配额策略计费；本地调用直接使用你的 AppBuilder 余额。'
+              : '提示：云端转发免去你管理密钥的麻烦，且所有云端用户共享运营者配置的额度。'}
           </p>
         </div>
       </div>

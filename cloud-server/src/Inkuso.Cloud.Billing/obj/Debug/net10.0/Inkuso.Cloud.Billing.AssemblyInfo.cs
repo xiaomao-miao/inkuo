@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("Inkuso.Cloud.Billing")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+58296883d4a9aea1001849670c9d3dbe9c603610")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+fe8081f7f6d7be1862386695f4fe0dd0f0bb0a91")]
 [assembly: System.Reflection.AssemblyProductAttribute("Inkuso.Cloud.Billing")]
 [assembly: System.Reflection.AssemblyTitleAttribute("Inkuso.Cloud.Billing")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

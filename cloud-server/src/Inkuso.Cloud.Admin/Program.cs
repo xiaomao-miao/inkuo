@@ -44,6 +44,18 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     });
 builder.Services.AddAuthorization();
 
+// Mirror the cloud-api project's JSON conventions so the admin SPA (which
+// translates camelCase to snake_case in its axios interceptor) can talk to
+// the minimal-API endpoints without 400s from missing-property validation.
+// Without this, a payload like {"provider_id": "baike", ...} would not
+// bind to a record `ProviderId` (case-sensitive by default).
+builder.Services.ConfigureHttpJsonOptions(opt =>
+{
+    opt.SerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.SnakeCaseLower;
+    opt.SerializerOptions.PropertyNameCaseInsensitive = true;
+    opt.SerializerOptions.DictionaryKeyPolicy = System.Text.Json.JsonNamingPolicy.SnakeCaseLower;
+});
+
 // CORS for the React admin frontend (separate port 5174 in dev)
 builder.Services.AddCors(opt => opt.AddDefaultPolicy(p =>
     p.AllowAnyHeader().AllowAnyMethod().AllowAnyOrigin()));
@@ -123,6 +135,7 @@ app.MapDashboardEndpoints();
 app.MapAdminUsersEndpoints();
 app.MapAdminPlansEndpoints();
 app.MapAdminModelConfigsEndpoints();
+app.MapAdminWebSearchProvidersEndpoints();
 app.MapAdminInviteCodesEndpoints();
 app.MapAdminRedemptionCodesEndpoints();
 app.MapAdminUsageEndpoints();

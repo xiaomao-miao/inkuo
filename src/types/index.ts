@@ -819,6 +819,13 @@ export interface WebSearchProviderConfig {
   enabled: boolean;
 }
 
+/** Where to send `web_search` calls. The default `"local"` uses the
+ * user's own provider credentials; `"cloud"` forwards the call through
+ * the operator-managed inkuo Cloud server so the user doesn't have to
+ * carry their own API key. Anything else collapses to `"local"` on the
+ * Rust side so a typo in the persisted JSON never disables search. */
+export type WebSearchRouting = 'local' | 'cloud';
+
 /** Top-level settings for the `web_search` tool. */
 export interface WebSearchSettings {
   /** Master kill switch. When `false`, the tool returns a polite
@@ -828,6 +835,8 @@ export interface WebSearchSettings {
   providers: WebSearchProviderConfig[];
   /** Hard cap on results per call. Clamped to [1, 20] by the tool. */
   maxResults: number;
+  /** Routing preference. See `WebSearchRouting`. */
+  routing: WebSearchRouting;
 }
 
 /** Keys of the expert profile registry, mirroring `PROFILES` in

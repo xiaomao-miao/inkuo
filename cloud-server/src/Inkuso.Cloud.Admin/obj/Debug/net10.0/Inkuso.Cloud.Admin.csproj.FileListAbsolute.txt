@@ -133,7 +133,9 @@
 /home/maomao/work/inkuo/cloud-server/src/Inkuso.Cloud.Admin/obj/Debug/net10.0/Inkuso.Cloud.Admin.pdb
 /home/maomao/work/inkuo/cloud-server/src/Inkuso.Cloud.Admin/obj/Debug/net10.0/Inkuso.Cloud.Admin.genruntimeconfig.cache
 /home/maomao/work/inkuo/cloud-server/src/Inkuso.Cloud.Admin/obj/Debug/net10.0/ref/Inkuso.Cloud.Admin.dll
-/home/maomao/work/inkuo/cloud-server/src/Inkuso.Cloud.Admin/obj/Debug/net10.0/compressed/vbm111j1sf-{0}-5hrh1n6ubb-5hrh1n6ubb.gz
-/home/maomao/work/inkuo/cloud-server/src/Inkuso.Cloud.Admin/obj/Debug/net10.0/compressed/9gwlfx409m-{0}-zx5c4liejo-zx5c4liejo.gz
 /home/maomao/work/inkuo/cloud-server/src/Inkuso.Cloud.Admin/obj/Debug/net10.0/compressed/byb3frdkf0-{0}-8ujchv1jem-8ujchv1jem.gz
-/home/maomao/work/inkuo/cloud-server/src/Inkuso.Cloud.Admin/obj/Debug/net10.0/compressed/7gzsb7ffqq-{0}-c86qwdikvm-c86qwdikvm.gz
+/home/maomao/work/inkuo/cloud-server/src/Inkuso.Cloud.Admin/obj/Debug/net10.0/Inkuso.Cloud.Admin.sourcelink.json
+/home/maomao/work/inkuo/cloud-server/src/Inkuso.Cloud.Admin/obj/Debug/net10.0/compressed/4tavuka86l-{0}-ahtyyn0s4y-ahtyyn0s4y.gz
+/home/maomao/work/inkuo/cloud-server/src/Inkuso.Cloud.Admin/obj/Debug/net10.0/compressed/iho3js4o7b-{0}-nrnun6xs7k-nrnun6xs7k.gz
+/home/maomao/work/inkuo/cloud-server/src/Inkuso.Cloud.Admin/obj/Debug/net10.0/compressed/9idraxxufy-{0}-yq4x0yaqfn-yq4x0yaqfn.gz
+/home/maomao/work/inkuo/cloud-server/src/Inkuso.Cloud.Admin/obj/Debug/net10.0/compressed/7gzsb7ffqq-{0}-abc2sww4yt-abc2sww4yt.gz

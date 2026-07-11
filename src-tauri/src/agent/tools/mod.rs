@@ -450,8 +450,10 @@ impl ToolRegistry {
             // `web_search` feature toggle via
             // `feature_toggles::effective_tool_set` — when the toggle is
             // off, the tool is filtered out of the allowlist and the
-            // model has no way to call it.
-            ToolExecutor::WebSearch(WebSearchTool::new()),
+            // model has no way to call it. A placeholder is registered
+            // here and swapped for the real implementation when the
+            // AppHandle is wired up via `set_app_handle`.
+            ToolExecutor::WebSearch(WebSearchTool::placeholder()),
             // `update_todo` is a meta-tool — its registry stub always
             // errors out, and the actual implementation lives in
             // `agent_loop::try_handle_meta_tool`. Registering it here
@@ -490,12 +492,25 @@ impl ToolRegistry {
         self.app_handle = Some(app.clone());
         // Lazily add database_search now that we have the AppHandle
         if !self.has_tool("database_search") {
-            let tool = ToolExecutor::DatabaseSearch(DatabaseSearchTool::new(app));
+            let tool = ToolExecutor::DatabaseSearch(DatabaseSearchTool::new(app.clone()));
             let name = tool.name().to_string();
             let def = tool.definition();
             self.definitions.insert(name.clone(), def);
             self.executors.insert(name, tool);
         }
+        // Same lazy pattern for web_search: the tool needs the AppHandle
+        // to reach the cloud client + the `Settings` cache, both of
+        // which are accessed via the running Tauri app. The placeholder
+        // registered by `register_builtin_tools` errors out if reached
+        // before this hook fires; after this point we replace it with the
+        // real tool. (Today every call site sets the AppHandle at startup
+        // so this should always overwrite the placeholder — the existing
+        // entry is a defence against a future caller forgetting.)
+        let replacement = ToolExecutor::WebSearch(WebSearchTool::new(app));
+        let name = replacement.name().to_string();
+        let def = replacement.definition();
+        self.definitions.insert(name.clone(), def);
+        self.executors.insert(name, replacement);
     }
 
     fn register_builtin_tools(&mut self) {
@@ -517,7 +532,12 @@ impl ToolRegistry {
             ToolExecutor::InspectOffice(InspectOfficeTool),
             ToolExecutor::RenderMermaid(RenderMermaidTool::default()),
             // DatabaseSearchTool added lazily via with_app_handle()
-            ToolExecutor::WebSearch(WebSearchTool::new()),
+            // `web_search` is registered here with a placeholder tool;
+            // `set_app_handle()` swaps in the real implementation once
+            // the Tauri app handle is available. The placeholder never
+            // actually executes because every call site seeds the
+            // AppHandle before any agent turn.
+            ToolExecutor::WebSearch(WebSearchTool::placeholder()),
             // Meta tools (intercepted in agent loop, but still registered so
             // they appear in tool catalogs and can be schema-validated).
             ToolExecutor::GetToolHelp(GetToolHelpTool),

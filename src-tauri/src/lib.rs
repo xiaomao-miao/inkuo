@@ -13,6 +13,7 @@ mod document;
 mod diff;
 mod feature_toggles;
 mod runtime_state;
+mod app_handle;
 mod ai;
 mod ai_config;
 mod commands;
@@ -33,6 +34,7 @@ pub use document::*;
 pub use diff::*;
 pub use ai::*;
 use std::panic;
+use tauri::Manager;
 
 fn setup_logging() {
     // Simple logging setup - write to stdout
@@ -54,11 +56,28 @@ pub fn run() {
 
     tracing::info!("Starting inkuo v{}", env!("CARGO_PKG_VERSION"));
 
+    // Build ONE CloudClient, then `.clone()` it before handing each
+    // copy to Tauri's `.manage`. Because `CloudClient` internally
+    // holds the mutable account behind an `Arc<Mutex<...>>`, the
+    // two managed copies share state: a write through one is visible
+    // to the other. This is what lets the startup hydrate (which
+    // targets the `tauri::State<CloudClient>` instance) be picked up
+    // by `AppState.cloud` when the agent chat path resolves an
+    // AIConfig — without this link they diverge and the agent path
+    // surfaces a confusing "not logged in" error in cloud mode.
+    let cloud = cloud::CloudClient::new();
+
     tauri::Builder::default()
-        .manage(commands::AppState::default())
-        .manage(cloud::CloudClient::new())
+        .manage(commands::AppState::new(cloud.clone()))
+        .manage(cloud)
         .manage(file_watcher::FileWatcherState::new())
         .setup(|app| {
+            // Stash the live AppHandle in a process-global registry so
+            // consumers constructed before this hook fires (e.g.
+            // WebSearchTool's placeholder path) can lazy-fetch it
+            // instead of permanently erroring with "AppHandle missing".
+            app_handle::set_app_handle(app.handle().clone());
+
             tauri::async_runtime::spawn(async {
                 crate::backup::init_backup_cleanup_task();
             });
@@ -76,6 +95,37 @@ pub fn run() {
             // Register shared vector store cache so both KB commands and agent tools
             // use the same cache, avoiding WAL lock conflicts.
             knowledge::commands::register_shared_stores();
+
+            // Re-hydrate the in-process CloudClient from the persisted
+            // settings so the first chat / web_search call after a restart
+            // doesn't have to wait for the frontend to re-push the account.
+            // Without this, the user has to log in twice on every cold start:
+            // once for the persisted settings, and once again because the
+            // Rust-side CloudClient starts empty.
+            let app_handle_for_hydrate = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                let settings = match commands::get_settings_cached() {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::warn!(
+                            "startup hydrate: could not read settings cache ({}); \
+                             cloud account will stay uninitialised until the \
+                             frontend pushes it",
+                            e
+                        );
+                        return;
+                    }
+                };
+                if let Some(account) = settings.cloud.account {
+                    let cloud = app_handle_for_hydrate.state::<cloud::CloudClient>();
+                    cloud.set_account(Some(account.clone())).await;
+                    tracing::info!(
+                        user_id = %account.user_id,
+                        "startup hydrate: CloudClient restored from persisted settings"
+                    );
+                }
+            });
+
             Ok(())
         })
         .plugin(tauri_plugin_opener::init())

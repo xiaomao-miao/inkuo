@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "build:deploy": "vite build && rm -rf ../src/Inkuso.Cloud.Admin/wwwroot/admin/* && cp -r dist/* ../src/Inkuso.Cloud.Admin/wwwroot/admin/"
   },
   "dependencies": {
     "@ant-design/icons": "^5.5.0",

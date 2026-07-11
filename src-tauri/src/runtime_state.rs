@@ -223,7 +223,7 @@ mod tests {
                 &[ToggleId::KbStrict][..],
                 &[ToggleId::KbStrict, ToggleId::WebSearch][..],
             ] {
-                let f = runtime_state_fragment(*mode, toggles);
+                let f = runtime_state_fragment(mode, toggles);
                 assert!(
                     !f.trim().is_empty(),
                     "runtime_state_fragment must be non-empty for mode={mode:?} toggles={toggles:?}"
@@ -237,7 +237,7 @@ mod tests {
         // The "if it disagrees" preamble is the entire point — make
         // sure it shows up in every variant.
         for mode in [Mode::Ask, Mode::Plan, Mode::Agent] {
-            let f = runtime_state_fragment(*mode, &[]);
+            let f = runtime_state_fragment(mode, &[]);
             assert!(
                 f.contains("follow THIS block"),
                 "fragment for {mode:?} should declare itself authoritative; got:\n{f}"

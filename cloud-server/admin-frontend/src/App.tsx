@@ -13,6 +13,7 @@ import DashboardPage from './pages/Dashboard';
 import UsersPage from './pages/Users';
 import PlansPage from './pages/Plans';
 import ModelConfigsPage from './pages/ModelConfigs';
+import WebSearchProvidersPage from './pages/WebSearchProviders';
 import InviteCodesPage from './pages/InviteCodes';
 import RedemptionCodesPage from './pages/RedemptionCodes';
 import UsagePage from './pages/Usage';
@@ -67,6 +68,7 @@ export default function App() {
         { path: '/users', element: <UsersPage /> },
         { path: '/plans', element: <PlansPage /> },
         { path: '/models', element: <ModelConfigsPage /> },
+        { path: '/web-search-providers', element: <WebSearchProvidersPage /> },
         { path: '/invite-codes', element: <InviteCodesPage /> },
         { path: '/redemption-codes', element: <RedemptionCodesPage /> },
         { path: '/usage', element: <UsagePage /> },

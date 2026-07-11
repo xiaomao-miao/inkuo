@@ -12,3 +12,4 @@
 /home/maomao/work/inkuo/cloud-server/src/Inkuso.Cloud.Core/obj/Debug/net10.0/Inkuso.Cloud.Core.pdb
 /home/maomao/work/inkuo/cloud-server/src/Inkuso.Cloud.Core/obj/Debug/net10.0/Inkuso.Cloud.Core.genruntimeconfig.cache
 /home/maomao/work/inkuo/cloud-server/src/Inkuso.Cloud.Core/obj/Debug/net10.0/ref/Inkuso.Cloud.Core.dll
+/home/maomao/work/inkuo/cloud-server/src/Inkuso.Cloud.Core/obj/Debug/net10.0/Inkuso.Cloud.Core.sourcelink.json

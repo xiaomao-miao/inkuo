@@ -129,3 +129,4 @@
 /home/maomao/work/inkuo/cloud-server/src/Inkuso.Cloud.Api/obj/Debug/net10.0/Inkuso.Cloud.Api.pdb
 /home/maomao/work/inkuo/cloud-server/src/Inkuso.Cloud.Api/obj/Debug/net10.0/Inkuso.Cloud.Api.genruntimeconfig.cache
 /home/maomao/work/inkuo/cloud-server/src/Inkuso.Cloud.Api/obj/Debug/net10.0/ref/Inkuso.Cloud.Api.dll
+/home/maomao/work/inkuo/cloud-server/src/Inkuso.Cloud.Api/obj/Debug/net10.0/Inkuso.Cloud.Api.sourcelink.json

@@ -84,6 +84,11 @@ function createDefaultWebSearchConfig(): Settings['web_search'] {
       },
     ],
     maxResults: 5,
+    // Default to local routing: existing users keep their current
+    // behaviour (use their own Baidu key) without any opt-in. Users
+    // who are cloud-authenticated can flip this to "cloud" from the
+    // Web Search settings panel.
+    routing: 'local',
   };
 }
 
@@ -232,6 +237,15 @@ function sanitiseWebSearchConfig(
         )
       : fallback.maxResults;
 
+  // Accept anything string-shaped and let the Rust side collapse unknown
+  // values back to "local". This keeps the on-disk schema forward-compat:
+  // adding a new routing mode later doesn't require a sanitiser upgrade.
+  const routingValue: Settings['web_search']['routing'] =
+    typeof raw.routing === 'string' &&
+    (raw.routing === 'local' || raw.routing === 'cloud')
+      ? raw.routing
+      : fallback.routing;
+
   const providers: Settings['web_search']['providers'] = Array.isArray(raw.providers)
     ? raw.providers
         .filter(
@@ -263,10 +277,11 @@ function sanitiseWebSearchConfig(
       enabled,
       maxResults,
       providers: [{ ...fallback.providers[0] }],
+      routing: routingValue,
     };
   }
 
-  return { enabled, maxResults, providers };
+  return { enabled, maxResults, providers, routing: routingValue };
 }
 
 /** Defensive sanitiser for the persisted cloud settings. Mirrors the
@@ -497,6 +512,12 @@ export const useSettingsStore = create<SettingsState>()(
           enabled: next.enabled,
           maxResults: next.maxResults,
           providers: next.providers.map((p) => ({ ...p })),
+          // Preserve the routing value from the incoming payload (the
+          // form-level "Save" button never touches it; routing is a
+          // separate control). If the caller omitted it, keep whatever
+          // was previously stored so we don't accidentally reset the
+          // user's preference.
+          routing: next.routing ?? get().settings.web_search.routing,
         };
         const nextSettings: Settings = {
           ...get().settings,

@@ -175,33 +175,42 @@ pub enum AppCommandError {
 }
 
 pub struct AppState {
-    pub ai_config: Arc<tokio::sync::RwLock<ai::AIConfig>>,
+    /// Async resolver that produces a fresh `AIConfig` on demand.
+    /// Replaces the previous `Arc<RwLock<AIConfig>>` cache, which
+    /// silently went stale when the cloud access token rotated.
+    pub ai_config: Arc<ai_config::AIConfigResolver>,
+    /// Handle to the process-global CloudClient. Cloned from the
+    /// same instance that lib.rs passes to `.manage(CloudClient)`,
+    /// so the two managed copies share the inner account state via
+    /// the existing `Arc<Mutex<...>>` inside CloudClient. Both the
+    /// startup hydrate and the agent-path `build_input_ai_config_async`
+    /// therefore see the same logged-in account.
+    pub cloud: crate::cloud::CloudClient,
+}
+
+impl AppState {
+    /// Constructor used by `lib.rs::run` so the same `CloudClient`
+    /// can both be `tauri::manage()`-ed and stored on `AppState`.
+    /// Tauri's manager receives a clone; the inner `Arc<Mutex<...>>`
+    /// in `CloudClient` keeps both copies in sync.
+    pub fn new(cloud: crate::cloud::CloudClient) -> Self {
+        let cloud_for_resolver = cloud.clone();
+        Self {
+            ai_config: Arc::new(ai_config::AIConfigResolver::new(cloud_for_resolver)),
+            cloud,
+        }
+    }
 }
 
 impl Default for AppState {
+    /// Used by unit tests that don't share state with a running Tauri
+    /// app. The production path builds via `AppState::new(...)` in
+    /// `lib.rs::run` so the two managed CloudClient copies share
+    /// their inner account state; `default()` here produces a fresh,
+    /// standalone CloudClient, which is exactly the semantics tests
+    /// expect (no leakage between test cases).
     fn default() -> Self {
-        let settings = read_settings_from_disk().unwrap_or_else(|error| {
-            // Logged here because `Default` cannot propagate errors; we still
-            // get a Settings value (defaults) so the app can start.
-            tracing::warn!("Falling back to default settings at startup: {}", error);
-            Settings::default()
-        });
-
-        let ai_config = ai_config::build_settings_ai_config(&settings).unwrap_or_else(|error| {
-            // The persisted settings may reference a cloud provider without
-            // an API key (the user hasn't filled in their credentials yet).
-            // Falling back to the local Ollama default lets the app boot and
-            // surface a clear error when the user actually tries to chat.
-            tracing::warn!(
-                "Could not build AI config from settings ({}); falling back to Ollama",
-                error
-            );
-            ai::AIConfig::default()
-        });
-
-        Self {
-            ai_config: Arc::new(tokio::sync::RwLock::new(ai_config)),
-        }
+        Self::new(crate::cloud::CloudClient::new())
     }
 }
 
@@ -508,7 +517,11 @@ pub async fn ai_edit(
 ) -> Result<ai::AIEditResponse, AppCommandError> {
     tracing::info!("AI edit request: {}", instruction);
 
-    let config = state.ai_config.read().await.clone();
+    let config = state
+        .ai_config
+        .resolve()
+        .await
+        .map_err(|e| AppCommandError::AIConfig(format!("resolve AI config: {}", e)))?;
     let adapter = ai::AIProviderAdapter::new(config);
 
     let edit_scope = match scope.as_str() {
@@ -620,6 +633,18 @@ pub struct WebSearchSettings {
     /// per call. Clamped to `[1, 20]` by the tool itself.
     #[serde(default = "default_web_search_max_results")]
     pub max_results: usize,
+    /// Where to send `web_search` tool calls when the user is logged
+    /// into the cloud. `"local"` (default) uses the user's own Baidu
+    /// AppBuilder key; `"cloud"` forwards the call through the cloud
+    /// server so the operator-managed key is used instead.
+    ///
+    /// Stored as a free-form `String` (rather than a strict enum) so a
+    /// future `"hybrid"` / `"ask-each-time"` mode can land without a
+    /// schema migration. The tool itself only knows about `local` and
+    /// `cloud`; anything else falls back to `local` so a typo in the
+    /// settings file never disables search silently.
+    #[serde(default = "default_web_search_routing")]
+    pub routing: String,
 }
 
 fn default_web_search_enabled() -> bool {
@@ -630,12 +655,17 @@ fn default_web_search_max_results() -> usize {
     5
 }
 
+fn default_web_search_routing() -> String {
+    "local".to_string()
+}
+
 impl Default for WebSearchSettings {
     fn default() -> Self {
         Self {
             enabled: default_web_search_enabled(),
             providers: vec![WebSearchProviderConfig::default()],
             max_results: default_web_search_max_results(),
+            routing: default_web_search_routing(),
         }
     }
 }
@@ -756,10 +786,36 @@ pub fn get_settings_cached() -> Result<Settings, AppCommandError> {
     Ok(settings)
 }
 
-/// Update the settings cache when settings are saved.
+/// Update the settings cache when settings are called.
 pub fn update_settings_cache(settings: Settings) {
     let mut guard = SETTINGS_CACHE.lock();
     *guard = Some(settings);
+}
+
+/// Patch the in-memory settings cache in-place so callers that read
+/// `settings.cloud.account` (e.g. `build_settings_ai_config`) see
+/// freshly rotated tokens without having to reload from disk.
+///
+/// **Does NOT write to disk.** Persistence is the caller's
+/// responsibility — most callers (login / logout / `save_settings`)
+/// already do their own write, and `CloudClient::persist_current_account`
+/// spawns a separate task to avoid holding the in-memory mutex while
+/// hitting the filesystem.
+pub fn patch_settings_cache_account(account: crate::cloud::CloudAccount) {
+    let mut guard = SETTINGS_CACHE.lock();
+    if let Some(ref mut settings) = *guard {
+        settings.cloud.account = Some(account);
+    }
+}
+
+/// Clear the in-memory account snapshot when the user logs out or the
+/// refresh token is rejected by the server. Same caveat as
+/// `patch_settings_cache_account` — disk persistence is separate.
+pub fn clear_settings_cache_account() {
+    let mut guard = SETTINGS_CACHE.lock();
+    if let Some(ref mut settings) = *guard {
+        settings.cloud.account = None;
+    }
 }
 
 /// Get embedding model name from settings
@@ -847,7 +903,7 @@ pub async fn get_settings() -> Result<Settings, AppCommandError> {
 }
 
 #[tauri::command]
-pub async fn save_settings(settings: Settings, state: State<'_, AppState>) -> Result<(), AppCommandError> {
+pub async fn save_settings(settings: Settings, _state: State<'_, AppState>) -> Result<(), AppCommandError> {
     let path = get_settings_path();
     let config_dir = path.parent().ok_or(AppCommandError::InvalidConfigPath)?;
 
@@ -867,8 +923,12 @@ pub async fn save_settings(settings: Settings, state: State<'_, AppState>) -> Re
     // was the previous behaviour).
     crate::commands::update_settings_cache(settings.clone());
 
-    *state.ai_config.write().await = ai_config::build_settings_ai_config(&settings)
-        .map_err(|error| AppCommandError::AIConfig(error.to_string()))?;
+    // The AIConfigResolver reads from the cache on each call, so we
+    // don't need to push a new AIConfig into a shared cell here. The
+    // previous code rebuilt and stored an AIConfig in
+    // `state.ai_config`, but that snapshot silently went stale when
+    // the cloud access token rotated — see the Step-3 change in
+    // `ai_config.rs::AIConfigResolver` for the rationale.
 
     Ok(())
 }

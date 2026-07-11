@@ -13633,7 +13633,7 @@ var CheckCircleFilled = function CheckCircleFilled2(props, ref) {
     icon: CheckCircleFilled$1
   }));
 };
-var RefIcon$P = /* @__PURE__ */ reactExports.forwardRef(CheckCircleFilled);
+var RefIcon$Q = /* @__PURE__ */ reactExports.forwardRef(CheckCircleFilled);
 var CloseCircleFilled$1 = { "icon": { "tag": "svg", "attrs": { "fill-rule": "evenodd", "viewBox": "64 64 896 896", "focusable": "false" }, "children": [{ "tag": "path", "attrs": { "d": "M512 64c247.4 0 448 200.6 448 448S759.4 960 512 960 64 759.4 64 512 264.6 64 512 64zm127.98 274.82h-.04l-.08.06L512 466.75 384.14 338.88c-.04-.05-.06-.06-.08-.06a.12.12 0 00-.07 0c-.03 0-.05.01-.09.05l-45.02 45.02a.2.2 0 00-.05.09.12.12 0 000 .07v.02a.27.27 0 00.06.06L466.75 512 338.88 639.86c-.05.04-.06.06-.06.08a.12.12 0 000 .07c0 .03.01.05.05.09l45.02 45.02a.2.2 0 00.09.05.12.12 0 00.07 0c.02 0 .04-.01.08-.05L512 557.25l127.86 127.87c.04.04.06.05.08.05a.12.12 0 00.07 0c.03 0 .05-.01.09-.05l45.02-45.02a.2.2 0 00.05-.09.12.12 0 000-.07v-.02a.27.27 0 00-.05-.06L557.25 512l127.87-127.86c.04-.04.05-.06.05-.08a.12.12 0 000-.07c0-.03-.01-.05-.05-.09l-45.02-45.02a.2.2 0 00-.09-.05.12.12 0 00-.07 0z" } }] }, "name": "close-circle", "theme": "filled" };
 var CloseCircleFilled = function CloseCircleFilled2(props, ref) {
   return /* @__PURE__ */ reactExports.createElement(Icon$2, _extends$3({}, props, {
@@ -13641,7 +13641,7 @@ var CloseCircleFilled = function CloseCircleFilled2(props, ref) {
     icon: CloseCircleFilled$1
   }));
 };
-var RefIcon$O = /* @__PURE__ */ reactExports.forwardRef(CloseCircleFilled);
+var RefIcon$P = /* @__PURE__ */ reactExports.forwardRef(CloseCircleFilled);
 var CloseOutlined$1 = { "icon": { "tag": "svg", "attrs": { "fill-rule": "evenodd", "viewBox": "64 64 896 896", "focusable": "false" }, "children": [{ "tag": "path", "attrs": { "d": "M799.86 166.31c.02 0 .04.02.08.06l57.69 57.7c.04.03.05.05.06.08a.12.12 0 010 .06c0 .03-.02.05-.06.09L569.93 512l287.7 287.7c.04.04.05.06.06.09a.12.12 0 010 .07c0 .02-.02.04-.06.08l-57.7 57.69c-.03.04-.05.05-.07.06a.12.12 0 01-.07 0c-.03 0-.05-.02-.09-.06L512 569.93l-287.7 287.7c-.04.04-.06.05-.09.06a.12.12 0 01-.07 0c-.02 0-.04-.02-.08-.06l-57.69-57.7c-.04-.03-.05-.05-.06-.07a.12.12 0 010-.07c0-.03.02-.05.06-.09L454.07 512l-287.7-287.7c-.04-.04-.05-.06-.06-.09a.12.12 0 010-.07c0-.02.02-.04.06-.08l57.7-57.69c.03-.04.05-.05.07-.06a.12.12 0 01.07 0c.03 0 .05.02.09.06L512 454.07l287.7-287.7c.04-.04.06-.05.09-.06a.12.12 0 01.07 0z" } }] }, "name": "close", "theme": "outlined" };
 var CloseOutlined = function CloseOutlined2(props, ref) {
   return /* @__PURE__ */ reactExports.createElement(Icon$2, _extends$3({}, props, {
@@ -13649,7 +13649,7 @@ var CloseOutlined = function CloseOutlined2(props, ref) {
     icon: CloseOutlined$1
   }));
 };
-var RefIcon$N = /* @__PURE__ */ reactExports.forwardRef(CloseOutlined);
+var RefIcon$O = /* @__PURE__ */ reactExports.forwardRef(CloseOutlined);
 var ExclamationCircleFilled$1 = { "icon": { "tag": "svg", "attrs": { "viewBox": "64 64 896 896", "focusable": "false" }, "children": [{ "tag": "path", "attrs": { "d": "M512 64C264.6 64 64 264.6 64 512s200.6 448 448 448 448-200.6 448-448S759.4 64 512 64zm-32 232c0-4.4 3.6-8 8-8h48c4.4 0 8 3.6 8 8v272c0 4.4-3.6 8-8 8h-48c-4.4 0-8-3.6-8-8V296zm32 440a48.01 48.01 0 010-96 48.01 48.01 0 010 96z" } }] }, "name": "exclamation-circle", "theme": "filled" };
 var ExclamationCircleFilled = function ExclamationCircleFilled2(props, ref) {
   return /* @__PURE__ */ reactExports.createElement(Icon$2, _extends$3({}, props, {
@@ -13657,7 +13657,7 @@ var ExclamationCircleFilled = function ExclamationCircleFilled2(props, ref) {
     icon: ExclamationCircleFilled$1
   }));
 };
-var RefIcon$M = /* @__PURE__ */ reactExports.forwardRef(ExclamationCircleFilled);
+var RefIcon$N = /* @__PURE__ */ reactExports.forwardRef(ExclamationCircleFilled);
 var InfoCircleFilled$1 = { "icon": { "tag": "svg", "attrs": { "viewBox": "64 64 896 896", "focusable": "false" }, "children": [{ "tag": "path", "attrs": { "d": "M512 64C264.6 64 64 264.6 64 512s200.6 448 448 448 448-200.6 448-448S759.4 64 512 64zm32 664c0 4.4-3.6 8-8 8h-48c-4.4 0-8-3.6-8-8V456c0-4.4 3.6-8 8-8h48c4.4 0 8 3.6 8 8v272zm-32-344a48.01 48.01 0 010-96 48.01 48.01 0 010 96z" } }] }, "name": "info-circle", "theme": "filled" };
 var InfoCircleFilled = function InfoCircleFilled2(props, ref) {
   return /* @__PURE__ */ reactExports.createElement(Icon$2, _extends$3({}, props, {
@@ -13665,7 +13665,7 @@ var InfoCircleFilled = function InfoCircleFilled2(props, ref) {
     icon: InfoCircleFilled$1
   }));
 };
-var RefIcon$L = /* @__PURE__ */ reactExports.forwardRef(InfoCircleFilled);
+var RefIcon$M = /* @__PURE__ */ reactExports.forwardRef(InfoCircleFilled);
 var attributes = "accept acceptCharset accessKey action allowFullScreen allowTransparency\n    alt async autoComplete autoFocus autoPlay capture cellPadding cellSpacing challenge\n    charSet checked classID className colSpan cols content contentEditable contextMenu\n    controls coords crossOrigin data dateTime default defer dir disabled download draggable\n    encType form formAction formEncType formMethod formNoValidate formTarget frameBorder\n    headers height hidden high href hrefLang htmlFor httpEquiv icon id inputMode integrity\n    is keyParams keyType kind label lang list loop low manifest marginHeight marginWidth max maxLength media\n    mediaGroup method min minLength multiple muted name noValidate nonce open\n    optimum pattern placeholder poster preload radioGroup readOnly rel required\n    reversed role rowSpan rows sandbox scope scoped scrolling seamless selected\n    shape size sizes span spellCheck src srcDoc srcLang srcSet start step style\n    summary tabIndex target title type useMap value width wmode wrap";
 var eventsName = "onCopy onCut onPaste onCompositionEnd onCompositionStart onCompositionUpdate onKeyDown\n    onKeyPress onKeyUp onFocus onBlur onChange onInput onSubmit onClick onContextMenu onDoubleClick\n    onDrag onDragEnd onDragEnter onDragExit onDragLeave onDragOver onDragStart onDrop onMouseDown\n    onMouseEnter onMouseLeave onMouseMove onMouseOut onMouseOver onMouseUp onSelect onTouchCancel\n    onTouchEnd onTouchMove onTouchStart onScroll onWheel onAbort onCanPlay onCanPlayThrough\n    onDurationChange onEmptied onEncrypted onEnded onError onLoadedData onLoadedMetadata\n    onLoadStart onPause onPlay onPlaying onProgress onRateChange onSeeked onSeeking onStalled onSuspend onTimeUpdate onVolumeChange onWaiting onLoad onError";
 var propList = "".concat(attributes, " ").concat(eventsName).split(/[\s\n]+/);
@@ -13898,10 +13898,10 @@ var __rest$19 = function(s, e2) {
   return t2;
 };
 const iconMapFilled = {
-  success: RefIcon$P,
-  info: RefIcon$L,
-  error: RefIcon$O,
-  warning: RefIcon$M
+  success: RefIcon$Q,
+  info: RefIcon$M,
+  error: RefIcon$P,
+  warning: RefIcon$N
 };
 const IconNode = (props) => {
   const {
@@ -13929,7 +13929,7 @@ const CloseIconNode = (props) => {
     handleClose,
     ariaProps
   } = props;
-  const mergedCloseIcon = closeIcon === true || closeIcon === void 0 ? /* @__PURE__ */ reactExports.createElement(RefIcon$N, null) : closeIcon;
+  const mergedCloseIcon = closeIcon === true || closeIcon === void 0 ? /* @__PURE__ */ reactExports.createElement(RefIcon$O, null) : closeIcon;
   return isClosable ? /* @__PURE__ */ reactExports.createElement("button", Object.assign({
     type: "button",
     onClick: handleClose,
@@ -14880,7 +14880,7 @@ var LoadingOutlined = function LoadingOutlined2(props, ref) {
     icon: LoadingOutlined$1
   }));
 };
-var RefIcon$K = /* @__PURE__ */ reactExports.forwardRef(LoadingOutlined);
+var RefIcon$L = /* @__PURE__ */ reactExports.forwardRef(LoadingOutlined);
 function mergeProps$1(...items) {
   const ret = {};
   items.forEach((item) => {
@@ -14938,7 +14938,7 @@ const useClosable = (propCloseCollection, contextCloseCollection, fallbackCloseC
   const [contextLocale] = useLocale$1("global", localeValues$1.global);
   const closeBtnIsDisabled = typeof propCloseConfig !== "boolean" ? !!(propCloseConfig === null || propCloseConfig === void 0 ? void 0 : propCloseConfig.disabled) : false;
   const mergedFallbackCloseCollection = React.useMemo(() => Object.assign({
-    closeIcon: /* @__PURE__ */ React.createElement(RefIcon$N, null)
+    closeIcon: /* @__PURE__ */ React.createElement(RefIcon$O, null)
   }, fallbackCloseCollection), [fallbackCloseCollection]);
   const mergedClosableConfig = React.useMemo(() => {
     if (propCloseConfig === false) {
@@ -15316,11 +15316,11 @@ const useStyle$D = genStyleHooks("Message", (token2) => {
   return t2;
 });
 const TypeIcon = {
-  info: /* @__PURE__ */ reactExports.createElement(RefIcon$L, null),
-  success: /* @__PURE__ */ reactExports.createElement(RefIcon$P, null),
-  error: /* @__PURE__ */ reactExports.createElement(RefIcon$O, null),
-  warning: /* @__PURE__ */ reactExports.createElement(RefIcon$M, null),
-  loading: /* @__PURE__ */ reactExports.createElement(RefIcon$K, null)
+  info: /* @__PURE__ */ reactExports.createElement(RefIcon$M, null),
+  success: /* @__PURE__ */ reactExports.createElement(RefIcon$Q, null),
+  error: /* @__PURE__ */ reactExports.createElement(RefIcon$P, null),
+  warning: /* @__PURE__ */ reactExports.createElement(RefIcon$N, null),
+  loading: /* @__PURE__ */ reactExports.createElement(RefIcon$L, null)
 };
 const PureContent$1 = ({
   prefixCls,
@@ -15407,7 +15407,7 @@ const Holder$1 = /* @__PURE__ */ reactExports.forwardRef((props, ref) => {
   const getNotificationMotion = () => getMotion$3(prefixCls, transitionName);
   const mergedCloseIcon = /* @__PURE__ */ reactExports.createElement("span", {
     className: `${prefixCls}-close-x`
-  }, /* @__PURE__ */ reactExports.createElement(RefIcon$N, {
+  }, /* @__PURE__ */ reactExports.createElement(RefIcon$O, {
     className: `${prefixCls}-close-icon`
   }));
   const [api2, holder] = useNotification$1({
@@ -16433,7 +16433,7 @@ const InnerLoadingIcon = /* @__PURE__ */ reactExports.forwardRef((props, ref) =>
     className: mergedIconCls,
     style: style2,
     ref
-  }, /* @__PURE__ */ React.createElement(RefIcon$K, {
+  }, /* @__PURE__ */ React.createElement(RefIcon$L, {
     className: iconClassName
   }));
 });
@@ -16728,7 +16728,7 @@ var RightOutlined = function RightOutlined2(props, ref) {
     icon: RightOutlined$1
   }));
 };
-var RefIcon$J = /* @__PURE__ */ reactExports.forwardRef(RightOutlined);
+var RefIcon$K = /* @__PURE__ */ reactExports.forwardRef(RightOutlined);
 const genCollapseMotion = (token2) => ({
   [token2.componentCls]: {
     // For common/openAnimation
@@ -22783,7 +22783,7 @@ const NormalOkBtn = () => {
 function renderCloseIcon(prefixCls, closeIcon) {
   return /* @__PURE__ */ React.createElement("span", {
     className: `${prefixCls}-close-x`
-  }, closeIcon || /* @__PURE__ */ React.createElement(RefIcon$N, {
+  }, closeIcon || /* @__PURE__ */ React.createElement(RefIcon$O, {
     className: `${prefixCls}-close-icon`
   }));
 }
@@ -23369,7 +23369,7 @@ const Modal$1 = (props) => {
   })) : null;
   const [mergedClosable, mergedCloseIcon, closeBtnIsDisabled, ariaProps] = useClosable(pickClosable(props), pickClosable(modalContext), {
     closable: true,
-    closeIcon: /* @__PURE__ */ reactExports.createElement(RefIcon$N, {
+    closeIcon: /* @__PURE__ */ reactExports.createElement(RefIcon$O, {
       className: `${prefixCls}-close-icon`
     }),
     closeIconRender: (icon) => renderCloseIcon(prefixCls, icon)
@@ -23562,16 +23562,16 @@ const ConfirmContent = (props) => {
   if (!icon && icon !== null) {
     switch (type4) {
       case "info":
-        mergedIcon = /* @__PURE__ */ reactExports.createElement(RefIcon$L, null);
+        mergedIcon = /* @__PURE__ */ reactExports.createElement(RefIcon$M, null);
         break;
       case "success":
-        mergedIcon = /* @__PURE__ */ reactExports.createElement(RefIcon$P, null);
+        mergedIcon = /* @__PURE__ */ reactExports.createElement(RefIcon$Q, null);
         break;
       case "error":
-        mergedIcon = /* @__PURE__ */ reactExports.createElement(RefIcon$O, null);
+        mergedIcon = /* @__PURE__ */ reactExports.createElement(RefIcon$P, null);
         break;
       default:
-        mergedIcon = /* @__PURE__ */ reactExports.createElement(RefIcon$M, null);
+        mergedIcon = /* @__PURE__ */ reactExports.createElement(RefIcon$N, null);
     }
   }
   const mergedOkCancel = okCancel !== null && okCancel !== void 0 ? okCancel : type4 === "confirm";
@@ -24426,15 +24426,15 @@ function getCloseIcon(prefixCls, closeIcon) {
   if (closeIcon === null || closeIcon === false) {
     return null;
   }
-  return closeIcon || /* @__PURE__ */ reactExports.createElement(RefIcon$N, {
+  return closeIcon || /* @__PURE__ */ reactExports.createElement(RefIcon$O, {
     className: `${prefixCls}-close-icon`
   });
 }
 const typeToIcon = {
-  success: RefIcon$P,
-  info: RefIcon$L,
-  error: RefIcon$O,
-  warning: RefIcon$M
+  success: RefIcon$Q,
+  info: RefIcon$M,
+  error: RefIcon$P,
+  warning: RefIcon$N
 };
 const PureContent = (props) => {
   const {
@@ -30882,7 +30882,7 @@ var CheckOutlined = function CheckOutlined2(props, ref) {
     icon: CheckOutlined$1
   }));
 };
-var RefIcon$I = /* @__PURE__ */ reactExports.forwardRef(CheckOutlined);
+var RefIcon$J = /* @__PURE__ */ reactExports.forwardRef(CheckOutlined);
 var DownOutlined$1 = { "icon": { "tag": "svg", "attrs": { "viewBox": "64 64 896 896", "focusable": "false" }, "children": [{ "tag": "path", "attrs": { "d": "M884 256h-75c-5.1 0-9.9 2.5-12.9 6.6L512 654.2 227.9 262.6c-3-4.1-7.8-6.6-12.9-6.6h-75c-6.5 0-10.3 7.4-6.5 12.7l352.6 486.1c12.8 17.6 39 17.6 51.7 0l352.6-486.1c3.9-5.3.1-12.7-6.4-12.7z" } }] }, "name": "down", "theme": "outlined" };
 var DownOutlined = function DownOutlined2(props, ref) {
   return /* @__PURE__ */ reactExports.createElement(Icon$2, _extends$3({}, props, {
@@ -30890,7 +30890,7 @@ var DownOutlined = function DownOutlined2(props, ref) {
     icon: DownOutlined$1
   }));
 };
-var RefIcon$H = /* @__PURE__ */ reactExports.forwardRef(DownOutlined);
+var RefIcon$I = /* @__PURE__ */ reactExports.forwardRef(DownOutlined);
 var SearchOutlined$1 = { "icon": { "tag": "svg", "attrs": { "viewBox": "64 64 896 896", "focusable": "false" }, "children": [{ "tag": "path", "attrs": { "d": "M909.6 854.5L649.9 594.8C690.2 542.7 712 479 712 412c0-80.2-31.3-155.4-87.9-212.1-56.6-56.7-132-87.9-212.1-87.9s-155.5 31.3-212.1 87.9C143.2 256.5 112 331.8 112 412c0 80.1 31.3 155.5 87.9 212.1C256.5 680.8 331.8 712 412 712c67 0 130.6-21.8 182.7-62l259.7 259.6a8.2 8.2 0 0011.6 0l43.6-43.5a8.2 8.2 0 000-11.6zM570.4 570.4C528 612.7 471.8 636 412 636s-116-23.3-158.4-65.6C211.3 528 188 471.8 188 412s23.3-116.1 65.6-158.4C296 211.3 352.2 188 412 188s116.1 23.2 158.4 65.6S636 352.2 636 412s-23.3 116.1-65.6 158.4z" } }] }, "name": "search", "theme": "outlined" };
 var SearchOutlined = function SearchOutlined2(props, ref) {
   return /* @__PURE__ */ reactExports.createElement(Icon$2, _extends$3({}, props, {
@@ -30898,7 +30898,7 @@ var SearchOutlined = function SearchOutlined2(props, ref) {
     icon: SearchOutlined$1
   }));
 };
-var RefIcon$G = /* @__PURE__ */ reactExports.forwardRef(SearchOutlined);
+var RefIcon$H = /* @__PURE__ */ reactExports.forwardRef(SearchOutlined);
 function useIcons$1({
   suffixIcon,
   clearIcon,
@@ -30913,7 +30913,7 @@ function useIcons$1({
   showArrow,
   componentName
 }) {
-  const mergedClearIcon = clearIcon !== null && clearIcon !== void 0 ? clearIcon : /* @__PURE__ */ reactExports.createElement(RefIcon$O, null);
+  const mergedClearIcon = clearIcon !== null && clearIcon !== void 0 ? clearIcon : /* @__PURE__ */ reactExports.createElement(RefIcon$P, null);
   const getSuffixIconNode = (arrowIcon) => {
     if (suffixIcon === null && !hasFeedback && !showArrow) {
       return null;
@@ -30924,7 +30924,7 @@ function useIcons$1({
   if (suffixIcon !== void 0) {
     mergedSuffixIcon = getSuffixIconNode(suffixIcon);
   } else if (loading) {
-    mergedSuffixIcon = getSuffixIconNode(/* @__PURE__ */ reactExports.createElement(RefIcon$K, {
+    mergedSuffixIcon = getSuffixIconNode(/* @__PURE__ */ reactExports.createElement(RefIcon$L, {
       spin: true
     }));
   } else {
@@ -30934,11 +30934,11 @@ function useIcons$1({
       showSearch
     }) => {
       if (open && showSearch) {
-        return getSuffixIconNode(/* @__PURE__ */ reactExports.createElement(RefIcon$G, {
+        return getSuffixIconNode(/* @__PURE__ */ reactExports.createElement(RefIcon$H, {
           className: iconCls
         }));
       }
-      return getSuffixIconNode(/* @__PURE__ */ reactExports.createElement(RefIcon$H, {
+      return getSuffixIconNode(/* @__PURE__ */ reactExports.createElement(RefIcon$I, {
         className: iconCls
       }));
     };
@@ -30947,7 +30947,7 @@ function useIcons$1({
   if (menuItemSelectedIcon !== void 0) {
     mergedItemIcon = menuItemSelectedIcon;
   } else if (multiple) {
-    mergedItemIcon = /* @__PURE__ */ reactExports.createElement(RefIcon$I, null);
+    mergedItemIcon = /* @__PURE__ */ reactExports.createElement(RefIcon$J, null);
   } else {
     mergedItemIcon = null;
   }
@@ -30955,7 +30955,7 @@ function useIcons$1({
   if (removeIcon !== void 0) {
     mergedRemoveIcon = removeIcon;
   } else {
-    mergedRemoveIcon = /* @__PURE__ */ reactExports.createElement(RefIcon$N, null);
+    mergedRemoveIcon = /* @__PURE__ */ reactExports.createElement(RefIcon$O, null);
   }
   return {
     clearIcon: mergedClearIcon,
@@ -32872,7 +32872,7 @@ var LeftOutlined = function LeftOutlined2(props, ref) {
     icon: LeftOutlined$1
   }));
 };
-var RefIcon$F = /* @__PURE__ */ reactExports.forwardRef(LeftOutlined);
+var RefIcon$G = /* @__PURE__ */ reactExports.forwardRef(LeftOutlined);
 var ESC$1 = KeyCode.ESC, TAB = KeyCode.TAB;
 function useAccessibility$1(_ref) {
   var visible = _ref.visible, triggerRef = _ref.triggerRef, onVisibleChange = _ref.onVisibleChange, autoFocus = _ref.autoFocus, overlayRef = _ref.overlayRef;
@@ -34447,7 +34447,7 @@ var BarsOutlined = function BarsOutlined2(props, ref) {
     icon: BarsOutlined$1
   }));
 };
-var RefIcon$E = /* @__PURE__ */ reactExports.forwardRef(BarsOutlined);
+var RefIcon$F = /* @__PURE__ */ reactExports.forwardRef(BarsOutlined);
 const LayoutContext = /* @__PURE__ */ reactExports.createContext({
   siderHook: {
     addSider: () => null,
@@ -34777,11 +34777,11 @@ const Sider$1 = /* @__PURE__ */ reactExports.forwardRef((props, ref) => {
     onClick: toggle,
     className: classNames(`${prefixCls}-zero-width-trigger`, `${prefixCls}-zero-width-trigger-${reverseArrow ? "right" : "left"}`),
     style: zeroWidthTriggerStyle
-  }, trigger2 || /* @__PURE__ */ reactExports.createElement(RefIcon$E, null)) : null;
+  }, trigger2 || /* @__PURE__ */ reactExports.createElement(RefIcon$F, null)) : null;
   const reverseIcon = direction === "rtl" === !reverseArrow;
   const iconObj = {
-    expanded: reverseIcon ? /* @__PURE__ */ reactExports.createElement(RefIcon$J, null) : /* @__PURE__ */ reactExports.createElement(RefIcon$F, null),
-    collapsed: reverseIcon ? /* @__PURE__ */ reactExports.createElement(RefIcon$F, null) : /* @__PURE__ */ reactExports.createElement(RefIcon$J, null)
+    expanded: reverseIcon ? /* @__PURE__ */ reactExports.createElement(RefIcon$K, null) : /* @__PURE__ */ reactExports.createElement(RefIcon$G, null),
+    collapsed: reverseIcon ? /* @__PURE__ */ reactExports.createElement(RefIcon$G, null) : /* @__PURE__ */ reactExports.createElement(RefIcon$K, null)
   };
   const status = collapsed ? "collapsed" : "expanded";
   const defaultTrigger = iconObj[status];
@@ -34825,7 +34825,7 @@ var EllipsisOutlined = function EllipsisOutlined2(props, ref) {
     icon: EllipsisOutlined$1
   }));
 };
-var RefIcon$D = /* @__PURE__ */ reactExports.forwardRef(EllipsisOutlined);
+var RefIcon$E = /* @__PURE__ */ reactExports.forwardRef(EllipsisOutlined);
 const MenuContext = /* @__PURE__ */ reactExports.createContext({
   prefixCls: "",
   firstLevel: true,
@@ -36113,7 +36113,7 @@ const InternalMenu = /* @__PURE__ */ reactExports.forwardRef((props, ref) => {
     value: contextValue
   }, /* @__PURE__ */ reactExports.createElement(ExportMenu, Object.assign({
     getPopupContainer,
-    overflowedIndicator: /* @__PURE__ */ reactExports.createElement(RefIcon$D, null),
+    overflowedIndicator: /* @__PURE__ */ reactExports.createElement(RefIcon$E, null),
     overflowedIndicatorPopupClassName: classNames(prefixCls, `${prefixCls}-${theme2}`, overflowedIndicatorPopupClassName),
     mode: mergedMode,
     selectable: mergedSelectable,
@@ -36579,9 +36579,9 @@ const Dropdown$1 = (props) => {
       rootClassName: classNames(cssVarCls, rootCls),
       expandIcon: /* @__PURE__ */ reactExports.createElement("span", {
         className: `${prefixCls}-menu-submenu-arrow`
-      }, direction === "rtl" ? /* @__PURE__ */ reactExports.createElement(RefIcon$F, {
+      }, direction === "rtl" ? /* @__PURE__ */ reactExports.createElement(RefIcon$G, {
         className: `${prefixCls}-menu-submenu-arrow-icon`
-      }) : /* @__PURE__ */ reactExports.createElement(RefIcon$J, {
+      }) : /* @__PURE__ */ reactExports.createElement(RefIcon$K, {
         className: `${prefixCls}-menu-submenu-arrow-icon`
       })),
       mode: "vertical",
@@ -44609,7 +44609,7 @@ var PlusOutlined = function PlusOutlined2(props, ref) {
     icon: PlusOutlined$1
   }));
 };
-var RefIcon$C = /* @__PURE__ */ reactExports.forwardRef(PlusOutlined);
+var RefIcon$D = /* @__PURE__ */ reactExports.forwardRef(PlusOutlined);
 const TabContext = /* @__PURE__ */ reactExports.createContext(null);
 var useIndicator = function useIndicator2(options) {
   var activeTabOffset = options.activeTabOffset, horizontal = options.horizontal, rtl = options.rtl, _options$indicator = options.indicator, indicator = _options$indicator === void 0 ? {} : _options$indicator;
@@ -46874,8 +46874,8 @@ const InternalTabs = /* @__PURE__ */ reactExports.forwardRef((props, ref) => {
       }) => {
         onEdit === null || onEdit === void 0 ? void 0 : onEdit(editType === "add" ? event : key, editType);
       },
-      removeIcon: (_a2 = removeIcon !== null && removeIcon !== void 0 ? removeIcon : tabs === null || tabs === void 0 ? void 0 : tabs.removeIcon) !== null && _a2 !== void 0 ? _a2 : /* @__PURE__ */ reactExports.createElement(RefIcon$N, null),
-      addIcon: (addIcon !== null && addIcon !== void 0 ? addIcon : tabs === null || tabs === void 0 ? void 0 : tabs.addIcon) || /* @__PURE__ */ reactExports.createElement(RefIcon$C, null),
+      removeIcon: (_a2 = removeIcon !== null && removeIcon !== void 0 ? removeIcon : tabs === null || tabs === void 0 ? void 0 : tabs.removeIcon) !== null && _a2 !== void 0 ? _a2 : /* @__PURE__ */ reactExports.createElement(RefIcon$O, null),
+      addIcon: (addIcon !== null && addIcon !== void 0 ? addIcon : tabs === null || tabs === void 0 ? void 0 : tabs.addIcon) || /* @__PURE__ */ reactExports.createElement(RefIcon$D, null),
       showAdd: hideAdd !== true
     };
   }
@@ -46904,7 +46904,7 @@ const InternalTabs = /* @__PURE__ */ reactExports.forwardRef((props, ref) => {
     style: mergedStyle,
     editable,
     more: Object.assign({
-      icon: (_l = (_k = (_j = (_h = tabs === null || tabs === void 0 ? void 0 : tabs.more) === null || _h === void 0 ? void 0 : _h.icon) !== null && _j !== void 0 ? _j : tabs === null || tabs === void 0 ? void 0 : tabs.moreIcon) !== null && _k !== void 0 ? _k : moreIcon) !== null && _l !== void 0 ? _l : /* @__PURE__ */ reactExports.createElement(RefIcon$D, null),
+      icon: (_l = (_k = (_j = (_h = tabs === null || tabs === void 0 ? void 0 : tabs.more) === null || _h === void 0 ? void 0 : _h.icon) !== null && _j !== void 0 ? _j : tabs === null || tabs === void 0 ? void 0 : tabs.moreIcon) !== null && _k !== void 0 ? _k : moreIcon) !== null && _l !== void 0 ? _l : /* @__PURE__ */ reactExports.createElement(RefIcon$E, null),
       transitionName: `${rootPrefixCls}-slide-up`
     }, more),
     prefixCls,
@@ -48588,7 +48588,7 @@ var UpOutlined = function UpOutlined2(props, ref) {
     icon: UpOutlined$1
   }));
 };
-var RefIcon$B = /* @__PURE__ */ reactExports.forwardRef(UpOutlined);
+var RefIcon$C = /* @__PURE__ */ reactExports.forwardRef(UpOutlined);
 function supportBigInt() {
   return typeof BigInt === "function";
 }
@@ -50322,10 +50322,10 @@ const InputNumber = /* @__PURE__ */ reactExports.forwardRef((props, ref) => {
     compactSize,
     compactItemClassnames
   } = useCompactItemContext(prefixCls, direction);
-  let upIcon = /* @__PURE__ */ reactExports.createElement(RefIcon$B, {
+  let upIcon = /* @__PURE__ */ reactExports.createElement(RefIcon$C, {
     className: `${prefixCls}-handler-up-inner`
   });
-  let downIcon = /* @__PURE__ */ reactExports.createElement(RefIcon$H, {
+  let downIcon = /* @__PURE__ */ reactExports.createElement(RefIcon$I, {
     className: `${prefixCls}-handler-down-inner`
   });
   const controlsTemp = typeof controls === "boolean" ? controls : void 0;
@@ -50419,7 +50419,7 @@ const getAllowClear = (allowClear) => {
     mergedAllowClear = allowClear;
   } else if (allowClear) {
     mergedAllowClear = {
-      clearIcon: /* @__PURE__ */ React.createElement(RefIcon$O, null)
+      clearIcon: /* @__PURE__ */ React.createElement(RefIcon$P, null)
     };
   }
   return mergedAllowClear;
@@ -50583,7 +50583,7 @@ var SwapRightOutlined = function SwapRightOutlined2(props, ref) {
     icon: SwapRightOutlined$1
   }));
 };
-var RefIcon$A = /* @__PURE__ */ reactExports.forwardRef(SwapRightOutlined);
+var RefIcon$B = /* @__PURE__ */ reactExports.forwardRef(SwapRightOutlined);
 const useMergedPickerSemantic = (pickerType, classNames$1, styles, popupClassName, popupStyle) => {
   const {
     classNames: contextClassNames,
@@ -50685,7 +50685,7 @@ var CalendarOutlined = function CalendarOutlined2(props, ref) {
     icon: CalendarOutlined$1
   }));
 };
-var RefIcon$z = /* @__PURE__ */ reactExports.forwardRef(CalendarOutlined);
+var RefIcon$A = /* @__PURE__ */ reactExports.forwardRef(CalendarOutlined);
 var ClockCircleOutlined$1 = { "icon": { "tag": "svg", "attrs": { "viewBox": "64 64 896 896", "focusable": "false" }, "children": [{ "tag": "path", "attrs": { "d": "M512 64C264.6 64 64 264.6 64 512s200.6 448 448 448 448-200.6 448-448S759.4 64 512 64zm0 820c-205.4 0-372-166.6-372-372s166.6-372 372-372 372 166.6 372 372-166.6 372-372 372z" } }, { "tag": "path", "attrs": { "d": "M686.7 638.6L544.1 535.5V288c0-4.4-3.6-8-8-8H488c-4.4 0-8 3.6-8 8v275.4c0 2.6 1.2 5 3.3 6.5l165.4 120.6c3.6 2.6 8.6 1.8 11.2-1.7l28.6-39c2.6-3.7 1.8-8.7-1.8-11.2z" } }] }, "name": "clock-circle", "theme": "outlined" };
 var ClockCircleOutlined = function ClockCircleOutlined2(props, ref) {
   return /* @__PURE__ */ reactExports.createElement(Icon$2, _extends$3({}, props, {
@@ -50693,7 +50693,7 @@ var ClockCircleOutlined = function ClockCircleOutlined2(props, ref) {
     icon: ClockCircleOutlined$1
   }));
 };
-var RefIcon$y = /* @__PURE__ */ reactExports.forwardRef(ClockCircleOutlined);
+var RefIcon$z = /* @__PURE__ */ reactExports.forwardRef(ClockCircleOutlined);
 const SuffixIcon = ({
   picker,
   hasFeedback,
@@ -50704,7 +50704,7 @@ const SuffixIcon = ({
     return null;
   }
   if (suffixIcon === true || suffixIcon === void 0) {
-    return /* @__PURE__ */ React.createElement(React.Fragment, null, picker === TIME ? /* @__PURE__ */ React.createElement(RefIcon$y, null) : /* @__PURE__ */ React.createElement(RefIcon$z, null), hasFeedback && feedbackIcon);
+    return /* @__PURE__ */ React.createElement(React.Fragment, null, picker === TIME ? /* @__PURE__ */ React.createElement(RefIcon$z, null) : /* @__PURE__ */ React.createElement(RefIcon$A, null), hasFeedback && feedbackIcon);
   }
   return suffixIcon;
 };
@@ -50798,7 +50798,7 @@ const generateRangePicker = (generateConfig2) => {
       separator: /* @__PURE__ */ reactExports.createElement("span", {
         "aria-label": "to",
         className: `${prefixCls}-separator`
-      }, /* @__PURE__ */ reactExports.createElement(RefIcon$A, null)),
+      }, /* @__PURE__ */ reactExports.createElement(RefIcon$B, null)),
       disabled: mergedDisabled,
       ref: innerRef,
       placement,
@@ -52665,7 +52665,7 @@ const DropdownButton = (props) => {
     placement,
     getPopupContainer,
     href,
-    icon = /* @__PURE__ */ reactExports.createElement(RefIcon$D, null),
+    icon = /* @__PURE__ */ reactExports.createElement(RefIcon$E, null),
     title,
     buttonsRender = (buttons) => buttons,
     mouseEnterDelay,
@@ -53699,7 +53699,7 @@ var QuestionCircleOutlined = function QuestionCircleOutlined2(props, ref) {
     icon: QuestionCircleOutlined$1
   }));
 };
-var RefIcon$x = /* @__PURE__ */ reactExports.forwardRef(QuestionCircleOutlined);
+var RefIcon$y = /* @__PURE__ */ reactExports.forwardRef(QuestionCircleOutlined);
 var __rest$t = function(s, e2) {
   var t2 = {};
   for (var p2 in s) if (Object.prototype.hasOwnProperty.call(s, p2) && e2.indexOf(p2) < 0) t2[p2] = s[p2];
@@ -53746,7 +53746,7 @@ const FormItemLabel = ({
   const tooltipProps = convertToTooltipProps(tooltip);
   if (tooltipProps) {
     const {
-      icon = /* @__PURE__ */ reactExports.createElement(RefIcon$x, null)
+      icon = /* @__PURE__ */ reactExports.createElement(RefIcon$y, null)
     } = tooltipProps, restTooltipProps = __rest$t(tooltipProps, ["icon"]);
     const tooltipNode = /* @__PURE__ */ reactExports.createElement(Tooltip2, Object.assign({}, restTooltipProps), /* @__PURE__ */ reactExports.cloneElement(icon, {
       className: `${prefixCls}-item-tooltip`,
@@ -53791,10 +53791,10 @@ const FormItemLabel = ({
   }, labelChildren));
 };
 const iconMap = {
-  success: RefIcon$P,
-  warning: RefIcon$M,
-  error: RefIcon$O,
-  validating: RefIcon$K
+  success: RefIcon$Q,
+  warning: RefIcon$N,
+  error: RefIcon$P,
+  validating: RefIcon$L
 };
 function StatusProvider({
   children,
@@ -54269,7 +54269,7 @@ var EyeOutlined = function EyeOutlined2(props, ref) {
     icon: EyeOutlined$1
   }));
 };
-var RefIcon$w = /* @__PURE__ */ reactExports.forwardRef(EyeOutlined);
+var RefIcon$x = /* @__PURE__ */ reactExports.forwardRef(EyeOutlined);
 function addEventListenerWrap(target, eventType, cb2, option) {
   var callback = ReactDOM.unstable_batchedUpdates ? function run(e2) {
     ReactDOM.unstable_batchedUpdates(cb2, e2);
@@ -54633,7 +54633,7 @@ var EyeInvisibleOutlined = function EyeInvisibleOutlined2(props, ref) {
     icon: EyeInvisibleOutlined$1
   }));
 };
-var RefIcon$v = /* @__PURE__ */ reactExports.forwardRef(EyeInvisibleOutlined);
+var RefIcon$w = /* @__PURE__ */ reactExports.forwardRef(EyeInvisibleOutlined);
 var __rest$o = function(s, e2) {
   var t2 = {};
   for (var p2 in s) if (Object.prototype.hasOwnProperty.call(s, p2) && e2.indexOf(p2) < 0) t2[p2] = s[p2];
@@ -54642,7 +54642,7 @@ var __rest$o = function(s, e2) {
   }
   return t2;
 };
-const defaultIconRender = (visible) => visible ? /* @__PURE__ */ reactExports.createElement(RefIcon$w, null) : /* @__PURE__ */ reactExports.createElement(RefIcon$v, null);
+const defaultIconRender = (visible) => visible ? /* @__PURE__ */ reactExports.createElement(RefIcon$x, null) : /* @__PURE__ */ reactExports.createElement(RefIcon$w, null);
 const actionMap = {
   click: "onClick",
   hover: "onMouseOver"
@@ -54794,7 +54794,7 @@ const Search = /* @__PURE__ */ reactExports.forwardRef((props, ref) => {
     customOnPressEnter === null || customOnPressEnter === void 0 ? void 0 : customOnPressEnter(e2);
     onSearch(e2);
   };
-  const searchIcon = typeof enterButton === "boolean" ? /* @__PURE__ */ reactExports.createElement(RefIcon$G, null) : null;
+  const searchIcon = typeof enterButton === "boolean" ? /* @__PURE__ */ reactExports.createElement(RefIcon$H, null) : null;
   const btnClassName = `${prefixCls}-button`;
   let button;
   const enterButtonAsElement = enterButton || {};
@@ -55573,7 +55573,7 @@ var DoubleLeftOutlined = function DoubleLeftOutlined2(props, ref) {
     icon: DoubleLeftOutlined$1
   }));
 };
-var RefIcon$u = /* @__PURE__ */ reactExports.forwardRef(DoubleLeftOutlined);
+var RefIcon$v = /* @__PURE__ */ reactExports.forwardRef(DoubleLeftOutlined);
 var DoubleRightOutlined$1 = { "icon": { "tag": "svg", "attrs": { "viewBox": "64 64 896 896", "focusable": "false" }, "children": [{ "tag": "path", "attrs": { "d": "M533.2 492.3L277.9 166.1c-3-3.9-7.7-6.1-12.6-6.1H188c-6.7 0-10.4 7.7-6.3 12.9L447.1 512 181.7 851.1A7.98 7.98 0 00188 864h77.3c4.9 0 9.6-2.3 12.6-6.1l255.3-326.1c9.1-11.7 9.1-27.9 0-39.5zm304 0L581.9 166.1c-3-3.9-7.7-6.1-12.6-6.1H492c-6.7 0-10.4 7.7-6.3 12.9L751.1 512 485.7 851.1A7.98 7.98 0 00492 864h77.3c4.9 0 9.6-2.3 12.6-6.1l255.3-326.1c9.1-11.7 9.1-27.9 0-39.5z" } }] }, "name": "double-right", "theme": "outlined" };
 var DoubleRightOutlined = function DoubleRightOutlined2(props, ref) {
   return /* @__PURE__ */ reactExports.createElement(Icon$2, _extends$3({}, props, {
@@ -55581,7 +55581,7 @@ var DoubleRightOutlined = function DoubleRightOutlined2(props, ref) {
     icon: DoubleRightOutlined$1
   }));
 };
-var RefIcon$t = /* @__PURE__ */ reactExports.forwardRef(DoubleRightOutlined);
+var RefIcon$u = /* @__PURE__ */ reactExports.forwardRef(DoubleRightOutlined);
 var locale$4 = {
   // Options
   items_per_page: "条/页",
@@ -56794,21 +56794,21 @@ const Pagination = (props) => {
       className: `${prefixCls}-item-link`,
       type: "button",
       tabIndex: -1
-    }, direction === "rtl" ? /* @__PURE__ */ reactExports.createElement(RefIcon$J, null) : /* @__PURE__ */ reactExports.createElement(RefIcon$F, null));
+    }, direction === "rtl" ? /* @__PURE__ */ reactExports.createElement(RefIcon$K, null) : /* @__PURE__ */ reactExports.createElement(RefIcon$G, null));
     const nextIcon = /* @__PURE__ */ reactExports.createElement("button", {
       className: `${prefixCls}-item-link`,
       type: "button",
       tabIndex: -1
-    }, direction === "rtl" ? /* @__PURE__ */ reactExports.createElement(RefIcon$F, null) : /* @__PURE__ */ reactExports.createElement(RefIcon$J, null));
+    }, direction === "rtl" ? /* @__PURE__ */ reactExports.createElement(RefIcon$G, null) : /* @__PURE__ */ reactExports.createElement(RefIcon$K, null));
     const jumpPrevIcon = (
       // biome-ignore lint/a11y/useValidAnchor: it is hard to refactor
       /* @__PURE__ */ reactExports.createElement("a", {
         className: `${prefixCls}-item-link`
       }, /* @__PURE__ */ reactExports.createElement("div", {
         className: `${prefixCls}-item-container`
-      }, direction === "rtl" ? /* @__PURE__ */ reactExports.createElement(RefIcon$t, {
+      }, direction === "rtl" ? /* @__PURE__ */ reactExports.createElement(RefIcon$u, {
         className: `${prefixCls}-item-link-icon`
-      }) : /* @__PURE__ */ reactExports.createElement(RefIcon$u, {
+      }) : /* @__PURE__ */ reactExports.createElement(RefIcon$v, {
         className: `${prefixCls}-item-link-icon`
       }), ellipsis))
     );
@@ -56818,9 +56818,9 @@ const Pagination = (props) => {
         className: `${prefixCls}-item-link`
       }, /* @__PURE__ */ reactExports.createElement("div", {
         className: `${prefixCls}-item-container`
-      }, direction === "rtl" ? /* @__PURE__ */ reactExports.createElement(RefIcon$u, {
+      }, direction === "rtl" ? /* @__PURE__ */ reactExports.createElement(RefIcon$v, {
         className: `${prefixCls}-item-link-icon`
-      }) : /* @__PURE__ */ reactExports.createElement(RefIcon$t, {
+      }) : /* @__PURE__ */ reactExports.createElement(RefIcon$u, {
         className: `${prefixCls}-item-link-icon`
       }), ellipsis))
     );
@@ -58165,7 +58165,7 @@ const Overlay = (props) => {
     cancelText,
     okText,
     okType = "primary",
-    icon = /* @__PURE__ */ reactExports.createElement(RefIcon$M, null),
+    icon = /* @__PURE__ */ reactExports.createElement(RefIcon$N, null),
     showCancel = true,
     close,
     onConfirm,
@@ -58243,7 +58243,7 @@ const InternalPopconfirm = /* @__PURE__ */ reactExports.forwardRef((props, ref) 
     placement = "top",
     trigger: trigger2 = "click",
     okType = "primary",
-    icon = /* @__PURE__ */ reactExports.createElement(RefIcon$M, null),
+    icon = /* @__PURE__ */ reactExports.createElement(RefIcon$N, null),
     children,
     overlayClassName,
     onOpenChange,
@@ -58328,7 +58328,7 @@ var ReloadOutlined = function ReloadOutlined2(props, ref) {
     icon: ReloadOutlined$1
   }));
 };
-var RefIcon$s = /* @__PURE__ */ reactExports.forwardRef(ReloadOutlined);
+var RefIcon$t = /* @__PURE__ */ reactExports.forwardRef(ReloadOutlined);
 const StatisticNumber = (props) => {
   const {
     value,
@@ -59020,7 +59020,7 @@ const InternalSwitch = /* @__PURE__ */ reactExports.forwardRef((props, ref) => {
   const prefixCls = getPrefixCls("switch", customizePrefixCls);
   const loadingIcon = /* @__PURE__ */ reactExports.createElement("div", {
     className: `${prefixCls}-handle`
-  }, loading && /* @__PURE__ */ reactExports.createElement(RefIcon$K, {
+  }, loading && /* @__PURE__ */ reactExports.createElement(RefIcon$L, {
     className: `${prefixCls}-loading-icon`
   }));
   const [wrapCSSVar, hashId, cssVarCls] = useStyle$4(prefixCls);
@@ -62276,7 +62276,7 @@ const useSelection = (config, rowSelection) => {
         }, /* @__PURE__ */ reactExports.createElement(Dropdown, {
           menu,
           getPopupContainer
-        }, /* @__PURE__ */ reactExports.createElement("span", null, /* @__PURE__ */ reactExports.createElement(RefIcon$H, null))));
+        }, /* @__PURE__ */ reactExports.createElement("span", null, /* @__PURE__ */ reactExports.createElement(RefIcon$I, null))));
       }
       const allDisabledData = flattedData.map((record, index2) => {
         const key = getRowKey(record, index2);
@@ -62548,7 +62548,7 @@ var FilterFilled = function FilterFilled2(props, ref) {
     icon: FilterFilled$1
   }));
 };
-var RefIcon$r = /* @__PURE__ */ reactExports.forwardRef(FilterFilled);
+var RefIcon$s = /* @__PURE__ */ reactExports.forwardRef(FilterFilled);
 var DropIndicator = function DropIndicator2(props) {
   var dropPosition = props.dropPosition, dropLevelOffset = props.dropLevelOffset, indent = props.indent;
   var style2 = {
@@ -63844,7 +63844,7 @@ var FileOutlined = function FileOutlined2(props, ref) {
     icon: FileOutlined$1
   }));
 };
-var RefIcon$q = /* @__PURE__ */ reactExports.forwardRef(FileOutlined);
+var RefIcon$r = /* @__PURE__ */ reactExports.forwardRef(FileOutlined);
 var FolderOpenOutlined$1 = { "icon": { "tag": "svg", "attrs": { "viewBox": "64 64 896 896", "focusable": "false" }, "children": [{ "tag": "path", "attrs": { "d": "M928 444H820V330.4c0-17.7-14.3-32-32-32H473L355.7 186.2a8.15 8.15 0 00-5.5-2.2H96c-17.7 0-32 14.3-32 32v592c0 17.7 14.3 32 32 32h698c13 0 24.8-7.9 29.7-20l134-332c1.5-3.8 2.3-7.9 2.3-12 0-17.7-14.3-32-32-32zM136 256h188.5l119.6 114.4H748V444H238c-13 0-24.8 7.9-29.7 20L136 643.2V256zm635.3 512H159l103.3-256h612.4L771.3 768z" } }] }, "name": "folder-open", "theme": "outlined" };
 var FolderOpenOutlined = function FolderOpenOutlined2(props, ref) {
   return /* @__PURE__ */ reactExports.createElement(Icon$2, _extends$3({}, props, {
@@ -63852,7 +63852,7 @@ var FolderOpenOutlined = function FolderOpenOutlined2(props, ref) {
     icon: FolderOpenOutlined$1
   }));
 };
-var RefIcon$p = /* @__PURE__ */ reactExports.forwardRef(FolderOpenOutlined);
+var RefIcon$q = /* @__PURE__ */ reactExports.forwardRef(FolderOpenOutlined);
 var FolderOutlined$1 = { "icon": { "tag": "svg", "attrs": { "viewBox": "64 64 896 896", "focusable": "false" }, "children": [{ "tag": "path", "attrs": { "d": "M880 298.4H521L403.7 186.2a8.15 8.15 0 00-5.5-2.2H144c-17.7 0-32 14.3-32 32v592c0 17.7 14.3 32 32 32h736c17.7 0 32-14.3 32-32V330.4c0-17.7-14.3-32-32-32zM840 768H184V256h188.5l119.6 114.4H840V768z" } }] }, "name": "folder", "theme": "outlined" };
 var FolderOutlined = function FolderOutlined2(props, ref) {
   return /* @__PURE__ */ reactExports.createElement(Icon$2, _extends$3({}, props, {
@@ -63860,7 +63860,7 @@ var FolderOutlined = function FolderOutlined2(props, ref) {
     icon: FolderOutlined$1
   }));
 };
-var RefIcon$o = /* @__PURE__ */ reactExports.forwardRef(FolderOutlined);
+var RefIcon$p = /* @__PURE__ */ reactExports.forwardRef(FolderOutlined);
 var HolderOutlined$1 = { "icon": { "tag": "svg", "attrs": { "viewBox": "64 64 896 896", "focusable": "false" }, "children": [{ "tag": "path", "attrs": { "d": "M300 276.5a56 56 0 1056-97 56 56 0 00-56 97zm0 284a56 56 0 1056-97 56 56 0 00-56 97zM640 228a56 56 0 10112 0 56 56 0 00-112 0zm0 284a56 56 0 10112 0 56 56 0 00-112 0zM300 844.5a56 56 0 1056-97 56 56 0 00-56 97zM640 796a56 56 0 10112 0 56 56 0 00-112 0z" } }] }, "name": "holder", "theme": "outlined" };
 var HolderOutlined = function HolderOutlined2(props, ref) {
   return /* @__PURE__ */ reactExports.createElement(Icon$2, _extends$3({}, props, {
@@ -63868,7 +63868,7 @@ var HolderOutlined = function HolderOutlined2(props, ref) {
     icon: HolderOutlined$1
   }));
 };
-var RefIcon$n = /* @__PURE__ */ reactExports.forwardRef(HolderOutlined);
+var RefIcon$o = /* @__PURE__ */ reactExports.forwardRef(HolderOutlined);
 const genDirectoryStyle = ({
   treeCls,
   treeNodeCls,
@@ -64322,7 +64322,7 @@ var CaretDownFilled = function CaretDownFilled2(props, ref) {
     icon: CaretDownFilled$1
   }));
 };
-var RefIcon$m = /* @__PURE__ */ reactExports.forwardRef(CaretDownFilled);
+var RefIcon$n = /* @__PURE__ */ reactExports.forwardRef(CaretDownFilled);
 var MinusSquareOutlined$1 = { "icon": { "tag": "svg", "attrs": { "viewBox": "64 64 896 896", "focusable": "false" }, "children": [{ "tag": "path", "attrs": { "d": "M328 544h368c4.4 0 8-3.6 8-8v-48c0-4.4-3.6-8-8-8H328c-4.4 0-8 3.6-8 8v48c0 4.4 3.6 8 8 8z" } }, { "tag": "path", "attrs": { "d": "M880 112H144c-17.7 0-32 14.3-32 32v736c0 17.7 14.3 32 32 32h736c17.7 0 32-14.3 32-32V144c0-17.7-14.3-32-32-32zm-40 728H184V184h656v656z" } }] }, "name": "minus-square", "theme": "outlined" };
 var MinusSquareOutlined = function MinusSquareOutlined2(props, ref) {
   return /* @__PURE__ */ reactExports.createElement(Icon$2, _extends$3({}, props, {
@@ -64330,7 +64330,7 @@ var MinusSquareOutlined = function MinusSquareOutlined2(props, ref) {
     icon: MinusSquareOutlined$1
   }));
 };
-var RefIcon$l = /* @__PURE__ */ reactExports.forwardRef(MinusSquareOutlined);
+var RefIcon$m = /* @__PURE__ */ reactExports.forwardRef(MinusSquareOutlined);
 var PlusSquareOutlined$1 = { "icon": { "tag": "svg", "attrs": { "viewBox": "64 64 896 896", "focusable": "false" }, "children": [{ "tag": "path", "attrs": { "d": "M328 544h152v152c0 4.4 3.6 8 8 8h48c4.4 0 8-3.6 8-8V544h152c4.4 0 8-3.6 8-8v-48c0-4.4-3.6-8-8-8H544V328c0-4.4-3.6-8-8-8h-48c-4.4 0-8 3.6-8 8v152H328c-4.4 0-8 3.6-8 8v48c0 4.4 3.6 8 8 8z" } }, { "tag": "path", "attrs": { "d": "M880 112H144c-17.7 0-32 14.3-32 32v736c0 17.7 14.3 32 32 32h736c17.7 0 32-14.3 32-32V144c0-17.7-14.3-32-32-32zm-40 728H184V184h656v656z" } }] }, "name": "plus-square", "theme": "outlined" };
 var PlusSquareOutlined = function PlusSquareOutlined2(props, ref) {
   return /* @__PURE__ */ reactExports.createElement(Icon$2, _extends$3({}, props, {
@@ -64338,7 +64338,7 @@ var PlusSquareOutlined = function PlusSquareOutlined2(props, ref) {
     icon: PlusSquareOutlined$1
   }));
 };
-var RefIcon$k = /* @__PURE__ */ reactExports.forwardRef(PlusSquareOutlined);
+var RefIcon$l = /* @__PURE__ */ reactExports.forwardRef(PlusSquareOutlined);
 const SwitcherIconCom = (props) => {
   var _a2, _b2;
   const {
@@ -64357,7 +64357,7 @@ const SwitcherIconCom = (props) => {
     if (/* @__PURE__ */ reactExports.isValidElement(switcherLoadingIcon)) {
       return switcherLoadingIcon;
     }
-    return /* @__PURE__ */ reactExports.createElement(RefIcon$K, {
+    return /* @__PURE__ */ reactExports.createElement(RefIcon$L, {
       className: `${prefixCls}-switcher-loading-icon`
     });
   }
@@ -64379,7 +64379,7 @@ const SwitcherIconCom = (props) => {
       }
       return leafIcon;
     }
-    return showLeafIcon ? /* @__PURE__ */ reactExports.createElement(RefIcon$q, {
+    return showLeafIcon ? /* @__PURE__ */ reactExports.createElement(RefIcon$r, {
       className: `${prefixCls}-switcher-line-icon`
     }) : /* @__PURE__ */ reactExports.createElement("span", {
       className: `${prefixCls}-switcher-leaf-line`
@@ -64396,13 +64396,13 @@ const SwitcherIconCom = (props) => {
     return switcher;
   }
   if (showLine) {
-    return expanded ? /* @__PURE__ */ reactExports.createElement(RefIcon$l, {
+    return expanded ? /* @__PURE__ */ reactExports.createElement(RefIcon$m, {
       className: `${prefixCls}-switcher-line-icon`
-    }) : /* @__PURE__ */ reactExports.createElement(RefIcon$k, {
+    }) : /* @__PURE__ */ reactExports.createElement(RefIcon$l, {
       className: `${prefixCls}-switcher-line-icon`
     });
   }
-  return /* @__PURE__ */ reactExports.createElement(RefIcon$m, {
+  return /* @__PURE__ */ reactExports.createElement(RefIcon$n, {
     className: switcherCls
   });
 };
@@ -64464,7 +64464,7 @@ const Tree$2 = /* @__PURE__ */ React.forwardRef((props, ref) => {
         break;
     }
     if (mergedDraggable.icon !== false) {
-      mergedDraggable.icon = mergedDraggable.icon || /* @__PURE__ */ React.createElement(RefIcon$n, null);
+      mergedDraggable.icon = mergedDraggable.icon || /* @__PURE__ */ React.createElement(RefIcon$o, null);
     }
     return mergedDraggable;
   }, [draggable]);
@@ -64583,9 +64583,9 @@ function getIcon(props) {
     expanded
   } = props;
   if (isLeaf) {
-    return /* @__PURE__ */ reactExports.createElement(RefIcon$q, null);
+    return /* @__PURE__ */ reactExports.createElement(RefIcon$r, null);
   }
-  return expanded ? /* @__PURE__ */ reactExports.createElement(RefIcon$p, null) : /* @__PURE__ */ reactExports.createElement(RefIcon$o, null);
+  return expanded ? /* @__PURE__ */ reactExports.createElement(RefIcon$q, null) : /* @__PURE__ */ reactExports.createElement(RefIcon$p, null);
 }
 function getTreeData({
   treeData,
@@ -64728,7 +64728,7 @@ const FilterSearch = (props) => {
   return /* @__PURE__ */ reactExports.createElement("div", {
     className: `${tablePrefixCls}-filter-dropdown-search`
   }, /* @__PURE__ */ reactExports.createElement(Input$1, {
-    prefix: /* @__PURE__ */ reactExports.createElement(RefIcon$G, null),
+    prefix: /* @__PURE__ */ reactExports.createElement(RefIcon$H, null),
     placeholder: locale2.filterSearchPlaceholder,
     onChange,
     value,
@@ -65139,7 +65139,7 @@ const FilterDropdown = (props) => {
     } else if (column2.filterIcon) {
       filterIcon = column2.filterIcon;
     } else {
-      filterIcon = /* @__PURE__ */ reactExports.createElement(RefIcon$r, null);
+      filterIcon = /* @__PURE__ */ reactExports.createElement(RefIcon$s, null);
     }
     return /* @__PURE__ */ reactExports.createElement("span", {
       role: "button",
@@ -65449,7 +65449,7 @@ var CaretDownOutlined = function CaretDownOutlined2(props, ref) {
     icon: CaretDownOutlined$1
   }));
 };
-var RefIcon$j = /* @__PURE__ */ reactExports.forwardRef(CaretDownOutlined);
+var RefIcon$k = /* @__PURE__ */ reactExports.forwardRef(CaretDownOutlined);
 var CaretUpOutlined$1 = { "icon": { "tag": "svg", "attrs": { "viewBox": "0 0 1024 1024", "focusable": "false" }, "children": [{ "tag": "path", "attrs": { "d": "M858.9 689L530.5 308.2c-9.4-10.9-27.5-10.9-37 0L165.1 689c-12.2 14.2-1.2 35 18.5 35h656.8c19.7 0 30.7-20.8 18.5-35z" } }] }, "name": "caret-up", "theme": "outlined" };
 var CaretUpOutlined = function CaretUpOutlined2(props, ref) {
   return /* @__PURE__ */ reactExports.createElement(Icon$2, _extends$3({}, props, {
@@ -65457,7 +65457,7 @@ var CaretUpOutlined = function CaretUpOutlined2(props, ref) {
     icon: CaretUpOutlined$1
   }));
 };
-var RefIcon$i = /* @__PURE__ */ reactExports.forwardRef(CaretUpOutlined);
+var RefIcon$j = /* @__PURE__ */ reactExports.forwardRef(CaretUpOutlined);
 const ASCEND = "ascend";
 const DESCEND = "descend";
 const getMultiplePriority = (column2) => {
@@ -65532,12 +65532,12 @@ const injectSorter = (prefixCls, columns, sorterStates, triggerSorter, defaultSo
           sortOrder
         });
       } else {
-        const upNode = sortDirections.includes(ASCEND) && /* @__PURE__ */ reactExports.createElement(RefIcon$i, {
+        const upNode = sortDirections.includes(ASCEND) && /* @__PURE__ */ reactExports.createElement(RefIcon$j, {
           className: classNames(`${prefixCls}-column-sorter-up`, {
             active: sortOrder === ASCEND
           })
         });
-        const downNode = sortDirections.includes(DESCEND) && /* @__PURE__ */ reactExports.createElement(RefIcon$j, {
+        const downNode = sortDirections.includes(DESCEND) && /* @__PURE__ */ reactExports.createElement(RefIcon$k, {
           className: classNames(`${prefixCls}-column-sorter-down`, {
             active: sortOrder === DESCEND
           })
@@ -67871,7 +67871,7 @@ var DeleteOutlined = function DeleteOutlined2(props, ref) {
     icon: DeleteOutlined$1
   }));
 };
-var RefIcon$h = /* @__PURE__ */ reactExports.forwardRef(DeleteOutlined);
+var RefIcon$i = /* @__PURE__ */ reactExports.forwardRef(DeleteOutlined);
 var EditOutlined$1 = { "icon": { "tag": "svg", "attrs": { "viewBox": "64 64 896 896", "focusable": "false" }, "children": [{ "tag": "path", "attrs": { "d": "M257.7 752c2 0 4-.2 6-.5L431.9 722c2-.4 3.9-1.3 5.3-2.8l423.9-423.9a9.96 9.96 0 000-14.1L694.9 114.9c-1.9-1.9-4.4-2.9-7.1-2.9s-5.2 1-7.1 2.9L256.8 538.8c-1.5 1.5-2.4 3.3-2.8 5.3l-29.5 168.2a33.5 33.5 0 009.4 29.8c6.6 6.4 14.9 9.9 23.8 9.9zm67.4-174.4L687.8 215l73.3 73.3-362.7 362.6-88.9 15.7 15.6-89zM880 836H144c-17.7 0-32 14.3-32 32v36c0 4.4 3.6 8 8 8h784c4.4 0 8-3.6 8-8v-36c0-17.7-14.3-32-32-32z" } }] }, "name": "edit", "theme": "outlined" };
 var EditOutlined = function EditOutlined2(props, ref) {
   return /* @__PURE__ */ reactExports.createElement(Icon$2, _extends$3({}, props, {
@@ -67879,7 +67879,7 @@ var EditOutlined = function EditOutlined2(props, ref) {
     icon: EditOutlined$1
   }));
 };
-var RefIcon$g = /* @__PURE__ */ reactExports.forwardRef(EditOutlined);
+var RefIcon$h = /* @__PURE__ */ reactExports.forwardRef(EditOutlined);
 var EnterOutlined$1 = { "icon": { "tag": "svg", "attrs": { "viewBox": "64 64 896 896", "focusable": "false" }, "children": [{ "tag": "path", "attrs": { "d": "M864 170h-60c-4.4 0-8 3.6-8 8v518H310v-73c0-6.7-7.8-10.5-13-6.3l-141.9 112a8 8 0 000 12.6l141.9 112c5.3 4.2 13 .4 13-6.3v-75h498c35.3 0 64-28.7 64-64V178c0-4.4-3.6-8-8-8z" } }] }, "name": "enter", "theme": "outlined" };
 var EnterOutlined = function EnterOutlined2(props, ref) {
   return /* @__PURE__ */ reactExports.createElement(Icon$2, _extends$3({}, props, {
@@ -67887,7 +67887,7 @@ var EnterOutlined = function EnterOutlined2(props, ref) {
     icon: EnterOutlined$1
   }));
 };
-var RefIcon$f = /* @__PURE__ */ reactExports.forwardRef(EnterOutlined);
+var RefIcon$g = /* @__PURE__ */ reactExports.forwardRef(EnterOutlined);
 const getTitleStyle = (fontSize, lineHeight, color2, token2) => {
   const {
     titleMarginBottom,
@@ -68208,7 +68208,7 @@ const Editable = (props) => {
     onCancel,
     onEnd,
     component,
-    enterIcon = /* @__PURE__ */ reactExports.createElement(RefIcon$f, null)
+    enterIcon = /* @__PURE__ */ reactExports.createElement(RefIcon$g, null)
   } = props;
   const ref = reactExports.useRef(null);
   const inComposition = reactExports.useRef(false);
@@ -68571,7 +68571,7 @@ var CopyOutlined = function CopyOutlined2(props, ref) {
     icon: CopyOutlined$1
   }));
 };
-var RefIcon$e = /* @__PURE__ */ reactExports.forwardRef(CopyOutlined);
+var RefIcon$f = /* @__PURE__ */ reactExports.forwardRef(CopyOutlined);
 function toList(val) {
   if (val === false) {
     return [false, false];
@@ -68628,7 +68628,7 @@ const CopyBtn = ({
     onClick: onCopy,
     "aria-label": ariaLabel,
     tabIndex
-  }, copied ? getNode(iconNodes[1], /* @__PURE__ */ reactExports.createElement(RefIcon$I, null), true) : getNode(iconNodes[0], btnLoading ? /* @__PURE__ */ reactExports.createElement(RefIcon$K, null) : /* @__PURE__ */ reactExports.createElement(RefIcon$e, null), true)));
+  }, copied ? getNode(iconNodes[1], /* @__PURE__ */ reactExports.createElement(RefIcon$J, null), true) : getNode(iconNodes[0], btnLoading ? /* @__PURE__ */ reactExports.createElement(RefIcon$L, null) : /* @__PURE__ */ reactExports.createElement(RefIcon$f, null), true)));
 };
 const MeasureText = /* @__PURE__ */ reactExports.forwardRef(({
   style: style2,
@@ -69064,7 +69064,7 @@ const Base = /* @__PURE__ */ reactExports.forwardRef((props, ref) => {
       onClick: onEditClick,
       "aria-label": ariaLabel,
       tabIndex
-    }, icon || /* @__PURE__ */ reactExports.createElement(RefIcon$g, {
+    }, icon || /* @__PURE__ */ reactExports.createElement(RefIcon$h, {
       role: "button"
     }))) : null;
   };
@@ -77096,6 +77096,19 @@ const tokenStore = {
   set: (token2) => localStorage.setItem(STORAGE_KEY, token2),
   clear: () => localStorage.removeItem(STORAGE_KEY)
 };
+const camelToSnake = (s) => s.replace(/([A-Z])/g, (_m, c2, i) => i === 0 ? c2.toLowerCase() : `_${c2.toLowerCase()}`);
+const snakeToCamel = (s) => s.replace(/_([a-z0-9])/g, (_m, c2) => c2.toUpperCase());
+const deepKeys = (input, transform2) => {
+  if (Array.isArray(input)) return input.map((v4) => deepKeys(v4, transform2));
+  if (input && typeof input === "object" && !(input instanceof Date) && !(input instanceof File)) {
+    const out2 = {};
+    for (const [k, v4] of Object.entries(input)) {
+      out2[transform2(k)] = deepKeys(v4, transform2);
+    }
+    return out2;
+  }
+  return input;
+};
 const api = axios.create({
   baseURL: "",
   timeout: 3e4
@@ -77105,7 +77118,16 @@ api.interceptors.request.use((config) => {
   if (token2) {
     config.headers.set("Authorization", `Bearer ${token2}`);
   }
+  if (config.data && typeof config.data === "object" && !(config.data instanceof FormData)) {
+    config.data = deepKeys(config.data, camelToSnake);
+  }
   return config;
+});
+api.interceptors.response.use((response) => {
+  if (response.data && typeof response.data === "object") {
+    response.data = deepKeys(response.data, snakeToCamel);
+  }
+  return response;
 });
 api.interceptors.response.use(
   (response) => response,
@@ -77135,7 +77157,7 @@ var ApiOutlined = function ApiOutlined2(props, ref) {
     icon: ApiOutlined$1
   }));
 };
-var RefIcon$d = /* @__PURE__ */ reactExports.forwardRef(ApiOutlined);
+var RefIcon$e = /* @__PURE__ */ reactExports.forwardRef(ApiOutlined);
 var BarChartOutlined$1 = { "icon": { "tag": "svg", "attrs": { "viewBox": "64 64 896 896", "focusable": "false" }, "children": [{ "tag": "path", "attrs": { "d": "M888 792H200V168c0-4.4-3.6-8-8-8h-56c-4.4 0-8 3.6-8 8v688c0 4.4 3.6 8 8 8h752c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zm-600-80h56c4.4 0 8-3.6 8-8V560c0-4.4-3.6-8-8-8h-56c-4.4 0-8 3.6-8 8v144c0 4.4 3.6 8 8 8zm152 0h56c4.4 0 8-3.6 8-8V384c0-4.4-3.6-8-8-8h-56c-4.4 0-8 3.6-8 8v320c0 4.4 3.6 8 8 8zm152 0h56c4.4 0 8-3.6 8-8V462c0-4.4-3.6-8-8-8h-56c-4.4 0-8 3.6-8 8v242c0 4.4 3.6 8 8 8zm152 0h56c4.4 0 8-3.6 8-8V304c0-4.4-3.6-8-8-8h-56c-4.4 0-8 3.6-8 8v400c0 4.4 3.6 8 8 8z" } }] }, "name": "bar-chart", "theme": "outlined" };
 var BarChartOutlined = function BarChartOutlined2(props, ref) {
   return /* @__PURE__ */ reactExports.createElement(Icon$2, _extends$3({}, props, {
@@ -77143,7 +77165,7 @@ var BarChartOutlined = function BarChartOutlined2(props, ref) {
     icon: BarChartOutlined$1
   }));
 };
-var RefIcon$c = /* @__PURE__ */ reactExports.forwardRef(BarChartOutlined);
+var RefIcon$d = /* @__PURE__ */ reactExports.forwardRef(BarChartOutlined);
 var CrownOutlined$1 = { "icon": { "tag": "svg", "attrs": { "viewBox": "64 64 896 896", "focusable": "false" }, "children": [{ "tag": "path", "attrs": { "d": "M899.6 276.5L705 396.4 518.4 147.5a8.06 8.06 0 00-12.9 0L319 396.4 124.3 276.5c-5.7-3.5-13.1 1.2-12.2 7.9L188.5 865c1.1 7.9 7.9 14 16 14h615.1c8 0 14.9-6 15.9-14l76.4-580.6c.8-6.7-6.5-11.4-12.3-7.9zm-126 534.1H250.3l-53.8-409.4 139.8 86.1L512 252.9l175.7 234.4 139.8-86.1-53.9 409.4zM512 509c-62.1 0-112.6 50.5-112.6 112.6S449.9 734.2 512 734.2s112.6-50.5 112.6-112.6S574.1 509 512 509zm0 160.9c-26.6 0-48.2-21.6-48.2-48.3 0-26.6 21.6-48.3 48.2-48.3s48.2 21.6 48.2 48.3c0 26.6-21.6 48.3-48.2 48.3z" } }] }, "name": "crown", "theme": "outlined" };
 var CrownOutlined = function CrownOutlined2(props, ref) {
   return /* @__PURE__ */ reactExports.createElement(Icon$2, _extends$3({}, props, {
@@ -77151,7 +77173,7 @@ var CrownOutlined = function CrownOutlined2(props, ref) {
     icon: CrownOutlined$1
   }));
 };
-var RefIcon$b = /* @__PURE__ */ reactExports.forwardRef(CrownOutlined);
+var RefIcon$c = /* @__PURE__ */ reactExports.forwardRef(CrownOutlined);
 var DashboardOutlined$1 = { "icon": { "tag": "svg", "attrs": { "viewBox": "64 64 896 896", "focusable": "false" }, "children": [{ "tag": "path", "attrs": { "d": "M924.8 385.6a446.7 446.7 0 00-96-142.4 446.7 446.7 0 00-142.4-96C631.1 123.8 572.5 112 512 112s-119.1 11.8-174.4 35.2a446.7 446.7 0 00-142.4 96 446.7 446.7 0 00-96 142.4C75.8 440.9 64 499.5 64 560c0 132.7 58.3 257.7 159.9 343.1l1.7 1.4c5.8 4.8 13.1 7.5 20.6 7.5h531.7c7.5 0 14.8-2.7 20.6-7.5l1.7-1.4C901.7 817.7 960 692.7 960 560c0-60.5-11.9-119.1-35.2-174.4zM761.4 836H262.6A371.12 371.12 0 01140 560c0-99.4 38.7-192.8 109-263 70.3-70.3 163.7-109 263-109 99.4 0 192.8 38.7 263 109 70.3 70.3 109 163.7 109 263 0 105.6-44.5 205.5-122.6 276zM623.5 421.5a8.03 8.03 0 00-11.3 0L527.7 506c-18.7-5-39.4-.2-54.1 14.5a55.95 55.95 0 000 79.2 55.95 55.95 0 0079.2 0 55.87 55.87 0 0014.5-54.1l84.5-84.5c3.1-3.1 3.1-8.2 0-11.3l-28.3-28.3zM490 320h44c4.4 0 8-3.6 8-8v-80c0-4.4-3.6-8-8-8h-44c-4.4 0-8 3.6-8 8v80c0 4.4 3.6 8 8 8zm260 218v44c0 4.4 3.6 8 8 8h80c4.4 0 8-3.6 8-8v-44c0-4.4-3.6-8-8-8h-80c-4.4 0-8 3.6-8 8zm12.7-197.2l-31.1-31.1a8.03 8.03 0 00-11.3 0l-56.6 56.6a8.03 8.03 0 000 11.3l31.1 31.1c3.1 3.1 8.2 3.1 11.3 0l56.6-56.6c3.1-3.1 3.1-8.2 0-11.3zm-458.6-31.1a8.03 8.03 0 00-11.3 0l-31.1 31.1a8.03 8.03 0 000 11.3l56.6 56.6c3.1 3.1 8.2 3.1 11.3 0l31.1-31.1c3.1-3.1 3.1-8.2 0-11.3l-56.6-56.6zM262 530h-80c-4.4 0-8 3.6-8 8v44c0 4.4 3.6 8 8 8h80c4.4 0 8-3.6 8-8v-44c0-4.4-3.6-8-8-8z" } }] }, "name": "dashboard", "theme": "outlined" };
 var DashboardOutlined = function DashboardOutlined2(props, ref) {
   return /* @__PURE__ */ reactExports.createElement(Icon$2, _extends$3({}, props, {
@@ -77159,7 +77181,7 @@ var DashboardOutlined = function DashboardOutlined2(props, ref) {
     icon: DashboardOutlined$1
   }));
 };
-var RefIcon$a = /* @__PURE__ */ reactExports.forwardRef(DashboardOutlined);
+var RefIcon$b = /* @__PURE__ */ reactExports.forwardRef(DashboardOutlined);
 var DollarOutlined$1 = { "icon": { "tag": "svg", "attrs": { "viewBox": "64 64 896 896", "focusable": "false" }, "children": [{ "tag": "path", "attrs": { "d": "M512 64C264.6 64 64 264.6 64 512s200.6 448 448 448 448-200.6 448-448S759.4 64 512 64zm0 820c-205.4 0-372-166.6-372-372s166.6-372 372-372 372 166.6 372 372-166.6 372-372 372zm47.7-395.2l-25.4-5.9V348.6c38 5.2 61.5 29 65.5 58.2.5 4 3.9 6.9 7.9 6.9h44.9c4.7 0 8.4-4.1 8-8.8-6.1-62.3-57.4-102.3-125.9-109.2V263c0-4.4-3.6-8-8-8h-28.1c-4.4 0-8 3.6-8 8v33c-70.8 6.9-126.2 46-126.2 119 0 67.6 49.8 100.2 102.1 112.7l24.7 6.3v142.7c-44.2-5.9-69-29.5-74.1-61.3-.6-3.8-4-6.6-7.9-6.6H363c-4.7 0-8.4 4-8 8.7 4.5 55 46.2 105.6 135.2 112.1V761c0 4.4 3.6 8 8 8h28.4c4.4 0 8-3.6 8-8.1l-.2-31.7c78.3-6.9 134.3-48.8 134.3-124-.1-69.4-44.2-100.4-109-116.4zm-68.6-16.2c-5.6-1.6-10.3-3.1-15-5-33.8-12.2-49.5-31.9-49.5-57.3 0-36.3 27.5-57 64.5-61.7v124zM534.3 677V543.3c3.1.9 5.9 1.6 8.8 2.2 47.3 14.4 63.2 34.4 63.2 65.1 0 39.1-29.4 62.6-72 66.4z" } }] }, "name": "dollar", "theme": "outlined" };
 var DollarOutlined = function DollarOutlined2(props, ref) {
   return /* @__PURE__ */ reactExports.createElement(Icon$2, _extends$3({}, props, {
@@ -77167,7 +77189,7 @@ var DollarOutlined = function DollarOutlined2(props, ref) {
     icon: DollarOutlined$1
   }));
 };
-var RefIcon$9 = /* @__PURE__ */ reactExports.forwardRef(DollarOutlined);
+var RefIcon$a = /* @__PURE__ */ reactExports.forwardRef(DollarOutlined);
 var GiftOutlined$1 = { "icon": { "tag": "svg", "attrs": { "viewBox": "64 64 896 896", "focusable": "false" }, "children": [{ "tag": "path", "attrs": { "d": "M880 310H732.4c13.6-21.4 21.6-46.8 21.6-74 0-76.1-61.9-138-138-138-41.4 0-78.7 18.4-104 47.4-25.3-29-62.6-47.4-104-47.4-76.1 0-138 61.9-138 138 0 27.2 7.9 52.6 21.6 74H144c-17.7 0-32 14.3-32 32v200c0 4.4 3.6 8 8 8h40v344c0 17.7 14.3 32 32 32h640c17.7 0 32-14.3 32-32V550h40c4.4 0 8-3.6 8-8V342c0-17.7-14.3-32-32-32zm-334-74c0-38.6 31.4-70 70-70s70 31.4 70 70-31.4 70-70 70h-70v-70zm-138-70c38.6 0 70 31.4 70 70v70h-70c-38.6 0-70-31.4-70-70s31.4-70 70-70zM180 482V378h298v104H180zm48 68h250v308H228V550zm568 308H546V550h250v308zm48-376H546V378h298v104z" } }] }, "name": "gift", "theme": "outlined" };
 var GiftOutlined = function GiftOutlined2(props, ref) {
   return /* @__PURE__ */ reactExports.createElement(Icon$2, _extends$3({}, props, {
@@ -77175,7 +77197,15 @@ var GiftOutlined = function GiftOutlined2(props, ref) {
     icon: GiftOutlined$1
   }));
 };
-var RefIcon$8 = /* @__PURE__ */ reactExports.forwardRef(GiftOutlined);
+var RefIcon$9 = /* @__PURE__ */ reactExports.forwardRef(GiftOutlined);
+var GlobalOutlined$1 = { "icon": { "tag": "svg", "attrs": { "viewBox": "64 64 896 896", "focusable": "false" }, "children": [{ "tag": "path", "attrs": { "d": "M854.4 800.9c.2-.3.5-.6.7-.9C920.6 722.1 960 621.7 960 512s-39.4-210.1-104.8-288c-.2-.3-.5-.5-.7-.8-1.1-1.3-2.1-2.5-3.2-3.7-.4-.5-.8-.9-1.2-1.4l-4.1-4.7-.1-.1c-1.5-1.7-3.1-3.4-4.6-5.1l-.1-.1c-3.2-3.4-6.4-6.8-9.7-10.1l-.1-.1-4.8-4.8-.3-.3c-1.5-1.5-3-2.9-4.5-4.3-.5-.5-1-1-1.6-1.5-1-1-2-1.9-3-2.8-.3-.3-.7-.6-1-1C736.4 109.2 629.5 64 512 64s-224.4 45.2-304.3 119.2c-.3.3-.7.6-1 1-1 .9-2 1.9-3 2.9-.5.5-1 1-1.6 1.5-1.5 1.4-3 2.9-4.5 4.3l-.3.3-4.8 4.8-.1.1c-3.3 3.3-6.5 6.7-9.7 10.1l-.1.1c-1.6 1.7-3.1 3.4-4.6 5.1l-.1.1c-1.4 1.5-2.8 3.1-4.1 4.7-.4.5-.8.9-1.2 1.4-1.1 1.2-2.1 2.5-3.2 3.7-.2.3-.5.5-.7.8C103.4 301.9 64 402.3 64 512s39.4 210.1 104.8 288c.2.3.5.6.7.9l3.1 3.7c.4.5.8.9 1.2 1.4l4.1 4.7c0 .1.1.1.1.2 1.5 1.7 3 3.4 4.6 5l.1.1c3.2 3.4 6.4 6.8 9.6 10.1l.1.1c1.6 1.6 3.1 3.2 4.7 4.7l.3.3c3.3 3.3 6.7 6.5 10.1 9.6 80.1 74 187 119.2 304.5 119.2s224.4-45.2 304.3-119.2a300 300 0 0010-9.6l.3-.3c1.6-1.6 3.2-3.1 4.7-4.7l.1-.1c3.3-3.3 6.5-6.7 9.6-10.1l.1-.1c1.5-1.7 3.1-3.3 4.6-5 0-.1.1-.1.1-.2 1.4-1.5 2.8-3.1 4.1-4.7.4-.5.8-.9 1.2-1.4a99 99 0 003.3-3.7zm4.1-142.6c-13.8 32.6-32 62.8-54.2 90.2a444.07 444.07 0 00-81.5-55.9c11.6-46.9 18.8-98.4 20.7-152.6H887c-3 40.9-12.6 80.6-28.5 118.3zM887 484H743.5c-1.9-54.2-9.1-105.7-20.7-152.6 29.3-15.6 56.6-34.4 81.5-55.9A373.86 373.86 0 01887 484zM658.3 165.5c39.7 16.8 75.8 40 107.6 69.2a394.72 394.72 0 01-59.4 41.8c-15.7-45-35.8-84.1-59.2-115.4 3.7 1.4 7.4 2.9 11 4.4zm-90.6 700.6c-9.2 7.2-18.4 12.7-27.7 16.4V697a389.1 389.1 0 01115.7 26.2c-8.3 24.6-17.9 47.3-29 67.8-17.4 32.4-37.8 58.3-59 75.1zm59-633.1c11 20.6 20.7 43.3 29 67.8A389.1 389.1 0 01540 327V141.6c9.2 3.7 18.5 9.1 27.7 16.4 21.2 16.7 41.6 42.6 59 75zM540 640.9V540h147.5c-1.6 44.2-7.1 87.1-16.3 127.8l-.3 1.2A445.02 445.02 0 00540 640.9zm0-156.9V383.1c45.8-2.8 89.8-12.5 130.9-28.1l.3 1.2c9.2 40.7 14.7 83.5 16.3 127.8H540zm-56 56v100.9c-45.8 2.8-89.8 12.5-130.9 28.1l-.3-1.2c-9.2-40.7-14.7-83.5-16.3-127.8H484zm-147.5-56c1.6-44.2 7.1-87.1 16.3-127.8l.3-1.2c41.1 15.6 85 25.3 130.9 28.1V484H336.5zM484 697v185.4c-9.2-3.7-18.5-9.1-27.7-16.4-21.2-16.7-41.7-42.7-59.1-75.1-11-20.6-20.7-43.3-29-67.8 37.2-14.6 75.9-23.3 115.8-26.1zm0-370a389.1 389.1 0 01-115.7-26.2c8.3-24.6 17.9-47.3 29-67.8 17.4-32.4 37.8-58.4 59.1-75.1 9.2-7.2 18.4-12.7 27.7-16.4V327zM365.7 165.5c3.7-1.5 7.3-3 11-4.4-23.4 31.3-43.5 70.4-59.2 115.4-21-12-40.9-26-59.4-41.8 31.8-29.2 67.9-52.4 107.6-69.2zM165.5 365.7c13.8-32.6 32-62.8 54.2-90.2 24.9 21.5 52.2 40.3 81.5 55.9-11.6 46.9-18.8 98.4-20.7 152.6H137c3-40.9 12.6-80.6 28.5-118.3zM137 540h143.5c1.9 54.2 9.1 105.7 20.7 152.6a444.07 444.07 0 00-81.5 55.9A373.86 373.86 0 01137 540zm228.7 318.5c-39.7-16.8-75.8-40-107.6-69.2 18.5-15.8 38.4-29.7 59.4-41.8 15.7 45 35.8 84.1 59.2 115.4-3.7-1.4-7.4-2.9-11-4.4zm292.6 0c-3.7 1.5-7.3 3-11 4.4 23.4-31.3 43.5-70.4 59.2-115.4 21 12 40.9 26 59.4 41.8a373.81 373.81 0 01-107.6 69.2z" } }] }, "name": "global", "theme": "outlined" };
+var GlobalOutlined = function GlobalOutlined2(props, ref) {
+  return /* @__PURE__ */ reactExports.createElement(Icon$2, _extends$3({}, props, {
+    ref,
+    icon: GlobalOutlined$1
+  }));
+};
+var RefIcon$8 = /* @__PURE__ */ reactExports.forwardRef(GlobalOutlined);
 var KeyOutlined$1 = { "icon": { "tag": "svg", "attrs": { "viewBox": "64 64 896 896", "focusable": "false" }, "children": [{ "tag": "path", "attrs": { "d": "M608 112c-167.9 0-304 136.1-304 304 0 70.3 23.9 135 63.9 186.5L255.8 713.6l-62.3-62.3a8.19 8.19 0 00-11.4 0l-39.8 39.8a8.19 8.19 0 000 11.4l62.3 62.3-44.9 44.9-62.3-62.3a8.19 8.19 0 00-11.4 0l-39.8 39.8a8.19 8.19 0 000 11.4l110.3 111.2c3.1 3.1 8.2 3.1 11.3 0l253.6-253.6A304.1 304.1 0 00608 720c167.9 0 304-136.1 304-304S775.9 112 608 112m161.2 465.2C726.2 620.3 668.9 644 608 644s-118.2-23.7-161.2-66.8C403.7 534.2 380 476.9 380 416s23.7-118.2 66.8-161.2c43-43.1 100.3-66.8 161.2-66.8s118.2 23.7 161.2 66.8c43.1 43 66.8 100.3 66.8 161.2s-23.7 118.2-66.8 161.2" } }] }, "name": "key", "theme": "outlined" };
 var KeyOutlined = function KeyOutlined2(props, ref) {
   return /* @__PURE__ */ reactExports.createElement(Icon$2, _extends$3({}, props, {
@@ -77299,13 +77329,14 @@ function AdminLayout({ admin, onLogout }) {
   const [pwModalOpen, setPwModalOpen] = reactExports.useState(false);
   const [pwForm] = Form2.useForm();
   const menuItems = [
-    { key: "/", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$a, {}), label: "仪表盘" },
+    { key: "/", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$b, {}), label: "仪表盘" },
     { key: "/users", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon, {}), label: "用户管理" },
-    { key: "/plans", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$b, {}), label: "套餐管理" },
-    { key: "/models", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$d, {}), label: "模型配置" },
-    { key: "/invite-codes", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$8, {}), label: "邀请码" },
+    { key: "/plans", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$c, {}), label: "套餐管理" },
+    { key: "/models", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$e, {}), label: "模型配置" },
+    { key: "/web-search-providers", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$8, {}), label: "联网搜索" },
+    { key: "/invite-codes", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$9, {}), label: "邀请码" },
     { key: "/redemption-codes", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$3, {}), label: "兑换码" },
-    { key: "/usage", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$c, {}), label: "用量记录" },
+    { key: "/usage", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$d, {}), label: "用量记录" },
     { key: "/admins", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$2, {}), label: "管理员" }
   ];
   const userMenu = {
@@ -77361,7 +77392,7 @@ function AdminLayout({ admin, onLogout }) {
             /* @__PURE__ */ jsxRuntimeExports.jsx(Dropdown, { menu: userMenu, placement: "bottomRight", children: /* @__PURE__ */ jsxRuntimeExports.jsxs(Space, { style: { cursor: "pointer" }, children: [
               /* @__PURE__ */ jsxRuntimeExports.jsx(Avatar, { style: { backgroundColor: "#1677ff" }, children: (_b2 = admin.username[0]) == null ? void 0 : _b2.toUpperCase() }),
               /* @__PURE__ */ jsxRuntimeExports.jsx("span", { children: admin.username }),
-              admin.role === "superadmin" && /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$b, { style: { color: "#faad14" } })
+              admin.role === "superadmin" && /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$c, { style: { color: "#faad14" } })
             ] }) })
           ]
         }
@@ -150885,7 +150916,7 @@ function DashboardPage() {
         {
           title: "活跃订阅",
           value: summary.activeSubscriptions,
-          prefix: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$b, {}),
+          prefix: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$c, {}),
           valueStyle: { color: "#722ed1" }
         }
       ) }) }),
@@ -150895,7 +150926,7 @@ function DashboardPage() {
           {
             title: "本月收入 (元)",
             value: (summary.monthRevenueCents / 100).toFixed(2),
-            prefix: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$9, {}),
+            prefix: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$a, {}),
             valueStyle: { color: "#52c41a" }
           }
         ),
@@ -150920,7 +150951,7 @@ function DashboardPage() {
             title: "邀请码使用率",
             value: summary.totalInviteCodes === 0 ? 0 : Math.round(summary.usedInviteCodes / summary.totalInviteCodes * 100),
             suffix: "%",
-            prefix: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$8, {})
+            prefix: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$9, {})
           }
         ),
         /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { style: { marginTop: 8, fontSize: 12, color: "#999" }, children: [
@@ -151092,13 +151123,13 @@ function UsersPage() {
       width: 240,
       fixed: "right",
       render: (_, r2) => /* @__PURE__ */ jsxRuntimeExports.jsxs(Space, { size: "small", children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { size: "small", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$w, {}), onClick: () => openDetail(r2.id), children: "详情" }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { size: "small", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$9, {}), onClick: () => {
+        /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { size: "small", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$x, {}), onClick: () => openDetail(r2.id), children: "详情" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { size: "small", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$a, {}), onClick: () => {
           setAdjustTarget(r2);
           setAdjustOpen(true);
         }, children: "调账" }),
         /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { size: "small", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$4, {}), danger: true, onClick: () => onRevoke(r2.id), children: "吊销" }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { size: "small", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$h, {}), danger: true, onClick: () => onDelete(r2), children: "删除" })
+        /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { size: "small", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$i, {}), danger: true, onClick: () => onDelete(r2), children: "删除" })
       ] })
     }
   ];
@@ -151108,7 +151139,7 @@ function UsersPage() {
         Input,
         {
           placeholder: "搜索邮箱",
-          prefix: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$G, {}),
+          prefix: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$H, {}),
           value: search,
           onChange: (e2) => setSearch(e2.target.value),
           onPressEnter: () => {
@@ -151119,7 +151150,7 @@ function UsersPage() {
           allowClear: true
         }
       ),
-      /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$s, {}), onClick: () => {
+      /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$t, {}), onClick: () => {
         setPage(1);
         load();
       }, children: "刷新" })
@@ -151328,17 +151359,17 @@ function PlansPage() {
       width: 160,
       fixed: "right",
       render: (_, r2) => /* @__PURE__ */ jsxRuntimeExports.jsxs(Space, { children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { size: "small", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$g, {}), onClick: () => {
+        /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { size: "small", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$h, {}), onClick: () => {
           setEditing(r2);
           form.setFieldsValue(r2);
           setModalOpen(true);
         }, children: "编辑" }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { size: "small", danger: true, icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$h, {}), onClick: () => onDelete(r2), children: "删除" })
+        /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { size: "small", danger: true, icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$i, {}), onClick: () => onDelete(r2), children: "删除" })
       ] })
     }
   ];
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsx(Space, { style: { marginBottom: 16 }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { type: "primary", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$C, {}), onClick: () => {
+    /* @__PURE__ */ jsxRuntimeExports.jsx(Space, { style: { marginBottom: 16 }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { type: "primary", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$D, {}), onClick: () => {
       setEditing(null);
       form.resetFields();
       setModalOpen(true);
@@ -151503,23 +151534,23 @@ function ModelConfigsPage() {
       width: 180,
       fixed: "right",
       render: (_, r2) => /* @__PURE__ */ jsxRuntimeExports.jsxs(Space, { children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { size: "small", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$g, {}), onClick: () => {
+        /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { size: "small", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$h, {}), onClick: () => {
           setEditing(r2);
           form.setFieldsValue({ ...r2, upstreamApiKey: "" });
           setModalOpen(true);
         }, children: "编辑" }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { size: "small", danger: true, icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$h, {}), onClick: () => onDelete(r2), children: "删除" })
+        /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { size: "small", danger: true, icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$i, {}), onClick: () => onDelete(r2), children: "删除" })
       ] })
     }
   ];
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
     /* @__PURE__ */ jsxRuntimeExports.jsxs(Space, { style: { marginBottom: 16 }, children: [
-      /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { type: "primary", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$C, {}), onClick: () => {
+      /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { type: "primary", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$D, {}), onClick: () => {
         setEditing(null);
         form.resetFields();
         setModalOpen(true);
       }, children: "新增模型" }),
-      /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { icon: revealKey ? /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$w, {}) : /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$e, {}), onClick: () => setRevealKey(!revealKey), children: revealKey ? "隐藏 API Key" : "查看完整 API Key" })
+      /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { icon: revealKey ? /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$x, {}) : /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$f, {}), onClick: () => setRevealKey(!revealKey), children: revealKey ? "隐藏 API Key" : "查看完整 API Key" })
     ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsx(ForwardTable, { rowKey: "id", loading, dataSource: data, columns, pagination: false, scroll: { x: 1300 } }),
     /* @__PURE__ */ jsxRuntimeExports.jsx(
@@ -151570,6 +151601,179 @@ function ModelConfigsPage() {
             ]
           }
         )
+      }
+    )
+  ] });
+}
+const webSearchProvidersApi = {
+  list: (includeKey = false) => api.get("/api/web-search-providers/", { params: { includeKey } }).then((r2) => r2.data),
+  create: (data) => api.post("/api/web-search-providers/", data).then((r2) => r2.data),
+  update: (id2, data) => api.put(`/api/web-search-providers/${id2}`, data).then((r2) => r2.data),
+  delete: (id2) => api.delete(`/api/web-search-providers/${id2}`).then((r2) => r2.data)
+};
+function WebSearchProvidersPage() {
+  const [data, setData] = reactExports.useState([]);
+  const [loading, setLoading] = reactExports.useState(false);
+  const [modalOpen, setModalOpen] = reactExports.useState(false);
+  const [editing, setEditing] = reactExports.useState(null);
+  const [revealKey, setRevealKey] = reactExports.useState(false);
+  const [form] = Form2.useForm();
+  const { message, modal } = App$1.useApp();
+  const load = async () => {
+    setLoading(true);
+    try {
+      setData(await webSearchProvidersApi.list(revealKey));
+    } finally {
+      setLoading(false);
+    }
+  };
+  reactExports.useEffect(() => {
+    load();
+  }, [revealKey]);
+  const onSubmit = async (values) => {
+    var _a2, _b2, _c2, _d;
+    try {
+      const payload = {
+        providerId: values.providerId.trim().toLowerCase(),
+        displayName: values.displayName.trim(),
+        upstreamBaseUrl: ((_a2 = values.upstreamBaseUrl) == null ? void 0 : _a2.trim()) || null,
+        upstreamApiKey: ((_b2 = values.upstreamApiKey) == null ? void 0 : _b2.trim()) || null,
+        enabled: !!values.enabled
+      };
+      if (editing) {
+        const updatePayload = { ...payload };
+        if (!values.upstreamApiKey) delete updatePayload.upstreamApiKey;
+        await webSearchProvidersApi.update(editing.id, updatePayload);
+        message.success("已更新");
+      } else {
+        if (!values.upstreamApiKey) {
+          message.warning("请先填写上游 API Key");
+          return;
+        }
+        await webSearchProvidersApi.create(payload);
+        message.success("已创建");
+      }
+      setModalOpen(false);
+      form.resetFields();
+      setEditing(null);
+      load();
+    } catch (e2) {
+      message.error(((_d = (_c2 = e2.response) == null ? void 0 : _c2.data) == null ? void 0 : _d.error) ?? "保存失败");
+    }
+  };
+  const onDelete = (p2) => {
+    modal.confirm({
+      title: `删除「${p2.displayName}」？`,
+      content: "如果该 provider 已有调用记录,会被改为停用而非删除,以保留历史审计。",
+      okType: "danger",
+      onOk: async () => {
+        var _a2, _b2;
+        try {
+          const r2 = await webSearchProvidersApi.delete(p2.id);
+          message.success(r2.message);
+          load();
+        } catch (e2) {
+          message.error(((_b2 = (_a2 = e2.response) == null ? void 0 : _a2.data) == null ? void 0 : _b2.error) ?? "删除失败");
+        }
+      }
+    });
+  };
+  const columns = [
+    {
+      title: "Provider ID",
+      dataIndex: "providerId",
+      width: 140,
+      render: (v4) => /* @__PURE__ */ jsxRuntimeExports.jsx(Tag, { color: "geekblue", children: v4 })
+    },
+    {
+      title: "显示名",
+      dataIndex: "displayName",
+      width: 160,
+      render: (n2, r2) => /* @__PURE__ */ jsxRuntimeExports.jsxs(Space, { children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: n2 }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(Tag, { color: r2.enabled ? "green" : "default", children: r2.enabled ? "启用" : "停用" })
+      ] })
+    },
+    {
+      title: "上游 Base URL",
+      dataIndex: "upstreamBaseUrl",
+      width: 320,
+      render: (u2) => u2 ? /* @__PURE__ */ jsxRuntimeExports.jsx(Tooltip2, { title: u2, children: /* @__PURE__ */ jsxRuntimeExports.jsx("code", { style: { fontSize: 12 }, children: u2 }) }) : /* @__PURE__ */ jsxRuntimeExports.jsx(Tag, { children: "默认" })
+    },
+    {
+      title: "API Key",
+      dataIndex: "upstreamApiKeyMasked",
+      width: 180,
+      render: (k) => k ? /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: k }) : /* @__PURE__ */ jsxRuntimeExports.jsx(Tag, { color: "red", children: "未配置" })
+    },
+    {
+      title: "创建时间",
+      dataIndex: "createdAt",
+      width: 180,
+      render: (v4) => new Date(v4).toLocaleString()
+    },
+    {
+      title: "操作",
+      width: 160,
+      fixed: "right",
+      render: (_, r2) => /* @__PURE__ */ jsxRuntimeExports.jsxs(Space, { children: [
+        /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { size: "small", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$h, {}), onClick: () => {
+          setEditing(r2);
+          form.setFieldsValue({
+            providerId: r2.providerId,
+            displayName: r2.displayName,
+            upstreamBaseUrl: r2.upstreamBaseUrl ?? "",
+            upstreamApiKey: "",
+            enabled: r2.enabled
+          });
+          setModalOpen(true);
+        }, children: "编辑" }),
+        /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { size: "small", danger: true, icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$i, {}), onClick: () => onDelete(r2), children: "删除" })
+      ] })
+    }
+  ];
+  return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
+    /* @__PURE__ */ jsxRuntimeExports.jsxs("p", { style: { marginBottom: 12, color: "#666" }, children: [
+      "桌面端 ",
+      /* @__PURE__ */ jsxRuntimeExports.jsx("code", { children: "web_search" }),
+      " 工具启用「走云端」后会调用云端本表配置的对应 provider,共用系统账户的 API Key,无需每个用户单独配。"
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsxs(Space, { style: { marginBottom: 16 }, children: [
+      /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { type: "primary", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$D, {}), onClick: () => {
+        setEditing(null);
+        form.resetFields();
+        form.setFieldsValue({ enabled: true });
+        setModalOpen(true);
+      }, children: "新增 Provider" }),
+      /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { icon: revealKey ? /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$x, {}) : void 0, onClick: () => setRevealKey(!revealKey), children: revealKey ? "隐藏 API Key" : "查看完整 API Key" })
+    ] }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(ForwardTable, { rowKey: "id", loading, dataSource: data, columns, pagination: false, scroll: { x: 1100 } }),
+    /* @__PURE__ */ jsxRuntimeExports.jsx(
+      Modal,
+      {
+        title: editing ? `编辑 Provider - ${editing.displayName}` : "新增 Provider",
+        open: modalOpen,
+        onCancel: () => {
+          setModalOpen(false);
+          setEditing(null);
+        },
+        onOk: () => form.submit(),
+        width: 620,
+        children: /* @__PURE__ */ jsxRuntimeExports.jsxs(Form2, { form, layout: "vertical", onFinish: onSubmit, children: [
+          /* @__PURE__ */ jsxRuntimeExports.jsx(Form2.Item, { name: "providerId", label: "Provider ID (内部 ID,英文/数字)", rules: [{ required: true, pattern: /^[a-z0-9_-]+$/, message: "仅允许小写字母、数字、下划线、短横线" }], extra: "桌面端通过该字段分发请求,例如 baike", children: /* @__PURE__ */ jsxRuntimeExports.jsx(Input, { placeholder: "baike", disabled: !!editing }) }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(Form2.Item, { name: "displayName", label: "显示名", rules: [{ required: true }], children: /* @__PURE__ */ jsxRuntimeExports.jsx(Input, { placeholder: "百度百科" }) }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(Form2.Item, { name: "upstreamBaseUrl", label: "上游 Base URL (留空使用默认值)", extra: "不填则按 Provider ID 选编译期默认值,如 baike = https://appbuilder.baidu.com/v2/baike/lemma/get_content", children: /* @__PURE__ */ jsxRuntimeExports.jsx(Input, { placeholder: "https://appbuilder.baidu.com/v2/baike/lemma/get_content" }) }),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(
+            Form2.Item,
+            {
+              name: "upstreamApiKey",
+              label: editing ? "API Key (留空 = 保留原值)" : "API Key (Bearer Token)",
+              rules: editing ? [] : [{ required: true }],
+              children: /* @__PURE__ */ jsxRuntimeExports.jsx(Input.Password, { placeholder: "appbuilder / sk-..." })
+            }
+          ),
+          /* @__PURE__ */ jsxRuntimeExports.jsx(Form2.Item, { name: "enabled", label: "启用", valuePropName: "checked", children: /* @__PURE__ */ jsxRuntimeExports.jsx(Switch, {}) })
+        ] })
       }
     )
   ] });
@@ -151653,7 +151857,7 @@ function InviteCodesPage() {
       width: 220,
       render: (c2) => /* @__PURE__ */ jsxRuntimeExports.jsxs(Space, { children: [
         /* @__PURE__ */ jsxRuntimeExports.jsx("code", { style: { fontSize: 14, fontWeight: 600 }, children: c2 }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { size: "small", type: "text", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$e, {}), onClick: () => copy2(c2) })
+        /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { size: "small", type: "text", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$f, {}), onClick: () => copy2(c2) })
       ] })
     },
     {
@@ -151700,17 +151904,17 @@ function InviteCodesPage() {
       width: 160,
       fixed: "right",
       render: (_, r2) => /* @__PURE__ */ jsxRuntimeExports.jsxs(Space, { children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { size: "small", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$g, {}), onClick: () => {
+        /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { size: "small", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$h, {}), onClick: () => {
           setEditing(r2);
           form.setFieldsValue({ ...r2, expiresAt: r2.expiresAt ? dayjs(r2.expiresAt) : null });
           setModalOpen(true);
         }, children: "编辑" }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { size: "small", danger: true, icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$h, {}), onClick: () => onDelete(r2.id), children: "删除" })
+        /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { size: "small", danger: true, icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$i, {}), onClick: () => onDelete(r2.id), children: "删除" })
       ] })
     }
   ];
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsx(Space, { style: { marginBottom: 16 }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { type: "primary", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$C, {}), onClick: () => {
+    /* @__PURE__ */ jsxRuntimeExports.jsx(Space, { style: { marginBottom: 16 }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { type: "primary", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$D, {}), onClick: () => {
       setEditing(null);
       form.resetFields();
       setModalOpen(true);
@@ -151843,7 +152047,7 @@ function RedemptionCodesPage() {
       width: 220,
       render: (c2) => /* @__PURE__ */ jsxRuntimeExports.jsxs(Space, { children: [
         /* @__PURE__ */ jsxRuntimeExports.jsx("code", { style: { fontSize: 14, fontWeight: 600 }, children: c2 }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { size: "small", type: "text", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$e, {}), onClick: () => copy2(c2) })
+        /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { size: "small", type: "text", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$f, {}), onClick: () => copy2(c2) })
       ] })
     },
     {
@@ -151892,7 +152096,7 @@ function RedemptionCodesPage() {
       width: 160,
       fixed: "right",
       render: (_, r2) => /* @__PURE__ */ jsxRuntimeExports.jsxs(Space, { children: [
-        /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { size: "small", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$g, {}), onClick: () => {
+        /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { size: "small", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$h, {}), onClick: () => {
           setEditing(r2);
           form.setFieldsValue({
             ...r2,
@@ -151901,13 +152105,13 @@ function RedemptionCodesPage() {
           });
           setModalOpen(true);
         }, children: "编辑" }),
-        /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { size: "small", danger: true, icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$h, {}), onClick: () => onDelete(r2.id), children: "删除" })
+        /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { size: "small", danger: true, icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$i, {}), onClick: () => onDelete(r2.id), children: "删除" })
       ] })
     }
   ];
   const planOptions = plans.map((p2) => ({ value: p2.id, label: p2.name }));
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsx(Space, { style: { marginBottom: 16 }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { type: "primary", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$C, {}), onClick: () => {
+    /* @__PURE__ */ jsxRuntimeExports.jsx(Space, { style: { marginBottom: 16 }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { type: "primary", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$D, {}), onClick: () => {
       setEditing(null);
       form.resetFields();
       setModalOpen(true);
@@ -152016,7 +152220,7 @@ function UsagePage() {
           }
         }
       ),
-      /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$s, {}), onClick: () => load(), children: "刷新" })
+      /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$t, {}), onClick: () => load(), children: "刷新" })
     ] }),
     /* @__PURE__ */ jsxRuntimeExports.jsx(
       ForwardTable,
@@ -152081,7 +152285,7 @@ function AdminsPage() {
       title: "用户名",
       dataIndex: "username",
       render: (u2, r2) => /* @__PURE__ */ jsxRuntimeExports.jsxs(Space, { children: [
-        r2.role === "superadmin" ? /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$b, { style: { color: "#faad14" } }) : /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon, {}),
+        r2.role === "superadmin" ? /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$c, { style: { color: "#faad14" } }) : /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon, {}),
         /* @__PURE__ */ jsxRuntimeExports.jsx("strong", { children: u2 })
       ] })
     },
@@ -152112,11 +152316,11 @@ function AdminsPage() {
     {
       title: "操作",
       width: 120,
-      render: (_, r2) => /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { danger: true, size: "small", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$h, {}), onClick: () => onDelete(r2), children: "删除" })
+      render: (_, r2) => /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { danger: true, size: "small", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$i, {}), onClick: () => onDelete(r2), children: "删除" })
     }
   ];
   return /* @__PURE__ */ jsxRuntimeExports.jsxs("div", { children: [
-    /* @__PURE__ */ jsxRuntimeExports.jsx(Space, { style: { marginBottom: 16 }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { type: "primary", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$C, {}), onClick: () => {
+    /* @__PURE__ */ jsxRuntimeExports.jsx(Space, { style: { marginBottom: 16 }, children: /* @__PURE__ */ jsxRuntimeExports.jsx(Button$1, { type: "primary", icon: /* @__PURE__ */ jsxRuntimeExports.jsx(RefIcon$D, {}), onClick: () => {
       form.resetFields();
       setModalOpen(true);
     }, children: "新增管理员" }) }),
@@ -152161,6 +152365,7 @@ function App() {
         { path: "/users", element: /* @__PURE__ */ jsxRuntimeExports.jsx(UsersPage, {}) },
         { path: "/plans", element: /* @__PURE__ */ jsxRuntimeExports.jsx(PlansPage, {}) },
         { path: "/models", element: /* @__PURE__ */ jsxRuntimeExports.jsx(ModelConfigsPage, {}) },
+        { path: "/web-search-providers", element: /* @__PURE__ */ jsxRuntimeExports.jsx(WebSearchProvidersPage, {}) },
         { path: "/invite-codes", element: /* @__PURE__ */ jsxRuntimeExports.jsx(InviteCodesPage, {}) },
         { path: "/redemption-codes", element: /* @__PURE__ */ jsxRuntimeExports.jsx(RedemptionCodesPage, {}) },
         { path: "/usage", element: /* @__PURE__ */ jsxRuntimeExports.jsx(UsagePage, {}) },
@@ -152211,4 +152416,4 @@ createRoot$2(document.getElementById("root")).render(
     }
   ) })
 );
-//# sourceMappingURL=index-BUQXcD80.js.map
+//# sourceMappingURL=index-D1B4YSwT.js.map

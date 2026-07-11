@@ -16,6 +16,8 @@ public class AppDbContext : DbContext
     public DbSet<ModelConfig> ModelConfigs => Set<ModelConfig>();
     public DbSet<UsageRecord> UsageRecords => Set<UsageRecord>();
     public DbSet<AdminUser> AdminUsers => Set<AdminUser>();
+    public DbSet<WebSearchProvider> WebSearchProviders => Set<WebSearchProvider>();
+    public DbSet<WebSearchUsageRecord> WebSearchUsageRecords => Set<WebSearchUsageRecord>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -105,6 +107,27 @@ public class AppDbContext : DbContext
             e.Property(u => u.Role).HasMaxLength(32);
         });
 
+        // WebSearchProvider
+        modelBuilder.Entity<WebSearchProvider>(e =>
+        {
+            e.HasIndex(p => p.ProviderId).IsUnique();
+            e.Property(p => p.ProviderId).HasMaxLength(64);
+            e.Property(p => p.DisplayName).HasMaxLength(128);
+            e.Property(p => p.UpstreamBaseUrl).HasMaxLength(512);
+        });
+
+        // WebSearchUsageRecord
+        modelBuilder.Entity<WebSearchUsageRecord>(e =>
+        {
+            e.HasOne(u => u.User)
+                .WithMany()
+                .HasForeignKey(u => u.UserId)
+                .OnDelete(DeleteBehavior.Restrict);
+            e.Property(u => u.ProviderId).HasMaxLength(64);
+            e.Property(u => u.Query).HasMaxLength(512);
+            e.HasIndex(u => new { u.UserId, u.RecordedAt });
+        });
+
         // Seed default plans
         modelBuilder.Entity<Plan>().HasData(
             new Plan { Id = Guid.Parse("00000000-0000-0000-0000-000000000001"), Name = "Free", MonthlyQuotaCents = 0, MonthlyTokenLimit = 500_000, OverageInputPricePer1k = 0.002m, OverageOutputPricePer1k = 0.004m, Enabled = true, CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc) },
@@ -123,6 +146,23 @@ public class AppDbContext : DbContext
             new ModelConfig { Id = Guid.Parse("00000000-0000-0000-0001-000000000001"), UpstreamProvider = "deepseek", UpstreamBaseUrl = "https://api.deepseek.com", ModelName = "deepseek-chat", DisplayName = "DeepSeek-V3", InputPricePerMTokens = 1.0m, OutputPricePerMTokens = 2.0m, CachedInputPricePerMTokens = 0.1m, Enabled = true, SortOrder = 1, CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc) },
             new ModelConfig { Id = Guid.Parse("00000000-0000-0000-0001-000000000002"), UpstreamProvider = "openai", UpstreamBaseUrl = "https://api.openai.com/v1", ModelName = "gpt-4o-mini", DisplayName = "GPT-4o Mini", InputPricePerMTokens = 0.15m, OutputPricePerMTokens = 0.6m, CachedInputPricePerMTokens = 0.075m, Enabled = true, SortOrder = 2, CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc) },
             new ModelConfig { Id = Guid.Parse("00000000-0000-0000-0001-000000000003"), UpstreamProvider = "openai", UpstreamBaseUrl = "https://api.openai.com/v1", ModelName = "gpt-4o", DisplayName = "GPT-4o", InputPricePerMTokens = 2.5m, OutputPricePerMTokens = 10.0m, CachedInputPricePerMTokens = 1.25m, Enabled = true, SortOrder = 3, CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc) }
+        );
+
+        // Seed default web_search provider. The Baidu Baike endpoint
+        // requires an operator-supplied API key in production; the seed
+        // has no key so the desktop client sees a clear "missing key"
+        // error until the operator pastes one in the admin UI.
+        modelBuilder.Entity<WebSearchProvider>().HasData(
+            new WebSearchProvider
+            {
+                Id = Guid.Parse("00000000-0000-0000-0002-000000000001"),
+                ProviderId = "baike",
+                DisplayName = "百度百科",
+                UpstreamBaseUrl = "https://appbuilder.baidu.com/v2/baike/lemma/get_content",
+                UpstreamApiKey = null,
+                Enabled = true,
+                CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            }
         );
 
         // Seed default admin user (created programmatically at startup; see AdminService.EnsureSeedAdminAsync)

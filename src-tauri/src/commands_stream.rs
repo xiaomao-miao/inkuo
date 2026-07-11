@@ -31,7 +31,15 @@ pub async fn ai_edit_stream(
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<(), StreamCommandError> {
-    let config = state.ai_config.read().await.clone();
+    // Resolve a fresh AIConfig per call so a rotated cloud access
+    // token is picked up automatically. The previous code cloned a
+    // cached AIConfig out of a shared `RwLock` — which silently went
+    // stale when the cloud access token TTL elapsed.
+    let config = state
+        .ai_config
+        .resolve()
+        .await
+        .map_err(|e| StreamCommandError::AIRequest(format!("resolve AI config: {}", e)))?;
     let adapter = ai::AIProviderAdapter::new(config);
 
     let edit_scope = match scope.as_str() {

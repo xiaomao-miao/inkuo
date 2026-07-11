@@ -478,6 +478,83 @@ namespace Inkuso.Cloud.Core.Migrations
                     b.ToTable("Users");
                 });
 
+            modelBuilder.Entity("Inkuso.Cloud.Core.Entities.WebSearchProvider", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("character varying(128)");
+
+                    b.Property<bool>("Enabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("ProviderId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("UpstreamApiKey")
+                        .HasColumnType("text");
+
+                    b.Property<string>("UpstreamBaseUrl")
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProviderId")
+                        .IsUnique();
+
+                    b.ToTable("WebSearchProviders");
+
+                    b.HasData(
+                        new
+                        {
+                            Id = new Guid("00000000-0000-0000-0002-000000000001"),
+                            CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),
+                            DisplayName = "百度百科",
+                            Enabled = true,
+                            ProviderId = "baike",
+                            UpstreamBaseUrl = "https://appbuilder.baidu.com/v2/baike/lemma/get_content"
+                        });
+                });
+
+            modelBuilder.Entity("Inkuso.Cloud.Core.Entities.WebSearchUsageRecord", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ProviderId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("Query")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
+                    b.Property<DateTime>("RecordedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UserId", "RecordedAt");
+
+                    b.ToTable("WebSearchUsageRecords");
+                });
+
             modelBuilder.Entity("Inkuso.Cloud.Core.Entities.RedemptionCode", b =>
                 {
                     b.HasOne("Inkuso.Cloud.Core.Entities.Plan", "Plan")
@@ -532,6 +609,17 @@ namespace Inkuso.Cloud.Core.Migrations
                         .IsRequired();
 
                     b.Navigation("ModelConfig");
+
+                    b.Navigation("User");
+                });
+
+            modelBuilder.Entity("Inkuso.Cloud.Core.Entities.WebSearchUsageRecord", b =>
+                {
+                    b.HasOne("Inkuso.Cloud.Core.Entities.User", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
 
                     b.Navigation("User");
                 });

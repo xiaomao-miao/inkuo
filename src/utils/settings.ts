@@ -36,6 +36,11 @@ export interface BackendSettings {
       base_url: string | null;
       enabled: boolean;
     }>;
+    /** `"local"` uses the user's own provider credentials; `"cloud"`
+     * forwards through the inkuo Cloud server so the operator-managed
+     * key is used instead. Free-form string on the wire to keep
+     * forward-compat with future modes (e.g. `"hybrid"`). */
+    routing: string;
   };
   /** Cloud-mode settings. Sent on every `save_settings` IPC. The Rust
    * side uses this to decide whether to route LLM calls through the
@@ -83,6 +88,7 @@ export function toBackendSettings(settings: Settings): BackendSettings {
         base_url: p.baseUrl,
         enabled: p.enabled,
       })),
+      routing: settings.web_search.routing,
     },
     cloud: {
       cloud_mode_enabled: settings.cloud.cloud_mode_enabled,

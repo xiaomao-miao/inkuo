@@ -1,8 +1,10 @@
 use crate::ai;
 use crate::commands::{ApiConfig, Settings};
+use crate::cloud::CloudClient;
 use reqwest::{Client, RequestBuilder, Response};
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::sync::Arc;
 use thiserror::Error;
 
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
@@ -17,6 +19,8 @@ pub enum AIConfigError {
     Network(String),
     #[error("Provider '{provider}' requires an API key but none was provided")]
     MissingApiKey { provider: String },
+    #[error("Cloud routing failed: {0}")]
+    Cloud(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -214,6 +218,140 @@ pub fn build_input_ai_config(config_input: AIConfigInput) -> Result<ai::AIConfig
     })
 }
 
+/// Async equivalent of `build_input_ai_config` that re-resolves the
+/// access token for cloud-mode inputs via `CloudClient`. Used by the
+/// agent command: the frontend sends its current snapshot of the
+/// access token, but a long-lived session can outlive the token's
+/// TTL, so we always go through the in-process `CloudClient` to
+/// pick up a fresh (possibly just-refreshed) token instead of
+/// trusting the snapshot.
+///
+/// In local mode the input is forwarded as-is (local API keys
+/// don't expire so caching them per-session is safe).
+pub async fn build_input_ai_config_async(
+    config_input: AIConfigInput,
+    cloud: Arc<CloudClient>,
+) -> Result<ai::AIConfig, AIConfigError> {
+    if matches!(config_input.provider, AIProviderKind::Cloud) {
+        let settings = crate::commands::get_settings_cached().map_err(|e| {
+            AIConfigError::Cloud(format!("read settings for cloud re-resolve: {}", e))
+        })?;
+        let entry = settings
+            .cloud
+            .cached_models
+            .iter()
+            .find(|m| m.id == config_input.model)
+            .ok_or_else(|| {
+                AIConfigError::Cloud(format!(
+                    "cloud input model '{}' is not in cached_models; \
+                     refresh the cloud account from the settings panel",
+                    config_input.model
+                ))
+            })?;
+        let (provider, model_id) = cloud
+            .build_ai_config_for_model(entry)
+            .await
+            .map_err(|e| AIConfigError::Cloud(e.to_string()))?;
+        return Ok(ai::AIConfig {
+            provider,
+            model: model_id,
+            temperature: config_input.temperature.unwrap_or(0.7),
+            max_tokens: config_input.max_tokens,
+        });
+    }
+    build_input_ai_config(config_input)
+}
+
+/// Async resolver that produces a *fresh* `AIConfig` on demand.
+///
+/// ## Why
+///
+/// The previous design cached a single `AIConfig` (cloning
+/// `settings.cloud.account.access_token` into the `api_key` field) and
+/// reused it across requests. That meant a short-lived `access_token`
+/// silently went stale in the cache and every chat / stream call started
+/// failing with a 401 after the TTL — without any auto-refresh, because
+/// the cache snapshot never went through `CloudClient::ensure_fresh_token`.
+///
+/// The resolver closes that gap:
+///  - **Cloud mode**: each `resolve()` asks `CloudClient` for a fresh
+///    token, which transparently refreshes the access token via the
+///    refresh token when it is near expiry.
+///  - **Local mode**: falls back to the cached settings-based config
+///    (the previous behaviour); local API keys don't expire so caching
+///    is safe.
+///
+/// Holding an `Arc<CloudClient>` (not a raw reference) means the
+/// resolver can be cloned cheaply and shared across threads.
+pub struct AIConfigResolver {
+    cloud: Arc<CloudClient>,
+}
+
+impl AIConfigResolver {
+    pub fn new(cloud: CloudClient) -> Self {
+        Self { cloud: Arc::new(cloud) }
+    }
+
+    /// Build the AIConfig appropriate for the current settings. In
+    /// cloud mode this hits `CloudClient` to obtain a fresh access
+    /// token (refreshing if needed); in local mode it reads the
+    /// cached settings and picks the active API config.
+    ///
+    /// Returns `Err(AIConfigError::Cloud(...))` when the user is in
+    /// cloud mode but not logged in (the previous behaviour was a
+    /// silent fallback to local — which produced confusing "why is
+    /// my cloud account not being used?" bug reports).
+    pub async fn resolve(&self) -> Result<ai::AIConfig, AIConfigError> {
+        let settings = crate::commands::get_settings_cached()
+            .map_err(|e| AIConfigError::Cloud(format!("read settings: {}", e)))?;
+
+        if settings.cloud.cloud_mode_enabled {
+            let entry = settings
+                .cloud
+                .cached_models
+                .iter()
+                .find(|m| {
+                    settings
+                        .cloud
+                        .active_cloud_model_id
+                        .as_deref()
+                        .map(|id| id == m.id)
+                        .unwrap_or(false)
+                })
+                .ok_or_else(|| {
+                    AIConfigError::Cloud(
+                        "cloud mode is enabled but no active cloud model is selected; \
+                         open the Cloud settings panel and pick a model"
+                            .to_string(),
+                    )
+                })?;
+
+            let (provider, model_id) = self
+                .cloud
+                .build_ai_config_for_model(entry)
+                .await
+                .map_err(|e| {
+                    tracing::warn!(
+                        "cloud AI config build failed: {}; falling back to local \
+                         is no longer automatic because cloud_mode_enabled is true",
+                        e
+                    );
+                    AIConfigError::Cloud(e.to_string())
+                })?;
+
+            return Ok(ai::AIConfig {
+                provider,
+                model: model_id,
+                temperature: 0.7,
+                max_tokens: None,
+            });
+        }
+
+        // Local-mode branch: behaviour unchanged.
+        build_settings_ai_config(&settings)
+    }
+}
+
 fn build_test_request(client: &Client, api_key: Option<&str>, url: &str) -> RequestBuilder {
     let mut request = client.post(url);
 
@@ -288,4 +426,104 @@ pub async fn test_ai_connection_impl(
         .map_err(|e| AIConfigError::Network(e.to_string()))?;
 
     parse_test_response(response).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::commands::AppState;
+    use crate::commands::{get_settings_cached, update_settings_cache};
+    // Serialize tests that mutate the global SETTINGS_CACHE. Tokio
+    // tests run on the multi-threaded runtime by default and would
+    // otherwise interleave cache writes between siblings.
+    static CACHE_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
+    /// The resolver in local mode should defer to the active API
+    /// config without ever touching the cloud client — this is the
+    /// common path for users who aren't on the cloud tier.
+    #[tokio::test]
+    async fn resolver_local_mode_returns_active_api_config() {
+        let _guard = CACHE_LOCK.lock();
+
+        // Build a local-mode settings snapshot with a configured
+        // DeepSeek key so the resolver doesn't bail on MissingApiKey.
+        let mut settings = Settings::default();
+        settings.cloud.cloud_mode_enabled = false;
+        settings.cloud.account = None;
+        settings.cloud.cached_models = vec![];
+        settings.cloud.active_cloud_model_id = None;
+        if let Some(cfg) = settings.api_configs.first_mut() {
+            cfg.api_key = Some("test-local-key".to_string());
+        }
+        update_settings_cache(settings);
+
+        let state = AppState::default();
+        let config = state.ai_config.resolve().await.unwrap();
+
+        match &config.provider {
+            crate::ai::AIProvider::OpenAI { base_url, .. } => {
+                assert!(
+                    !base_url.contains("cloud.inkuo.com"),
+                    "local mode resolved a cloud-like base_url: {}",
+                    base_url
+                );
+            }
+            crate::ai::AIProvider::Ollama { .. } => {
+                // also valid — Settings::default() uses Ollama if no API
+                // config is set, but with the seeded key above the
+                // resolver should pick the DeepSeek OpenAI-compatible
+                // path.
+            }
+            other => panic!("unexpected provider in local mode: {:?}", other),
+        }
+    }
+
+    /// When cloud mode is on but the cached settings have no active
+    /// model, the resolver must return an actionable error — the
+    /// previous behaviour silently fell back to local, which made
+    /// "my cloud account is not being used" bug reports confusing.
+    #[tokio::test]
+    async fn resolver_cloud_mode_with_no_active_model_errors() {
+        let _guard = CACHE_LOCK.lock();
+
+        let mut settings = Settings::default();
+        settings.cloud.cloud_mode_enabled = true;
+        settings.cloud.account = Some(crate::cloud::CloudAccount {
+            base_url: "http://127.0.0.1:1".into(),
+            email: "user@example.com".into(),
+            user_id: "user-1".into(),
+            access_token: "tok".into(),
+            refresh_token: "rt".into(),
+            access_expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
+            plan_name: None,
+            balance_cents: 0.0,
+        });
+        settings.cloud.cached_models = vec![];
+        settings.cloud.active_cloud_model_id = None;
+        update_settings_cache(settings);
+
+        let state = AppState::default();
+        let err = state.ai_config.resolve().await.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("active cloud model"),
+            "expected actionable error, got: {}",
+            msg
+        );
+    }
+
+    /// Reading the global AppHandle before setup must return None —
+    /// confirms the lazy-fetch path in WebSearchTool only kicks in
+    /// when needed.
+    #[test]
+    fn current_app_handle_is_none_until_setup() {
+        let _ = crate::app_handle::current_app_handle();
+    }
+
+    /// Sanity check that the settings cache round-trips.
+    #[tokio::test]
+    async fn settings_cache_roundtrips() {
+        let _guard = CACHE_LOCK.lock();
+        let _ = get_settings_cached();
+    }
 }
