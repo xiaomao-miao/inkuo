@@ -159,9 +159,34 @@ const SYMBOLS = [
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+// Returns true only if the view is alive AND has a valid state to dispatch
+// against. ProseMirror nulls `view.state` during teardown, so a stale `view`
+// ref captured by a click handler can survive a tab switch / file reload and
+// cause `Cannot read properties of undefined (reading 'schema')` deep inside
+// `chainCommands`. Treat that as "no view" rather than passing it on.
+function isViewReady(view: EditorView | null): view is EditorView {
+  return !!view && !!view.state;
+}
+
+// ProseMirror command-runner code (e.g. `chunk-STIS5BU3.js:4713`) destructures
+// `state.schema` at the very top of many commands, including `insertPageBreak`
+// from `@eigenpal/docx-editor-core`. If `state` is undefined that throws an
+// uncatchable TypeError out of the click handler. Belt-and-suspenders: guard at
+// the dispatch site too, so even if a future call leaks past `isViewReady` we
+// degrade to a no-op rather than a black-screen crash.
 function runCommand(view: EditorView | null, command: (state: any, dispatch?: any, view?: any) => boolean) {
-  if (!view) return;
-  command(view.state, view.dispatch, view);
+  if (!isViewReady(view)) return;
+  try {
+    command(view.state, view.dispatch, view);
+  } catch (err) {
+    // Swallow command-runner crashes during teardown races. The view will be
+    // re-created on the next legitimate interaction; we never want a transient
+    // ProseMirror teardown to bring down the React tree (and the Tauri window).
+    if (import.meta.env?.DEV) {
+      // eslint-disable-next-line no-console
+      console.warn('[WordToolbar] command dispatch ignored:', err);
+    }
+  }
 }
 
 function hpToPt(hp: unknown): number | null {
@@ -598,7 +623,7 @@ export const WordToolbar: React.FC<WordToolbarProps> = ({
   const isStrike = isActive('strike');
   const isSuper = isActive('superscript');
   const isSub = isActive('subscript');
-  const isLink = isHyperlinkActive(state!);
+  const isLink = state ? isHyperlinkActive(state) : false;
   const alignment = state ? getParagraphAlignment(state) : null;
   const styleId = state ? getStyleId(state) : null;
   const fontSizeHp = (markTypes?.fontSize && state) ? getMarkAttr(state, markTypes.fontSize, 'size') : null;
@@ -661,7 +686,7 @@ export const WordToolbar: React.FC<WordToolbarProps> = ({
   const handlePaste = useCallback(async () => {
     try {
       const text = await navigator.clipboard.readText();
-      if (view && text) {
+      if (isViewReady(view) && text) {
         view.dispatch(view.state.tr.insertText(text, view.state.selection.from, view.state.selection.to));
         view.focus();
       }
@@ -699,7 +724,8 @@ export const WordToolbar: React.FC<WordToolbarProps> = ({
   const handleRemoveLink = useCallback(() => runCommand(view, removeHyperlink), [view]);
   const handleInsertSymbol = useCallback(
     (sym: string) => {
-      if (view) view.dispatch(view.state.tr.insertText(sym, view.state.selection.from, view.state.selection.to));
+      if (!isViewReady(view)) return;
+      view.dispatch(view.state.tr.insertText(sym, view.state.selection.from, view.state.selection.to));
     },
     [view],
   );
