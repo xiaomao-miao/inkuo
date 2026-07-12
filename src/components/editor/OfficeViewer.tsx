@@ -4,7 +4,8 @@ import { DocxEditor, type DocxEditorRef } from '@eigenpal/docx-editor-react';
 import { Workbook } from '@fortune-sheet/react';
 import type { WorkbookInstance } from '@fortune-sheet/react';
 import type { Sheet as FortuneSheetCoreSheet } from '@fortune-sheet/core';
-import { Save, Table2, FileText } from 'lucide-react';
+import { Save, Table2 } from 'lucide-react';
+import { WordToolbar } from './WordToolbar';
 import { useKeyboardSave } from './useKeyboardSave';
 import { useSidebarStore, useEditorStore, useInlineCompleteStore, useNotificationStore } from '../../store';
 import {
@@ -209,6 +210,9 @@ export const WordEditor: React.FC<WordEditorProps> = ({
   const wordLastVersionRef = useRef(-1);
   const hasInitializedFromCacheRef = useRef(false);
 
+  const [mode, setMode] = useState<'editing' | 'suggesting' | 'viewing'>('editing');
+  const [pmView, setPmView] = useState<EditorView | null>(null);
+
   const wordInlineCompletePlugin = useMemo(
     () =>
       createWordInlineCompletePlugin({
@@ -221,6 +225,7 @@ export const WordEditor: React.FC<WordEditorProps> = ({
 
   const handleEditorViewReady = useCallback((view: EditorView) => {
     pmViewRef.current = view;
+    setPmView(view);
   }, []);
 
   // When this editor unmounts (tab closed, file switched, etc.) the ProseMirror
@@ -235,6 +240,7 @@ export const WordEditor: React.FC<WordEditorProps> = ({
         clearWordTimersForEditor(view);
       }
       pmViewRef.current = null;
+      setPmView(null);
     };
   }, []);
 
@@ -347,6 +353,35 @@ export const WordEditor: React.FC<WordEditorProps> = ({
     setOpenTabDirty(filePath, true);
   }, [filePath, setOpenTabDirty]);
 
+  // ── Toolbar wiring ───────────────────────────────────────────────────────
+  const handleFind = useCallback(() => {
+    // FindReplace is built into the editor; the keyboard shortcut Ctrl+F is
+    // already wired by DocxEditor (unless `disableFindReplaceShortcuts` is
+    // set). We focus the editor so the shortcut is delivered to it.
+    editorRef.current?.focus();
+  }, []);
+
+  const handleTriggerAI = useCallback(() => {
+    // Force-focus the editor and dispatch a no-op txn so the inline-complete
+    // machinery schedules a completion on the next render-frame. Falling
+    // back to a synthetic input event when scheduling doesn't auto-fire.
+    const view = pmViewRef.current;
+    if (!view) return;
+    view.focus();
+    const tr = view.state.tr.insertText('', view.state.selection.head, view.state.selection.head);
+    view.dispatch(tr);
+  }, []);
+
+  const handleZoom = useCallback((z: number) => {
+    editorRef.current?.setZoom(z);
+  }, []);
+
+  const handleGetZoom = useCallback(() => editorRef.current?.getZoom() ?? 1, []);
+
+  const handlePrint = useCallback(() => {
+    editorRef.current?.print();
+  }, []);
+
   // ── Render
   // We keep the `<DocxEditor>` mounted at all times (loading, error, ready)
   // so that the right-hand scrollbar's containing block — the paged-editor's
@@ -359,23 +394,34 @@ export const WordEditor: React.FC<WordEditorProps> = ({
   // (see OfficeTabRenderer in Editor.tsx).
   return (
     <div className={styles.officeEditor}>
-      <OfficeToolbar
+      <WordToolbar
+        view={pmView}
         fileName={fileName}
         isDirty={isDirty}
+        isLoading={loading}
+        mode={mode}
+        onModeChange={setMode}
         onSave={handleSave}
         canSave={isDirty && !loading && !error}
-        formatIcon={<FileText size={16} />}
-        editLabel={loading ? '加载中...' : error ? '加载失败' : '可编辑'}
+        onTriggerAI={handleTriggerAI}
+        onFind={handleFind}
+        setZoom={handleZoom}
+        getZoom={handleGetZoom}
+        print={handlePrint}
       />
       <div ref={containerRef} className={styles.docxContainer} data-office-editor-root="word">
         <DocxEditor
           ref={editorRef}
           documentBuffer={documentBuffer}
-          mode="editing"
+          mode={mode}
           onChange={handleChange}
+          onModeChange={setMode}
           onEditorViewReady={handleEditorViewReady}
           externalPlugins={[wordInlineCompletePlugin]}
           renderLogo={() => null}
+          showToolbar={false}
+          showHelpMenu={false}
+          showFileOpen={false}
         />
         {/* Word inline completion ghost is rendered by ProseMirror decorations (externalPlugins) */}
         {(loading || error) && (

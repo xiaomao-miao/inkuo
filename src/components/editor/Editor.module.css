@@ -218,6 +218,31 @@
   gap: 6px;
 }
 
+/* Route-level Suspense fallback spinner. Sized to match the no-file
+   hint typography so the editor pane stays calm while a lazy chunk
+   (Settings / Cloud / Word / Excel editor) is being fetched. */
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border-muted);
+  border-top-color: var(--accent-primary);
+  border-radius: 50%;
+  animation: routeFallbackSpin 0.8s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation-duration: 3s;
+  }
+}
+
+@keyframes routeFallbackSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .hintText kbd {
   padding: 2px 6px;
   font-size: 11px;

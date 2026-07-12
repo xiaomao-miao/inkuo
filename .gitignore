@@ -66,3 +66,7 @@ wix*.zip
 # Claude / AI assistant working dirs
 .claude/
 .crs/
+
+# Cursor / AI local memory + migration backups (workspace-local, never commit)
+.ai-memory/
+.migration-backup/

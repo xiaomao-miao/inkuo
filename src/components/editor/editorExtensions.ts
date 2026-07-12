@@ -8,6 +8,14 @@ import { inlineDiffTheme } from './inlineDiffDecorations';
 import { inlineCompletionDecoration } from '../inline-complete';
 import { useInlineCompleteStore } from '../../store';
 
+// `@codemirror/language-data`'s `languages` array ships per-language
+// metadata + a `load()` async importer. Passing it as `codeLanguages`
+// only registers the metadata with CodeMirror's markdown parser; the
+// underlying Lezer grammar + StreamLanguage parsers are dynamically
+// imported on first use (when a fenced code block is actually rendered).
+// This keeps the markdown editor main-chunk small even with 70+
+// language definitions reachable from a single import.
+
 export function createEditorTheme() {
   return EditorView.theme({
     '&': {

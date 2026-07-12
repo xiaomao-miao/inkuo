@@ -5,6 +5,12 @@
   "type": "module",
   "description": "AI Document Editor",
   "license": "UNLICENSED",
+  "sideEffects": [
+    "*.css",
+    "*.scss",
+    "*.module.css",
+    "*.module.scss"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/inkuo/inkuo.git"
@@ -35,8 +41,8 @@
     "@codemirror/state": "^6.5.2",
     "@codemirror/theme-one-dark": "^6.1.2",
     "@codemirror/view": "^6.36.5",
-    "@eigenpal/docx-editor-core": "^1.2.1",
-    "@eigenpal/docx-editor-react": "^1.2.1",
+    "@eigenpal/docx-editor-core": "^1.9.0",
+    "@eigenpal/docx-editor-react": "^1.9.0",
     "@fortune-sheet/react": "^1.0.4",
     "@lezer/highlight": "^1.2.1",
     "@mukundakatta/streamparse": "^1.0.1",
@@ -50,6 +56,7 @@
     "clsx": "^2.1.1",
     "diff": "^7.0.0",
     "jsonchunk": "^0.1.0",
+    "jszip": "^3.10.1",
     "lucide-react": "^0.468.0",
     "marked": "^18.0.4",
     "prosemirror-commands": "^1.7.1",
@@ -71,7 +78,6 @@
     "rehype-raw": "^7.0.0",
     "remark-gfm": "^4.0.1",
     "xlsx": "^0.18.5",
-    "jszip": "^3.10.1",
     "zustand": "^5.0.13"
   },
   "devDependencies": {

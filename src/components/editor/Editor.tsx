@@ -1,13 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense } from 'react';
 import { type ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import CodeMirror from '@uiw/react-codemirror';
 import { Compartment } from '@codemirror/state';
 import { Sparkles } from 'lucide-react';
 import { useEditorStore, useSidebarStore, useSettingsStore, SETTINGS_TAB_ID, CLOUD_TAB_ID, type OpenTab } from '../../store';
 import { DiffOverlay } from './DiffOverlay';
-import { SettingsPanel } from '../settings/SettingsPanel';
-import { CloudPage } from '../cloud/CloudPage';
-import { WordEditor, ExcelEditor } from './OfficeViewer';
 import { InlineCompleteProvider } from '../inline-complete';
 import { useDocumentLoader } from './useDocumentLoader';
 import { useDocumentSave } from './useDocumentSave';
@@ -19,6 +17,26 @@ import { useEditorInlineCompletion } from './useEditorInlineCompletion';
 import { useEditorKeyboardShortcuts, useEditorSelectionSync } from './useEditorInteraction';
 import styles from './Editor.module.css';
 import inlineCompleteStyles from '../inline-complete/InlineComplete.module.css';
+
+// Code-split heavy route-level panels and the Office editor bundle.
+// Each of these pulls in a substantial dependency tree:
+//   - SettingsPanel: settings UI + child panels
+//   - CloudPage: cloud auth UI + Tauri shell helpers
+//   - OfficeViewer: DocxEditor (ProseMirror + OOXML + mammoth) and
+//     Workbook (FortuneSheet + xlsx) — the single largest contributors
+//     to the main chunk in the baseline build (~5.8 MB main, ~1.5 MB
+//     gzip). Lazy-loading them removes ~3 MB from first paint and
+//     shifts the cost to when the user actually opens a .docx/.xlsx
+//     tab or visits Settings / Cloud.
+//
+// The lazy components are mounted behind a Suspense boundary that
+// shows a skeleton so the UI stays responsive during chunk fetch.
+const SettingsPanel = lazy(() =>
+  import('../settings/SettingsPanel').then((m) => ({ default: m.SettingsPanel }))
+);
+const CloudPage = lazy(() =>
+  import('../cloud/CloudPage').then((m) => ({ default: m.CloudPage }))
+);
 
 const EditorContent: React.FC<{
   editorRef: React.RefObject<ReactCodeMirrorRef | null>;
@@ -158,16 +176,50 @@ const EmptyState: React.FC = () => (
   </div>
 );
 
-const SettingsState: React.FC = () => (
-  <div className={styles.editorContainer}>
-    <SettingsPanel />
+/**
+ * Lightweight Suspense fallback shown while a lazy-loaded route or
+ * editor chunk is being fetched. Reuses the existing Skeleton
+ * primitives so the look matches the rest of the app. Kept inline in
+ * Editor.tsx (rather than a separate file) because the lazy routes are
+ * co-located here and the fallback only matters during chunk fetch.
+ */
+const RouteFallback: React.FC<{ label: string }> = ({ label }) => (
+  <div className={styles.editorContainer} role="status" aria-live="polite">
+    <div className={styles.editorWrapper}>
+      <div className={styles.noFileHint}>
+        <span className={styles.spinner} aria-hidden="true" />
+        <span className={styles.hintText}>{label}</span>
+      </div>
+    </div>
   </div>
 );
 
+// OfficeViewer pulls in DocxEditor (ProseMirror + OOXML parser +
+// prosemirror-tables + 200+ KB of layout/serializer code) plus Workbook
+// (FortuneSheet + xlsx ~430 KB). Together these are the largest single
+// contributor to the main chunk in the baseline build.
+//
+// We split OfficeViewer into its own chunk and lazy-load it so the cost
+// is paid only when the user opens a .docx or .xlsx tab. The lazy
+// boundary returns a Suspense fallback (skeleton) until the chunk arrives,
+// keeping the right-hand editor pane visually stable.
+const WordEditor = lazy(() =>
+  import('./OfficeViewer').then((m) => ({ default: m.WordEditor }))
+);
+const ExcelEditor = lazy(() =>
+  import('./OfficeViewer').then((m) => ({ default: m.ExcelEditor }))
+);
+
+const SettingsState: React.FC = () => (
+  <Suspense fallback={<RouteFallback label="正在加载设置" />}>
+    <SettingsPanel />
+  </Suspense>
+);
+
 const CloudState: React.FC = () => (
-  <div className={styles.editorContainer}>
+  <Suspense fallback={<RouteFallback label="正在加载云服务" />}>
     <CloudPage />
-  </div>
+  </Suspense>
 );
 
 function detectFileType(path: string): 'markdown' | 'plaintext' | 'word' | 'excel' {
@@ -203,23 +255,27 @@ const OfficeTabRenderer: React.FC<{
   if (fileType === 'word') {
     const tabCached = officeState?.docxBuffer ?? null;
     return (
-      <WordEditor
-        key={tab.id}
-        filePath={tab.path}
-        fileName={tab.name}
-        initialBuffer={tabCached ? new Uint8Array(tabCached) : null}
-        isActive={isActive}
-      />
+      <Suspense fallback={<RouteFallback label="正在加载 Word 编辑器" />}>
+        <WordEditor
+          key={tab.id}
+          filePath={tab.path}
+          fileName={tab.name}
+          initialBuffer={tabCached ? new Uint8Array(tabCached) : null}
+          isActive={isActive}
+        />
+      </Suspense>
     );
   }
 
   return (
-    <ExcelEditor
-      key={tab.id}
-      filePath={tab.path}
-      fileName={tab.name}
-      isActive={isActive}
-    />
+    <Suspense fallback={<RouteFallback label="正在加载 Excel 编辑器" />}>
+      <ExcelEditor
+        key={tab.id}
+        filePath={tab.path}
+        fileName={tab.name}
+        isActive={isActive}
+      />
+    </Suspense>
   );
 };
 
