@@ -166,6 +166,11 @@ export const TitleBar: React.FC = () => {
       }
     } catch (err) {
       reportError('titlebar-open-folder', err);
+      pushNotification({
+        kind: 'error',
+        title: '打开文件夹失败',
+        message: String((err as Error)?.message ?? err),
+      });
     }
     setActiveMenu(null);
   };

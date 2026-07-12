@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2/capabilities",
   "identifier": "default",
   "description": "Default capabilities for inkuo",
-  "windows": ["main", "main-*"],
+  "windows": ["main", "main-*", "diag-*"],
   "permissions": [
     "core:default",
     "core:window:allow-close",

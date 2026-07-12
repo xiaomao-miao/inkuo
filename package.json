@@ -4,6 +4,15 @@
   "version": "0.1.0",
   "type": "module",
   "description": "AI Document Editor",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/inkuo/inkuo.git"
+  },
+  "engines": {
+    "node": ">=20",
+    "pnpm": ">=9"
+  },
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

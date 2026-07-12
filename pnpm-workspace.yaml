@@ -1,5 +1,10 @@
 allowBuilds:
       esbuild: true
+overrides:
+  react: "$react"
+  react-dom: "$react-dom"
+  "@types/react": "$@types/react"
+  "@types/react-dom": "$@types/react-dom"
 packages:
   - .
   - cloud-server/admin-frontend

@@ -3,6 +3,7 @@
 //! Exposes Rust backend functionality to the frontend via IPC.
 
 use std::collections::HashSet;
+use std::io::Write;
 use std::sync::Arc;
 
 use once_cell::sync::Lazy;
@@ -1882,6 +1883,101 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
         }
     }
     Ok(out)
+}
+
+// =====================================================================
+// Frontend diagnostic bridge
+// =====================================================================
+//
+// During release-mode debugging of WebView2 rendering issues we need the
+// frontend's `console.*` output (and uncaught errors) to land in a file
+// the user can inspect.  The webview2 renderer does NOT forward console
+// to stdout, and F12 / right-click "Inspect Element" is gated by
+// `tauri.conf.json` -> `app.windows[].devtools`.  Even when it works
+// the user might not be able to copy/paste out of it.
+//
+// `frontend_log` is the IPC sink the injected init-script uses.  We
+// deliberately route to a *file* under `%LOCALAPPDATA%\com.inkuo.app\`
+// rather than stdout because the release exe is `windows_subsystem =
+// "windows"` and has no console attached.
+//
+// Safe under concurrent webviews: writes are serialized behind a
+// Mutex; we never block the IPC thread for more than a single
+// small write + flush.
+
+static FRONTEND_LOG_FILE: Lazy<Mutex<Option<std::path::PathBuf>>> =
+    Lazy::new(|| Mutex::new(None));
+
+fn frontend_log_path() -> std::path::PathBuf {
+    let mut p = std::env::var_os("LOCALAPPDATA")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    p.push("com.inkuo.app");
+    let _ = std::fs::create_dir_all(&p);
+    p.push("frontend-console.log");
+    p
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FrontendLogPayload {
+    pub level: String,
+    pub message: String,
+    /// Optional URL where the message originated (best-effort).
+    #[serde(default)]
+    pub url: Option<String>,
+    /// Optional stack trace (for errors / rejections).
+    #[serde(default)]
+    pub stack: Option<String>,
+}
+
+#[tauri::command]
+pub async fn frontend_log(payload: FrontendLogPayload) -> Result<(), String> {
+    let path = {
+        let mut guard = FRONTEND_LOG_FILE.lock();
+        guard.get_or_insert_with(frontend_log_path).clone()
+    };
+
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+
+    let line = format!(
+        "[{}] [{}] [{}] {}{}\n",
+        ts,
+        payload.level.to_uppercase(),
+        payload
+            .url
+            .clone()
+            .unwrap_or_else(|| "<unknown>".to_string()),
+        payload.message,
+        payload
+            .stack
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(|s| format!("\n  stack: {}", s))
+            .unwrap_or_default(),
+    );
+
+    // Mirror to tracing so the same line shows up in stdout/file log too.
+    let trimmed = line.trim_end();
+    match payload.level.as_str() {
+        "error" => tracing::error!(target: "frontend", "{}", trimmed),
+        "warn" => tracing::warn!(target: "frontend", "{}", trimmed),
+        _ => tracing::info!(target: "frontend", "{}", trimmed),
+    }
+
+    // Append to the file.  Best-effort — never propagate IO failures
+    // back into the frontend (would create an error log loop).
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        let _ = f.write_all(line.as_bytes());
+        let _ = f.flush();
+    }
+    Ok(())
 }
 
 #[cfg(test)]

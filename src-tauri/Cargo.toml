@@ -56,3 +56,16 @@ urlencoding = "2"
 # download on first run. Re-exports a small facade crate; the
 # `render` + `raster` features pull in layout + SVG + PNG pipelines.
 merman = { version = "0.7", features = ["render", "raster"] }
+
+# Lean release binary: smaller installer, faster cold start.
+# - lto = "thin" gives most of the size/perf win of fat LTO with a much shorter
+#   link time, which matters because we already link a heavy C++ stack
+#   (fastembed/ort, merman/resvg, qdrant-edge).
+# - codegen-units = 1 enables cross-module inlining that LTO can then fold.
+# - panic = "abort" trims ~hundreds of KB of unwind tables.
+# - strip = "symbols" keeps the .exe runnable while dropping PDB/debug info.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
