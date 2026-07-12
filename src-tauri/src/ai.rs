@@ -392,21 +392,87 @@ Context text:
         }
     }
 
-    /// Direct chat call with thinking disabled - optimized for inline completion
+    /// Direct chat call with thinking disabled - optimized for inline completion.
+    ///
+    /// Always sends `stream: true` so the inkuo Cloud server (which forces
+    /// `stream: true` regardless of the incoming request -- see
+    /// `cloud-server/src/Inkuso.Cloud.Api/Endpoints/Chat.cs::MapChatEndpoints`)
+    /// is happy with us. Local OpenAI-compatible providers also accept
+    /// `stream: true` and respond with SSE, which is exactly what
+    /// `stream_sse_text` consumes. The single code path keeps both local
+    /// and cloud modes working without branching on the provider.
+    ///
+    /// The `thinking` field is sent regardless of provider (cloud strips
+    /// it server-side; local OpenAI-compatible APIs tolerate unknown JSON
+    /// keys).
     pub async fn completion(&self, system_prompt: &str, user_prompt: &str) -> Result<String, AIError> {
         match &self.config.provider {
             AIProvider::OpenAI { api_key, base_url } => {
-                self.call_openai_compatible_chat_no_thinking(api_key, base_url, system_prompt, user_prompt)
+                self.call_openai_compatible_chat_stream_no_thinking(api_key, base_url, system_prompt, user_prompt)
                     .await
             }
             AIProvider::Ollama { base_url } => self.call_ollama_chat(base_url, system_prompt, user_prompt).await,
             AIProvider::Official { api_key } => {
-                self.call_openai_compatible_chat_no_thinking(api_key, OFFICIAL_BASE_URL, system_prompt, user_prompt)
+                self.call_openai_compatible_chat_stream_no_thinking(api_key, OFFICIAL_BASE_URL, system_prompt, user_prompt)
                     .await
             }
         }
     }
 
+    /// Streamed OpenAI-compatible completion call with `thinking` disabled.
+    /// Mirrors `call_openai_compatible_chat_stream` but includes the
+    /// vendor-specific `thinking: {"type": "disabled"}` extension and
+    /// collects the full text via `stream_sse_text` so the caller doesn't
+    /// have to wire a `FnMut` callback. Used by `completion()` for inline
+    /// auto-complete, where we want the full text in one shot.
+    async fn call_openai_compatible_chat_stream_no_thinking(
+        &self,
+        api_key: &str,
+        base_url: &str,
+        system_prompt: &str,
+        user_prompt: &str,
+    ) -> Result<String, AIError> {
+        let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
+        let body = serde_json::json!({
+            "model": self.config.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            "temperature": self.config.temperature,
+            "max_tokens": self.config.max_tokens,
+            "stream": true,
+            "thinking": {"type": "disabled"},
+        });
+
+        let response = HTTP_CLIENT
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", api_key))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| AIError::NetworkError(e.to_string()))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let error_body = response.text().await.unwrap_or_default();
+            return Err(Self::handle_http_error(status, &error_body));
+        }
+
+        Self::stream_sse_text(response, |_| {}).await
+    }
+
+    /// Non-streamed fallback for `call_openai_compatible_chat_no_thinking`.
+    ///
+    /// **Deprecated for cross-provider calls** -- kept around only because
+    /// `completion()` historically used it. The inkuo Cloud server always
+    /// forces `stream: true` on the upstream side, so any provider routed
+    /// through it returns an SSE stream. Calling `response.json()` on an
+    /// SSE body fails with `InvalidResponse`. Prefer
+    /// `call_openai_compatible_chat_stream_no_thinking` (the streaming
+    /// sibling) which handles both SSE and JSON-only providers uniformly.
+    #[allow(dead_code)]
     async fn call_openai_compatible_chat_no_thinking(
         &self,
         api_key: &str,
