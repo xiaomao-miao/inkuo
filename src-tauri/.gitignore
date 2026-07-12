@@ -8,5 +8,7 @@
 
 # WebView2 fixed-version runtime (bundled via webviewInstallMode in tauri.conf.json).
 # ~750MB extracted; checked in locally for portable builds. Do NOT commit the
-# downloaded .cab — keep a link in `scripts/` so contributors can refetch.
+# downloaded .cab or the extracted runtime tree — keep a link in `scripts/` so
+# contributors can refetch.
 Microsoft.WebView2.FixedVersionRuntime.*.cab
+/Microsoft.WebView2.FixedVersionRuntime.*/

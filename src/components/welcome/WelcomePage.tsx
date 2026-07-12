@@ -150,6 +150,13 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onWorkspaceSelected })
   const hasCloudAccount = !!settings.cloud.account;
   const cloudBaseUrl = getCloudBaseUrl();
   const initialEmail = settings.cloud.account?.email ?? '';
+  // Show plan + remaining balance in the welcome card after login instead of
+  // the server host (the host was a leak-ish implementation detail; plan and
+  // balance are what a logged-in user actually wants to glance at).
+  const planName = settings.cloud.account?.plan_name?.trim();
+  const balanceCents = settings.cloud.account?.balance_cents ?? 0;
+  const balanceYuan = (balanceCents / 100).toFixed(2);
+  const planLabel = planName && planName.length > 0 ? planName : '免费套餐';
   const [authMode, setAuthMode] = useState<AuthMode>('login');
   const [email, setEmail] = useState(initialEmail);
   const [password, setPassword] = useState('');
@@ -431,7 +438,7 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onWorkspaceSelected })
                     {settings.cloud.account?.email}
                   </span>
                   <span className={styles.accountServer}>
-                    {cloudBaseUrl.replace(/^https?:\/\//, '')}
+                    {planLabel} · 余额 ¥{balanceYuan}
                   </span>
                 </div>
                 <button

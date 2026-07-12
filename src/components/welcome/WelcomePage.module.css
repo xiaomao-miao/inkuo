@@ -645,7 +645,7 @@
 }
 
 .accountServer {
-  font-family: var(--font-mono);
+  font-family: inherit;
   font-size: var(--font-size-xs);
   color: var(--fg-muted);
   overflow: hidden;
