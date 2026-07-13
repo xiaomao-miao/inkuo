@@ -128,22 +128,34 @@ pub struct InsertElement {
 
 impl WordDocument {
     /// Convert the document to a flat list of elements with stable IDs.
-    /// Tables and paragraphs are interleaved by matching position markers
-    /// to tables in sequential order. Images are skipped here (v1 writes
-    /// inline `<w:drawing>` runs but the read path doesn't surface them in
-    /// the element list — a future PR can add round-trip support once the
-    /// parser can match image markers to their parent paragraphs).
+    /// Tables, paragraphs, and images are interleaved by matching position
+    /// markers to their backing entries in sequential order.
+    ///
+    /// Each `DocElement::Image` here carries the same id as the marker
+    /// paragraph we *skip* in the paragraph loop below, so `modify()` can
+    /// treat image elements as first-class participants in the
+    /// delete/replace/insert pipeline. Without this, `modify()` would drop
+    /// every pre-existing image on the first pass — see the multi-image
+    /// insert regression test for the failure mode.
     pub fn to_elements(&self) -> Vec<DocElement> {
         // Build a map of table id -> table for O(1) lookup.
         let table_map: std::collections::HashMap<&str, &WordTable> =
             self.tables.iter().map(|t| (t.id.as_str(), t)).collect();
 
+        // Build a map of image id -> image for O(1) lookup. The image's
+        // stable id is matched against `<__img_pos_<id>__>` marker
+        // paragraphs below.
+        let image_map: std::collections::HashMap<&str, &WordImage> =
+            self.images.iter().map(|i| (i.id.as_str(), i)).collect();
+
         // Tables already emitted via a marker paragraph (see loop below) are
         // recorded here so the final "append remaining tables" pass doesn't
         // double-count them.
         let mut tables_emitted: std::collections::HashSet<String> = std::collections::HashSet::new();
+        // Same idea for images — a marker paragraph consumes one entry.
+        let mut images_emitted: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-        let mut elements: Vec<DocElement> = Vec::with_capacity(self.paragraphs.len() + self.tables.len());
+        let mut elements: Vec<DocElement> = Vec::with_capacity(self.paragraphs.len() + self.tables.len() + self.images.len());
 
         for p in &self.paragraphs {
             if let Some(rest) = p.text.strip_prefix("<__tbl_pos_") {
@@ -162,12 +174,34 @@ impl WordDocument {
                     continue;
                 }
             }
-            // Image marker paragraphs are emitted by the writer as inline
-            // `<w:drawing>` runs; here in the read path we drop the marker
-            // so it doesn't show up as a stray blank paragraph. v1: images
-            // are write-only as far as round-tripping is concerned.
-            if p.text.starts_with("<__img_pos_") {
-                continue;
+            // Image marker paragraph: surface the underlying `WordImage` as
+            // a first-class `DocElement::Image` so callers (notably
+            // `modify()` and `read_office_file`'s elements payload) see
+            // images alongside paragraphs and tables. The marker paragraph
+            // itself is consumed here — the writer re-emits it via
+            // `from_elements` (or the equivalent inline in `modify()`) so
+            // no visible paragraph slot is lost.
+            if let Some(rest) = p.text.strip_prefix("<__img_pos_") {
+                if let Some(end) = rest.find("__>") {
+                    let img_id = &rest[..end];
+                    if let Some(img) = image_map.get(img_id) {
+                        elements.push(DocElement::Image {
+                            id: img.id.clone(),
+                            position: elements.len(),
+                            path: img.path.clone(),
+                            width_emu: img.width_emu,
+                            height_emu: img.height_emu,
+                        });
+                        images_emitted.insert(img.id.clone());
+                        continue;
+                    }
+                    // Marker without a matching `WordImage` (e.g. the image
+                    // entry got dropped by a buggy caller): fall through
+                    // and emit the marker as a regular paragraph so we
+                    // don't silently eat it. The writer won't render a
+                    // drawing from it but at least the round-trip stays
+                    // lossless.
+                }
             }
             elements.push(DocElement::Paragraph {
                 id: p.id.clone(),
@@ -189,6 +223,21 @@ impl WordDocument {
                     position: elements.len(),
                     header,
                     rows,
+                });
+            }
+        }
+        // Same defensive pass for images. Today the writer always emits a
+        // marker paragraph alongside a `WordImage`, but if a future
+        // refactor relaxes that requirement we still don't want to lose
+        // images that already lived in `self.images`.
+        for img in &self.images {
+            if !images_emitted.contains(img.id.as_str()) {
+                elements.push(DocElement::Image {
+                    id: img.id.clone(),
+                    position: elements.len(),
+                    path: img.path.clone(),
+                    width_emu: img.width_emu,
+                    height_emu: img.height_emu,
                 });
             }
         }
@@ -298,12 +347,18 @@ impl WordDocument {
     }
 
     /// Modify the document by applying a list of edit operations.
-    /// 
+    ///
     /// Bug fixes:
     /// - Bug 2: Fixed omit_text logic - when omit_text is false and text is provided, use the new text
     /// - Bug 3: Preserve original IDs by not calling from_elements which reassigns IDs
     /// - Bug 4: Support "before" position for anchor insertions
     /// - Bug 6: Support multiple elements each with their own anchor_id and position
+    /// - Bug 7: Preserve pre-existing images across modify(). `to_elements()` now
+    ///   surfaces images as `DocElement::Image` (rather than dropping them on the
+    ///   floor) and the rebuild loop preserves each one's `internal_path` so
+    ///   the writer can reuse the already-embedded media bytes. Without this
+    ///   every call to `modify()` would orphan all previously inserted images
+    ///   — see the `modify_preserves_existing_images` regression test.
     pub fn modify(
         &mut self,
         modifies: Vec<DocElement>,
@@ -413,10 +468,25 @@ impl WordDocument {
         }
 
         // Bug fix 3: Build document manually to preserve IDs instead of using from_elements
-        // from_elements would reassign all IDs via marker paragraphs
+        // from_elements would reassign all IDs via marker paragraphs.
+        //
+        // Images need extra care: a DocElement::Image that came straight from
+        // `self.to_elements()` (no `modifies` hit) is a pre-existing image and
+        // should preserve its `internal_path` so the writer reuses the
+        // already-embedded bytes from the preserved zip. A hit on `modify_map`
+        // means the user is replacing the image: use the new path/width/height
+        // and reset `internal_path` to None so the writer re-reads from disk.
+        // A hit on `insert_elements` (no original by id) is a brand-new image
+        // and naturally has `internal_path = None`.
         let mut out_paras: Vec<WordParagraph> = Vec::new();
         let mut tables: Vec<WordTable> = Vec::new();
         let mut images: Vec<WordImage> = Vec::new();
+
+        // Snapshot the original images so we can look up `internal_path` for
+        // unchanged entries. We only consult this map when the result element
+        // is *not* in `modify_map`; replacements bypass it intentionally.
+        let originals_by_id: std::collections::HashMap<&str, &WordImage> =
+            self.images.iter().map(|i| (i.id.as_str(), i)).collect();
 
         for elem in result {
             match elem {
@@ -454,12 +524,26 @@ impl WordDocument {
                         runs: None,
                         numbering: None,
                     });
+                    // Preserve `internal_path` for unchanged pre-existing
+                    // images so the writer can reuse the bytes already
+                    // embedded in the docx (and keep the original rId).
+                    // Anything in `modify_map` is a replacement; anything
+                    // not found in `originals_by_id` is a brand new image
+                    // the user just appended — both reset `internal_path`
+                    // so the writer allocates a fresh `imageN.ext`.
+                    let internal_path = if modify_map.contains_key(&id) {
+                        None
+                    } else {
+                        originals_by_id
+                            .get(id.as_str())
+                            .and_then(|orig| orig.internal_path.clone())
+                    };
                     images.push(WordImage {
                         id,
                         path,
                         width_emu,
                         height_emu,
-                        internal_path: None,
+                        internal_path,
                     });
                 }
             }
@@ -4081,5 +4165,404 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&tmpdir);
+    }
+
+    // ─── Regression: image preservation through modify() ────────────────
+    //
+    // The bug: `to_elements()` previously skipped image marker paragraphs
+    // (so no `DocElement::Image` ever reached the modify pipeline) and the
+    // modify rebuild loop set `internal_path = None` unconditionally. Net
+    // effect: every call to `modify()` (which is the path the agent's
+    // `create_word_doc` tool takes for any non-`append: true` operation on
+    // an existing file) silently dropped every previously-inserted image.
+    //
+    // The two scenarios below cover both halves of the original bug
+    // report: (a) sequential image-insertion calls into an existing docx
+    // and (b) a subsequent text edit that re-enters the `modify()` path
+    // must not strip the images out from under the user.
+
+    /// Minimal valid PNG bytes (1×1 white pixel).
+    const TINY_PNG: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+        0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+        0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+        0x89,
+        0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54,
+        0x78, 0x9C, 0x62, 0x00, 0x01, 0x00, 0x00, 0x05,
+        0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4,
+        0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44,
+        0xAE, 0x42, 0x60, 0x82,
+    ];
+
+    /// Write two PNGs to a tmpdir and return their absolute paths.
+    fn write_two_pngs(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let tmpdir = std::env::temp_dir().join(format!(
+            "inkuo_modimg_{}_{}",
+            tag,
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&tmpdir).expect("create tmpdir");
+        let a = tmpdir.join("a.png");
+        let b = tmpdir.join("b.png");
+        std::fs::write(&a, TINY_PNG).unwrap();
+        std::fs::write(&b, TINY_PNG).unwrap();
+        (a, b)
+    }
+
+    /// Number of `<w:drawing>` runs in the document.xml part of `bytes`.
+    fn count_drawings(bytes: &[u8]) -> usize {
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("zip");
+        let mut doc_xml = String::new();
+        std::io::Read::read_to_string(
+            &mut archive.by_name("word/document.xml").unwrap(),
+            &mut doc_xml,
+        )
+        .unwrap();
+        doc_xml.matches("<w:drawing>").count()
+    }
+
+    /// Simulates what `CreateWordDocTool::execute` does when the user
+    /// calls `create_word_doc` to insert a single image into an existing
+    /// docx via the `modify()` path (no `append: true`). This is the
+    /// exact code path that was losing images before the fix.
+    fn simulate_create_word_doc_insert_image(
+        bytes: &[u8],
+        path: &std::path::Path,
+        id: &str,
+        source: &std::path::Path,
+        anchor_id: Option<&str>,
+        position: Option<&str>,
+    ) -> Vec<u8> {
+        let mut existing = read_word_document(bytes).expect("read before insert");
+
+        let new_image = DocElement::Image {
+            id: id.to_string(),
+            position: 0,
+            path: source.to_string_lossy().to_string(),
+            width_emu: 1000000,
+            height_emu: 1000000,
+        };
+
+        // The tool layer splits elements between `modifies` (id+exists)
+        // and `new_elements` (everything else). An insert-with-no-id goes
+        // straight into the insert pipeline, exactly like a fresh
+        // `DocElement::Image` with `anchor_id` set.
+        existing.modify(
+            vec![],
+            vec![],
+            vec![InsertElement {
+                element: new_image,
+                anchor_id: anchor_id.map(|s| s.to_string()),
+                position: position.map(|s| s.to_string()),
+            }],
+        );
+
+        let mut buf = std::io::Cursor::new(Vec::<u8>::new());
+        write_word_document(&existing, &mut buf, Some(bytes))
+            .expect("write after insert");
+        let new_bytes = buf.into_inner();
+        std::fs::write(path, &new_bytes).expect("write to disk");
+        new_bytes
+    }
+
+    /// Mirrors the tool layer's "modify with no inserts, just edits"
+    /// branch: read the docx, run modify with modifies/deletes, write
+    /// back. Used to confirm that text edits don't accidentally drop
+    /// pre-existing images.
+    fn simulate_create_word_doc_edit_paragraph(
+        bytes: &[u8],
+        path: &std::path::Path,
+        paragraph_id: &str,
+        new_text: &str,
+    ) -> Vec<u8> {
+        let mut existing = read_word_document(bytes).expect("read before edit");
+
+        existing.modify(
+            vec![DocElement::Paragraph {
+                id: paragraph_id.to_string(),
+                text: new_text.to_string(),
+                omit_text: false,
+                style: None,
+                runs: None,
+                numbering: None,
+            }],
+            vec![],
+            vec![],
+        );
+
+        let mut buf = std::io::Cursor::new(Vec::<u8>::new());
+        write_word_document(&existing, &mut buf, Some(bytes))
+            .expect("write after edit");
+        let new_bytes = buf.into_inner();
+        std::fs::write(path, &new_bytes).expect("write to disk");
+        new_bytes
+    }
+
+    /// Bug 1: inserting multiple images via separate `create_word_doc`
+    /// calls into an existing file (one image per call, no
+    /// `append: true`) must keep every previously-inserted image. Before
+    /// the fix, only the last call's image survived because `modify()`
+    /// dropped the prior image on every pass.
+    #[test]
+    fn modify_preserves_existing_images_across_multiple_inserts() {
+        let (src_a, src_b) = write_two_pngs("multi_insert");
+        let doc_path = std::env::temp_dir().join(format!(
+            "inkuo_modimg_multi_insert_{}.docx",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&doc_path);
+
+        // Seed a doc with one paragraph so the image inserts have
+        // something to anchor against.
+        let seed = {
+            let mut buf = std::io::Cursor::new(Vec::<u8>::new());
+            let doc = WordDocument::from_elements(vec![DocElement::Paragraph {
+                id: "p_intro".into(),
+                text: "Intro paragraph.".into(),
+                omit_text: false,
+                style: None,
+                runs: None,
+                numbering: None,
+            }]);
+            write_word_document(&doc, &mut buf, None).expect("seed write");
+            let bytes = buf.into_inner();
+            std::fs::write(&doc_path, &bytes).unwrap();
+            bytes
+        };
+
+        // Insert imageA after the intro paragraph.
+        let after_a = simulate_create_word_doc_insert_image(
+            &seed,
+            &doc_path,
+            "imgA",
+            &src_a,
+            Some("p_intro"),
+            Some("after"),
+        );
+        assert_eq!(
+            count_drawings(&after_a),
+            1,
+            "after first insert: expected exactly 1 drawing"
+        );
+        let reread = read_word_document(&after_a).unwrap();
+        assert_eq!(reread.images.len(), 1, "after first insert: model lost the image");
+
+        // Insert imageB after the intro paragraph (NOT after imageA —
+        // exercises the "anchor_id points at a paragraph, then a new
+        // image is appended" code path). With the existing "insert at
+        // anchor_idx + 1" semantics, this lands the new image right
+        // after the anchor (between p_intro and any content that
+        // already followed it) — what we care about here is that BOTH
+        // images survive, not their relative order.
+        let after_b = simulate_create_word_doc_insert_image(
+            &after_a,
+            &doc_path,
+            "imgB",
+            &src_b,
+            Some("p_intro"),
+            Some("after"),
+        );
+
+        // The fix: both images must be in the resulting docx.
+        assert_eq!(
+            count_drawings(&after_b),
+            2,
+            "after second insert: expected 2 drawings, but the first image was lost (this is the original bug)"
+        );
+        let reread = read_word_document(&after_b).unwrap();
+        assert_eq!(
+            reread.images.len(),
+            2,
+            "after second insert: model should track both images"
+        );
+        let mut ids: Vec<&str> = reread.images.iter().map(|i| i.id.as_str()).collect();
+        ids.sort();
+        assert_eq!(ids, vec!["imgA", "imgB"]);
+
+        // Both image markers must still be present in the paragraph
+        // list (i.e. neither round was silently dropped from
+        // self.paragraphs). Before the fix, the first round's marker
+        // paragraph disappeared alongside its DocElement::Image.
+        let marker_a_present = reread.paragraphs.iter().any(|p| p.id == "__img_pos_imgA__");
+        let marker_b_present = reread.paragraphs.iter().any(|p| p.id == "__img_pos_imgB__");
+        assert!(
+            marker_a_present && marker_b_present,
+            "image marker paragraphs missing: marker_a={}, marker_b={}",
+            marker_a_present, marker_b_present,
+        );
+
+        // The rels file must have two non-colliding image relationships.
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(after_b.as_slice())).unwrap();
+        let mut rels = String::new();
+        std::io::Read::read_to_string(
+            &mut archive.by_name("word/_rels/document.xml.rels").unwrap(),
+            &mut rels,
+        )
+        .unwrap();
+        assert!(rels.contains("media/image1.png"), "rels missing image1: {}", rels);
+        assert!(rels.contains("media/image2.png"), "rels missing image2: {}", rels);
+
+        // And the original intro paragraph's text must still be there.
+        let mut doc_xml = String::new();
+        std::io::Read::read_to_string(
+            &mut archive.by_name("word/document.xml").unwrap(),
+            &mut doc_xml,
+        )
+        .unwrap();
+        assert!(
+            doc_xml.contains("Intro paragraph."),
+            "intro paragraph text missing after image inserts: {}",
+            doc_xml
+        );
+
+        let _ = std::fs::remove_dir_all(src_a.parent().unwrap());
+        let _ = std::fs::remove_file(&doc_path);
+    }
+
+    /// Bug 2: after images are in the document, a *text* edit (which
+    /// also goes through `modify()`) must not lose the images. Before
+    /// the fix, calling `modify()` with `modifies=[some paragraph]`
+    /// wiped `self.images` to empty and the writer then emitted a docx
+    /// with the new paragraph but no images at all.
+    #[test]
+    fn modify_preserves_images_across_unrelated_text_edit() {
+        let (src_a, _) = write_two_pngs("post_edit");
+        let doc_path = std::env::temp_dir().join(format!(
+            "inkuo_modimg_post_edit_{}.docx",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&doc_path);
+
+        // Build a seed doc with a paragraph + an image already inside,
+        // written through the public writer so the rels / media / doc
+        // xml are all in the canonical "after the writer saw it" form.
+        let seed = {
+            let mut buf = std::io::Cursor::new(Vec::<u8>::new());
+            let doc = WordDocument::from_elements(vec![
+                DocElement::Paragraph {
+                    id: "p_intro".into(),
+                    text: "Original text.".into(),
+                    omit_text: false,
+                    style: None,
+                    runs: None,
+                    numbering: None,
+                },
+                DocElement::Image {
+                    id: "imgA".into(),
+                    position: 0,
+                    path: src_a.to_string_lossy().to_string(),
+                    width_emu: 1000000,
+                    height_emu: 1000000,
+                },
+            ]);
+            write_word_document(&doc, &mut buf, None).expect("seed write");
+            let bytes = buf.into_inner();
+            std::fs::write(&doc_path, &bytes).unwrap();
+            bytes
+        };
+        assert_eq!(count_drawings(&seed), 1, "seed doc should have one drawing");
+
+        // Now apply a text edit (the agent's `create_word_doc` would
+        // route this through `modify()` exactly like an image insert).
+        let after_edit = simulate_create_word_doc_edit_paragraph(
+            &seed,
+            &doc_path,
+            "p_intro",
+            "Updated text after the image.",
+        );
+
+        // The image must survive. Before the fix this would be 0.
+        assert_eq!(
+            count_drawings(&after_edit),
+            1,
+            "text edit dropped the image (this is the original bug)"
+        );
+
+        // The new text must be there too.
+        let reread = read_word_document(&after_edit).unwrap();
+        assert_eq!(reread.images.len(), 1, "model lost the image after text edit");
+        let intro_para = reread
+            .paragraphs
+            .iter()
+            .find(|p| p.id == "p_intro")
+            .expect("intro paragraph missing");
+        assert_eq!(
+            intro_para.text, "Updated text after the image.",
+            "text edit didn't apply: got {:?}",
+            intro_para.text
+        );
+
+        // The rels must still reference the image with a stable rId.
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(after_edit.as_slice())).unwrap();
+        let mut rels = String::new();
+        std::io::Read::read_to_string(
+            &mut archive.by_name("word/_rels/document.xml.rels").unwrap(),
+            &mut rels,
+        )
+        .unwrap();
+        assert!(rels.contains("rId6"), "rels lost the image rId: {}", rels);
+        assert!(
+            rels.contains("media/image1.png"),
+            "rels lost the image target: {}",
+            rels
+        );
+
+        let _ = std::fs::remove_dir_all(src_a.parent().unwrap());
+        let _ = std::fs::remove_file(&doc_path);
+    }
+
+    /// `to_elements()` should now surface images alongside paragraphs and
+    /// tables so callers (most importantly `modify()` and the
+    /// `read_office_file` JSON payload) see the full document content.
+    /// This was previously a silent omission — the marker paragraph was
+    /// just dropped.
+    #[test]
+    fn to_elements_surfaces_existing_images() {
+        let (src, _) = write_two_pngs("to_elems");
+        let mut buf = std::io::Cursor::new(Vec::<u8>::new());
+        let doc = WordDocument::from_elements(vec![
+            DocElement::Paragraph {
+                id: "p1".into(),
+                text: "hello".into(),
+                omit_text: false,
+                style: None,
+                runs: None,
+                numbering: None,
+            },
+            DocElement::Image {
+                id: "img1".into(),
+                position: 0,
+                path: src.to_string_lossy().to_string(),
+                width_emu: 1000000,
+                height_emu: 1000000,
+            },
+        ]);
+        write_word_document(&doc, &mut buf, None).expect("seed write");
+        let reread = read_word_document(&buf.into_inner()).unwrap();
+
+        let elements = reread.to_elements();
+        let has_image = elements
+            .iter()
+            .any(|e| matches!(e, DocElement::Image { id, .. } if id == "img1"));
+        assert!(
+            has_image,
+            "to_elements() should surface the existing image; got: {:?}",
+            elements
+        );
+        // The image marker paragraph must NOT appear as a stray
+        // blank Paragraph in the elements list (it was previously
+        // dropped, but a future bug could regress it to leak through).
+        let has_stray_marker = elements.iter().any(|e| {
+            matches!(e, DocElement::Paragraph { id, text, .. }
+                if id == "__img_pos_img1__"
+                    || text.contains("<__img_pos_img1__>"))
+        });
+        assert!(
+            !has_stray_marker,
+            "image marker paragraph leaked through as a regular element"
+        );
+
+        let _ = std::fs::remove_dir_all(src.parent().unwrap());
     }
 }
