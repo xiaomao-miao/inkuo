@@ -1,15 +1,11 @@
-import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useSidebarStore } from '../store';
 import type { FileEntry } from '../types';
 import { useWorkspaceFileWatcher } from './useWorkspaceFileWatcher';
 import { useDebouncedCallback } from './useDebouncedCallback';
-import {
-  loadDirectoryChildren,
-  openWorkspaceDirectory,
-  switchWorkspace,
-} from '../services/workspace';
+import { loadDirectoryChildren } from '../services/workspace';
 import { reportError } from '../utils/errors';
-import { getRelativePath, isPathInside, joinPath, normalizeDirPath } from '../utils/path';
+import { getRelativePath, isPathInside, normalizeDirPath } from '../utils/path';
 
 interface FileChangeEvent {
   type: string;
@@ -23,43 +19,32 @@ interface UseWorkspaceTreeResult {
   isLoading: boolean;
   loadingDirs: Set<string>;
   openTabs: ReturnType<typeof useSidebarStore.getState>['openTabs'];
-  isCollapsed: boolean;
-  setIsCollapsed: React.Dispatch<React.SetStateAction<boolean>>;
-  openWorkspace: () => Promise<void>;
-  refreshWorkspace: () => Promise<void>;
-  handleFileClick: (entry: FileEntry) => Promise<void>;
+
+  /** Synchronous read from the cache. Returns `[]` for unknown paths so the
+   *  tree never has to special-case "no data yet". */
   getChildren: (dirPath: string) => FileEntry[];
-  isDirLoading: (path: string) => boolean;
-  triggerFileRefresh: (parentPath: string) => Promise<void>;
-}
 
-async function restoreExpandedDirectories(
-  workspaceRootPath: string,
-  expandedDirPaths: string[],
-  loadChildren: (dirPath: string) => Promise<FileEntry[]>,
-): Promise<void> {
-  const normalizedRoot = normalizeDirPath(workspaceRootPath);
+  /**
+   * Ensure `dirPath` has a cache entry. Cheap if it does; otherwise fetches
+   * from the backend and stores the result. The promise resolves once the
+   * fetch completes — even on error, so callers can `await` without leaking
+   * unhandled rejection warnings.
+   */
+  ensureLoaded: (dirPath: string) => Promise<void>;
 
-  // Normalize every persisted path before sorting/comparing so the
-  // sort by length + startsWith check works whether the persisted entry
-  // used `\` or `/` (Windows app versions persist native paths).
-  const normalizedExpandedPaths = expandedDirPaths
-    .map((path) => normalizeDirPath(path))
-    .filter((path) => path && path !== normalizedRoot)
-    .sort((left, right) => left.length - right.length);
+  /**
+   * Toggle the expanded state of a directory. If the directory is being
+   * expanded for the first time, kick off `ensureLoaded` so the row
+   * actually has something to render.
+   */
+  onDirectoryClick: (entry: FileEntry) => void;
 
-  for (const dirPath of normalizedExpandedPaths) {
-    const relativePath = getRelativePath(normalizedRoot, dirPath);
-    if (!relativePath) continue;
-
-    const segments = relativePath.split('/').filter(Boolean);
-    let currentPath = normalizedRoot;
-
-    for (const segment of segments) {
-      currentPath = joinPath(currentPath, segment);
-      await loadChildren(currentPath);
-    }
-  }
+  /**
+   * Re-read `dirPath` from the backend and replace the cache entry. Used
+   * by mutation call sites (create, rename, paste, delete) to keep the
+   * tree honest without dropping subdirectory entries.
+   */
+  refreshDirectory: (dirPath: string) => Promise<void>;
 }
 
 export function useWorkspaceTree(): UseWorkspaceTreeResult {
@@ -69,231 +54,155 @@ export function useWorkspaceTree(): UseWorkspaceTreeResult {
   const isLoading = useSidebarStore((state) => state.isLoading);
   const loadingDirs = useSidebarStore((state) => state.loadingDirs);
   const openTabs = useSidebarStore((state) => state.openTabs);
+
   const toggleDir = useSidebarStore((state) => state.toggleDir);
-  const setIsLoading = useSidebarStore((state) => state.setIsLoading);
   const setDirLoading = useSidebarStore((state) => state.setDirLoading);
-  const openWorkspaceFile = useSidebarStore((state) => state.openWorkspaceFile);
-  const getCachedChildren = useSidebarStore((state) => state.getCachedChildren);
   const setCachedChildren = useSidebarStore((state) => state.setCachedChildren);
+  const getCachedChildren = useSidebarStore((state) => state.getCachedChildren);
   const hasCachedChildren = useSidebarStore((state) => state.hasCachedChildren);
-  const invalidateCache = useSidebarStore((state) => state.invalidateCache);
-  const clearCache = useSidebarStore((state) => state.clearCache);
-  const isDirExpanded = useSidebarStore((state) => state.isDirExpanded);
+  const evictCachedChildren = useSidebarStore((state) => state.evictCachedChildren);
 
-  const [isCollapsed, setIsCollapsed] = useState(false);
-
-  const workspaceRootPath = useMemo(
-    () => workspacePath ?? null,
-    [workspacePath],
-  );
-
-  const refreshLockRef = useRef<Set<string>>(new Set());
-  /// Outstanding lock-release timers for each parent path. We track them so a
-  /// hook unmount (e.g. workspace switch) can cancel pending releases instead
-  /// of letting them fire against a (potentially remounted) ref. The set is
-  /// the source of truth for `clearTimeout` calls on cleanup.
-  const lockReleaseTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
-
-  useEffect(() => {
-    const timers = lockReleaseTimersRef.current;
-    const lockSet = refreshLockRef.current;
-    return () => {
-      for (const handle of timers.values()) {
-        clearTimeout(handle);
-      }
-      timers.clear();
-      lockSet.clear();
-    };
-  }, []);
+  const normalizedWorkspacePath = workspacePath
+    ? normalizeDirPath(workspacePath)
+    : null;
 
   /**
-   * Refresh a specific directory's cache and reload.
+   * Fetch the children of `dirPath` from the backend, store them, and
+   * toggle the `loadingDirs` flag so the row can show a spinner.
    *
-   * We always re-read the directory contents (debounced upstream) so that:
-   * - expanded directories show fresh children immediately,
-   * - collapsed directories have fresh cache for when the user expands them,
-   *   avoiding a "stale until manual refresh" UX.
+   * This is the **only** function in the file that talks to the backend.
+   * Every cache update flows through here, which means there is exactly
+   * one place to reason about ordering, error handling, and the
+   * "evict-on-error" fallback.
+   *
+   * Normalisation is performed here (not at the callsite) so every cache
+   * key is automatically consistent regardless of which OS-style path the
+   * caller passes in.
    */
-  const triggerFileRefresh = useCallback(
-    async (parentPath: string) => {
-      invalidateCache(parentPath);
-
-      try {
-        const children = await loadDirectoryChildren(parentPath);
-        setCachedChildren(parentPath, children);
-      } catch (err) {
-        reportError('workspace-tree-refresh-children', err);
-      }
-    },
-    [invalidateCache, setCachedChildren],
-  );
-
-  /**
-   * Debounced file refresh to batch multiple rapid changes.
-   */
-  const debouncedRefresh = useDebouncedCallback(
-    async (parentPath: string) => {
-      if (refreshLockRef.current.has(parentPath)) return;
-
-      refreshLockRef.current.add(parentPath);
-      try {
-        await triggerFileRefresh(parentPath);
-      } finally {
-        const timers = lockReleaseTimersRef.current;
-        const existing = timers.get(parentPath);
-        if (existing !== undefined) {
-          clearTimeout(existing);
-        }
-        const handle = setTimeout(() => {
-          timers.delete(parentPath);
-          refreshLockRef.current.delete(parentPath);
-        }, 500);
-        timers.set(parentPath, handle);
-      }
-    },
-    300,
-  );
-
-  /**
-   * Load children for a directory (lazy loading).
-   * Uses cache if available, otherwise fetches from backend.
-   */
-  const loadChildren = useCallback(
-    async (dirPath: string) => {
-      if (hasCachedChildren(dirPath)) {
-        return getCachedChildren(dirPath);
-      }
+  const fetchAndCache = useCallback(
+    async (rawDirPath: string): Promise<void> => {
+      const dirPath = normalizeDirPath(rawDirPath);
+      if (!dirPath) return;
 
       setDirLoading(dirPath, true);
       try {
         const children = await loadDirectoryChildren(dirPath);
         setCachedChildren(dirPath, children);
-        return children;
       } catch (err) {
-        reportError('workspace-tree-load-children', err);
-        return [];
+        reportError('workspace-tree-fetch', err);
+        // Drop the stale entry so the tree stops rendering an out-of-date
+        // list. The next click on the row will trigger another fetch.
+        evictCachedChildren(dirPath);
       } finally {
         setDirLoading(dirPath, false);
       }
     },
-    [getCachedChildren, hasCachedChildren, setCachedChildren, setDirLoading],
+    [setDirLoading, setCachedChildren, evictCachedChildren],
   );
 
   /**
-   * Get children for a directory (synchronous, from cache).
+   * Debounce file-watcher events so a burst of changes (e.g. an editor
+   * saving a batch of files) triggers a single refetch per directory
+   * instead of one per event.
    */
-  const getChildren = useCallback(
-    (dirPath: string): FileEntry[] => {
-      return getCachedChildren(dirPath);
+  const debouncedFetch = useDebouncedCallback(fetchAndCache, 250);
+
+  // Per-directory lock to coalesce overlapping refresh requests. If a
+  // refresh for `parentPath` is already in flight (or just resolved), we
+  // skip until the lock is released. Without this, a quick `Created` →
+  // `Modified` pair for the same file could cancel each other out and
+  // leave a partially-applied cache entry.
+  const inflightRef = useRef<Set<string>>(new Set());
+
+  const refreshDirectory = useCallback(
+    async (parentPath: string) => {
+      const dirPath = normalizeDirPath(parentPath);
+      if (!dirPath || inflightRef.current.has(dirPath)) return;
+      inflightRef.current.add(dirPath);
+      try {
+        await fetchAndCache(dirPath);
+      } finally {
+        inflightRef.current.delete(dirPath);
+      }
     },
-    [getCachedChildren],
+    [fetchAndCache],
   );
 
-  /**
-   * Check if a directory is currently loading.
-   */
-  const isDirLoading = useCallback(
-    (path: string): boolean => {
-      return loadingDirs.has(path);
+  const ensureLoaded = useCallback(
+    async (dirPath: string) => {
+      if (hasCachedChildren(dirPath)) return;
+      await refreshDirectory(dirPath);
     },
-    [loadingDirs],
+    [hasCachedChildren, refreshDirectory],
   );
 
   /**
-   * Refresh the entire workspace by clearing cache and reloading root.
+   * First-time population of the root directory cache.
+   *
+   * Triggers once when the workspace is opened (either via persist-restore
+   * or via `setWorkspacePath` from the picker). Only depends on the
+   * normalised workspace path so it does NOT re-fire on every expand /
+   * collapse — that was the bug that produced the tree-wide flicker.
+   *
+   * The `getCachedChildren` guard means a `switchWorkspace` that has
+   * already populated the root (via `applyWorkspaceDirectoryLoad`) won't
+   * pay for a redundant fetch.
    */
-  const refreshWorkspace = useCallback(async () => {
-    if (!workspaceRootPath) return;
-
-    setIsLoading(true);
-    try {
-      clearCache();
-      await loadChildren(workspaceRootPath);
-      await restoreExpandedDirectories(
-        workspaceRootPath,
-        Array.from(expandedDirs),
-        loadChildren,
-      );
-    } catch (err) {
-      reportError('workspace-tree-refresh', err);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [workspaceRootPath, loadChildren, clearCache, expandedDirs, setIsLoading]);
+  useEffect(() => {
+    if (!normalizedWorkspacePath) return;
+    if (hasCachedChildren(normalizedWorkspacePath)) return;
+    void refreshDirectory(normalizedWorkspacePath);
+  }, [normalizedWorkspacePath, hasCachedChildren, refreshDirectory]);
 
   /**
-   * Handle file system changes from the watcher.
+   * Watcher → refresh. Every `file-change` event resolves to the parent
+   * directory of the changed path, which is exactly the cache entry we
+   * need to invalidate. We debounce to coalesce bursts.
    */
   const handleFileChange = useCallback(
     (event: FileChangeEvent) => {
-      if (!workspaceRootPath) return;
+      if (!normalizedWorkspacePath) return;
 
       const changedPath = event.data?.path;
-      if (!changedPath || !isPathInside(workspaceRootPath, changedPath)) return;
+      if (!changedPath || !isPathInside(normalizedWorkspacePath, changedPath)) return;
 
-      switch (event.type) {
-        case 'Created':
-        case 'Deleted':
-        case 'Modified': {
-          const parentPath = getParentPath(changedPath, workspaceRootPath);
-          if (parentPath) {
-            debouncedRefresh(parentPath);
-          }
-          break;
+      if (
+        event.type === 'Created' ||
+        event.type === 'Deleted' ||
+        event.type === 'Modified'
+      ) {
+        const parentPath = getParentDirPath(changedPath, normalizedWorkspacePath);
+        if (parentPath) {
+          void debouncedFetch(parentPath);
         }
-        default:
-          break;
       }
     },
-    [workspaceRootPath, debouncedRefresh],
+    [normalizedWorkspacePath, debouncedFetch],
   );
 
-  useWorkspaceFileWatcher(workspaceRootPath, handleFileChange);
+  useWorkspaceFileWatcher(normalizedWorkspacePath, handleFileChange);
 
   /**
-   * Open a workspace directory.
+   * Click handler for a directory row in the tree. Toggles the expanded
+   * state and lazily fetches children on first expansion.
    */
-  const openWorkspace = useCallback(async () => {
-    try {
-      const selected = await openWorkspaceDirectory();
-      if (!selected) return;
-
-      switchWorkspace(selected);
-      clearCache();
-      await loadChildren(selected);
-    } catch (err) {
-      reportError('workspace-tree-open-workspace', err);
-    }
-  }, [loadChildren, clearCache]);
-
-  /**
-   * Handle file/folder click.
-   */
-  const handleFileClick = useCallback(
-    async (entry: FileEntry) => {
-      if (entry.is_dir) {
-        const wasExpanded = isDirExpanded(entry.path);
-
-        if (wasExpanded) {
-          toggleDir(entry.path);
-        } else {
-          toggleDir(entry.path);
-          if (!hasCachedChildren(entry.path)) {
-            await loadChildren(entry.path);
-          }
-        }
-        return;
+  const onDirectoryClick = useCallback(
+    (entry: FileEntry) => {
+      if (!entry.is_dir) return;
+      const wasExpanded = useSidebarStore.getState().isDirExpanded(entry.path);
+      toggleDir(entry.path);
+      if (!wasExpanded) {
+        void ensureLoaded(entry.path);
       }
-
-      openWorkspaceFile(entry.path, { name: entry.name });
     },
-    [
-      isDirExpanded,
-      toggleDir,
-      loadChildren,
-      hasCachedChildren,
-      openWorkspaceFile,
-    ],
+    [toggleDir, ensureLoaded],
+  );
+
+  const getChildren = useCallback(
+    (dirPath: string): FileEntry[] => {
+      return getCachedChildren(normalizeDirPath(dirPath));
+    },
+    [getCachedChildren],
   );
 
   return {
@@ -303,25 +212,22 @@ export function useWorkspaceTree(): UseWorkspaceTreeResult {
     isLoading,
     loadingDirs,
     openTabs,
-    isCollapsed,
-    setIsCollapsed,
-    openWorkspace,
-    refreshWorkspace,
-    handleFileClick,
     getChildren,
-    isDirLoading,
-    triggerFileRefresh,
+    ensureLoaded,
+    onDirectoryClick,
+    refreshDirectory,
   };
 }
 
 /**
- * Extract parent directory path from a file path.
+ * Return the directory that contains `filePath`, rooted at `workspaceRoot`.
+ * Both inputs are normalised first so the math is separator-agnostic.
  *
- * Both arguments are normalized so this works whether the watcher hands
- * us `E:\文档\sub\file.md` or `E:/文档/sub/file.md`. The returned parent is
- * also normalized, so it can be used as a cache key directly.
+ *   getParentDirPath('/root', '/root/a.md')           === '/root'
+ *   getParentDirPath('/root', '/root/sub/b.md')      === '/root/sub'
+ *   getParentDirPath('/root', '/root/sub/nested/c')  === '/root/sub/nested'
  */
-function getParentPath(filePath: string, workspaceRoot: string): string | null {
+function getParentDirPath(filePath: string, workspaceRoot: string): string | null {
   const normalizedRoot = normalizeDirPath(workspaceRoot);
   if (!normalizedRoot) return null;
 
@@ -329,10 +235,9 @@ function getParentPath(filePath: string, workspaceRoot: string): string | null {
   if (!relativePath) return normalizedRoot;
 
   const segments = relativePath.split('/').filter(Boolean);
-  if (segments.length <= 1) {
-    return normalizedRoot;
-  }
+  if (segments.length <= 1) return normalizedRoot;
 
-  const parentSegments = segments.slice(0, -1);
-  return joinPath(normalizedRoot, ...parentSegments);
+  return segments
+    .slice(0, -1)
+    .reduce((acc, segment) => `${acc}/${segment}`, normalizedRoot);
 }

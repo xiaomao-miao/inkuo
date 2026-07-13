@@ -9,7 +9,7 @@ import {
   BookMarked,
   FolderX,
 } from 'lucide-react';
-import type { MouseEvent as ReactMouseEvent } from 'react';
+import type { MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import {
   useContextMenuStore,
   useSidebarStore,
@@ -28,16 +28,27 @@ interface FileTreeProps {
   selectedFile: string | null;
   openTabs: OpenTab[];
   onFileClick: (entry: FileEntry) => void | Promise<void>;
-  /** Whether knowledge base selection mode is active */
   knowledgeSelectMode?: boolean;
-  /** Paths checked in knowledge selection mode */
   knowledgeCheckedPaths?: Set<string>;
-  /** Paths that are already knowledge base members (relative to workspace) */
   knowledgeMembers?: string[];
-  /** Callback when a path is checked/unchecked */
   onKnowledgeCheck?: (path: string, checked: boolean) => void;
 }
 
+/**
+ * Root of the workspace file tree.
+ *
+ * The tree is fully driven by the directory cache:
+ *   - `getChildren(path)` returns the cached child list for `path`
+ *     (or `[]` if we have never read that directory).
+ *   - The tree itself never fetches — `useWorkspaceTree` is the only
+ *     component allowed to talk to the backend.
+ *
+ * Three rendering paths:
+ *   1. Root cache is unknown      → show a single "loading…" placeholder
+ *      until the hook finishes its initial fetch.
+ *   2. Root cache is known but empty → show "空文件夹".
+ *   3. Root cache has entries     → recurse into `TreeRow` for each child.
+ */
 export const FileTree = ({
   workspaceRoot,
   getChildren,
@@ -51,11 +62,18 @@ export const FileTree = ({
   knowledgeMembers = [],
   onKnowledgeCheck,
 }: FileTreeProps) => {
+  const isRootLoading = loadingDirs.has(normalizeDirPath(workspaceRoot));
   const rootChildren = getChildren(workspaceRoot);
+  const rootKnown = rootChildren.length > 0 || !isRootLoading;
+  // We only know "this folder is empty" once we've actually loaded it.
+  // Before the first fetch lands we must not flash an "空文件夹" message.
+  const rootIsEmpty = rootKnown && rootChildren.length === 0 && !isRootLoading;
+
+  const inlineEdit = useSidebarStore((s) => s.inlineEdit);
+  const isInlineCreateAtRoot =
+    inlineEdit?.mode === 'create' && inlineEdit.parentPath === workspaceRoot;
 
   const handleRootContextMenu = (e: ReactMouseEvent<HTMLDivElement>) => {
-    // Only fire when the click landed on the empty area of the tree itself,
-    // not on a child row (which stops propagation in its own handler).
     if (e.target !== e.currentTarget) return;
     e.preventDefault();
     useContextMenuStore.getState().open({
@@ -72,36 +90,37 @@ export const FileTree = ({
       aria-label="文件树"
       onContextMenu={handleRootContextMenu}
     >
-      {rootChildren.length === 0 ? (
-        <div className={styles.emptyFolder}><FolderX size={12} /> 空文件夹</div>
+      {isRootLoading && rootChildren.length === 0 ? (
+        <RootLoading />
+      ) : isInlineCreateAtRoot ? (
+        <InlineRenameInput state={inlineEdit} depth={0} />
+      ) : rootIsEmpty ? (
+        <EmptyFolder />
       ) : (
-        <FileTreeNode
-          entry={{
-            name: workspaceRoot.split('/').pop() ?? '',
-            path: workspaceRoot,
-            is_dir: true,
-            is_markdown: false,
-          }}
-          getChildren={getChildren}
-          expandedDirs={expandedDirs}
-          loadingDirs={loadingDirs}
-          selectedFile={selectedFile}
-          openTabs={openTabs}
-          onFileClick={onFileClick}
-          depth={0}
-          isRoot
-          knowledgeSelectMode={knowledgeSelectMode}
-          knowledgeCheckedPaths={knowledgeCheckedPaths}
-          knowledgeMembers={knowledgeMembers}
-          onKnowledgeCheck={onKnowledgeCheck}
-          workspaceRoot={workspaceRoot}
-        />
+        rootChildren.map((child) => (
+          <TreeRow
+            key={child.path}
+            entry={child}
+            getChildren={getChildren}
+            expandedDirs={expandedDirs}
+            loadingDirs={loadingDirs}
+            selectedFile={selectedFile}
+            openTabs={openTabs}
+            onFileClick={onFileClick}
+            depth={0}
+            workspaceRoot={workspaceRoot}
+            knowledgeSelectMode={knowledgeSelectMode}
+            knowledgeCheckedPaths={knowledgeCheckedPaths}
+            knowledgeMembers={knowledgeMembers}
+            onKnowledgeCheck={onKnowledgeCheck}
+          />
+        ))
       )}
     </div>
   );
 };
 
-interface FileTreeNodeProps {
+interface TreeRowProps {
   entry: FileEntry;
   getChildren: (dirPath: string) => FileEntry[];
   expandedDirs: Set<string>;
@@ -110,15 +129,20 @@ interface FileTreeNodeProps {
   openTabs: OpenTab[];
   onFileClick: (entry: FileEntry) => void | Promise<void>;
   depth: number;
-  isRoot?: boolean;
-  knowledgeSelectMode?: boolean;
-  knowledgeCheckedPaths?: Set<string>;
-  knowledgeMembers?: string[];
+  workspaceRoot: string;
+  knowledgeSelectMode: boolean;
+  knowledgeCheckedPaths: Set<string>;
+  knowledgeMembers: string[];
   onKnowledgeCheck?: (path: string, checked: boolean) => void;
-  workspaceRoot?: string;
 }
 
-const FileTreeNode = ({
+/**
+ * One row in the tree — either a file or a directory. The shape of the
+ * rendered output differs (file vs chevron + children), but the metadata
+ * (selection, knowledge-base membership, inline-edit slot, context menu)
+ * is identical, so it lives here in one place.
+ */
+const TreeRow = ({
   entry,
   getChildren,
   expandedDirs,
@@ -127,63 +151,38 @@ const FileTreeNode = ({
   openTabs,
   onFileClick,
   depth,
-  isRoot,
-  knowledgeSelectMode = false,
-  knowledgeCheckedPaths = new Set(),
-  knowledgeMembers = [],
+  workspaceRoot,
+  knowledgeSelectMode,
+  knowledgeCheckedPaths,
+  knowledgeMembers,
   onKnowledgeCheck,
-  workspaceRoot = '',
-}: FileTreeNodeProps) => {
-  const isExpanded = expandedDirs.has(entry.path);
-  const isLoading = loadingDirs.has(entry.path);
-  const isSelected = selectedFile === entry.path;
-  const isOpen = openTabs.some((tab) => tab.path === entry.path);
-  const children = getChildren(entry.path);
+}: TreeRowProps) => {
+  const isDir = entry.is_dir;
+  const isExpanded = isDir && expandedDirs.has(entry.path);
+  const isLoading = isDir && loadingDirs.has(entry.path);
+  const isSelected = !isDir && selectedFile === entry.path;
+  const isOpen = !isDir && openTabs.some((tab) => tab.path === entry.path);
 
-  // Inline-edit slot: either renaming an existing entry, or creating a new
-  // one as a child of this node (for directories) / as a sibling (for the
-  // workspace root, which is handled via parent path).
+  const children = isDir ? getChildren(entry.path) : [];
+
   const inlineEdit = useSidebarStore((s) => s.inlineEdit);
-  const inlineEditForThisEntry =
-    inlineEdit &&
-    ((inlineEdit.mode === 'rename' && inlineEdit.originalPath === entry.path) ||
-      (inlineEdit.mode === 'create' &&
-        !isRoot &&
-        inlineEdit.parentPath === entry.path &&
-        !entry.is_dir));
-
-  // For directory rows in 'create' mode, render the input as a synthetic
-  // first-child instead of the directory's own row.
-  const inlineEditAsChild =
-    inlineEdit &&
-    inlineEdit.mode === 'create' &&
-    !isRoot &&
-    entry.is_dir &&
+  const isRenamingThis =
+    inlineEdit?.mode === 'rename' && inlineEdit.originalPath === entry.path;
+  const isCreatingAsChild =
+    inlineEdit?.mode === 'create' &&
+    isDir &&
     inlineEdit.parentPath === entry.path;
 
-  // Compute relative path for knowledge base matching.
-  // Knowledge-base members are stored as workspace-relative paths by the
-  // Rust backend (see `DocScanner::strip_prefix`). Both sides need to be
-  // normalized so the comparison is correct on Windows, where `entry.path`
-  // is `E:\文档\file.md` and a stored member would also have `\`.
-  const relativePath = workspaceRoot
-    ? getRelativePath(workspaceRoot, entry.path)
-    : normalizeDirPath(entry.path);
+  const relativePath = getRelativePath(workspaceRoot, entry.path);
   const isKnowledgeMember = knowledgeMembers.includes(relativePath);
   const isChecked = knowledgeCheckedPaths.has(relativePath);
-  const showCheckbox = knowledgeSelectMode && !entry.is_dir;
+  const showCheckbox = knowledgeSelectMode && !isDir;
 
   const handleClick = () => {
     void onFileClick(entry);
   };
-
-  const handleCheckboxChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    e.stopPropagation();
-    onKnowledgeCheck?.(relativePath, e.target.checked);
-  };
-
   const handleContextMenu = (e: ReactMouseEvent<HTMLElement>) => {
-    if (knowledgeSelectMode) return; // selection mode has its own UX
+    if (knowledgeSelectMode) return;
     e.preventDefault();
     e.stopPropagation();
     useContextMenuStore.getState().open({
@@ -194,14 +193,16 @@ const FileTreeNode = ({
       entry,
     });
   };
+  const handleCheckboxChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    e.stopPropagation();
+    onKnowledgeCheck?.(relativePath, e.target.checked);
+  };
 
-  // If this specific row is in rename mode, render the input in place of
-  // the static row. We still keep it inside the treeItem wrapper so the
-  // surrounding chrome (checkbox, indentation) stays consistent.
-  if (inlineEditForThisEntry && inlineEdit) {
+  // Inline-rename replaces this row entirely. We still wrap it in the
+  // treeItem container so indentation matches the row it stands in for.
+  if (isRenamingThis && inlineEdit) {
     return (
       <div
-        key={entry.path}
         role="treeitem"
         aria-selected
         aria-level={depth + 1}
@@ -212,108 +213,23 @@ const FileTreeNode = ({
     );
   }
 
-  if (!entry.is_dir) {
-    return (
-      <div
-        key={entry.path}
-        role="treeitem"
-        aria-selected={isSelected}
-        aria-level={depth + 1}
-        className={styles.treeItem}
-      >
-        <button
-          type="button"
-          className={`${styles.fileItem} ${isSelected ? styles.selected : ''}`}
-          onClick={handleClick}
-          onContextMenu={handleContextMenu}
-          data-depth={Math.min(depth, 4)}
-        >
-          {showCheckbox && (
-            <input
-              type="checkbox"
-              className={styles.knowledgeCheckbox}
-              checked={isChecked}
-              onChange={handleCheckboxChange}
-              onClick={(e) => e.stopPropagation()}
-            />
-          )}
-          {!showCheckbox && <span className={styles.chevronPlaceholder} />}
-          <span
-            className={`${styles.icon} ${isSelected ? styles.iconActive : ''}`}
-            data-type={entry.is_markdown ? 'markdown' : 'file'}
-          >
-            {entry.is_markdown ? <FileText size={14} /> : <File size={14} />}
-          </span>
-          <span className={styles.fileName}>{entry.name}</span>
-          {isKnowledgeMember && !showCheckbox && (
-            <span className={styles.knowledgeBadge}>
-              <BookMarked size={12} />
-            </span>
-          )}
-          {isOpen && (
-            <span className={`${styles.openIndicator} ${styles.openIndicatorActive}`}>
-              ●
-            </span>
-          )}
-        </button>
-      </div>
-    );
-  }
-
-  if (isRoot) {
-    // Workspace-root: also render inline-edit row as a virtual child if the
-    // user picked "New file / New folder" at the root.
-    return (
-      <>
-        {inlineEdit && inlineEdit.mode === 'create' && inlineEdit.parentPath === entry.path ? (
-          <InlineRenameInput
-            key={`__inline-create__`}
-            state={inlineEdit}
-            depth={0}
-          />
-        ) : null}
-        {children.length === 0 && !isLoading && !inlineEditAsChild ? (
-          <div className={styles.emptyFolder}><FolderX size={12} /> 空文件夹</div>
-        ) : (
-          children.map((child) => (
-            <FileTreeNode
-              key={child.path}
-              entry={child}
-              getChildren={getChildren}
-              expandedDirs={expandedDirs}
-              loadingDirs={loadingDirs}
-              selectedFile={selectedFile}
-              openTabs={openTabs}
-              onFileClick={onFileClick}
-              depth={0}
-              knowledgeSelectMode={knowledgeSelectMode}
-              knowledgeCheckedPaths={knowledgeCheckedPaths}
-              knowledgeMembers={knowledgeMembers}
-              onKnowledgeCheck={onKnowledgeCheck}
-              workspaceRoot={workspaceRoot}
-            />
-          ))
-        )}
-      </>
-    );
-  }
-
-  return (
-    <div
-      key={entry.path}
-      role="treeitem"
-      aria-expanded={isExpanded}
-      aria-selected={isSelected}
-      aria-level={depth + 1}
-      className={styles.treeItem}
+  const headerButton = (
+    <button
+      type="button"
+      className={`${styles.fileItem} ${isSelected ? styles.selected : ''}`}
+      onClick={handleClick}
+      onContextMenu={handleContextMenu}
+      data-depth={Math.min(depth, 4)}
     >
-      <button
-        type="button"
-        className={`${styles.fileItem} ${isSelected ? styles.selected : ''}`}
-        onClick={handleClick}
-        onContextMenu={handleContextMenu}
-        data-depth={Math.min(depth, 4)}
-      >
+      {showCheckbox ? (
+        <input
+          type="checkbox"
+          className={styles.knowledgeCheckbox}
+          checked={isChecked}
+          onChange={handleCheckboxChange}
+          onClick={(e) => e.stopPropagation()}
+        />
+      ) : isDir ? (
         <span className={styles.chevron}>
           {isLoading ? (
             <Loader2 size={14} className={styles.spin} />
@@ -323,57 +239,162 @@ const FileTreeNode = ({
             <ChevronRight size={14} />
           )}
         </span>
-        <span
-          className={styles.icon}
-          data-type={isExpanded ? 'folder-open' : 'folder'}
-        >
-          {isExpanded ? <FolderOpenIcon size={14} /> : <Folder size={14} />}
+      ) : (
+        <span className={styles.chevronPlaceholder} />
+      )}
+      <span
+        className={`${styles.icon} ${isSelected ? styles.iconActive : ''}`}
+        data-type={iconType(entry)}
+      >
+        {iconFor(entry, isExpanded)}
+      </span>
+      <span className={styles.fileName}>{entry.name}</span>
+      {!showCheckbox && isKnowledgeMember && (
+        <span className={styles.knowledgeBadge}>
+          <BookMarked size={12} />
         </span>
-        <span className={styles.fileName}>{entry.name}</span>
-      </button>
+      )}
+      {isOpen && (
+        <span className={`${styles.openIndicator} ${styles.openIndicatorActive}`}>
+          ●
+        </span>
+      )}
+    </button>
+  );
 
+  if (!isDir) {
+    return (
+      <div
+        role="treeitem"
+        aria-selected={isSelected}
+        aria-level={depth + 1}
+        className={styles.treeItem}
+      >
+        {headerButton}
+      </div>
+    );
+  }
+
+  return (
+    <div
+      role="treeitem"
+      aria-expanded={isExpanded}
+      aria-selected={isSelected}
+      aria-level={depth + 1}
+      className={styles.treeItem}
+    >
+      {headerButton}
       {isExpanded && (
         <div role="group" className={styles.children}>
-          {isLoading ? (
-            <div className={styles.loadingChildren}>
-              <Loader2 size={12} className={styles.spin} />
-              <span>加载中...</span>
-            </div>
-          ) : (
-            <>
-              {inlineEditAsChild && inlineEdit ? (
-                <InlineRenameInput
-                  key="__inline-create__"
-                  state={inlineEdit}
-                  depth={depth + 1}
-                />
-              ) : null}
-              {children.length === 0 && !inlineEditAsChild ? (
-                <div className={styles.emptyFolder}><FolderX size={12} /> 空文件夹</div>
-              ) : (
-                children.map((child) => (
-                  <FileTreeNode
-                    key={child.path}
-                    entry={child}
-                    getChildren={getChildren}
-                    expandedDirs={expandedDirs}
-                    loadingDirs={loadingDirs}
-                    selectedFile={selectedFile}
-                    openTabs={openTabs}
-                    onFileClick={onFileClick}
-                    depth={depth + 1}
-                    knowledgeSelectMode={knowledgeSelectMode}
-                    knowledgeCheckedPaths={knowledgeCheckedPaths}
-                    knowledgeMembers={knowledgeMembers}
-                    onKnowledgeCheck={onKnowledgeCheck}
-                    workspaceRoot={workspaceRoot}
-                  />
-                ))
-              )}
-            </>
-          )}
+          {renderChildren({
+            children,
+            isLoading: !!isLoading,
+            depth,
+            getChildren,
+            expandedDirs,
+            loadingDirs,
+            selectedFile,
+            openTabs,
+            onFileClick,
+            workspaceRoot,
+            knowledgeSelectMode,
+            knowledgeCheckedPaths,
+            knowledgeMembers,
+            onKnowledgeCheck,
+            inlineCreateSlot: isCreatingAsChild ? inlineEdit : null,
+          })}
         </div>
       )}
     </div>
   );
 };
+
+interface RenderChildrenArgs {
+  children: FileEntry[];
+  isLoading: boolean;
+  depth: number;
+  inlineCreateSlot: ReturnType<typeof useSidebarStore.getState>['inlineEdit'];
+  // Re-forwarded props — collapsed into one bag so the JSX stays readable.
+  getChildren: TreeRowProps['getChildren'];
+  expandedDirs: TreeRowProps['expandedDirs'];
+  loadingDirs: TreeRowProps['loadingDirs'];
+  selectedFile: TreeRowProps['selectedFile'];
+  openTabs: TreeRowProps['openTabs'];
+  onFileClick: TreeRowProps['onFileClick'];
+  workspaceRoot: TreeRowProps['workspaceRoot'];
+  knowledgeSelectMode: TreeRowProps['knowledgeSelectMode'];
+  knowledgeCheckedPaths: TreeRowProps['knowledgeCheckedPaths'];
+  knowledgeMembers: TreeRowProps['knowledgeMembers'];
+  onKnowledgeCheck: TreeRowProps['onKnowledgeCheck'];
+}
+
+function renderChildren({
+  children,
+  isLoading,
+  depth,
+  inlineCreateSlot,
+  ...rest
+}: RenderChildrenArgs): ReactNode {
+  if (isLoading && children.length === 0) {
+    return (
+      <div className={styles.loadingChildren}>
+        <Loader2 size={12} className={styles.spin} />
+        <span>加载中...</span>
+      </div>
+    );
+  }
+
+  if (children.length === 0 && !inlineCreateSlot) {
+    return <EmptyFolder />;
+  }
+
+  const rows: ReactNode[] = [];
+  if (inlineCreateSlot) {
+    rows.push(
+      <InlineRenameInput
+        key="__inline-create__"
+        state={inlineCreateSlot}
+        depth={depth + 1}
+      />,
+    );
+  }
+  for (const child of children) {
+    rows.push(
+      <TreeRow
+        key={child.path}
+        entry={child}
+        depth={depth + 1}
+        {...rest}
+      />,
+    );
+  }
+  return rows;
+}
+
+function iconType(entry: FileEntry): string {
+  if (entry.is_dir) return 'folder';
+  if (entry.is_markdown) return 'markdown';
+  return 'file';
+}
+
+function iconFor(entry: FileEntry, isExpanded: boolean): ReactNode {
+  if (entry.is_dir) {
+    return isExpanded ? <FolderOpenIcon size={14} /> : <Folder size={14} />;
+  }
+  if (entry.is_markdown) return <FileText size={14} />;
+  return <File size={14} />;
+}
+
+const RootLoading = () => (
+  <div className={styles.emptyFolder}>
+    <Loader2 size={12} className={styles.spin} />
+    <span>加载中…</span>
+  </div>
+);
+
+const EmptyFolder = () => (
+  <div className={styles.emptyFolder}>
+    <FolderX size={12} />
+    <span>空文件夹</span>
+  </div>
+);

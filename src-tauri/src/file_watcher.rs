@@ -112,7 +112,13 @@ impl FileWatcherState {
                     }
                 }
             },
-            Config::default().with_poll_interval(Duration::from_secs(2)),
+            // Tuned for snappy UI feedback when an outside editor (or the
+            // sidebar's inline-create flow that forgot to refetch) lands a
+            // write the watcher otherwise wouldn't see. 2s is too sluggish —
+            // users perceive that as "the file tree didn't refresh until I
+            // clicked 刷新". 500ms is the smallest interval at which we
+            // can still tolerate polling on every watched workspace.
+            Config::default().with_poll_interval(Duration::from_millis(500)),
         )
         .map_err(|e| FileWatcherError::CreateWatcher(e.to_string()))?;
 

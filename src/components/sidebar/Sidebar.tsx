@@ -12,7 +12,7 @@ import {
   Check,
   Minus,
 } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useWorkspaceSearch } from '../../hooks/useWorkspaceSearch';
 import { useWorkspaceTree } from '../../hooks/useWorkspaceTree';
 import { useSidebarStore } from '../../store/sidebarStore';
@@ -20,6 +20,7 @@ import { FileTree } from './FileTree';
 import { ContextMenu } from './ContextMenu';
 import type { FileEntry } from '../../types';
 import { getRelativePath, normalizeDirPath } from '../../utils/path';
+import { reloadCurrentWorkspace } from '../../services/workspace';
 import styles from './Sidebar.module.css';
 import { SkeletonGroup, SkeletonListItem } from '../common/Skeleton';
 
@@ -72,12 +73,28 @@ export const Sidebar = () => {
     isLoading,
     loadingDirs,
     openTabs,
-    isCollapsed,
-    setIsCollapsed,
-    refreshWorkspace,
-    handleFileClick,
+    onDirectoryClick,
     getChildren,
   } = useWorkspaceTree();
+
+  const [isCollapsed, setIsCollapsed] = useState(false);
+
+  const openWorkspaceFile = useSidebarStore((s) => s.openWorkspaceFile);
+
+  const handleFileClick = useCallback(
+    async (entry: FileEntry) => {
+      if (entry.is_dir) {
+        onDirectoryClick(entry);
+      } else {
+        openWorkspaceFile(entry.path, { name: entry.name });
+      }
+    },
+    [onDirectoryClick, openWorkspaceFile],
+  );
+
+  const refreshWorkspace = useCallback(async () => {
+    await reloadCurrentWorkspace();
+  }, []);
 
   const {
     knowledgeSelectMode,
@@ -107,11 +124,12 @@ export const Sidebar = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [knowledgeSelectMode, setKnowledgeSelectMode, clearKnowledgeChecked]);
 
-  useEffect(() => {
-    if (workspacePath) {
-      void refreshWorkspace();
-    }
-  }, [refreshWorkspace, workspacePath]);
+  // First-time population of the root directory cache lives in
+  // `useWorkspaceTree` as a `useEffect([workspaceRootPath])`, NOT here. The
+  // previous incarnation of this file did mount its own refresh effect, but
+  // its dependency list captured `expandedDirs` (transitively, via
+  // `refreshWorkspace`'s `useCallback` deps), which made every
+  // expand/collapse re-fire the full clearCache+isLoading+Skeleton swap.
 
   const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Escape') {

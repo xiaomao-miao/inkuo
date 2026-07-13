@@ -42,9 +42,11 @@ import { NEW_FILE_TEMPLATES } from '../../types';
 import {
   copyPath,
   deletePath,
+  loadDirectoryChildren,
   movePath,
   openWithDefaultApp,
   pathExists,
+  reloadCurrentWorkspace,
   revealInFileManager,
 } from '../../services/workspace';
 import { reportError } from '../../utils/errors';
@@ -219,7 +221,7 @@ async function uniqueDestination(parent: string, name: string, isDir: boolean): 
 }
 
 function buildWorkspaceMenu(ctx: MenuBuilderContext): MenuItem[] {
-  const { workspacePath, refresh, notify } = ctx;
+  const { workspacePath, notify } = ctx;
 
   const newFileSubmenu: MenuItem[] = NEW_FILE_TEMPLATES.map((tpl) => ({
     id: `new-file-${tpl.id}`,
@@ -274,7 +276,12 @@ function buildWorkspaceMenu(ctx: MenuBuilderContext): MenuItem[] {
       disabled: !workspacePath,
       action: async () => {
         if (!workspacePath) return;
-        await refresh(workspacePath);
+        // `reloadCurrentWorkspace` walks `clearCache` → root read → each
+        // expanded-dir read, wrapped in an `isLoading` skeleton. Earlier
+        // this menu only called `invalidateCache(workspacePath)`, which
+        // blanks the visible tree without refetching and left the user
+        // staring at an empty side-panel until they expanded something.
+        await reloadCurrentWorkspace();
         notify('success', '已刷新工作区');
       },
     },
@@ -747,7 +754,6 @@ export const ContextMenu = () => {
   const openTabs = useSidebarStore((s) => s.openTabs);
   const selectedFile = useSidebarStore((s) => s.selectedFile);
   const knowledgeBase = useSidebarStore((s) => s.knowledgeBase);
-  const refreshWorkspace = useSidebarStore((s) => s.invalidateCache);
   const pushNotification = useNotificationStore((s) => s.pushNotification);
 
   // Position the menu at the click coordinates, then clamp to viewport.
@@ -796,9 +802,19 @@ export const ContextMenu = () => {
 
   const refresh = useCallback(
     async (parentPath: string) => {
-      refreshWorkspace(parentPath);
+      // After a paste / copy / delete we re-read the parent directory so
+      // the tree shows the new state immediately, instead of waiting on
+      // the (now 500 ms) backend poll-watcher. Atomic replace — the tree
+      // never sees an empty row mid-refresh.
+      try {
+        const children = await loadDirectoryChildren(parentPath);
+        useSidebarStore.getState().setCachedChildren(parentPath, children);
+      } catch (err) {
+        useSidebarStore.getState().evictCachedChildren(parentPath);
+        reportError('contextmenu-refresh', err);
+      }
     },
-    [refreshWorkspace],
+    [],
   );
 
   const notify = useCallback(

@@ -2,7 +2,12 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { useSidebarStore, useAIPanelStore } from '../store';
 import { createNewSession } from '../store/aiPanelReducers';
-import { normalizeDirPath } from '../utils/path';
+import {
+  getRelativePath,
+  joinPath,
+  normalizeDirPath,
+} from '../utils/path';
+import { reportError } from '../utils/errors';
 import type {
   CreateEntryResult,
   FileEntry,
@@ -82,21 +87,121 @@ export async function searchFiles(path: string, query: string): Promise<FileEntr
 
 /**
  * Apply a workspace directory load, caching the root entries.
+ *
+ * `mergeWithExisting` controls whether the directory cache is wiped before
+ * loading:
+ *   - `false` (default for picker-driven switches): the new root entry is
+ *     added on top of whatever is already in the cache. The caller (typically
+ *     `switchWorkspace`) has already cleared the cache in its own step, so we
+ *     would otherwise do the work twice.
+ *   - `true` (default for `reloadCurrentWorkspace`): clear the cache first so
+ *     a manual "重新加载工作区" really does rebuild everything from disk.
+ *
+ * `showSkeleton` toggles the sidebar `isLoading` flag for the duration of
+ * the network call, so the UI shows the loading skeleton instead of an
+ * empty/broken tree. Off by default — background refreshes triggered by
+ * the file watcher shouldn't swap the visible tree for a skeleton.
  */
 export async function applyWorkspaceDirectoryLoad(
   path: string,
-  options?: { mergeWithExisting?: boolean },
+  options?: { mergeWithExisting?: boolean; showSkeleton?: boolean },
 ): Promise<FileEntry[]> {
   const store = useSidebarStore.getState();
   const normalizedPath = normalizeDirPath(path);
-  const children = await loadDirectoryChildren(normalizedPath);
 
-  if (options?.mergeWithExisting !== false) {
-    store.clearCache();
+  if (options?.showSkeleton) {
+    store.setIsLoading(true);
   }
+  try {
+    const children = await loadDirectoryChildren(normalizedPath);
 
-  store.setCachedChildren(normalizedPath, children);
-  return children;
+    if (options?.mergeWithExisting !== false) {
+      store.clearCache();
+    }
+
+    store.setCachedChildren(normalizedPath, children);
+    return children;
+  } finally {
+    if (options?.showSkeleton) {
+      store.setIsLoading(false);
+    }
+  }
+}
+
+/**
+ * Reload the current workspace from disk.
+ *
+ * Sole owner of the "整树全清 + 重新加载" flow. Wraps a `clearCache` + root
+ * load + restored-expanded-dirs walk with a single `isLoading` envelope so
+ * the sidebar shows the loading skeleton for the duration. Callers:
+ *   - the Sidebar's "刷新" button (manual refresh)
+ *   - the ContextMenu's "重新加载工作区" entry
+ *
+ * This function is intentionally NOT bound to React's render lifecycle —
+ * we used to drive it from a `Sidebar` `useEffect` whose dependencies
+ * included a function that captured `expandedDirs`, which made every
+ * expand/collapse re-run the whole reload. Centralising it here keeps
+ * `refresh-on-demand` and `refresh-on-render` correctly separated.
+ */
+export async function reloadCurrentWorkspace(): Promise<void> {
+  const { workspacePath, expandedDirs, setIsLoading } = useSidebarStore.getState();
+  if (!workspacePath) return;
+
+  const normalizedRoot = normalizeDirPath(workspacePath);
+
+  setIsLoading(true);
+  try {
+    // `applyWorkspaceDirectoryLoad` already owns `clearCache` + root write.
+    await applyWorkspaceDirectoryLoad(normalizedRoot, {
+      mergeWithExisting: true,
+      showSkeleton: false, // we manage isLoading here to keep the gate open
+      // across the whole restore walk below.
+    });
+
+    await reloadExpandedDirectories(normalizedRoot, Array.from(expandedDirs));
+  } catch (err) {
+    reportError('reload-current-workspace', err);
+  } finally {
+    setIsLoading(false);
+  }
+}
+
+/**
+ * Walk every directory the user has expanded in the current workspace and
+ * re-read it from the backend, so the freshly-cleared cache is repopulated
+ * with what the user previously chose to keep visible.
+ *
+ * Mirrors the helper that used to live inside `useWorkspaceTree` (kept here
+ * so the reactive hook no longer owns the reload flow).
+ */
+async function reloadExpandedDirectories(
+  workspaceRootPath: string,
+  expandedDirPaths: string[],
+): Promise<void> {
+  const normalizedRoot = normalizeDirPath(workspaceRootPath);
+
+  const normalizedExpandedPaths = expandedDirPaths
+    .map((path) => normalizeDirPath(path))
+    .filter((path) => path && path !== normalizedRoot)
+    .sort((left, right) => left.length - right.length);
+
+  const store = useSidebarStore.getState();
+  for (const dirPath of normalizedExpandedPaths) {
+    const relativePath = getRelativePath(normalizedRoot, dirPath);
+    if (!relativePath) continue;
+
+    const segments = relativePath.split('/').filter(Boolean);
+    let currentPath = normalizedRoot;
+    for (const segment of segments) {
+      currentPath = joinPath(currentPath, segment);
+      try {
+        const children = await loadDirectoryChildren(currentPath);
+        store.setCachedChildren(currentPath, children);
+      } catch (err) {
+        reportError('reload-expanded-directory', err);
+      }
+    }
+  }
 }
 
 /**

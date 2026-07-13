@@ -10,8 +10,10 @@ import { useNotificationStore, useSidebarStore } from '../../store';
 import type { InlineEditState } from '../../store';
 import {
   createFileEntry,
+  loadDirectoryChildren,
   renamePath,
 } from '../../services/workspace';
+import { normalizeDirPath } from '../../utils/path';
 import { reportError } from '../../utils/errors';
 import styles from './InlineRenameInput.module.css';
 
@@ -43,7 +45,8 @@ export const InlineRenameInput = ({ state, depth }: InlineRenameInputProps) => {
   const [submitting, setSubmitting] = useState(false);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const cancelInlineEdit = useSidebarStore((s) => s.cancelInlineEdit);
-  const invalidateCache = useSidebarStore((s) => s.invalidateCache);
+  const evictCachedChildren = useSidebarStore((s) => s.evictCachedChildren);
+  const setCachedChildren = useSidebarStore((s) => s.setCachedChildren);
   const openWorkspaceFile = useSidebarStore((s) => s.openWorkspaceFile);
   const pushNotification = useNotificationStore((s) => s.pushNotification);
 
@@ -86,6 +89,28 @@ export const InlineRenameInput = ({ state, depth }: InlineRenameInputProps) => {
     }
     if (submitting) return;
     setSubmitting(true);
+
+    /**
+     * Refetch the parent directory after a successful mutation so the new /
+     * renamed entry is visible in the tree without waiting for the (possibly
+     * 2-second-poll-interval) backend watcher to deliver its `Created` event.
+     *
+     * Done *before* `cancelInlineEdit()` so the inline input disappears at the
+     * same time the new row materialises, not later.
+     */
+    const refetchParentAfterMutation = async (parentPath: string) => {
+      const normalized = normalizeDirPath(parentPath);
+      try {
+        const children = await loadDirectoryChildren(normalized);
+        setCachedChildren(normalized, children);
+      } catch (err) {
+        // Drop the (now-stale) cache entry so the tree isn't showing a
+        // pre-mutation list. The next expand or watcher event will refetch.
+        evictCachedChildren(normalized);
+        reportError('inline-refetch-parent', err);
+      }
+    };
+
     try {
       if (state.mode === 'rename' && state.originalPath) {
         const parent = state.parentPath;
@@ -101,7 +126,7 @@ export const InlineRenameInput = ({ state, depth }: InlineRenameInputProps) => {
           }
           throw err;
         }
-        invalidateCache(parent);
+        await refetchParentAfterMutation(parent);
         cancelInlineEdit();
         pushNotification({ kind: 'success', title: '已重命名', message: trimmed });
         return;
@@ -115,7 +140,7 @@ export const InlineRenameInput = ({ state, depth }: InlineRenameInputProps) => {
             trimmed,
             state.createPayload,
           );
-          invalidateCache(state.parentPath);
+          await refetchParentAfterMutation(state.parentPath);
           cancelInlineEdit();
           // Auto-open markdown/office files in the editor.
           const isMarkdown =
@@ -154,7 +179,8 @@ export const InlineRenameInput = ({ state, depth }: InlineRenameInputProps) => {
     state,
     submitting,
     cancelInlineEdit,
-    invalidateCache,
+    evictCachedChildren,
+    setCachedChildren,
     openWorkspaceFile,
     pushNotification,
   ]);

@@ -148,10 +148,28 @@ export interface InlineEditState {
 
 interface SidebarState {
   workspacePath: string | null;
+  /**
+   * Lazy directory cache, keyed by normalized absolute path (`/` separator,
+   * no trailing slash). The tree reads this synchronously; only the cache
+   * writer (the `useWorkspaceTree` hook, the watcher, and the file-mutation
+   * call sites) ever writes to it.
+   *
+   * Invariants:
+   *   - A key exists in this map IFF we have read that directory from the
+   *     backend at least once. The value is the exact list we got back.
+   *   - The map only ever grows by `setCachedChildren(path, list)` and shrinks
+   *     by `evictCachedChildren(path)` or `clearCache()`. There is no
+   *     prefix-delete or "invalidate" — subdirectory entries are never
+   *     affected by parent-directory operations.
+   *   - We do NOT cache `loading` state here; the `loadingDirs` Set below
+   *     tracks in-flight fetches independently.
+   */
   directoryCache: Map<string, FileEntry[]>;
   expandedDirs: Set<string>;
+  /** Directories currently being fetched from the backend. */
   loadingDirs: Set<string>;
   selectedFile: string | null;
+  /** True only during a full `reloadCurrentWorkspace` (manual refresh). */
   isLoading: boolean;
   openTabs: OpenTab[];
   activeTabId: string | null;
@@ -171,8 +189,22 @@ interface SidebarState {
   setWorkspacePath: (path: string) => void;
   getCachedChildren: (dirPath: string) => FileEntry[];
   hasCachedChildren: (dirPath: string) => boolean;
+  /**
+   * Replace the cached child list for a single directory. This is the
+   * ONLY write path for `directoryCache`. The previous entry (if any) is
+   * discarded wholesale — partial merges are not supported because we
+   * always re-read the full listing from the backend.
+   */
   setCachedChildren: (dirPath: string, children: FileEntry[]) => void;
-  invalidateCache: (dirPath: string) => void;
+  /**
+   * Drop the cached entry for `dirPath` alone. Does NOT touch subdirectory
+   * entries. Callers that need a fresh listing should fetch first then call
+   * `setCachedChildren`; this method is for the error path where we want
+   * the tree to show "no data" rather than hold on to a stale list.
+   */
+  evictCachedChildren: (dirPath: string) => void;
+  /** Drop every cached directory entry. Used only by the manual "刷新"
+   *  pipeline before it reloads the tree from disk. */
   clearCache: () => void;
 
   toggleDir: (path: string) => void;
@@ -243,15 +275,18 @@ export const useSidebarStore = create<SidebarState>()(
           return { directoryCache: newCache };
         }),
 
-      invalidateCache: (dirPath) =>
+      /**
+       * Drop a single cache entry. The path is normalized so cache-key
+       * consistency holds across callsites that may pass Windows-style
+       * (`\`) input. No recursive / prefix-delete — sibling and child
+       * directories are untouched on purpose.
+       */
+      evictCachedChildren: (dirPath) =>
         set((state) => {
+          const key = normalizeDirPath(dirPath);
+          if (!state.directoryCache.has(key)) return {};
           const newCache = new Map(state.directoryCache);
-          const prefix = `${dirPath}/`;
-          for (const key of newCache.keys()) {
-            if (key === dirPath || key.startsWith(prefix)) {
-              newCache.delete(key);
-            }
-          }
+          newCache.delete(key);
           return { directoryCache: newCache };
         }),
 
