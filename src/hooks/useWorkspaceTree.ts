@@ -9,6 +9,7 @@ import {
   switchWorkspace,
 } from '../services/workspace';
 import { reportError } from '../utils/errors';
+import { getRelativePath, isPathInside, joinPath, normalizeDirPath } from '../utils/path';
 
 interface FileChangeEvent {
   type: string;
@@ -37,19 +38,25 @@ async function restoreExpandedDirectories(
   expandedDirPaths: string[],
   loadChildren: (dirPath: string) => Promise<FileEntry[]>,
 ): Promise<void> {
+  const normalizedRoot = normalizeDirPath(workspaceRootPath);
+
+  // Normalize every persisted path before sorting/comparing so the
+  // sort by length + startsWith check works whether the persisted entry
+  // used `\` or `/` (Windows app versions persist native paths).
   const normalizedExpandedPaths = expandedDirPaths
-    .filter((path) => path !== workspaceRootPath)
+    .map((path) => normalizeDirPath(path))
+    .filter((path) => path && path !== normalizedRoot)
     .sort((left, right) => left.length - right.length);
 
   for (const dirPath of normalizedExpandedPaths) {
-    const relativePath = dirPath.slice(workspaceRootPath.length).replace(/^\//, '');
+    const relativePath = getRelativePath(normalizedRoot, dirPath);
     if (!relativePath) continue;
 
     const segments = relativePath.split('/').filter(Boolean);
-    let currentPath = workspaceRootPath;
+    let currentPath = normalizedRoot;
 
     for (const segment of segments) {
-      currentPath = `${currentPath}/${segment}`;
+      currentPath = joinPath(currentPath, segment);
       await loadChildren(currentPath);
     }
   }
@@ -222,7 +229,7 @@ export function useWorkspaceTree(): UseWorkspaceTreeResult {
       if (!workspaceRootPath) return;
 
       const changedPath = event.data?.path;
-      if (!changedPath || !changedPath.startsWith(workspaceRootPath)) return;
+      if (!changedPath || !isPathInside(workspaceRootPath, changedPath)) return;
 
       switch (event.type) {
         case 'Created':
@@ -309,15 +316,23 @@ export function useWorkspaceTree(): UseWorkspaceTreeResult {
 
 /**
  * Extract parent directory path from a file path.
+ *
+ * Both arguments are normalized so this works whether the watcher hands
+ * us `E:\文档\sub\file.md` or `E:/文档/sub/file.md`. The returned parent is
+ * also normalized, so it can be used as a cache key directly.
  */
 function getParentPath(filePath: string, workspaceRoot: string): string | null {
-  const relativePath = filePath.slice(workspaceRoot.length);
-  const segments = relativePath.split('/').filter(Boolean);
+  const normalizedRoot = normalizeDirPath(workspaceRoot);
+  if (!normalizedRoot) return null;
 
+  const relativePath = getRelativePath(normalizedRoot, filePath);
+  if (!relativePath) return normalizedRoot;
+
+  const segments = relativePath.split('/').filter(Boolean);
   if (segments.length <= 1) {
-    return workspaceRoot;
+    return normalizedRoot;
   }
 
   const parentSegments = segments.slice(0, -1);
-  return `${workspaceRoot}/${parentSegments.join('/')}`;
+  return joinPath(normalizedRoot, ...parentSegments);
 }

@@ -49,6 +49,12 @@ import {
 } from '../../services/workspace';
 import { reportError } from '../../utils/errors';
 import { invoke } from '@tauri-apps/api/core';
+import {
+  getBaseName,
+  getDirName,
+  getRelativePath,
+  joinPath as joinDirPath,
+} from '../../utils/path';
 import styles from './ContextMenu.module.css';
 
 // ----------------------------------------------------------------------------
@@ -178,17 +184,15 @@ interface MenuBuilderContext {
 }
 
 function basename(path: string): string {
-  return path.split('/').pop() ?? path;
+  return getBaseName(path);
 }
 
 function parentPath(path: string): string {
-  const idx = path.lastIndexOf('/');
-  return idx > 0 ? path.slice(0, idx) : path;
+  return getDirName(path);
 }
 
 function joinPath(parent: string, name: string): string {
-  if (parent.endsWith('/')) return `${parent}${name}`;
-  return `${parent}/${name}`;
+  return joinDirPath(parent, name);
 }
 
 async function uniqueDestination(parent: string, name: string, isDir: boolean): Promise<string> {
@@ -303,8 +307,11 @@ function buildEntryMenu(
 
   // Knowledge-base membership is matched on workspace-relative paths, see
   // Sidebar.tsx / KnowledgeView.tsx for the same logic.
-  const relativePath = workspacePath && entry.path.startsWith(workspacePath + '/')
-    ? entry.path.slice(workspacePath.length + 1)
+  // Both sides need to be normalized so the comparison is correct on
+  // Windows, where `entry.path` is `E:\文档\file.md` and a stored member
+  // also has `\`.
+  const relativePath = workspacePath
+    ? getRelativePath(workspacePath, entry.path)
     : entry.path;
   const isKnowledgeMember = knowledgeMembers.includes(relativePath);
 

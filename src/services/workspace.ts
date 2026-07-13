@@ -2,6 +2,7 @@ import { open } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { useSidebarStore, useAIPanelStore } from '../store';
 import { createNewSession } from '../store/aiPanelReducers';
+import { normalizeDirPath } from '../utils/path';
 import type {
   CreateEntryResult,
   FileEntry,
@@ -62,16 +63,21 @@ function pruneTodoSnapshotsToSessions(
 
 /**
  * Load children entries for a directory from the backend.
+ *
+ * The path is normalized to use `/` separators before being sent to the
+ * backend. Rust's `std::fs::read_dir` accepts either separator on Windows,
+ * but normalizing at this boundary guarantees that every cache key and
+ * every comparison downstream is separator-agnostic.
  */
 export async function loadDirectoryChildren(path: string): Promise<FileEntry[]> {
-  return invoke<FileEntry[]>('list_directory', { path });
+  return invoke<FileEntry[]>('list_directory', { path: normalizeDirPath(path) });
 }
 
 /**
  * Search for files in a directory by name.
  */
 export async function searchFiles(path: string, query: string): Promise<FileEntry[]> {
-  return invoke<FileEntry[]>('search_directory', { path, query });
+  return invoke<FileEntry[]>('search_directory', { path: normalizeDirPath(path), query });
 }
 
 /**
@@ -82,13 +88,14 @@ export async function applyWorkspaceDirectoryLoad(
   options?: { mergeWithExisting?: boolean },
 ): Promise<FileEntry[]> {
   const store = useSidebarStore.getState();
-  const children = await loadDirectoryChildren(path);
+  const normalizedPath = normalizeDirPath(path);
+  const children = await loadDirectoryChildren(normalizedPath);
 
   if (options?.mergeWithExisting !== false) {
     store.clearCache();
   }
 
-  store.setCachedChildren(path, children);
+  store.setCachedChildren(normalizedPath, children);
   return children;
 }
 

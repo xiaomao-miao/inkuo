@@ -43,6 +43,7 @@
     "@codemirror/view": "^6.36.5",
     "@eigenpal/docx-editor-core": "^1.9.0",
     "@eigenpal/docx-editor-react": "^1.9.0",
+    "@fortune-sheet/core": "^1.0.4",
     "@fortune-sheet/react": "^1.0.4",
     "@lezer/highlight": "^1.2.1",
     "@mukundakatta/streamparse": "^1.0.1",

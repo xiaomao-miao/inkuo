@@ -8,22 +8,29 @@ import type {
   BuildProgress,
   NewEntryPayload,
 } from '../types';
+import { getBaseName, getRelativePath, joinPath, normalizeDirPath } from '../utils/path';
 
 /**
  * Extract parent directory path from a file path.
+ *
+ * Both inputs are normalized to `/` separators first so the math works
+ * on Windows where file paths are stored with `\`. The returned parent is
+ * also normalized, ready to be used as a cache key or sent back to the
+ * backend.
  */
 function getParentPath(filePath: string, workspacePath: string | null): string | null {
-  if (!workspacePath) return null;
+  const normalizedRoot = workspacePath ? normalizeDirPath(workspacePath) : null;
+  if (!normalizedRoot) return null;
 
-  const relativePath = filePath.slice(workspacePath.length);
+  const relativePath = getRelativePath(normalizedRoot, filePath);
+  if (!relativePath) return normalizedRoot;
+
   const segments = relativePath.split('/').filter(Boolean);
-
   if (segments.length <= 1) {
-    return workspacePath;
+    return normalizedRoot;
   }
 
-  const parentSegments = segments.slice(0, -1);
-  return `${workspacePath}/${parentSegments.join('/')}`;
+  return joinPath(normalizedRoot, ...segments.slice(0, -1));
 }
 
 export interface OpenTab {
@@ -75,27 +82,33 @@ interface PersistedSidebarState {
   directoryCache: Record<string, FileEntry[]>;
 }
 
-function normalizeWorkspaceFilePath(path: string, workspacePath: string | null): string {
-  if (!workspacePath || !path.startsWith(workspacePath)) {
-    return path;
-  }
-  const normalized = path.slice(workspacePath.length);
-  return normalized.startsWith('/') ? normalized.slice(1) : normalized;
-}
-
+/**
+ * Look up a `FileEntry` in the cached directory tree by absolute path.
+ *
+ * The backend returns `FileEntry.path` as an absolute, platform-native
+ * path (`E:\文档\file.md` on Windows). The cache is keyed by the
+ * normalized form (`E:/文档/...`), so we compare against normalized values
+ * on both sides — no more false negatives when the workspace was opened
+ * with a different separator style than the cache key.
+ */
 function resolveWorkspaceFileEntry(
   path: string,
   directoryCache: Map<string, FileEntry[]>,
   workspacePath: string | null,
 ): FileEntry | null {
-  const normalizedPath = normalizeWorkspaceFilePath(path, workspacePath);
+  const normalizedRoot = workspacePath ? normalizeDirPath(workspacePath) : null;
+  const normalizedTarget = normalizeDirPath(path);
+  const relativeTarget = normalizedRoot
+    ? getRelativePath(normalizedRoot, normalizedTarget)
+    : normalizedTarget;
 
   for (const children of directoryCache.values()) {
     const found = children.find((file) => {
       if (file.is_dir) return false;
-      if (file.path === path) return true;
-      if (file.path === normalizedPath) return true;
-      if (workspacePath && `${workspacePath}/${file.path}` === path) return true;
+      const filePath = normalizeDirPath(file.path);
+      if (filePath === normalizedTarget) return true;
+      if (filePath === relativeTarget) return true;
+      if (normalizedRoot && joinPath(normalizedRoot, filePath) === normalizedTarget) return true;
       return false;
     });
     if (found) return found;
@@ -310,7 +323,7 @@ export const useSidebarStore = create<SidebarState>()(
           const tabName =
             options?.name ??
             resolvedEntry?.name ??
-            resolvedPath.split('/').pop() ??
+            getBaseName(resolvedPath) ??
             '未命名文档';
           const newTab: OpenTab = {
             id: newTabId,
@@ -319,17 +332,21 @@ export const useSidebarStore = create<SidebarState>()(
             isDirty: false,
           };
 
-          // Auto-expand parent directories in the file tree
+          // Auto-expand parent directories in the file tree. We add every
+          // ancestor between the workspace root and the opened file's
+          // parent so the row stays visible.
           const newExpandedDirs = new Set(state.expandedDirs);
           const parentPath = getParentPath(resolvedPath, state.workspacePath);
-          if (parentPath) {
-            const parts = parentPath.split('/').filter(Boolean);
-            let currentPath = '';
+          const normalizedRoot = state.workspacePath
+            ? normalizeDirPath(state.workspacePath)
+            : null;
+          if (parentPath && normalizedRoot) {
+            const relativeParent = getRelativePath(normalizedRoot, parentPath);
+            const parts = relativeParent.split('/').filter(Boolean);
+            let currentPath = normalizedRoot;
             for (const part of parts) {
-              currentPath = currentPath ? `${currentPath}/${part}` : part;
-              if (state.workspacePath && currentPath.startsWith(state.workspacePath)) {
-                newExpandedDirs.add(currentPath);
-              }
+              currentPath = joinPath(currentPath, part);
+              newExpandedDirs.add(currentPath);
             }
           }
 

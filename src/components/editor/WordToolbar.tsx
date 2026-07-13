@@ -163,9 +163,13 @@ const SYMBOLS = [
 // against. ProseMirror nulls `view.state` during teardown, so a stale `view`
 // ref captured by a click handler can survive a tab switch / file reload and
 // cause `Cannot read properties of undefined (reading 'schema')` deep inside
-// `chainCommands`. Treat that as "no view" rather than passing it on.
+// `chainCommands`. Treat that as "no view" rather than passing it on. The
+// schema check is non-obvious but matters: during the very first render after
+// `EditorView` construction, `view.state` is set synchronously but `schema`
+// is wired in slightly later by prosemirror internals; calling any of our
+// query helpers in that gap throws and unmounts the whole React tree.
 function isViewReady(view: EditorView | null): view is EditorView {
-  return !!view && !!view.state;
+  return !!view && !!view.state && !!view.state.schema;
 }
 
 // ProseMirror command-runner code (e.g. `chunk-STIS5BU3.js:4713`) destructures
@@ -611,10 +615,11 @@ export const WordToolbar: React.FC<WordToolbarProps> = ({
 
   // ── Active-state queries ──────────────────────────────────────────────────
   const state = view?.state;
+  const schemaReady = !!state?.schema;
   const isActive = (name: string): boolean => {
     const mt = markTypes?.[name];
-    if (!state || !mt) return false;
-    return isMarkActive(state, mt);
+    if (!schemaReady || !mt) return false;
+    return isMarkActive(state!, mt);
   };
 
   const isBold = isActive('bold');
@@ -623,12 +628,12 @@ export const WordToolbar: React.FC<WordToolbarProps> = ({
   const isStrike = isActive('strike');
   const isSuper = isActive('superscript');
   const isSub = isActive('subscript');
-  const isLink = state ? isHyperlinkActive(state) : false;
-  const alignment = state ? getParagraphAlignment(state) : null;
-  const styleId = state ? getStyleId(state) : null;
-  const fontSizeHp = (markTypes?.fontSize && state) ? getMarkAttr(state, markTypes.fontSize, 'size') : null;
-  const fontFamily = (markTypes?.fontFamily && state) ? getMarkAttr(state, markTypes.fontFamily, 'ascii') : null;
-  const textColor = (markTypes?.textColor && state) ? getMarkAttr(state, markTypes.textColor, 'rgb') : null;
+  const isLink = schemaReady ? isHyperlinkActive(state!) : false;
+  const alignment = schemaReady ? getParagraphAlignment(state!) : null;
+  const styleId = schemaReady ? getStyleId(state!) : null;
+  const fontSizeHp = (markTypes?.fontSize && schemaReady) ? getMarkAttr(state!, markTypes.fontSize, 'size') : null;
+  const fontFamily = (markTypes?.fontFamily && schemaReady) ? getMarkAttr(state!, markTypes.fontFamily, 'ascii') : null;
+  const textColor = (markTypes?.textColor && schemaReady) ? getMarkAttr(state!, markTypes.textColor, 'rgb') : null;
   const currentFontSizePt = hpToPt(fontSizeHp) ?? 12;
   const currentFontColor = rgbToHex(textColor) ?? '#000000';
 

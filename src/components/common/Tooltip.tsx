@@ -1,6 +1,15 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
 import styles from './Tooltip.module.css';
 
+interface TooltipChildProps {
+  onMouseEnter?: (e: React.MouseEvent) => void;
+  onMouseLeave?: (e: React.MouseEvent) => void;
+  onFocus?: (e: React.FocusEvent) => void;
+  onBlur?: (e: React.FocusEvent) => void;
+  'aria-describedby'?: string;
+  ref?: React.Ref<HTMLElement>;
+}
+
 interface TooltipProps {
   content: React.ReactNode;
   /**
@@ -13,7 +22,7 @@ interface TooltipProps {
   delay?: number;
   /** 快捷键提示,会自动以 ⌘/Ctrl 风格的 kbd 渲染在右侧 */
   shortcut?: string;
-  children: React.ReactElement;
+  children: React.ReactElement<TooltipChildProps>;
 }
 
 /**
@@ -116,7 +125,7 @@ export const Tooltip: React.FC<TooltipProps> = ({
           children.props.onBlur?.(e);
         },
         'aria-describedby': visible ? tooltipId : undefined,
-      } as React.HTMLAttributes<HTMLElement>)}
+      } satisfies TooltipChildProps)}
       {(visible || alwaysOn) && (
         <div
           id={tooltipId}

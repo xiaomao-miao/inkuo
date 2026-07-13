@@ -19,6 +19,7 @@ import { useSidebarStore } from '../../store/sidebarStore';
 import { FileTree } from './FileTree';
 import { ContextMenu } from './ContextMenu';
 import type { FileEntry } from '../../types';
+import { getRelativePath, normalizeDirPath } from '../../utils/path';
 import styles from './Sidebar.module.css';
 import { SkeletonGroup, SkeletonListItem } from '../common/Skeleton';
 
@@ -29,8 +30,8 @@ interface SearchResultItemProps {
 }
 
 const SearchResultItem = ({ entry, workspaceRoot, onClick }: SearchResultItemProps) => {
-  const relativePath = entry.path.slice(workspaceRoot.length + 1);
-  const depth = relativePath.split('/').length - 1;
+  const relativePath = getRelativePath(workspaceRoot, entry.path);
+  const depth = relativePath ? relativePath.split('/').length - 1 : 0;
 
   const handleClick = () => {
     onClick(entry);
@@ -56,7 +57,9 @@ const SearchResultItem = ({ entry, workspaceRoot, onClick }: SearchResultItemPro
         )}
       </span>
       <span className={styles.searchResultName}>{entry.name}</span>
-      <span className={styles.searchResultPath}>{relativePath.split('/').slice(0, -1).join('/')}</span>
+      <span className={styles.searchResultPath}>
+        {relativePath ? normalizeDirPath(relativePath).split('/').slice(0, -1).join('/') : ''}
+      </span>
     </button>
   );
 };

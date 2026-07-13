@@ -17,6 +17,7 @@ import {
 } from '../../store';
 import type { FileEntry } from '../../types';
 import { InlineRenameInput } from './InlineRenameInput';
+import { getRelativePath, normalizeDirPath } from '../../utils/path';
 import styles from './Sidebar.module.css';
 
 interface FileTreeProps {
@@ -160,10 +161,14 @@ const FileTreeNode = ({
     entry.is_dir &&
     inlineEdit.parentPath === entry.path;
 
-  // Compute relative path for knowledge base matching
-  const relativePath = workspaceRoot && entry.path.startsWith(workspaceRoot + '/')
-    ? entry.path.slice(workspaceRoot.length + 1)
-    : entry.path;
+  // Compute relative path for knowledge base matching.
+  // Knowledge-base members are stored as workspace-relative paths by the
+  // Rust backend (see `DocScanner::strip_prefix`). Both sides need to be
+  // normalized so the comparison is correct on Windows, where `entry.path`
+  // is `E:\文档\file.md` and a stored member would also have `\`.
+  const relativePath = workspaceRoot
+    ? getRelativePath(workspaceRoot, entry.path)
+    : normalizeDirPath(entry.path);
   const isKnowledgeMember = knowledgeMembers.includes(relativePath);
   const isChecked = knowledgeCheckedPaths.has(relativePath);
   const showCheckbox = knowledgeSelectMode && !entry.is_dir;
