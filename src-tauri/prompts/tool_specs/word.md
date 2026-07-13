@@ -7,7 +7,7 @@ Create, modify, append, or delete content in a .docx. A single tool covers every
 
 **Parameters**:
 - `path` (**required on every call, including append calls**)
-- `title` (optional, new files only) — document title (auto-renders as a `Title`-styled paragraph)
+- `title` (optional, new files only) — document title (auto-renders as a `Title`-styled paragraph). **Do NOT also add a Heading1/Title paragraph with the same text in `elements[]`; the title paragraph is generated for you. Using `title` here means the file already starts with a top-level title — do not duplicate it as a Heading1 in subsequent append calls either.**
 - `elements` (optional array) — see below
 - `deletes` (optional, array of element ids) — batch delete by id
 - `append` (bool, optional) — when true, new elements are appended to the end
@@ -32,17 +32,19 @@ Create, modify, append, or delete content in a .docx. A single tool covers every
 
 **Key behavioral rules**:
 1. Always specify `style` for every paragraph (`Heading1/2/3` for section titles, `Normal` for body).
-2. Omitted fields on modify = preserve original — this is the safe default for "edit just one thing".
-3. When you supply `runs`, they replace the entire run list. To bold a single word you must echo the other runs' text.
-4. Always `read_office_file` first — otherwise ids won't line up and edits will land in the wrong paragraph.
+2. **Do not duplicate the document title.** If you pass `title="..."`, the backend already inserts a `Title`-styled paragraph for it. Do not also add a `Heading1`/`Title` paragraph with the same text in `elements[]`, and do not repeat the title as the first `Heading1` of the first section when appending.
+3. Omitted fields on modify = preserve original — this is the safe default for "edit just one thing".
+4. When you supply `runs`, they replace the entire run list. To bold a single word you must echo the other runs' text.
+5. Always `read_office_file` first — otherwise ids won't line up and edits will land in the wrong paragraph.
 
 ## Long-document incremental generation
 For documents expected to have **~2000+ characters**, build incrementally instead of all at once to keep each tool call manageable.
 
-1. `create_word_doc` with `path` and `title="..."` to create the file header.
-2. For each section, call `create_word_doc` with `append: true` and the new `elements[]` (~1500-2000 characters of text per chunk).
-3. The first section must include a `Heading1` paragraph.
-4. Repeat for subsequent sections.
+1. `create_word_doc` with `path` and `title="..."` to create the file header (this generates the document's Title paragraph automatically).
+2. For each section, call `create_word_doc` with `append: true` and the new `elements[]` (~1500-2000 characters of text per chunk). **The first section starts directly with a `Heading1` paragraph for the first section title — do NOT repeat the document `title` here as another `Heading1`/`Title`.**
+3. Repeat for subsequent sections.
+
+> ⚠️ **No duplicate top-level titles.** The document `title` you pass in step 1 already produces a `Title`-styled paragraph at the top of the file. When you start the first section in step 2, the first `Heading1` should be the **first section's** heading (e.g. "Overview" or "Introduction"), not a repetition of the document title.
 
 > ⚠️ **The `path` field is required on every chunk above.** The backend does not store path between calls. If you forget `path` on a follow-up call you will get `Missing required field 'path'` and have to retry.
 
