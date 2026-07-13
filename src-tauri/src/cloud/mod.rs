@@ -49,6 +49,25 @@ impl From<CloudError> for AppCommandError {
     }
 }
 
+/// Internal bucketing of a single `/auth/refresh` response. Used by
+/// `ensure_fresh_token` to decide between "kill the session" and
+/// "retry once more". Never escapes the `cloud` module.
+enum RefreshAttemptError {
+    /// Server rejected the refresh token (401 / 403). The stored account
+    /// is no longer usable and the caller should re-authenticate.
+    AuthFailed {
+        status: reqwest::StatusCode,
+        body: String,
+    },
+    /// Transient failure: 5xx, 429, network error, malformed body, or
+    /// any non-auth status. Worth a single retry; on second failure we
+    /// surface the error to the caller without clearing the account.
+    Retriable {
+        status: reqwest::StatusCode,
+        body: String,
+    },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CloudAccount {
     /// Base URL of the inkuo Cloud Server, e.g. `https://cloud.example.com`.
@@ -312,6 +331,23 @@ impl CloudClient {
     /// happens **off-thread** so callers don't pay a fsync on the hot
     /// path; failures are logged but never surfaced as a token error
     /// (the in-memory token is still valid until the next process).
+    ///
+    /// ## Failure classification
+    ///
+    /// Refresh responses are bucketed into three groups. Only an *auth*
+    /// failure (401/403) clears the stored account — those are the only
+    /// codes where the server is unambiguously telling us the refresh
+    /// token is dead. Everything else (5xx, 429, network blip, malformed
+    /// body) preserves the account so the next call can retry:
+    ///
+    /// * **401 / 403** → `CloudError::AuthFailed` and the account is
+    ///   cleared. The frontend should react to this by routing the user
+    ///   to the login screen.
+    /// * **5xx, 429, or other 4xx** → `CloudError::Server` and the
+    ///   account is preserved. We retry once with a brief delay so a
+    ///   transient gateway hiccup doesn't force a re-login.
+    /// * **Network error** → `CloudError::Network` and the account is
+    ///   preserved (the existing single-test already pins this).
     pub async fn ensure_fresh_token(&self) -> Result<String, CloudError> {
         let mut guard = self.inner.lock().await;
         let account = guard.as_mut().ok_or(CloudError::NotLoggedIn)?;
@@ -326,42 +362,47 @@ impl CloudClient {
             "cloud access token nearing expiry, refreshing"
         );
 
-        let url = format!("{}/auth/refresh", account.base_url.trim_end_matches('/'));
-        let resp = self
-            .http
-            .post(&url)
-            .json(&RefreshRequest { refresh_token: &account.refresh_token })
-            .send()
-            .await
-            .map_err(|e| {
-                tracing::warn!(
-                    user_id = %account.user_id,
-                    "cloud refresh network error: {}",
-                    e
-                );
-                CloudError::Network(e.to_string())
-            })?;
+        let (base_url, refresh_token) =
+            (account.base_url.clone(), account.refresh_token.clone());
 
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        if !status.is_success() {
-            tracing::warn!(
-                user_id = %account.user_id,
-                status = status.as_u16(),
-                "cloud refresh failed: {}",
-                body.chars().take(200).collect::<String>()
-            );
-            // The stored refresh_token is no longer good — clear the
-            // account so subsequent calls surface a clean "log in
-            // again" error instead of looping on a known-bad refresh
-            // token forever.
-            *guard = None;
-            crate::commands::clear_settings_cache_account();
-            return Err(map_status(status, &body));
-        }
-
-        let parsed: RefreshResponse = serde_json::from_str(&body)
-            .map_err(|e| CloudError::Parse(e.to_string()))?;
+        let mut attempt = 0u8;
+        let parsed: RefreshResponse = loop {
+            attempt += 1;
+            match self.try_refresh_once(&base_url, &refresh_token).await {
+                Ok(parsed) => break parsed,
+                Err(RefreshAttemptError::AuthFailed { status, body }) => {
+                    tracing::warn!(
+                        user_id = %account.user_id,
+                        status = status.as_u16(),
+                        "cloud refresh rejected (auth); clearing stored account: {}",
+                        body.chars().take(200).collect::<String>()
+                    );
+                    *guard = None;
+                    crate::commands::clear_settings_cache_account();
+                    return Err(map_status(status, &body));
+                }
+                Err(RefreshAttemptError::Retriable { status, body }) => {
+                    if attempt >= 2 {
+                        tracing::warn!(
+                            user_id = %account.user_id,
+                            status = status.as_u16(),
+                            "cloud refresh failed after retry; preserving account: {}",
+                            body.chars().take(200).collect::<String>()
+                        );
+                        return Err(map_status(status, &body));
+                    }
+                    tracing::info!(
+                        user_id = %account.user_id,
+                        status = status.as_u16(),
+                        "cloud refresh transient failure; retrying once"
+                    );
+                    // Tiny backoff so we don't hammer a gateway that's
+                    // already struggling. Kept short (250 ms) to stay
+                    // imperceptible on the chat hot path.
+                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                }
+            }
+        };
 
         account.access_token = parsed.access_token.clone();
         account.access_expires_at = parsed.expires_at;
@@ -395,6 +436,57 @@ impl CloudClient {
         Ok(account.access_token.clone())
     }
 
+    /// Issue exactly one refresh HTTP request and bucket the response
+    /// into one of three failure categories. Kept separate from
+    /// `ensure_fresh_token` so the retry policy above stays readable.
+    async fn try_refresh_once(
+        &self,
+        base_url: &str,
+        refresh_token: &str,
+    ) -> Result<RefreshResponse, RefreshAttemptError> {
+        let url = format!("{}/auth/refresh", base_url.trim_end_matches('/'));
+        let resp = self
+            .http
+            .post(&url)
+            .json(&RefreshRequest { refresh_token })
+            .send()
+            .await
+            .map_err(|e| {
+                tracing::warn!("cloud refresh network error: {}", e);
+                RefreshAttemptError::Retriable {
+                    status: reqwest::StatusCode::SERVICE_UNAVAILABLE,
+                    body: format!("network: {}", e),
+                }
+            })?;
+
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+
+        if status.is_success() {
+            return serde_json::from_str(&body).map_err(|e| {
+                // Malformed body is treated as retriable: a transient
+                // proxy stripping bytes shouldn't kill the session.
+                RefreshAttemptError::Retriable {
+                    status: reqwest::StatusCode::BAD_GATEWAY,
+                    body: format!("parse: {}", e),
+                }
+            });
+        }
+
+        // 401 / 403 are the unambiguous "refresh token is no good"
+        // signals — those clear the account. Everything else (5xx,
+        // 429, other 4xx) is bucketed as retriable so a transient
+        // gateway hiccup doesn't force a re-login.
+        if matches!(
+            status,
+            reqwest::StatusCode::UNAUTHORIZED | reqwest::StatusCode::FORBIDDEN
+        ) {
+            Err(RefreshAttemptError::AuthFailed { status, body })
+        } else {
+            Err(RefreshAttemptError::Retriable { status, body })
+        }
+    }
+
     /// Persist the supplied account (or, when `None`, the currently
     /// in-memory account) back to `settings.json` and refresh the
     /// in-memory cache. Intended for two callers:
@@ -419,17 +511,9 @@ impl CloudClient {
         updated.cloud.account = Some(account.clone());
 
         let path = crate::commands::get_settings_path();
-        if let Some(parent) = path.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                return Err(CloudError::Other(format!(
-                    "could not create settings dir: {}",
-                    e
-                )));
-            }
-        }
         let content = serde_json::to_string_pretty(&updated)
             .map_err(|e| CloudError::Other(format!("serialise settings: {}", e)))?;
-        std::fs::write(&path, content)
+        crate::commands::atomic_write_settings(&path, &content)
             .map_err(|e| CloudError::Other(format!("write settings: {}", e)))?;
 
         crate::commands::update_settings_cache(updated);

@@ -857,6 +857,105 @@ pub fn get_settings_path() -> std::path::PathBuf {
         .join("settings.json")
 }
 
+/// Atomically write the serialized settings to disk.
+///
+/// The previous behaviour was a bare `std::fs::write(&path, content)` which
+/// truncates the destination file before the new bytes are flushed. A power
+/// loss, OS kill, or process panic in that tiny window leaves
+/// `settings.json` empty / partial — which on the next launch surfaces as
+/// "I have to log in again" because the persisted `cloud.account` (and every
+/// other setting) was just lost. Settings are the on-disk source of truth for
+/// the cloud token, so this matters more than the average file write.
+///
+/// Strategy mirrors `write_document` / `flush_snapshots_to_disk`:
+/// 1. Write to a sibling temp file (with a process-unique suffix so concurrent
+///    writers don't clobber each other's temp).
+/// 2. `fsync` the temp so its bytes are durable before the rename.
+/// 3. `rename` temp → final path. On POSIX this is atomic; on Windows the
+///    underlying `MoveFileExW(..., MOVEFILE_REPLACE_EXISTING)` is atomic too.
+/// 4. Best-effort cleanup of any stale `*.tmp` siblings from prior crashed
+///    writes — keeps the config dir tidy.
+///
+/// If anything fails after the temp file is created we remove it so we never
+/// leak `.tmp` siblings across restarts.
+pub fn atomic_write_settings(
+    path: &std::path::Path,
+    content: &str,
+) -> Result<(), AppCommandError> {
+    use std::io::Write;
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| AppCommandError::CreateConfigDirectory(e.to_string()))?;
+    }
+
+    let unique_suffix = format!(
+        "{}.{}.tmp",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
+    let temp_path = path.with_extension(format!("json.{}", unique_suffix));
+
+    // Open + write + flush + fsync so the bytes hit disk before we rename.
+    // `std::fs::write` would skip the fsync, which is the entire point of
+    // doing this ourselves.
+    let write_result = (|| -> std::io::Result<()> {
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)?;
+        f.write_all(content.as_bytes())?;
+        f.flush()?;
+        f.sync_all()?;
+        Ok(())
+    })();
+
+    if let Err(e) = write_result {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(AppCommandError::WriteSettings(format!(
+            "write temp settings: {}",
+            e
+        )));
+    }
+
+    if let Err(e) = std::fs::rename(&temp_path, path) {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(AppCommandError::WriteSettings(format!(
+            "rename temp settings: {}",
+            e
+        )));
+    }
+
+    // Best-effort sweep of any stale `*.tmp` siblings left behind by a
+    // crashed previous write. Failures are swallowed — this is a tidy-up,
+    // not a correctness step.
+    if let Some(parent) = path.parent() {
+        if let Ok(entries) = std::fs::read_dir(parent) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p == path {
+                    continue;
+                }
+                let Some(name) = p.file_name().and_then(|n| n.to_str()) else {
+                    continue;
+                };
+                // Match both `settings.json.<pid>.<nanos>.tmp` (current shape)
+                // and the older `json.tmp` style from `flush_snapshots_to_disk`
+                // — that helper doesn't touch settings.json but defensive
+                // cleanup here costs nothing.
+                if name.starts_with("settings.json.") && name.ends_with(".tmp") {
+                    let _ = std::fs::remove_file(&p);
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 pub fn read_settings_from_disk() -> Result<Settings, AppCommandError> {
     let path = get_settings_path();
 
@@ -906,16 +1005,11 @@ pub async fn get_settings() -> Result<Settings, AppCommandError> {
 #[tauri::command]
 pub async fn save_settings(settings: Settings, _state: State<'_, AppState>) -> Result<(), AppCommandError> {
     let path = get_settings_path();
-    let config_dir = path.parent().ok_or(AppCommandError::InvalidConfigPath)?;
-
-    std::fs::create_dir_all(config_dir)
-        .map_err(|e| AppCommandError::CreateConfigDirectory(e.to_string()))?;
 
     let content = serde_json::to_string_pretty(&settings)
         .map_err(|e| AppCommandError::SerializeSettings(e.to_string()))?;
 
-    std::fs::write(&path, content)
-        .map_err(|e| AppCommandError::WriteSettings(e.to_string()))?;
+    atomic_write_settings(&path, &content)?;
 
     // Refresh the in-memory settings cache so subsequent calls to
     // `get_embedding_model()`, `get_chunk_size()`, `get_chunk_overlap()`,

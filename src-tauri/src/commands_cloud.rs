@@ -76,13 +76,11 @@ pub async fn cloud_persist_account(
     write_settings(&updated).map_err(|e| AppCommandError::AIConfig(e))
 }
 
+/// Atomic, fsync'd write of the settings file. Delegates to the shared helper
+/// in `commands` so the document write path, the `save_settings` command, and
+/// the cloud persist path all use the same write-temp-then-rename pattern.
 fn write_settings(settings: &Settings) -> Result<(), String> {
     let path: PathBuf = crate::commands::get_settings_path();
-    let config_dir = path
-        .parent()
-        .ok_or_else(|| "Invalid settings path".to_string())?;
-    std::fs::create_dir_all(config_dir).map_err(|e| e.to_string())?;
     let content = serde_json::to_string_pretty(settings).map_err(|e| e.to_string())?;
-    std::fs::write(&path, content).map_err(|e| e.to_string())?;
-    Ok(())
+    crate::commands::atomic_write_settings(&path, &content).map_err(|e| e.to_string())
 }

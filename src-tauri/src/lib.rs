@@ -50,6 +50,42 @@ fn setup_logging() {
     }));
 }
 
+/// Synchronously hydrate the in-process `CloudClient` from the persisted
+/// settings cache. Runs on the setup task (not in a `spawn`) so the very
+/// first chat request after launch can already see the logged-in account.
+///
+/// Returns `Ok(())` when there is nothing to do (no persisted account) and
+/// `Err` only when reading the settings cache fails — in which case the
+/// caller is expected to log and continue, because the frontend can still
+/// push a freshly-logged-in account via `cloud_login` / `cloud_register`.
+fn hydrate_cloud_client_from_settings(
+    app_handle: &tauri::AppHandle,
+) -> Result<(), String> {
+    let settings = commands::get_settings_cached().map_err(|e| e.to_string())?;
+    if let Some(account) = settings.cloud.account.clone() {
+        let cloud = app_handle.state::<cloud::CloudClient>();
+        let user_id = account.user_id.clone();
+        let expires_at = account.access_expires_at;
+        // `set_account` is async; we block on the runtime here. Tauri's
+        // async runtime is multi-threaded so this is fine — we just hand
+        // off to the executor and wait.
+        tauri::async_runtime::block_on(async move {
+            cloud.set_account(Some(account)).await;
+        });
+        tracing::info!(
+            user_id = %user_id,
+            expires_at = %expires_at,
+            "startup hydrate: CloudClient restored from persisted settings"
+        );
+    } else {
+        tracing::info!(
+            "startup hydrate: no persisted cloud account; \
+             user must log in before cloud-mode chat will work"
+        );
+    }
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     setup_logging();
@@ -245,29 +281,23 @@ pub fn run() {
             // Without this, the user has to log in twice on every cold start:
             // once for the persisted settings, and once again because the
             // Rust-side CloudClient starts empty.
-            let app_handle_for_hydrate = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                let settings = match commands::get_settings_cached() {
-                    Ok(s) => s,
-                    Err(e) => {
-                        tracing::warn!(
-                            "startup hydrate: could not read settings cache ({}); \
-                             cloud account will stay uninitialised until the \
-                             frontend pushes it",
-                            e
-                        );
-                        return;
-                    }
-                };
-                if let Some(account) = settings.cloud.account {
-                    let cloud = app_handle_for_hydrate.state::<cloud::CloudClient>();
-                    cloud.set_account(Some(account.clone())).await;
-                    tracing::info!(
-                        user_id = %account.user_id,
-                        "startup hydrate: CloudClient restored from persisted settings"
-                    );
-                }
-            });
+            //
+            // We hydrate synchronously (blocking the setup task) rather than
+            // firing-and-forgetting in a `spawn` because the previous async
+            // shape had a race: a chat request that arrived before the hydrate
+            // task finished would surface "not logged in" and force a manual
+            // re-login on every cold start. Blocking here is fine — reading
+            // `settings.json` is a sub-millisecond operation once the cache
+            // is warm (and the cache is populated by `read_settings_from_disk`
+            // before this point on the first launch).
+            let hydrate_app_handle = app.handle().clone();
+            if let Err(e) = hydrate_cloud_client_from_settings(&hydrate_app_handle) {
+                tracing::warn!(
+                    "startup hydrate: cloud account not restored ({}); \
+                     the frontend can still push one via cloud_login / cloud_register",
+                    e
+                );
+            }
 
             Ok(())
         })
