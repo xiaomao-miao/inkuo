@@ -1,17 +1,20 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { lazy, Suspense } from 'react';
+import { type Extension } from '@codemirror/state';
 import { type ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import CodeMirror from '@uiw/react-codemirror';
 import { Compartment } from '@codemirror/state';
 import { Sparkles } from 'lucide-react';
 import { useEditorStore, useSidebarStore, useSettingsStore, SETTINGS_TAB_ID, CLOUD_TAB_ID, type OpenTab } from '../../store';
+import { detectFileKind, type FileKind } from '../../types';
 import { DiffOverlay } from './DiffOverlay';
 import { InlineCompleteProvider } from '../inline-complete';
 import { useDocumentLoader } from './useDocumentLoader';
 import { useDocumentSave } from './useDocumentSave';
 import { useExternalFileSync } from './useExternalFileSync';
 import { createDiffDecorationsField } from './diffDecorationsField';
-import { createEditorExtensions } from './editorExtensions';
+import { createEditorExtensions, languageExtensionForKind } from './editorExtensions';
+import { LazyImageViewer, LazyPdfViewer } from './LazyMediaViewers';
 import { EditorBody } from './EditorBody';
 import { useEditorInlineCompletion } from './useEditorInlineCompletion';
 import { useEditorKeyboardShortcuts, useEditorSelectionSync } from './useEditorInteraction';
@@ -40,7 +43,12 @@ const CloudPage = lazy(() =>
 
 const EditorContent: React.FC<{
   editorRef: React.RefObject<ReactCodeMirrorRef | null>;
-}> = ({ editorRef }) => {
+  /** Coarse-grained file kind. Used to pick a CodeMirror language
+   *  extension (e.g. typescript for `.ts`, python for `.py`,
+   *  markdown for `.md`). When omitted (legacy callers), the editor
+   *  falls back to the markdown language pack as before. */
+  fileKind?: FileKind;
+}> = ({ editorRef, fileKind }) => {
   const selectedFile = useSidebarStore((state) => state.selectedFile);
   const currentDoc = useEditorStore((state) => (selectedFile ? state.documentContents[selectedFile] : null));
   const setContent = useEditorStore((state) => state.setContent);
@@ -67,6 +75,33 @@ const EditorContent: React.FC<{
   const diffHunks = useMemo(() => currentDiff?.hunks ?? [], [currentDiff?.hunks]);
   const isDiffMode = currentDiff?.isActive || false;
   const selection = currentMetadata?.selection ?? null;
+
+  // Resolve the language extension for the current file. We resolve this
+  // asynchronously because some language parsers (e.g. via
+  // `@codemirror/language-data`) are dynamically imported on first use.
+  const [language, setLanguage] = useState<Extension | null>(null);
+
+  useEffect(() => {
+    if (!selectedFile) {
+      setLanguage(null);
+      return;
+    }
+    const kind = fileKind ?? detectFileKind(selectedFile);
+    const base = selectedFile.split(/[\\/]/).pop() ?? selectedFile;
+    const dot = base.lastIndexOf('.');
+    const ext = dot >= 0 && dot < base.length - 1 ? base.slice(dot + 1).toLowerCase() : '';
+
+    let cancelled = false;
+    languageExtensionForKind(kind, ext).then((ext) => {
+      if (!cancelled) setLanguage(ext);
+    }).catch(() => {
+      if (!cancelled) setLanguage(null);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedFile, fileKind]);
 
   const requestDocumentRefresh = useCallback(() => {
     setRefreshToken((current) => current + 1);
@@ -108,8 +143,9 @@ const EditorContent: React.FC<{
       inlineCompletionKeyHandler,
       inlineAutoTrigger,
       autoTriggerStateRef,
+      language,
     });
-  }, [diffDecorationsField, inlineCompletionKeyHandler, inlineAutoTrigger, autoTriggerStateRef]);
+  }, [diffDecorationsField, inlineCompletionKeyHandler, inlineAutoTrigger, autoTriggerStateRef, language]);
 
   return (
     <div className={`${styles.editorContainer} editorContainer`} data-inline-complete-styles={inlineCompleteStyles}>
@@ -222,22 +258,20 @@ const CloudState: React.FC = () => (
   </Suspense>
 );
 
-function detectFileType(path: string): 'markdown' | 'plaintext' | 'word' | 'excel' {
-  const ext = path.split('.').pop()?.toLowerCase() || '';
-  if (ext === 'docx') return 'word';
-  if (ext === 'xlsx' || ext === 'xls') return 'excel';
-  if (ext === 'md' || ext === 'markdown') return 'markdown';
-  return 'plaintext';
+function detectFileType(path: string): FileKind {
+  return detectFileKind(path);
 }
 
 type RenderableOfficeTab = {
   tab: OpenTab;
-  fileType: 'word' | 'excel';
+  fileType: Extract<FileKind, 'word' | 'excel'>;
 };
+
+const OFFICE_KINDS: ReadonlyArray<RenderableOfficeTab['fileType']> = ['word', 'excel'];
 
 const OfficeTabRenderer: React.FC<{
   tab: OpenTab;
-  fileType: 'word' | 'excel';
+  fileType: RenderableOfficeTab['fileType'];
   isActive: boolean;
 }> = ({ tab, fileType, isActive }) => {
   const officeState = useEditorStore((state) => state.documentContents[tab.path]?.office);
@@ -286,11 +320,11 @@ export const Editor: React.FC = () => {
   const openTabs = useSidebarStore((state) => state.openTabs);
   const isSettingsTab = activeTabId === SETTINGS_TAB_ID;
 
-  const activeFileType = selectedFile ? detectFileType(selectedFile) : null;
+  const activeFileType: FileKind | null = selectedFile ? detectFileType(selectedFile) : null;
   const officeTabs = useMemo<RenderableOfficeTab[]>(() => openTabs.flatMap((tab: OpenTab) => {
     const fileType = detectFileType(tab.path);
-    if (fileType !== 'word' && fileType !== 'excel') return [];
-    return [{ tab, fileType }];
+    if (!(OFFICE_KINDS as readonly string[]).includes(fileType)) return [];
+    return [{ tab, fileType: fileType as RenderableOfficeTab['fileType'] }];
   }), [openTabs]);
 
   if (isSettingsTab) {
@@ -304,6 +338,22 @@ export const Editor: React.FC = () => {
   if (!selectedFile) {
     return <EmptyState />;
   }
+
+  // Decide which top-level viewer to render. The office tabs are stacked
+  // (only one is shown at a time, the rest keep their state); the
+  // markdown/code/text editor is rendered separately and shares the
+  // same selected-file state. Image and PDF viewers are mounted as
+  // their own dedicated stack items because they have no live-edit
+  // state and should not participate in the OfficeTabRenderer cache.
+  const isOffice = activeFileType && (OFFICE_KINDS as readonly string[]).includes(activeFileType);
+  const isEditableText =
+    activeFileType === 'markdown' ||
+    activeFileType === 'text' ||
+    activeFileType === 'code' ||
+    activeFileType === 'config' ||
+    activeFileType === 'data';
+  const isImage = activeFileType === 'image';
+  const isPdf = activeFileType === 'pdf';
 
   return (
     <div className={styles.officeStack}>
@@ -320,13 +370,79 @@ export const Editor: React.FC = () => {
         );
       })}
 
-      {(activeFileType === 'markdown' || activeFileType === 'plaintext') && (
+      {isEditableText && (
         <div className={styles.officeStackItem}>
           <InlineCompleteProvider>
-            <EditorContent editorRef={editorRef} />
+            <EditorContent editorRef={editorRef} fileKind={activeFileType!} />
           </InlineCompleteProvider>
         </div>
       )}
+
+      {isImage && (
+        <div className={styles.officeStackItem}>
+          <LazyImageViewer filePath={selectedFile} />
+        </div>
+      )}
+
+      {isPdf && (
+        <div className={styles.officeStackItem}>
+          <LazyPdfViewer filePath={selectedFile} />
+        </div>
+      )}
+
+      {/* Binary / archive / audio / video modes currently have no in-app
+         viewer; if the active file is one of those, render an empty
+         hint so the editor pane isn't blank. */}
+      {selectedFile && !isOffice && !isEditableText && !isImage && !isPdf && (
+        <UnsupportedFileHint fileKind={activeFileType!} fileName={selectedFile} />
+      )}
+    </div>
+  );
+};
+
+/**
+ * Fallback hint shown for file kinds the editor doesn't yet support
+ * (binary, archive, audio, video, etc.). Includes a button to open
+ * the file with the system's default application, mirroring the
+ * behavior of the existing Office tabs that delegate unknown formats
+ * to the host OS.
+ */
+const UnsupportedFileHint: React.FC<{ fileKind: FileKind; fileName: string }> = ({
+  fileKind,
+  fileName,
+}) => {
+  const displayName = fileName.split(/[\\/]/).pop() ?? fileName;
+  const openExternal = async () => {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('open_with_default_app', { path: fileName });
+    } catch {
+      /* noop */
+    }
+  };
+
+  return (
+    <div className={styles.officeStackItem}>
+      <div className={styles.noFileHint}>
+        <Sparkles className={styles.hintIcon} size={20} />
+        <span>
+          不支持在 inkuo 中预览 <code>{displayName}</code>（类型：{fileKind}）。
+          <button
+            onClick={openExternal}
+            style={{
+              marginLeft: 8,
+              background: 'none',
+              border: '1px solid var(--border-color)',
+              padding: '2px 10px',
+              borderRadius: 4,
+              cursor: 'pointer',
+              color: 'inherit',
+            }}
+          >
+            用系统应用打开
+          </button>
+        </span>
+      </div>
     </div>
   );
 };

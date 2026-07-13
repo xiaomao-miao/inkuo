@@ -6,6 +6,12 @@ import {
   X,
   File,
   FileText,
+  FileCode,
+  FileImage,
+  FileType,
+  FileAudio,
+  FileVideo,
+  FileArchive,
   Folder,
   FolderOpen as FolderOpenIcon,
   BookMarked,
@@ -47,10 +53,44 @@ const SearchResultItem = ({ entry, workspaceRoot, onClick }: SearchResultItemPro
       <span className={styles.chevronPlaceholder} />
       <span
         className={styles.icon}
-        data-type={entry.is_dir ? 'folder' : entry.is_markdown ? 'markdown' : 'file'}
+        data-type={
+          entry.is_dir
+            ? 'folder'
+            : entry.file_kind === 'image'
+              ? 'image'
+              : entry.file_kind === 'pdf'
+                ? 'pdf'
+                : entry.file_kind === 'code' ||
+                    entry.file_kind === 'config' ||
+                    entry.file_kind === 'data'
+                  ? 'code'
+                  : entry.file_kind === 'audio'
+                    ? 'audio'
+                    : entry.file_kind === 'video'
+                      ? 'video'
+                      : entry.file_kind === 'archive'
+                        ? 'archive'
+                        : entry.is_markdown
+                          ? 'markdown'
+                          : 'file'
+        }
       >
         {entry.is_dir ? (
           entry.is_dir ? <Folder size={14} /> : <FolderOpenIcon size={14} />
+        ) : entry.file_kind === 'image' ? (
+          <FileImage size={14} />
+        ) : entry.file_kind === 'pdf' ? (
+          <FileType size={14} />
+        ) : entry.file_kind === 'audio' ? (
+          <FileAudio size={14} />
+        ) : entry.file_kind === 'video' ? (
+          <FileVideo size={14} />
+        ) : entry.file_kind === 'archive' ? (
+          <FileArchive size={14} />
+        ) : entry.file_kind === 'code' ||
+            entry.file_kind === 'config' ||
+            entry.file_kind === 'data' ? (
+          <FileCode size={14} />
         ) : entry.is_markdown ? (
           <FileText size={14} />
         ) : (

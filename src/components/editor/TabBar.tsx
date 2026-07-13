@@ -1,7 +1,11 @@
 import { useRef } from 'react';
-import { FileText, File, X, Circle, Settings, Cloud } from 'lucide-react';
+import {
+  FileText, File, X, Circle, Settings, Cloud,
+  FileImage, FileType, FileCode, FileAudio, FileVideo, FileArchive,
+} from 'lucide-react';
 import { useSidebarStore, useConfirmDialogStore } from '../../store';
 import type { OpenTab } from '../../store';
+import { detectFileKind } from '../../types';
 import styles from './TabBar.module.css';
 
 export const TabBar = () => {
@@ -51,8 +55,28 @@ export const TabBar = () => {
     if (tab.isCloud) {
       return <Cloud size={14} />;
     }
-    const isMarkdown = tab.name.endsWith('.md') || tab.name.endsWith('.markdown');
-    return isMarkdown ? <FileText size={14} /> : <File size={14} />;
+    const kind = detectFileKind(tab.name);
+    switch (kind) {
+      case 'markdown':
+      case 'text':
+        return <FileText size={14} />;
+      case 'image':
+        return <FileImage size={14} />;
+      case 'pdf':
+        return <FileType size={14} />;
+      case 'code':
+      case 'config':
+      case 'data':
+        return <FileCode size={14} />;
+      case 'audio':
+        return <FileAudio size={14} />;
+      case 'video':
+        return <FileVideo size={14} />;
+      case 'archive':
+        return <FileArchive size={14} />;
+      default:
+        return <File size={14} />;
+    }
   };
 
   return (

@@ -276,6 +276,7 @@ mod todo_tools; // update_todo (read-only meta-tool; see agent_loop::try_handle_
 mod plan_tools;  // create_plan  (read-only meta-tool; see agent_loop::try_handle_meta_tool)
 mod mermaid_tools; // render_mermaid  (in-process merman renderer, mermaid.js 11.15 parity)
 mod web_search_tool; // web_search (external encyclopedia lookup; today Baike)
+mod media_tools; // read_image / read_pdf  (binary workspace files for multimodal LLMs)
 pub mod ask_user_tools; // ask_user   (meta-tool; see agent_loop::try_handle_meta_tool)
 
 pub use file_tools::{ReadFileTool, WriteFileTool, EditFileTool, CreateDirTool, MoveFileTool};
@@ -291,6 +292,7 @@ pub use plan_tools::{CreatePlanTool, CreatePlanArgs, PlanFileTouch};
 pub use mermaid_tools::RenderMermaidTool;
 pub use web_search_tool::WebSearchTool;
 pub use ask_user_tools::AskUserTool;
+pub use media_tools::{ReadImageTool, ReadPdfTool};
 
 /// Unified executor enum combining all tool implementations
 pub enum ToolExecutor {
@@ -311,6 +313,8 @@ pub enum ToolExecutor {
     RenderMermaid(mermaid_tools::RenderMermaidTool),
     DatabaseSearch(database_tools::DatabaseSearchTool),
     WebSearch(web_search_tool::WebSearchTool),
+    ReadImage(media_tools::ReadImageTool),
+    ReadPdf(media_tools::ReadPdfTool),
     // Meta tools (intercepted by the agent loop; execute() returns an error
     // if reached directly).
     GetToolHelp(meta_tools::GetToolHelpTool),
@@ -340,6 +344,8 @@ impl ToolExecutor {
             ToolExecutor::RenderMermaid(_) => "render_mermaid",
             ToolExecutor::DatabaseSearch(_) => "database_search",
             ToolExecutor::WebSearch(_) => "web_search",
+            ToolExecutor::ReadImage(_) => "read_image",
+            ToolExecutor::ReadPdf(_) => "read_pdf",
             ToolExecutor::GetToolHelp(_) => "get_tool_help",
             ToolExecutor::DelegateTo(_) => "delegate_to",
             ToolExecutor::UpdateTodo(_) => "update_todo",
@@ -367,6 +373,8 @@ impl ToolExecutor {
             ToolExecutor::RenderMermaid(t) => t.definition(),
             ToolExecutor::DatabaseSearch(t) => t.definition(),
             ToolExecutor::WebSearch(t) => t.definition(),
+            ToolExecutor::ReadImage(t) => t.definition(),
+            ToolExecutor::ReadPdf(t) => t.definition(),
             ToolExecutor::GetToolHelp(t) => t.definition(),
             ToolExecutor::DelegateTo(t) => t.definition(),
             ToolExecutor::UpdateTodo(t) => t.definition(),
@@ -402,6 +410,8 @@ impl ToolExecutor {
             }
             ToolExecutor::DatabaseSearch(t) => t.execute(arguments, workspace).await,
             ToolExecutor::WebSearch(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::ReadImage(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::ReadPdf(t) => t.execute(arguments, workspace).await,
             ToolExecutor::GetToolHelp(t) => t.execute(arguments, workspace).await,
             ToolExecutor::DelegateTo(t) => t.execute(arguments, workspace).await,
             ToolExecutor::UpdateTodo(t) => t.execute(arguments, workspace).await,
@@ -538,6 +548,8 @@ impl ToolRegistry {
             // actually executes because every call site seeds the
             // AppHandle before any agent turn.
             ToolExecutor::WebSearch(WebSearchTool::placeholder()),
+            ToolExecutor::ReadImage(ReadImageTool),
+            ToolExecutor::ReadPdf(ReadPdfTool),
             // Meta tools (intercepted in agent loop, but still registered so
             // they appear in tool catalogs and can be schema-validated).
             ToolExecutor::GetToolHelp(GetToolHelpTool),

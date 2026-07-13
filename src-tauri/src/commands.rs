@@ -222,6 +222,22 @@ pub struct ReadDocumentResult {
     pub mtime: i64,  // Unix timestamp in milliseconds
 }
 
+/// Payload returned by `read_file_for_viewer` for binary file rendering.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ViewerFilePayload {
+    pub path: String,
+    pub size: u64,
+    /// Best-effort MIME type derived from the file extension
+    /// (e.g. `image/png`, `application/pdf`).
+    pub mime: String,
+    /// Coarse-grained `file_kind` classification (matches `FileEntry.file_kind`).
+    pub file_kind: String,
+    /// Raw file bytes encoded as base64. Frontend decodes via
+    /// `Uint8Array.from(atob(...), c => c.charCodeAt(0))` or uses the
+    /// `data:` URL directly for `<img>` / `<video>` / `<audio>`.
+    pub data_base64: String,
+}
+
 #[tauri::command]
 pub async fn read_document(path: String) -> Result<ReadDocumentResult, AppCommandError> {
     tracing::info!("Reading document: {}", path);
@@ -305,7 +321,53 @@ pub struct FileEntry {
     pub name: String,
     pub path: String,
     pub is_dir: bool,
+    /// Coarse-grained classification driving the editor + icon mapping.
+    /// Possible values: `word`, `excel`, `image`, `pdf`, `code`, `config`,
+    /// `data`, `markdown`, `text`, `binary`, `audio`, `video`, `archive`.
+    /// The frontend keeps `is_markdown` for backwards compatibility — it is
+    /// `true` iff `file_kind == "markdown" || file_kind == "text"`.
+    pub file_kind: String,
+    /// Kept for backwards compatibility — true if the file is a markdown
+    /// document. Prefer `file_kind`.
     pub is_markdown: bool,
+}
+
+/// Classify a file by extension into a coarse-grained `file_kind` string.
+///
+/// Mirrors the TypeScript `detectFileKind` in `src/types/index.ts` so the
+/// frontend and backend agree on the routing decision.
+pub fn classify_file_kind(path: &std::path::Path) -> &'static str {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    match ext.as_str() {
+        "docx" | "doc" => "word",
+        "xlsx" | "xls" | "xlsm" => "excel",
+        "md" | "markdown" => "markdown",
+        "pdf" => "pdf",
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico" | "avif" | "tif"
+        | "tiff" | "svg" => "image",
+        "json" | "jsonc" | "json5" | "yaml" | "yml" | "toml" | "ini" | "xml" | "env" => {
+            "config"
+        }
+        "csv" | "tsv" => "data",
+        "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "rs" | "py" | "go" | "java"
+        | "kt" | "swift" | "c" | "h" | "cpp" | "cc" | "cxx" | "hpp" | "hxx" | "rb"
+        | "php" | "lua" | "sh" | "bash" | "zsh" | "sql" | "graphql" | "gql" | "html"
+        | "htm" | "css" | "scss" | "sass" | "less" | "vue" | "svelte" | "astro"
+        | "dart" | "r" | "jl" | "pl" | "scala" | "clj" | "ex" | "exs" | "erl"
+        | "hs" | "ml" | "fs" | "fsx" | "mdx" => "code",
+        "txt" | "log" | "text" => "text",
+        "mp3" | "wav" | "flac" | "aac" | "ogg" | "m4a" => "audio",
+        "mp4" | "mov" | "mkv" | "webm" | "avi" | "m4v" => "video",
+        "zip" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "7z" | "rar" | "jar" | "war" => {
+            "archive"
+        }
+        _ => "binary",
+    }
 }
 
 #[tauri::command]
@@ -326,13 +388,14 @@ pub async fn list_directory(path: String) -> Result<Vec<FileEntry>, AppCommandEr
             }
 
             let is_dir = path.is_dir();
-            let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-            let is_markdown = matches!(extension, "md" | "markdown" | "txt");
+            let file_kind = classify_file_kind(&path);
+            let is_markdown = matches!(file_kind, "markdown" | "text");
 
             Some(FileEntry {
                 name,
                 path: path.to_string_lossy().to_string(),
                 is_dir,
+                file_kind: file_kind.to_string(),
                 is_markdown,
             })
         })
@@ -418,13 +481,14 @@ pub async fn search_directory(
             let is_dir = file_type.is_dir();
 
             if name.to_lowercase().contains(query) {
-                let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                let is_markdown = matches!(extension, "md" | "markdown" | "txt");
+                let file_kind = classify_file_kind(&path);
+                let is_markdown = matches!(file_kind, "markdown" | "text");
 
                 results.push(FileEntry {
                     name,
                     path: path.to_string_lossy().to_string(),
                     is_dir,
+                    file_kind: file_kind.to_string(),
                     is_markdown,
                 });
             }
@@ -1750,6 +1814,78 @@ pub async fn read_file_bytes_cmd(
     let bytes = std::fs::read(&path)
         .map_err(|e| AppCommandError::ReadDocument(e.to_string()))?;
     Ok(base64_encode(&bytes))
+}
+
+/// Read a file's bytes and return them base64-encoded, with a best-effort
+/// MIME guess derived from the file extension. Used by the workspace
+/// viewers for `image`, `pdf`, `audio`, `video`, and other binary
+/// formats. Caps the read at 200 MB to avoid runaway memory usage.
+#[tauri::command]
+pub async fn read_file_for_viewer(
+    path: String,
+) -> Result<ViewerFilePayload, AppCommandError> {
+    const MAX_BYTES: u64 = 200 * 1024 * 1024;
+
+    let metadata = std::fs::metadata(&path)
+        .map_err(|e| AppCommandError::ReadDocument(e.to_string()))?;
+
+    if metadata.len() > MAX_BYTES {
+        return Err(AppCommandError::ReadDocument(format!(
+            "file too large for in-app viewer ({} > {} bytes)",
+            metadata.len(),
+            MAX_BYTES
+        )));
+    }
+
+    let bytes = std::fs::read(&path)
+        .map_err(|e| AppCommandError::ReadDocument(e.to_string()))?;
+    let mime = mime_for_path(std::path::Path::new(&path));
+    let file_kind = classify_file_kind(std::path::Path::new(&path))
+        .to_string();
+
+    Ok(ViewerFilePayload {
+        path,
+        size: bytes.len() as u64,
+        mime,
+        file_kind,
+        data_base64: base64_encode(&bytes),
+    })
+}
+
+/// Best-effort MIME mapping for the in-app viewers. Falls back to
+/// `application/octet-stream` for unknown extensions.
+pub fn mime_for_path(path: &std::path::Path) -> String {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let mime = match ext.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "ico" => "image/x-icon",
+        "avif" => "image/avif",
+        "tif" | "tiff" => "image/tiff",
+        "svg" => "image/svg+xml",
+        "pdf" => "application/pdf",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "flac" => "audio/flac",
+        "aac" => "audio/aac",
+        "ogg" => "audio/ogg",
+        "m4a" => "audio/mp4",
+        "mp4" => "video/mp4",
+        "mov" => "video/quicktime",
+        "mkv" => "video/x-matroska",
+        "webm" => "video/webm",
+        "avi" => "video/x-msvideo",
+        "m4v" => "video/x-m4v",
+        _ => "application/octet-stream",
+    };
+    mime.to_string()
 }
 
 /// Read a single file's *text* content from a workspace snapshot.  Returns

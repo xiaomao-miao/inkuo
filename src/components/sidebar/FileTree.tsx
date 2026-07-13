@@ -3,6 +3,12 @@ import {
   ChevronRight,
   File,
   FileText,
+  FileCode,
+  FileImage,
+  FileType,
+  FileAudio,
+  FileVideo,
+  FileArchive,
   Folder,
   FolderOpen as FolderOpenIcon,
   Loader2,
@@ -373,7 +379,15 @@ function renderChildren({
 
 function iconType(entry: FileEntry): string {
   if (entry.is_dir) return 'folder';
-  if (entry.is_markdown) return 'markdown';
+  if (entry.file_kind === 'markdown' || entry.file_kind === 'text') return 'markdown';
+  if (entry.file_kind === 'image') return 'image';
+  if (entry.file_kind === 'pdf') return 'pdf';
+  if (entry.file_kind === 'code') return 'code';
+  if (entry.file_kind === 'config') return 'config';
+  if (entry.file_kind === 'data') return 'data';
+  if (entry.file_kind === 'audio') return 'audio';
+  if (entry.file_kind === 'video') return 'video';
+  if (entry.file_kind === 'archive') return 'archive';
   return 'file';
 }
 
@@ -381,8 +395,27 @@ function iconFor(entry: FileEntry, isExpanded: boolean): ReactNode {
   if (entry.is_dir) {
     return isExpanded ? <FolderOpenIcon size={14} /> : <Folder size={14} />;
   }
-  if (entry.is_markdown) return <FileText size={14} />;
-  return <File size={14} />;
+  switch (entry.file_kind) {
+    case 'markdown':
+    case 'text':
+      return <FileText size={14} />;
+    case 'image':
+      return <FileImage size={14} />;
+    case 'pdf':
+      return <FileType size={14} />;
+    case 'code':
+    case 'config':
+    case 'data':
+      return <FileCode size={14} />;
+    case 'audio':
+      return <FileAudio size={14} />;
+    case 'video':
+      return <FileVideo size={14} />;
+    case 'archive':
+      return <FileArchive size={14} />;
+    default:
+      return <File size={14} />;
+  }
 }
 
 const RootLoading = () => (

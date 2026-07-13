@@ -365,6 +365,7 @@ pub fn run() {
             commands::collect_workspace_empty_dirs_cmd,
             commands::collect_workspace_files_cmd,
             commands::read_file_bytes_cmd,
+            commands::read_file_for_viewer,
             commands::read_snapshot_file_cmd,
             commands_cloud::cloud_register,
             commands_cloud::cloud_login,

@@ -15,6 +15,7 @@ import {
 } from '../../services/workspace';
 import { normalizeDirPath } from '../../utils/path';
 import { reportError } from '../../utils/errors';
+import { detectFileKind } from '../../types';
 import styles from './InlineRenameInput.module.css';
 
 interface InlineRenameInputProps {
@@ -142,15 +143,17 @@ export const InlineRenameInput = ({ state, depth }: InlineRenameInputProps) => {
           );
           await refetchParentAfterMutation(state.parentPath);
           cancelInlineEdit();
-          // Auto-open markdown/office files in the editor.
-          const isMarkdown =
-            state.createPayload.kind === 'file' && state.createPayload.extension === 'md';
-          const isOffice =
-            state.createPayload.kind === 'file' &&
-            ['docx', 'xlsx'].includes(state.createPayload.extension);
-          if (isMarkdown || isOffice) {
+          // Auto-open document files in the editor (markdown, office,
+          // images, PDFs). Other plain-text files (code / config) fall
+          // through to the editor by virtue of `Editor`'s default mode
+          // and do not need a special-case auto-open here.
+          const openableKinds = new Set([
+            'markdown', 'word', 'excel', 'image', 'pdf',
+          ]);
+          const createdKind = detectFileKind(result.path);
+          if (openableKinds.has(createdKind)) {
             openWorkspaceFile(result.path, {
-              name: result.path.split('/').pop() ?? trimmed,
+              name: result.path.split(/[\\/]/).pop() ?? trimmed,
             });
           } else {
             pushNotification({ kind: 'success', title: '已创建', message: trimmed });
