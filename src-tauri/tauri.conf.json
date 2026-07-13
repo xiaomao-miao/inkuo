@@ -46,9 +46,11 @@
       "icons/icon.ico"
     ],
     "windows": {
-      "webviewInstallMode": {
-        "type": "fixedRuntime",
-        "path": "./Microsoft.WebView2.FixedVersionRuntime.150.0.4078.65.x64/"
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": ["English", "SimpChinese"],
+        "displayLanguageSelector": true,
+        "installerIcon": "icons/icon.ico"
       }
     }
   }

@@ -35,18 +35,228 @@ pub use diff::*;
 pub use ai::*;
 use std::panic;
 use tauri::Manager;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+
+/// Minimum Windows build we will even try to launch on. WebView2 itself
+/// only ships runtime support down to Win10 1507 / build 10240. We use
+/// that as the floor; the installer enforces the same via
+/// `MinimumWindowsVersion`. (Previously we used 17763, but `GetVersionExW`
+/// is unreliable: on Win10/11 hosts where the .exe is missing a manifest,
+/// Windows runs the binary under a legacy compat shim that reports build
+/// 9200 regardless of the real OS, which produced false "unsupported OS"
+/// failures for normal users.)
+const MIN_WINDOWS_BUILD: u32 = 10_240;
+
+/// Path of the on-disk startup log. Always written regardless of the
+/// build profile so a release build that crashes silently still leaves
+/// evidence behind for the user to copy back.
+///
+/// Layout: `%LOCALAPPDATA%\com.inkuo.app\startup.log` (Tauri's
+/// default per-app data dir on Windows).
+fn startup_log_path() -> std::path::PathBuf {
+    let base = std::env::var_os("LOCALAPPDATA")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    base.join("com.inkuo.app").join("startup.log")
+}
+
+/// Append a single timestamped line to the startup log. We use
+/// `OpenOptions::append` so each launch adds to the file rather than
+/// truncating it — keeping the previous crash context visible.
+///
+/// Failures are intentionally swallowed: writing the log must never
+/// crash the host process. If disk is full or the dir is read-only we
+/// still want the application to try to start.
+fn log_startup(line: impl AsRef<str>) {
+    use std::io::Write;
+    let path = startup_log_path();
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let pid = std::process::id();
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        let _ = writeln!(f, "[ts={timestamp} pid={pid}] {}", line.as_ref());
+    }
+}
+
+/// Read the OSVERSIONINFOEXW-style build number on Windows.
+///
+/// Uses `ntdll!RtlGetVersion` rather than `kernel32!GetVersionExW` because
+/// `GetVersionExW` is subject to the application-compatibility shim:
+/// without an embedded application manifest, Windows lies to the caller
+/// and reports build 9200 (Win8) even on a real Win10/11 host. This was
+/// the root cause of our "PREFLIGHT FAILED: build 9200" false negative on
+/// otherwise healthy systems.
+///
+/// `RtlGetVersion` is an internal ntdll export that is exempt from the
+/// shim — it returns the kernel's view of the OS, which is what we want.
+#[cfg(windows)]
+fn windows_build_number() -> Option<u32> {
+    use std::ffi::c_void;
+    #[repr(C)]
+    struct OsVersionInfoEx {
+        os_version_info_size: u32,
+        major_version: u32,
+        minor_version: u32,
+        build_number: u32,
+        platform_id: u32,
+        version: [u16; 128],
+        service_pack_major: u16,
+        service_pack_minor: u16,
+        suite_mask: u16,
+        product_type: u8,
+        reserved: u8,
+    }
+    impl OsVersionInfoEx {
+        const fn zeroed() -> Self {
+            Self {
+                os_version_info_size: 0,
+                major_version: 0,
+                minor_version: 0,
+                build_number: 0,
+                platform_id: 0,
+                version: [0u16; 128],
+                service_pack_major: 0,
+                service_pack_minor: 0,
+                suite_mask: 0,
+                product_type: 0,
+                reserved: 0,
+            }
+        }
+    }
+    extern "system" {
+        // RtlGetVersion is exported from ntdll.dll and is exempt from the
+        // application compatibility shim. Signature matches the public
+        // MSDN documentation: returns an NTSTATUS (0 on success).
+        fn RtlGetVersion(lp_version_information: *mut c_void) -> i32;
+    }
+    let mut info = OsVersionInfoEx::zeroed();
+    info.os_version_info_size = std::mem::size_of::<OsVersionInfoEx>() as u32;
+    // SAFETY: pointer is to a stack-allocated, properly-sized struct with
+    // `os_version_info_size` already set. RtlGetVersion only reads.
+    let status = unsafe { RtlGetVersion(&mut info as *mut _ as *mut c_void) };
+    if status != 0 {
+        None
+    } else {
+        Some(info.build_number)
+    }
+}
+
+#[cfg(not(windows))]
+fn windows_build_number() -> Option<u32> {
+    None
+}
+
+/// Quick sanity check before we hand control to `tauri::Builder`.
+///
+/// Returns `Ok(())` when the host is acceptable, `Err(reason)` with a
+/// human-readable explanation when it is not. We deliberately keep this
+/// dependency-free so it runs even if every later Tauri init step fails.
+fn preflight_os_check() -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        match windows_build_number() {
+            None => {
+                // GetVersionExW failed. Don't silently fall through;
+                // refuse to launch because we have no way to know whether
+                // WebView2 will start. The installer already enforces
+                // the same constraint via `MinimumWindowsVersion`, so
+                // reaching this branch in practice would mean someone
+                // shipped us an unsupported host (e.g. server SKU with
+                // an exotic manifest).
+                return Err(format!(
+                    "Could not determine Windows build number. \
+                     InkUO requires Windows 10 (build {MIN_WINDOWS_BUILD}+) \
+                     or Windows 11."
+                ));
+            }
+            Some(build) if build < MIN_WINDOWS_BUILD => Err(format!(
+                "InkUO requires Windows 10 (build {MIN_WINDOWS_BUILD}) or later. \
+                 Detected Windows build {build}. \
+                 Please upgrade your operating system and reinstall."
+            )),
+            Some(_) => Ok(()),
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        Ok(())
+    }
+}
 
 fn setup_logging() {
-    // Simple logging setup - write to stdout
-    // In production, would use tracing-appender with proper guard handling
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
+    // Write tracing output both to stdout (useful in `cargo run` /
+    // `pnpm tauri dev`) and to a rolling file under
+    // `%LOCALAPPDATA%\com.inkuo.app\inkuo.log`. The file path is
+    // logged once at startup so a support engineer can ask the user
+    // to paste it without guessing.
+    let log_path = startup_log_path().with_file_name("inkuo.log");
+    if let Some(parent) = log_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let stdout_layer = tracing_subscriber::fmt::layer()
         .with_target(true)
-        .init();
+        .with_writer(std::io::stdout);
+    // Two layers stacked on the registry: stdout + (optional) file.
+    // We build the file layer first because `Option<L>` is itself a
+    // valid Layer, so the registry stays homogeneous regardless of
+    // whether the log file could be opened.
+    let file_layer = match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
+        Ok(f) => Some(
+            tracing_subscriber::fmt::layer()
+                .with_target(true)
+                .with_ansi(false)
+                .with_writer(std::sync::Mutex::new(f)),
+        ),
+        Err(e) => {
+            eprintln!("warning: failed to open tracing log file {log_path:?}: {e}");
+            None
+        }
+    };
+    let subscriber = tracing_subscriber::registry()
+        .with(stdout_layer)
+        .with(file_layer);
+    // `try_init` instead of `init` so a test harness that already
+    // installed a global subscriber doesn't poison us; we still get
+    // stdout + (maybe) file in normal launches.
+    let _ = subscriber.try_init();
+    log_startup(format!(
+        "logging initialized; per-launch startup log = {}, \
+         rolling tracing log = {}",
+        startup_log_path().display(),
+        log_path.display()
+    ));
 
-    // Set up panic hook to log panics
+    // Panic hook: log every panic to both stderr AND the startup log
+    // so a release-mode user without a console can still find the
+    // cause after the fact.
     panic::set_hook(Box::new(move |info| {
-        eprintln!("Application panic: {:?}", info);
+        let loc = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_else(|| "<unknown>".to_string());
+        let msg = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "<non-string panic payload>".to_string()
+        };
+        eprintln!("Application panic at {loc}: {msg}");
+        log_startup(format!("PANIC at {loc}: {msg}"));
     }));
 }
 
@@ -91,6 +301,22 @@ pub fn run() {
     setup_logging();
 
     tracing::info!("Starting inkuo v{}", env!("CARGO_PKG_VERSION"));
+
+    // Refuse to launch on host OSes we cannot serve. This catches the
+    // path where a user manually copies the .exe onto Win7/8/8.1,
+    // bypassing the MSI `MinimumWindowsVersion` guard. We bail BEFORE
+    // tauri::Builder so we never spin up WebView2 on an unsupported host
+    // (which would otherwise surface as a confusing crash dialog).
+    if let Err(reason) = preflight_os_check() {
+        log_startup(format!("PREFLIGHT FAILED: {reason}"));
+        tracing::error!("startup preflight failed: {reason}");
+        eprintln!("\n[inkuo] {reason}\n");
+        return;
+    }
+    log_startup(format!(
+        "preflight passed (host Windows build = {:?}); entering tauri::Builder",
+        windows_build_number()
+    ));
 
     // Build ONE CloudClient, then `.clone()` it before handing each
     // copy to Tauri's `.manage`. Because `CloudClient` internally

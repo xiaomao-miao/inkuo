@@ -3660,6 +3660,7 @@ dependencies = [
  "calamine",
  "chrono",
  "dirs",
+ "embed-resource",
  "fastembed",
  "futures-util",
  "glob",
