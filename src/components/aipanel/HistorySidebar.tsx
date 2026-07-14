@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import { X, MessageSquare, PlusCircle, Search, Trash2, MessageSquareOff } from 'lucide-react';
 import type { ChatSession } from '../../store';
+import { useConfirmDialogStore, useNotificationStore } from '../../store';
 import { EmptyState } from '../common/EmptyState';
 import styles from './HistorySidebar.module.css';
 
@@ -76,6 +77,30 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
   onClose,
 }) => {
   const [search, setSearch] = useState('');
+  const askConfirm = useConfirmDialogStore((s) => s.ask);
+  const pushNotification = useNotificationStore((s) => s.pushNotification);
+
+  const handleDelete = useCallback(
+    async (sessionId: string) => {
+      const target = sessions.find((s) => s.id === sessionId);
+      const title = target ? getSessionTitle(target) : '此对话';
+      const ok = await askConfirm({
+        title: '永久删除对话',
+        message: `确定要永久删除「${title}」吗？此操作不可撤销。`,
+        confirmLabel: '永久删除',
+        cancelLabel: '取消',
+        danger: true,
+      });
+      if (!ok) return;
+      onDelete(sessionId);
+      pushNotification({
+        kind: 'success',
+        title: '对话已删除',
+        message: title === '此对话' ? undefined : title,
+      });
+    },
+    [sessions, askConfirm, onDelete, pushNotification],
+  );
 
   const filtered = search.trim()
     ? sessions.filter((s) => getSessionTitle(s).toLowerCase().includes(search.toLowerCase()))
@@ -149,9 +174,7 @@ export const HistorySidebar: React.FC<HistorySidebarProps> = ({
                     className={styles.deleteBtn}
                     onClick={(e) => {
                       e.stopPropagation();
-                      if (window.confirm('确定永久删除此对话？此操作不可撤销。')) {
-                        onDelete(session.id);
-                      }
+                      void handleDelete(session.id);
                     }}
                     title="永久删除"
                     type="button"

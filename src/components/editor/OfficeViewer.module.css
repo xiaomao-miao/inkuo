@@ -973,3 +973,332 @@
   background-color: var(--bg-hover);
   border-color: var(--border-color);
 }
+
+/* ============================================================================
+   Settings popovers (FormPopover + LinkPopover/MathPopover/Watermark/HeaderFooter)
+   ============================================================================
+   These replace legacy window.prompt / window.alert calls. They live in
+   portals at <body> so they escape the toolbar's overflow:hidden, and use
+   the app's design tokens — no native browser chrome anywhere. */
+
+.wFormMenu {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0;
+  min-width: 0;
+  max-height: min(560px, 80vh);
+  overflow: hidden;
+}
+
+.wFormHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-primary);
+  border-bottom: 1px solid var(--border-color);
+  background-color: var(--bg-secondary);
+  user-select: none;
+}
+
+.wFormHeaderIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-primary);
+}
+
+.wFormHeaderTitle {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wFormBody {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--fg-primary) 18%, transparent) transparent;
+}
+
+.wFormFooter {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border-color);
+  background-color: var(--bg-secondary);
+}
+
+.wFormBtnSecondary,
+.wFormBtnPrimary,
+.wFormBtnDanger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 12px;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+.wFormBtnSecondary {
+  background-color: var(--bg-primary);
+  color: var(--fg-secondary);
+  border-color: var(--border-color);
+}
+
+.wFormBtnSecondary:hover {
+  background-color: var(--bg-hover);
+  color: var(--fg-primary);
+}
+
+.wFormBtnPrimary {
+  background-color: var(--accent-primary);
+  color: #fff;
+  border-color: var(--accent-primary);
+}
+
+.wFormBtnPrimary:hover {
+  background-color: color-mix(in oklch, var(--accent-primary) 85%, white);
+  border-color: color-mix(in oklch, var(--accent-primary) 85%, white);
+}
+
+.wFormBtnPrimary:disabled {
+  background-color: color-mix(in oklch, var(--accent-primary) 35%, transparent);
+  border-color: transparent;
+  cursor: not-allowed;
+}
+
+.wFormBtnDanger {
+  background-color: transparent;
+  color: #d44a4a;
+  border-color: color-mix(in oklch, #d44a4a 35%, transparent);
+  width: 100%;
+  justify-content: center;
+}
+
+.wFormBtnDanger:hover {
+  background-color: color-mix(in oklch, #d44a4a 12%, transparent);
+  border-color: #d44a4a;
+}
+
+.wFormField {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.wFormLabel {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.wFormInput,
+.wFormTextarea,
+.wFormSelect {
+  width: 100%;
+  padding: 5px 8px;
+  font-size: 12px;
+  color: var(--fg-primary);
+  background-color: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+  box-sizing: border-box;
+}
+
+.wFormTextarea {
+  resize: vertical;
+  min-height: 60px;
+  line-height: 1.5;
+  font-family: ui-monospace, 'Cascadia Code', Menlo, Consolas, monospace;
+}
+
+.wFormSelect {
+  appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--fg-muted) 50%),
+    linear-gradient(135deg, var(--fg-muted) 50%, transparent 50%);
+  background-position: calc(100% - 14px) 50%, calc(100% - 9px) 50%;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 24px;
+}
+
+.wFormInput:focus,
+.wFormTextarea:focus,
+.wFormSelect:focus {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--accent-primary) 25%, transparent);
+}
+
+.wFormHint {
+  font-size: 10px;
+  color: var(--fg-muted);
+  line-height: 1.4;
+}
+
+.wFormChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.wFormChipsWrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.wFormChip {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  font-size: 11px;
+  color: var(--fg-secondary);
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+}
+
+.wFormChip:hover {
+  background-color: color-mix(in oklch, var(--accent-primary) 12%, transparent);
+  color: var(--fg-primary);
+  border-color: color-mix(in oklch, var(--accent-primary) 40%, transparent);
+}
+
+.wFormToggleRow {
+  display: inline-flex;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  width: fit-content;
+}
+
+.wFormToggle {
+  height: 24px;
+  padding: 0 10px;
+  font-size: 11px;
+  color: var(--fg-secondary);
+  background-color: var(--bg-primary);
+  border: none;
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.wFormToggle + .wFormToggle {
+  border-left: 1px solid var(--border-color);
+}
+
+.wFormToggle:hover {
+  background-color: var(--bg-hover);
+}
+
+.wFormToggleActive {
+  background-color: var(--accent-primary);
+  color: #fff;
+}
+
+.wFormToggleActive:hover {
+  background-color: color-mix(in oklch, var(--accent-primary) 85%, white);
+  color: #fff;
+}
+
+.wFormRange {
+  width: 100%;
+  height: 4px;
+  margin: 6px 0 2px;
+  appearance: none;
+  background: var(--border-color);
+  border-radius: 2px;
+  outline: none;
+}
+
+.wFormRange::-webkit-slider-thumb {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent-primary);
+  cursor: pointer;
+  border: 2px solid var(--bg-primary);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.wFormRange::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--accent-primary);
+  cursor: pointer;
+  border: 2px solid var(--bg-primary);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.wFormCheckbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--fg-secondary);
+  cursor: pointer;
+  user-select: none;
+}
+
+.wFormCheckbox input {
+  accent-color: var(--accent-primary);
+}
+
+/* ── Watermark preview ────────────────────────────────────────────────── */
+
+.wWatermarkPreviewWrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 76px;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  position: relative;
+}
+
+.wWatermarkPreview {
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  user-select: none;
+  white-space: nowrap;
+  pointer-events: none;
+  transition: color 0.12s ease, opacity 0.12s ease, transform 0.12s ease;
+}
+
+.wWatermarkColorRow {
+  display: grid;
+  grid-template-columns: repeat(7, 22px);
+  gap: 4px;
+}
+
+.wColorSwatchActive {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 1px;
+}

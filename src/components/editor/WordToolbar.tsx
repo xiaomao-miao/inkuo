@@ -218,6 +218,8 @@ interface IconButtonProps {
   disabled?: boolean;
   onClick: () => void;
   size?: number;
+  /** Forwarded to the underlying <button> so callers can anchor popovers. */
+  buttonRef?: React.RefObject<HTMLButtonElement | null>;
 }
 
 const IconButton: React.FC<IconButtonProps> = ({
@@ -227,8 +229,10 @@ const IconButton: React.FC<IconButtonProps> = ({
   disabled,
   onClick,
   size,
+  buttonRef,
 }) => (
   <button
+    ref={buttonRef}
     type="button"
     className={`${styles.wToolbarIconBtn} ${active ? styles.wToolbarIconBtnActive : ''}`}
     title={title}
@@ -744,6 +748,662 @@ const SymbolPicker: React.FC<SymbolPickerProps> = ({ onInsert }) => {
   );
 };
 
+// ─── Settings popovers (replace window.prompt with in-app panels) ─────────────
+
+/**
+ * `FormPopover` wraps `DropdownPortal` and adds a consistent settings-panel
+ * chrome (title bar + footer with Cancel/Confirm). Triggered by a toolbar
+ * button; renders into a portal at `<body>` so it escapes any `overflow:hidden`
+ * ancestor. Used to replace the legacy `window.prompt` calls with an in-app
+ * panel themed to match the rest of the toolbar.
+ */
+interface FormPopoverProps {
+  triggerRef: React.RefObject<HTMLElement | null>;
+  open: boolean;
+  onClose: () => void;
+  /** Header label shown above the form body. */
+  title: string;
+  /** Optional leading icon next to the title (lucide component or string char). */
+  titleIcon?: React.ReactNode;
+  /** Approximate menu width in px. */
+  width?: number;
+  /** Body content (form fields). */
+  children: React.ReactNode;
+  /** Footer button labels. Defaults: "取消" / "确定". */
+  confirmLabel?: string;
+  cancelLabel?: string;
+  /** Disable the confirm button (e.g. invalid form). */
+  confirmDisabled?: boolean;
+  /** Confirm handler. */
+  onConfirm: () => void;
+}
+
+/**
+ * Renders a settings panel into a portal at `<body>`. The panel shares
+ * styling with the existing dropdown menus but lays out vertically: a
+ * header row, a scrollable body, and a footer row with action buttons.
+ */
+const FormPopover: React.FC<FormPopoverProps> = ({
+  triggerRef,
+  open,
+  onClose,
+  title,
+  titleIcon,
+  width = 320,
+  children,
+  confirmLabel = '确定',
+  cancelLabel = '取消',
+  confirmDisabled,
+  onConfirm,
+}) => {
+  const layout = useDropdownPosition(triggerRef, open);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // Reset the upward translate whenever the menu opens or placement changes.
+  useLayoutEffect(() => {
+    const el = menuRef.current;
+    if (!el || !layout) return;
+    if (layout.placement === 'top') {
+      el.style.transform = `translateY(-${el.offsetHeight}px)`;
+    } else {
+      el.style.transform = '';
+    }
+  }, [layout, open]);
+
+  // Submit on Enter, cancel on Escape (handled by DropdownPortal's keydown,
+  // we only handle Enter here to keep the wiring self-contained).
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Enter' && !e.shiftKey && !e.altKey) {
+        const tag = (e.target as HTMLElement | null)?.tagName;
+        // Avoid hijacking Enter inside multi-line textareas.
+        if (tag === 'TEXTAREA') return;
+        if (confirmDisabled) return;
+        e.preventDefault();
+        onConfirm();
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [open, confirmDisabled, onConfirm]);
+
+  if (typeof document === 'undefined') return null;
+  if (!open || !layout) return null;
+
+  const anchorStyle: React.CSSProperties = {
+    position: 'fixed',
+    top: layout.top,
+    left: layout.left,
+    width,
+    zIndex: 1000,
+  };
+
+  return createPortal(
+    <>
+      <div
+        className={styles.wDropdownBackdrop}
+        onMouseDown={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onClose();
+        }}
+      />
+      <div
+        ref={menuRef}
+        className={`${styles.wDropdownMenu} ${styles.wFormMenu}`}
+        style={anchorStyle}
+        role="dialog"
+        aria-label={title}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <div className={styles.wFormHeader}>
+          {titleIcon && <span className={styles.wFormHeaderIcon}>{titleIcon}</span>}
+          <span className={styles.wFormHeaderTitle}>{title}</span>
+        </div>
+        <div className={styles.wFormBody}>{children}</div>
+        <div className={styles.wFormFooter}>
+          <button
+            type="button"
+            className={styles.wFormBtnSecondary}
+            onClick={onClose}
+          >
+            {cancelLabel}
+          </button>
+          <button
+            type="button"
+            className={styles.wFormBtnPrimary}
+            disabled={confirmDisabled}
+            onClick={onConfirm}
+          >
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </>,
+    document.body,
+  );
+};
+
+// ─── LinkPopover ──────────────────────────────────────────────────────────────
+
+interface LinkPopoverProps {
+  /** Current selection text (if any) — used as the default display text. */
+  initialText: string;
+  /** Currently-selected link URL if the cursor sits inside one. */
+  initialUrl?: string;
+  /** True when the cursor is already inside a hyperlink (so we're editing it). */
+  isEditingExisting: boolean;
+  /** Confirm handler receives the URL and display text. */
+  onConfirm: (url: string, displayText: string) => void;
+  /** Trigger button ref so the popover anchors next to it. */
+  triggerRef: React.RefObject<HTMLElement | null>;
+  open: boolean;
+  onClose: () => void;
+}
+
+/**
+ * Settings panel for inserting or editing a hyperlink. Mirrors the Word
+ * "Insert Hyperlink" dialog: URL field + optional display text + quick
+ * presets for common URL prefixes. Replaces the previous `window.prompt`
+ * which was a single-line modal and didn't allow the user to pick a
+ * different display string for the link.
+ */
+const LinkPopover: React.FC<LinkPopoverProps> = ({
+  initialText,
+  initialUrl,
+  isEditingExisting,
+  triggerRef,
+  open,
+  onClose,
+  onConfirm,
+}) => {
+  const [url, setUrl] = useState(initialUrl ?? 'https://');
+  const [display, setDisplay] = useState(initialText);
+
+  // Reset whenever the popover re-opens with a new context.
+  useEffect(() => {
+    if (open) {
+      setUrl(initialUrl ?? 'https://');
+      setDisplay(initialText);
+    }
+  }, [open, initialText, initialUrl]);
+
+  const isValid = url.trim().length > 0 && /^(https?:\/\/|mailto:|tel:|file:|\/|\.\/|\.\.\/|www\.)/i.test(url.trim());
+
+  return (
+    <FormPopover
+      triggerRef={triggerRef}
+      open={open}
+      onClose={onClose}
+      title={isEditingExisting ? '编辑超链接' : '插入超链接'}
+      titleIcon={<Link2 size={12} />}
+      width={340}
+      confirmDisabled={!isValid}
+      confirmLabel={isEditingExisting ? '应用' : '插入'}
+      onConfirm={() => {
+        onConfirm(url.trim(), display.trim() || url.trim());
+      }}
+    >
+      <div className={styles.wFormField}>
+        <label className={styles.wFormLabel}>地址 (URL)</label>
+        <input
+          type="text"
+          className={styles.wFormInput}
+          value={url}
+          autoFocus
+          placeholder="https://example.com"
+          onChange={(e) => setUrl(e.target.value)}
+        />
+        <div className={styles.wFormHint}>
+          支持 http(s)://、mailto:、tel:、file: 以及相对路径
+        </div>
+      </div>
+      <div className={styles.wFormField}>
+        <label className={styles.wFormLabel}>显示文字</label>
+        <input
+          type="text"
+          className={styles.wFormInput}
+          value={display}
+          placeholder={initialText || '链接文字'}
+          onChange={(e) => setDisplay(e.target.value)}
+        />
+      </div>
+      <div className={styles.wFormChips}>
+        {[
+          { label: 'http://', value: 'http://' },
+          { label: 'https://', value: 'https://' },
+          { label: 'mailto:', value: 'mailto:' },
+          { label: 'tel:', value: 'tel:' },
+        ].map((p) => (
+          <button
+            key={p.value}
+            type="button"
+            className={styles.wFormChip}
+            onClick={() => setUrl((u) => (u ? p.value + u.replace(/^\w+:\/\//, '') : p.value))}
+            title={p.value}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+    </FormPopover>
+  );
+};
+
+// ─── MathPopover ──────────────────────────────────────────────────────────────
+
+const MATH_PRESETS = [
+  { label: 'x²+y²=r²', latex: 'x^2 + y^2 = r^2' },
+  { label: '√(a²+b²)', latex: '\\sqrt{a^2 + b^2}' },
+  { label: 'a/b 分数', latex: '\\frac{a}{b}' },
+  { label: 'Σ 求和', latex: '\\sum_{i=1}^{n} x_i' },
+  { label: '∫ 积分', latex: '\\int_a^b f(x)\\,dx' },
+  { label: 'lim 极限', latex: '\\lim_{x \\to 0} \\frac{\\sin x}{x}' },
+  { label: '矩阵', latex: '\\begin{bmatrix} a & b \\\\ c & d \\end{bmatrix}' },
+  { label: '希腊 αβγ', latex: '\\alpha\\,\\beta\\,\\gamma' },
+];
+
+interface MathPopoverProps {
+  triggerRef: React.RefObject<HTMLElement | null>;
+  open: boolean;
+  onClose: () => void;
+  /** Confirm handler receives the LaTeX string (without surrounding `$$`). */
+  onConfirm: (latex: string) => void;
+}
+
+/**
+ * Math/LaTeX insertion panel. Provides a text input + preset chips for
+ * common equations. Replaces the prior `window.prompt('输入 LaTeX')`.
+ */
+const MathPopover: React.FC<MathPopoverProps> = ({ triggerRef, open, onClose, onConfirm }) => {
+  const [latex, setLatex] = useState('');
+
+  useEffect(() => {
+    if (open) setLatex('');
+  }, [open]);
+
+  return (
+    <FormPopover
+      triggerRef={triggerRef}
+      open={open}
+      onClose={onClose}
+      title="插入数学公式 (LaTeX)"
+      titleIcon={<Sigma size={12} />}
+      width={360}
+      confirmDisabled={latex.trim().length === 0}
+      onConfirm={() => onConfirm(latex.trim())}
+    >
+      <div className={styles.wFormField}>
+        <label className={styles.wFormLabel}>LaTeX 公式</label>
+        <textarea
+          className={styles.wFormTextarea}
+          rows={3}
+          autoFocus
+          value={latex}
+          placeholder="例如: x^2 + y^2 = r^2"
+          onChange={(e) => setLatex(e.target.value)}
+        />
+        <div className={styles.wFormHint}>
+          插入后在文档中显示为 $$…$$,与 Word 的 LaTeX 公式区段一致
+        </div>
+      </div>
+      <div className={styles.wFormField}>
+        <label className={styles.wFormLabel}>常用预设</label>
+        <div className={styles.wFormChipsWrap}>
+          {MATH_PRESETS.map((p) => (
+            <button
+              key={p.label}
+              type="button"
+              className={styles.wFormChip}
+              onClick={() => setLatex(p.latex)}
+              title={p.latex}
+            >
+              {p.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    </FormPopover>
+  );
+};
+
+// ─── WatermarkPopover ─────────────────────────────────────────────────────────
+
+const WATERMARK_COLORS = [
+  '#C0C0C0', '#808080', '#404040', '#000000',
+  '#D9D9D9', '#F2F2F2', '#FFFFFF',
+  '#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A',
+  '#980000', '#0066CC', '#3D9970', '#FFB400',
+];
+
+const WATERMARK_FONTS = [
+  'Microsoft YaHei',
+  'SimSun',
+  'SimHei',
+  'KaiTi',
+  'Arial',
+  'Calibri',
+  'Times New Roman',
+  'Helvetica',
+  'Georgia',
+];
+
+interface WatermarkPopoverProps {
+  triggerRef: React.RefObject<HTMLElement | null>;
+  open: boolean;
+  onClose: () => void;
+  /** Existing watermark on the doc (if any) — for "replace / remove" controls. */
+  currentWatermark: { kind: 'text'; text: string } | { kind: 'picture' } | null;
+  /** Confirm handler receives the TextWatermark config (or null to clear). */
+  onConfirm: (cfg: {
+    text: string;
+    font: string;
+    color: string;
+    semitransparent: boolean;
+    layout: 'diagonal' | 'horizontal';
+    fontSize: number;
+  } | null) => void;
+}
+
+/**
+ * Watermark settings panel. Builds a full `TextWatermark` object that the
+ * editor's `setWatermark` command will accept verbatim. Replaces the prior
+ * `window.prompt` (which only collected text and never produced a
+ * structurally valid TextWatermark — leading to silent mis-renders).
+ */
+const WatermarkPopover: React.FC<WatermarkPopoverProps> = ({
+  triggerRef,
+  open,
+  onClose,
+  currentWatermark,
+  onConfirm,
+}) => {
+  const isExistingText = currentWatermark?.kind === 'text';
+  const [text, setText] = useState('CONFIDENTIAL');
+  const [font, setFont] = useState('Calibri');
+  const [color, setColor] = useState('#C0C0C0');
+  const [semitransparent, setSemitransparent] = useState(true);
+  const [layout, setLayout] = useState<'diagonal' | 'horizontal'>('diagonal');
+  const [fontSize, setFontSize] = useState<number>(72);
+
+  // Seed defaults from the existing watermark whenever the popover opens.
+  useEffect(() => {
+    if (!open) return;
+    if (isExistingText) {
+      setText(currentWatermark.text);
+    } else {
+      setText('CONFIDENTIAL');
+    }
+  }, [open, isExistingText, currentWatermark]);
+
+  const canConfirm = text.trim().length > 0;
+  const previewTransform = layout === 'diagonal' ? 'rotate(-30deg)' : 'rotate(0deg)';
+  const previewOpacity = semitransparent ? 0.5 : 1;
+
+  return (
+    <FormPopover
+      triggerRef={triggerRef}
+      open={open}
+      onClose={onClose}
+      title="页面水印"
+      titleIcon={<Pilcrow size={12} />}
+      width={360}
+      confirmDisabled={!canConfirm}
+      confirmLabel="应用水印"
+      onConfirm={() => onConfirm({ text: text.trim(), font, color, semitransparent, layout, fontSize })}
+    >
+      <div className={styles.wWatermarkPreviewWrap}>
+        <div
+          className={styles.wWatermarkPreview}
+          style={{
+            color,
+            fontFamily: font,
+            fontSize: Math.min(36, Math.max(14, fontSize / 2.5)),
+            opacity: previewOpacity,
+            transform: previewTransform,
+          }}
+        >
+          {text || '水印预览'}
+        </div>
+      </div>
+
+      <div className={styles.wFormField}>
+        <label className={styles.wFormLabel}>文字内容</label>
+        <input
+          type="text"
+          className={styles.wFormInput}
+          value={text}
+          autoFocus
+          maxLength={64}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="例如 CONFIDENTIAL / DRAFT"
+        />
+        <div className={styles.wFormChips}>
+          {['CONFIDENTIAL', 'DRAFT', 'DO NOT COPY', '内部资料', '机密'].map((preset) => (
+            <button
+              key={preset}
+              type="button"
+              className={styles.wFormChip}
+              onClick={() => setText(preset)}
+            >
+              {preset}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className={styles.wFormField}>
+        <label className={styles.wFormLabel}>字体</label>
+        <select
+          className={styles.wFormSelect}
+          value={font}
+          onChange={(e) => setFont(e.target.value)}
+        >
+          {WATERMARK_FONTS.map((f) => (
+            <option key={f} value={f} style={{ fontFamily: f }}>
+              {f}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div className={styles.wFormField}>
+        <label className={styles.wFormLabel}>颜色</label>
+        <div className={styles.wWatermarkColorRow}>
+          {WATERMARK_COLORS.map((c) => (
+            <button
+              key={c}
+              type="button"
+              className={`${styles.wColorSwatch} ${c === color ? styles.wColorSwatchActive : ''}`}
+              style={{ background: c.toLowerCase() }}
+              title={c}
+              onClick={() => setColor(c)}
+            />
+          ))}
+        </div>
+      </div>
+
+      <div className={styles.wFormField}>
+        <label className={styles.wFormLabel}>布局</label>
+        <div className={styles.wFormToggleRow}>
+          <button
+            type="button"
+            className={`${styles.wFormToggle} ${layout === 'diagonal' ? styles.wFormToggleActive : ''}`}
+            onClick={() => setLayout('diagonal')}
+          >
+            倾斜
+          </button>
+          <button
+            type="button"
+            className={`${styles.wFormToggle} ${layout === 'horizontal' ? styles.wFormToggleActive : ''}`}
+            onClick={() => setLayout('horizontal')}
+          >
+            水平
+          </button>
+        </div>
+      </div>
+
+      <div className={styles.wFormField}>
+        <label className={styles.wFormLabel}>
+          字号 {fontSize}pt
+        </label>
+        <input
+          type="range"
+          min={24}
+          max={144}
+          step={6}
+          value={fontSize}
+          onChange={(e) => setFontSize(Number(e.target.value))}
+          className={styles.wFormRange}
+        />
+      </div>
+
+      <div className={styles.wFormField}>
+        <label className={styles.wFormCheckbox}>
+          <input
+            type="checkbox"
+            checked={semitransparent}
+            onChange={(e) => setSemitransparent(e.target.checked)}
+          />
+          <span>半透明 (Word 的"半透明"选项)</span>
+        </label>
+      </div>
+
+      {currentWatermark && (
+        <div className={styles.wFormField}>
+          <button
+            type="button"
+            className={styles.wFormBtnDanger}
+            onClick={() => onConfirm(null)}
+          >
+            <Eraser size={11} />
+            <span>移除当前水印</span>
+          </button>
+        </div>
+      )}
+    </FormPopover>
+  );
+};
+
+// ─── HeaderFooterPopover ──────────────────────────────────────────────────────
+
+interface HeaderFooterPopoverProps {
+  /** Whether this is for a header or a footer. */
+  kind: 'header' | 'footer';
+  triggerRef: React.RefObject<HTMLElement | null>;
+  open: boolean;
+  onClose: () => void;
+  onConfirm: (cfg: {
+    text: string;
+    alignment: 'left' | 'center' | 'right';
+    includePageNumber: boolean;
+    insertBeforeFirstPage: boolean;
+  }) => void;
+}
+
+/**
+ * Header/footer insertion panel. Lets the user pick the content (custom
+ * text / page number / both), the alignment, and whether to also clear
+ * the existing first-page header/footer. Replaces the prior `window.prompt`
+ * which only asked for a single text string.
+ */
+const HeaderFooterPopover: React.FC<HeaderFooterPopoverProps> = ({
+  kind,
+  triggerRef,
+  open,
+  onClose,
+  onConfirm,
+}) => {
+  const [text, setText] = useState(kind === 'header' ? '页眉' : '页脚');
+  const [alignment, setAlignment] = useState<'left' | 'center' | 'right'>('center');
+  const [includePageNumber, setIncludePageNumber] = useState(false);
+  const [insertBeforeFirstPage, setInsertBeforeFirstPage] = useState(false);
+
+  useEffect(() => {
+    if (open) {
+      setText(kind === 'header' ? '页眉' : '页脚');
+      setAlignment('center');
+      setIncludePageNumber(false);
+      setInsertBeforeFirstPage(false);
+    }
+  }, [open, kind]);
+
+  const canConfirm = text.trim().length > 0 || includePageNumber;
+
+  return (
+    <FormPopover
+      triggerRef={triggerRef}
+      open={open}
+      onClose={onClose}
+      title={kind === 'header' ? '插入页眉' : '插入页脚'}
+      titleIcon={kind === 'header' ? <PanelTop size={12} /> : <PanelBottom size={12} />}
+      width={340}
+      confirmDisabled={!canConfirm}
+      confirmLabel={kind === 'header' ? '插入页眉' : '插入页脚'}
+      onConfirm={() => onConfirm({ text: text.trim(), alignment, includePageNumber, insertBeforeFirstPage })}
+    >
+      <div className={styles.wFormField}>
+        <label className={styles.wFormLabel}>显示文字</label>
+        <input
+          type="text"
+          className={styles.wFormInput}
+          value={text}
+          autoFocus
+          maxLength={120}
+          onChange={(e) => setText(e.target.value)}
+          placeholder={kind === 'header' ? '页眉文字 (例如: 公司名称)' : '页脚文字 (例如: 版权信息)'}
+        />
+        <div className={styles.wFormHint}>
+          留空可只插入页码
+        </div>
+      </div>
+
+      <div className={styles.wFormField}>
+        <label className={styles.wFormLabel}>对齐方式</label>
+        <div className={styles.wFormToggleRow}>
+          {([
+            { v: 'left', label: '左对齐' },
+            { v: 'center', label: '居中' },
+            { v: 'right', label: '右对齐' },
+          ] as const).map((opt) => (
+            <button
+              key={opt.v}
+              type="button"
+              className={`${styles.wFormToggle} ${alignment === opt.v ? styles.wFormToggleActive : ''}`}
+              onClick={() => setAlignment(opt.v)}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className={styles.wFormField}>
+        <label className={styles.wFormCheckbox}>
+          <input
+            type="checkbox"
+            checked={includePageNumber}
+            onChange={(e) => setIncludePageNumber(e.target.checked)}
+          />
+          <span>同时插入页码 (在文字右侧)</span>
+        </label>
+      </div>
+
+      <div className={styles.wFormField}>
+        <label className={styles.wFormCheckbox}>
+          <input
+            type="checkbox"
+            checked={insertBeforeFirstPage}
+            onChange={(e) => setInsertBeforeFirstPage(e.target.checked)}
+          />
+          <span>也在首页显示 (清除首页单独的{kind === 'header' ? '页眉' : '页脚'})</span>
+        </label>
+      </div>
+    </FormPopover>
+  );
+};
+
 // ─── WordToolbar ──────────────────────────────────────────────────────────────
 
 export interface WordToolbarProps {
@@ -923,17 +1583,44 @@ export const WordToolbar: React.FC<WordToolbarProps> = ({
     };
     input.click();
   }, [view]);
+  const linkTriggerRef = useRef<HTMLButtonElement>(null);
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [linkInitialText, setLinkInitialText] = useState('');
+  const [linkInitialUrl, setLinkInitialUrl] = useState<string | undefined>(undefined);
+  const [linkEditing, setLinkEditing] = useState(false);
   const handleInsertLink = useCallback(() => {
     const sel = window.getSelection()?.toString() ?? '';
-    const url = window.prompt('输入链接 URL', 'https://');
-    if (!url) return;
-    if (sel && state) {
-      runCommand(view, setHyperlink(url));
-    } else if (state) {
-      runCommand(view, insertHyperlink(url, url));
-    }
-  }, [view, state]);
+    setLinkInitialText(sel);
+    setLinkInitialUrl(undefined);
+    setLinkEditing(!!isLink);
+    setLinkOpen(true);
+  }, [isLink]);
   const handleRemoveLink = useCallback(() => runCommand(view, removeHyperlink), [view]);
+  const handleLinkConfirm = useCallback(
+    (url: string, displayText: string) => {
+      // Insert or update the hyperlink on the current selection. If the user
+      // changed the display text while editing, replace the selection's text
+      // content with `displayText` first, then apply the mark.
+      if (!isViewReady(view)) {
+        setLinkOpen(false);
+        return;
+      }
+      const { from, to } = view.state.selection;
+      if (from !== to && view.state.doc.textBetween(from, to, '\n', '\n') !== displayText) {
+        view.dispatch(view.state.tr.insertText(displayText, from, to));
+      }
+      // After a text replace the selection might have collapsed; recompute.
+      const sel2 = view.state.selection;
+      if (sel2.from === sel2.to) {
+        runCommand(view, insertHyperlink(url, displayText));
+      } else {
+        runCommand(view, setHyperlink(url));
+      }
+      view.focus();
+      setLinkOpen(false);
+    },
+    [view],
+  );
   const handleInsertSymbol = useCallback(
     (sym: string) => {
       if (!isViewReady(view)) return;
@@ -949,11 +1636,62 @@ export const WordToolbar: React.FC<WordToolbarProps> = ({
   const handleClearFormatting = useCallback(() => runCommand(view, clearFormatting), [view]);
 
   // ── Watermark ─────────────────────────────────────────────────────────────
-  const handleWatermark = useCallback(() => {
-    const text = window.prompt('水印文字', 'CONFIDENTIAL');
-    if (!text) return;
-    runCommand(view, setWatermark({ text, color: { rgb: 'C0C0C0' }, angle: -45 } as any));
+  // `setWatermark` accepts a `TextWatermark` config object:
+  //   { kind: 'text', text, font, color, semitransparent, layout, fontSize }
+  // The previous handler passed `{ text, color: { rgb }, angle: -45 }` which
+  // didn't match the API — the watermark stored on the doc would silently
+  // fail to render. The new WatermarkPopover collects a full, well-typed
+  // config and we pass it through verbatim.
+  const watermarkTriggerRef = useRef<HTMLButtonElement>(null);
+  const [watermarkOpen, setWatermarkOpen] = useState(false);
+  const currentWatermark = useMemo(() => {
+    if (!isViewReady(view)) return null;
+    try {
+      const w = (view.state.doc as unknown as { attrs?: { watermark?: unknown } }).attrs?.watermark;
+      if (!w || typeof w !== 'object') return null;
+      const obj = w as { kind?: string; text?: string };
+      if (obj.kind === 'text' && typeof obj.text === 'string') {
+        return { kind: 'text' as const, text: obj.text };
+      }
+      if (obj.kind === 'picture') {
+        return { kind: 'picture' as const };
+      }
+      return null;
+    } catch {
+      return null;
+    }
   }, [view]);
+  const handleWatermark = useCallback(() => {
+    if (!view) return;
+    setWatermarkOpen(true);
+  }, [view]);
+  const handleWatermarkConfirm = useCallback(
+    (cfg: {
+      text: string;
+      font: string;
+      color: string;
+      semitransparent: boolean;
+      layout: 'diagonal' | 'horizontal';
+      fontSize: number;
+    } | null) => {
+      setWatermarkOpen(false);
+      if (!view) return;
+      if (cfg === null) {
+        runCommand(view, setWatermark(null as any));
+        return;
+      }
+      runCommand(view, setWatermark({
+        kind: 'text',
+        text: cfg.text,
+        font: cfg.font,
+        color: cfg.color,
+        semitransparent: cfg.semitransparent,
+        layout: cfg.layout,
+        fontSize: cfg.fontSize,
+      } as any));
+    },
+    [view],
+  );
 
   // ── History (undo / redo) ────────────────────────────────────────────────
   // The PM history plugin is wired into the editor by DocxEditor; the
@@ -1120,21 +1858,29 @@ export const WordToolbar: React.FC<WordToolbarProps> = ({
   );
 
   // ── Math formula ─────────────────────────────────────────────────────────
-  // Word's equation editor isn't exposed via PM commands in this build, so we
-  // insert the LaTeX wrapped in a Unicode-math hint string the user can later
-  // convert via "Insert → Equation". This is a deliberate, low-risk default:
-  // the cursor lands at the insertion point so an equation dialog can be
-  // opened immediately.
+  // The editor doesn't yet ship a native equation editor, so we insert the
+  // LaTeX wrapped in `$$ ... $$`. The user composes the formula via a
+  // in-app panel (MathPopover) — better than `window.prompt` because we can
+  // surface preset equations and avoid OS-level dialog styling.
+  const mathTriggerRef = useRef<HTMLButtonElement>(null);
+  const [mathOpen, setMathOpen] = useState(false);
   const handleInsertMath = useCallback(() => {
     if (!isViewReady(view)) return;
-    const latex = window.prompt('输入 LaTeX 公式 (如 x^2 + y^2 = r^2)', '');
-    if (!latex) return;
-    const { from, to } = view.state.selection;
-    // Wrap in `$$ ... $$` so the inserted text reads as a math block; the
-    // cursor is left between the dollar signs so the user can iterate.
-    view.dispatch(view.state.tr.insertText(`$$${latex}$$`, from, to));
-    view.focus();
+    setMathOpen(true);
   }, [view]);
+  const handleMathConfirm = useCallback(
+    (latex: string) => {
+      if (!isViewReady(view)) {
+        setMathOpen(false);
+        return;
+      }
+      const { from, to } = view.state.selection;
+      view.dispatch(view.state.tr.insertText(`$$${latex}$$`, from, to));
+      view.focus();
+      setMathOpen(false);
+    },
+    [view],
+  );
 
   // ── Page color ───────────────────────────────────────────────────────────
   // The PM model doesn't carry section properties directly, so we go through
@@ -1183,27 +1929,46 @@ export const WordToolbar: React.FC<WordToolbarProps> = ({
   );
 
   // ── Header / Footer ──────────────────────────────────────────────────────
-  // Headers and footers are part of the OOXML package, not the PM doc. We
-  // synthesize an empty header or footer part, register it on the document
-  // package, and reference it from the final section properties. Then we
-  // reload the document — the editor's existing header/footer UI will surface
-  // it (the editor exposes `getHfPmView` for direct editing).
-  const insertHeaderFooter = useCallback(
-    (kind: 'header' | 'footer') => {
+  // The header/footer is a part of the OOXML package referenced from the
+  // final section properties. We synthesize an empty header/footer part,
+  // register it on the document, and reload — the editor's HF UI will
+  // surface it. The HeaderFooterPopover collects alignment + page-number
+  // options in addition to text; we fold all of that into the paragraph
+  // run so the part renders the user's intent immediately.
+  const headerTriggerRef = useRef<HTMLButtonElement>(null);
+  const footerTriggerRef = useRef<HTMLButtonElement>(null);
+  const [headerOpen, setHeaderOpen] = useState(false);
+  const [footerOpen, setFooterOpen] = useState(false);
+  const handleInsertHeader = useCallback(() => {
+    if (!editor) return;
+    setHeaderOpen(true);
+  }, [editor]);
+  const handleInsertFooter = useCallback(() => {
+    if (!editor) return;
+    setFooterOpen(true);
+  }, [editor]);
+  const handleHeaderFooterConfirm = useCallback(
+    (
+      kind: 'header' | 'footer',
+      cfg: {
+        text: string;
+        alignment: 'left' | 'center' | 'right';
+        includePageNumber: boolean;
+        insertBeforeFirstPage: boolean;
+      },
+    ) => {
+      if (kind === 'header') setHeaderOpen(false);
+      else setFooterOpen(false);
       if (!editor?.getDocument || !editor?.loadDocument) {
         notify?.('error', '页眉页脚需要编辑器支持,当前不可用');
         return;
       }
-      const text = window.prompt(
-        kind === 'header' ? '页眉文字' : '页脚文字',
-        kind === 'header' ? '页眉' : '页脚',
-      );
-      if (text === null) return;
       const doc = editor.getDocument() as null | {
         body?: {
           finalSectionProperties?: {
             headerReferences?: Array<{ type: string; rId: string }>;
             footerReferences?: Array<{ type: string; rId: string }>;
+            titlePage?: boolean;
           };
         };
         headers?: Map<string, unknown> | Record<string, unknown>;
@@ -1213,23 +1978,37 @@ export const WordToolbar: React.FC<WordToolbarProps> = ({
         notify?.('error', '无法读取文档模型');
         return;
       }
-      // Mint a fresh relationship id. We can't easily inspect the existing
-      // map, so we synthesize a timestamp-based id that's unlikely to clash.
       const rId = `rId${kind}-${Date.now()}`;
+
+      // Build the runs for the header/footer paragraph. If `includePageNumber`
+      // is on, append a "PAGE" placeholder run after the text — the editor's
+      // HF UI renders that as an actual page-number field at save time.
+      const runs: Array<Record<string, unknown>> = [];
+      if (cfg.text) {
+        runs.push({ text: cfg.text, type: 'run' });
+      }
+      if (cfg.includePageNumber) {
+        if (runs.length > 0) {
+          runs.push({ text: ' ', type: 'run' });
+        }
+        runs.push({ text: 'PAGE', type: 'field', fieldType: 'PAGE' });
+      }
+      if (runs.length === 0) {
+        // Safety: nothing to write.
+        return;
+      }
       const newPart = {
         type: kind,
         hdrFtrType: 'default',
         content: [
           {
             type: 'paragraph',
-            // Minimal Paragraph shape — the loader will accept plain text and
-            // the user can edit it via the editor's HF UI.
-            runs: [{ text, type: 'run' }],
+            alignment: cfg.alignment,
+            runs,
           },
         ],
       };
-      // Deep-clone via JSON, but restore the headers/footers maps because
-      // JSON.stringify turns Maps into empty objects.
+
       const { headers, footers, ...rest } = doc;
       const next = JSON.parse(JSON.stringify(rest)) as typeof doc;
       if (!next.body) next.body = {};
@@ -1263,6 +2042,19 @@ export const WordToolbar: React.FC<WordToolbarProps> = ({
         });
         next.footers = partsMap;
       }
+      // "Insert before first page" → clear the firstPage reference if any.
+      if (cfg.insertBeforeFirstPage) {
+        next.body.finalSectionProperties.titlePage = false;
+        if (kind === 'header') {
+          const refs = next.body.finalSectionProperties.headerReferences ?? [];
+          next.body.finalSectionProperties.headerReferences =
+            refs.filter((r) => r.type !== 'first');
+        } else {
+          const refs = next.body.finalSectionProperties.footerReferences ?? [];
+          next.body.finalSectionProperties.footerReferences =
+            refs.filter((r) => r.type !== 'first');
+        }
+      }
       try {
         editor.loadDocument(next);
       } catch (e) {
@@ -1271,8 +2063,6 @@ export const WordToolbar: React.FC<WordToolbarProps> = ({
     },
     [editor, notify],
   );
-  const handleInsertHeader = useCallback(() => insertHeaderFooter('header'), [insertHeaderFooter]);
-  const handleInsertFooter = useCallback(() => insertHeaderFooter('footer'), [insertHeaderFooter]);
 
   // ── Spell check toggle ───────────────────────────────────────────────────
   // The ProseMirror editor doesn't bundle a Hunspell pipeline, but every
@@ -1474,7 +2264,7 @@ export const WordToolbar: React.FC<WordToolbarProps> = ({
         <div className={styles.wToolbarGroup}>
           <TablePicker onInsert={handleInsertTable} />
           <IconButton icon={ImageIcon} title="插入图片" onClick={handleInsertImage} />
-          <IconButton icon={Link2} title="插入超链接" active={isLink} onClick={handleInsertLink} />
+          <IconButton icon={Link2} title="插入超链接" active={isLink} onClick={handleInsertLink} buttonRef={linkTriggerRef} />
           {isLink && (
             <button
               type="button"
@@ -1486,7 +2276,7 @@ export const WordToolbar: React.FC<WordToolbarProps> = ({
             </button>
           )}
           <SymbolPicker onInsert={handleInsertSymbol} />
-          <IconButton icon={Sigma} title="插入数学公式 (LaTeX)" disabled={!view} onClick={handleInsertMath} />
+          <IconButton icon={Sigma} title="插入数学公式 (LaTeX)" disabled={!view} onClick={handleInsertMath} buttonRef={mathTriggerRef} />
         </div>
         <span className={styles.wToolbarGroupSep} />
 
@@ -1503,12 +2293,14 @@ export const WordToolbar: React.FC<WordToolbarProps> = ({
             title="插入页眉"
             disabled={!editor}
             onClick={handleInsertHeader}
+            buttonRef={headerTriggerRef}
           />
           <IconButton
             icon={PanelBottom}
             title="插入页脚"
             disabled={!editor}
             onClick={handleInsertFooter}
+            buttonRef={footerTriggerRef}
           />
           <IconButton
             icon={SpellCheck2}
@@ -1516,7 +2308,7 @@ export const WordToolbar: React.FC<WordToolbarProps> = ({
             active={spellCheckOn}
             onClick={handleToggleSpellCheck}
           />
-          <IconButton icon={Pilcrow} title="水印" disabled={!view} onClick={handleWatermark} />
+          <IconButton icon={Pilcrow} title="水印" disabled={!view} onClick={handleWatermark} buttonRef={watermarkTriggerRef} />
           <button
             type="button"
             className={styles.wToolbarTextBtn}
@@ -1590,6 +2382,44 @@ export const WordToolbar: React.FC<WordToolbarProps> = ({
           <IconButton icon={Printer} title="打印" onClick={print} />
         </div>
       </div>
+
+      {/* ── Settings popovers (rendered through React Portal) ── */}
+      <LinkPopover
+        triggerRef={linkTriggerRef}
+        open={linkOpen}
+        onClose={() => setLinkOpen(false)}
+        initialText={linkInitialText}
+        initialUrl={linkInitialUrl}
+        isEditingExisting={linkEditing}
+        onConfirm={handleLinkConfirm}
+      />
+      <MathPopover
+        triggerRef={mathTriggerRef}
+        open={mathOpen}
+        onClose={() => setMathOpen(false)}
+        onConfirm={handleMathConfirm}
+      />
+      <WatermarkPopover
+        triggerRef={watermarkTriggerRef}
+        open={watermarkOpen}
+        onClose={() => setWatermarkOpen(false)}
+        currentWatermark={currentWatermark}
+        onConfirm={handleWatermarkConfirm}
+      />
+      <HeaderFooterPopover
+        kind="header"
+        triggerRef={headerTriggerRef}
+        open={headerOpen}
+        onClose={() => setHeaderOpen(false)}
+        onConfirm={(cfg) => handleHeaderFooterConfirm('header', cfg)}
+      />
+      <HeaderFooterPopover
+        kind="footer"
+        triggerRef={footerTriggerRef}
+        open={footerOpen}
+        onClose={() => setFooterOpen(false)}
+        onConfirm={(cfg) => handleHeaderFooterConfirm('footer', cfg)}
+      />
     </div>
   );
 };

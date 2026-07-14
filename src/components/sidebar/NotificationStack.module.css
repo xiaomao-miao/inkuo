@@ -1,0 +1,118 @@
+.stack {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  display: flex;
+  flex-direction: column-reverse;
+  gap: 8px;
+  z-index: var(--z-toast, 9000);
+  pointer-events: none;
+  max-width: min(360px, calc(100vw - 32px));
+}
+
+.toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  background-color: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  color: var(--fg-primary);
+  font-size: var(--font-size-md, 14px);
+  line-height: 1.4;
+  animation: toast-slide-in var(--motion-base, 160ms) var(--motion-spring, cubic-bezier(0.2, 0.9, 0.3, 1.2));
+  position: relative;
+  overflow: hidden;
+}
+
+.toast::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background-color: var(--accent);
+}
+
+.toast_success::before {
+  background-color: var(--success, #22c55e);
+}
+
+.toast_error::before {
+  background-color: var(--error);
+}
+
+.toast_info::before {
+  background-color: var(--accent);
+}
+
+.toastIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.iconSuccess {
+  color: var(--success, #22c55e);
+}
+
+.iconError {
+  color: var(--error);
+}
+
+.iconInfo {
+  color: var(--accent);
+}
+
+.toastBody {
+  flex: 1;
+  min-width: 0;
+}
+
+.toastTitle {
+  font-weight: 600;
+  color: var(--fg-primary);
+}
+
+.toastMessage {
+  margin-top: 2px;
+  color: var(--fg-secondary);
+  font-size: var(--font-size-sm, 13px);
+  word-break: break-word;
+}
+
+.toastClose {
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  color: var(--fg-tertiary);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: var(--radius-sm, 4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color var(--motion-fast, 120ms) var(--motion-out, ease-out), background-color var(--motion-fast, 120ms) var(--motion-out, ease-out);
+}
+
+.toastClose:hover {
+  color: var(--fg-primary);
+  background-color: var(--bg-hover);
+}
+
+@keyframes toast-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0) scale(1);
+  }
+}

@@ -4,6 +4,7 @@ import { ActivityBar } from '../activitybar/ActivityBar';
 import { Sidebar } from '../sidebar/Sidebar';
 import { KnowledgeView } from '../sidebar/KnowledgeView';
 import { ConfirmDialog } from '../sidebar/ConfirmDialog';
+import { NotificationStack } from '../sidebar/NotificationStack';
 import { SnapshotPanel } from '../snapshots/SnapshotPanel';
 import { ResizableHandle } from '../resizable';
 import { Editor } from '../editor/Editor';
@@ -110,6 +111,7 @@ export const Layout = () => {
       {/* Global dialog portals — must be rendered outside the sidebar
           tree so they're available from any view (files, snapshots, etc.). */}
       <ConfirmDialog />
+      <NotificationStack />
     </div>
   );
 };
