@@ -289,13 +289,47 @@ export const WordEditor: React.FC<WordEditorProps> = ({
     loadFromDiskRef.current = doLoad;
   }, [filePath, setOpenTabDirty, setDocxBuffer, pushNotification]);
 
-  // Re-read from disk when the backing file version changes.
+  // Re-read from disk when the backing file version changes. The
+  // @eigenpal/docx-editor-react editor DOES reactively reload on prop
+  // changes (Ji({documentBuffer}) has a useEffect dependency on the
+  // buffer), but we still call `loadDocumentBuffer` imperatively on the
+  // editor ref so the reload is explicit and synchronous. This matters
+  // for the AI workflow: when `create_word_doc` finishes we want the
+  // new headers/footers (or any other AI-driven edits) to repaint
+  // immediately, not on whatever the next React commit cycle happens to
+  // be.
   useEffect(() => {
     if (wordLastVersionRef.current >= officeBufferVersion) return;
     wordLastVersionRef.current = officeBufferVersion;
 
     if (officeBufferVersion > 0) {
-      loadFromDiskRef.current();
+      // Refresh from disk. We read the file once via Tauri, then push
+      // the bytes through both paths so the editor repaints:
+      //   (a) `setDocumentBuffer(buf)` updates the `documentBuffer`
+      //       prop, which the library's own Ji({documentBuffer})
+      //       useEffect will pick up and reload;
+      //   (b) `editorRef.current?.loadDocumentBuffer(buf)` does the
+      //       same thing imperatively and synchronously, removing any
+      //       dependency on React commit scheduling.
+      (async () => {
+        try {
+          const data = await invoke<number[]>('read_office_file', { path: filePath });
+          const buf = new Uint8Array(data);
+          setDocumentBuffer(buf);
+          setDocxBuffer(filePath, data);
+          setIsDirty(false);
+          setOpenTabDirty(filePath, false);
+          await editorRef.current?.loadDocumentBuffer(buf);
+        } catch (err) {
+          const message = reportError('office-word-reload', err);
+          setError(message);
+          pushNotification({
+            kind: 'error',
+            title: '刷新 Word 文档失败',
+            message,
+          });
+        }
+      })();
       return;
     }
 
@@ -307,7 +341,7 @@ export const WordEditor: React.FC<WordEditorProps> = ({
     }
 
     loadFromDiskRef.current();
-  }, [officeBufferVersion, initialBuffer]);
+  }, [officeBufferVersion, initialBuffer, filePath, pushNotification, setDocxBuffer, setOpenTabDirty]);
 
   useEffect(() => {
     if (!loading || hasInitializedFromCacheRef.current) return;

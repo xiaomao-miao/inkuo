@@ -169,6 +169,17 @@ struct DocTextRun {
     font_name: Option<String>,
     #[serde(default)]
     highlight: Option<String>,
+    /// Character-level vertical alignment: `"superscript"`, `"subscript"`, or
+    /// `null`/`""` for baseline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    vert_align: Option<String>,
+    /// When set, this run renders as a Word field code (域代码) instead of
+    /// a plain text run. See `crate::office::FieldRef` for the shape.
+    /// Common values: `{"kind": "page"}`, `{"kind": "numpages"}`,
+    /// `{"kind": "date", "format": "yyyy-MM-dd"}`,
+    /// `{"kind": "custom", "instr": "DOCPROPERTY MyField"}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    field: Option<crate::office::FieldRef>,
 }
 
 /// A paragraph in the document.
@@ -201,6 +212,13 @@ struct DocParagraph {
     /// If true, delete the element with this id instead.
     #[serde(default, rename = "action")]
     delete_action: Option<String>,
+    /// Paragraph alignment: "left" | "right" | "center" | "both" | "distribute".
+    #[serde(default)]
+    alignment: Option<String>,
+    /// Paragraph text direction: "horizontal" | "vertical" |
+    /// "verticalRightToLeft" | "verticalLeftToRight" | "rotate90" | "rotate270".
+    #[serde(default)]
+    text_direction: Option<String>,
 }
 
 /// Same shape as `NumberingRef` but deserialized from the wire-format JSON.
@@ -240,6 +258,94 @@ struct DocTable {
     delete_action: Option<String>,
 }
 
+/// Top-level document sections. Each entry maps to a `<w:sectPr>` block.
+#[derive(Debug, Deserialize)]
+struct DocSectionInput {
+    id: String,
+    #[serde(default)]
+    section_type: Option<String>,
+    #[serde(default)]
+    page_size_mm: Option<DocPageSizeMm>,
+    #[serde(default)]
+    page_size_twips: Option<DocPageSize>,
+    #[serde(default)]
+    margins: Option<DocPageMargins>,
+    #[serde(default)]
+    text_direction: Option<String>,
+    #[serde(default)]
+    title_pg: Option<bool>,
+    #[serde(default)]
+    cols: Option<u32>,
+    #[serde(default)]
+    page_num_start: Option<u32>,
+    #[serde(default)]
+    page_num_format: Option<String>,
+    #[serde(default)]
+    header_refs: Option<Vec<DocHeaderRef>>,
+    #[serde(default)]
+    footer_refs: Option<Vec<DocFooterRef>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DocPageSize {
+    width: u32,
+    height: u32,
+    #[serde(default)]
+    orient: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DocPageSizeMm {
+    width: f32,
+    height: f32,
+    #[serde(default)]
+    orient: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DocPageMargins {
+    top: u32,
+    right: u32,
+    bottom: u32,
+    left: u32,
+    #[serde(default)]
+    header: Option<u32>,
+    #[serde(default)]
+    footer: Option<u32>,
+    #[serde(default)]
+    gutter: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DocHeaderRef {
+    header_id: String,
+    #[serde(default)]
+    kind: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DocFooterRef {
+    footer_id: String,
+    #[serde(default)]
+    kind: Option<String>,
+}
+
+/// A header part. Each entry becomes one `word/headerN.xml` file.
+#[derive(Debug, Deserialize)]
+struct DocHeaderPart {
+    id: String,
+    #[serde(default)]
+    paragraphs: Vec<DocParagraph>,
+}
+
+/// A footer part. Each entry becomes one `word/footerN.xml` file.
+#[derive(Debug, Deserialize)]
+struct DocFooterPart {
+    id: String,
+    #[serde(default)]
+    paragraphs: Vec<DocParagraph>,
+}
+
 #[derive(Debug, Deserialize)]
 struct CreateWordDocParams {
     /// Absolute path of the .docx file to create or modify.
@@ -272,6 +378,22 @@ struct CreateWordDocParams {
     /// Takes effect only when the file already exists.
     #[serde(default)]
     append: Option<bool>,
+    /// Document sections. Each entry maps to one `<w:sectPr>` block at
+    /// write time. Sections partition the document; the first (and
+    /// usually only) entry is the trailing sectPr, additional entries
+    /// inject a "next page" break before them. Required keys per entry:
+    /// `id`. All others are optional and have sensible defaults.
+    #[serde(default)]
+    sections: Option<Vec<DocSectionInput>>,
+    /// Reusable header parts. Each entry becomes one `word/headerN.xml`
+    /// file and can be referenced from one or more sections via
+    /// `sections[].header_refs[]`.
+    #[serde(default)]
+    headers: Option<Vec<DocHeaderPart>>,
+    /// Reusable footer parts. Each entry becomes one `word/footerN.xml`
+    /// file. Common contents: page numbers, total pages, dates.
+    #[serde(default)]
+    footers: Option<Vec<DocFooterPart>>,
 }
 
 pub struct CreateWordDocTool;
@@ -289,16 +411,42 @@ impl CreateWordDocTool {
                     ("path", "string", Some("**Required on every call, including append calls.** Absolute path of the .docx file to create or modify. Example: \"/Users/me/docs/report.docx\". Do not omit this field even when you are just appending more content with `append: true`.")),
                     ("title", "string", Some("Document title (for new files only; ignored when modifying existing)")),
                     ("elements", "array", Some(
-                        "Array of element objects. Paragraph: {id?, text?, style?, runs?, position?, anchor_id?}. Table: {id?, header, rows, position?, anchor_id?}. Image: {type:'image', id?, path, width_emu, height_emu, anchor_id?, position?}.\n\
+                        "Array of element objects. Paragraph: {id?, text?, style?, runs?, position?, anchor_id?, alignment?, text_direction?}. Table: {id?, header, rows, position?, anchor_id?}. Image: {type:'image', id?, path, width_emu, height_emu, anchor_id?, position?}.\n\
                          Elements with id replace existing ones; without id are appended or inserted at anchor_id+position. Use action:'delete' with id to delete.\n\
                          When modifying (id present), omit 'text' field to preserve original text. Providing 'text' field will update the paragraph text.\n\
                          Omit 'runs' to keep original formatting, or provide 'runs' array to fully replace paragraph formatting.\n\
-                         runs shape: array of {text, bold?, italic?, underline?, font_size? (half-points, e.g. 24=12pt), color? (hex RGB, e.g. 'FF0000'), font_name?}.\n\
+                         runs shape: array of {text, bold?, italic?, underline?, font_size? (half-points, e.g. 24=12pt), color? (hex RGB, e.g. 'FF0000'), font_name?, highlight?, vert_align?, field?}.\n\
+                         alignment: 'left' | 'right' | 'center' | 'both' | 'distribute'.\n\
+                         text_direction: 'horizontal' | 'vertical' | 'verticalRightToLeft' | 'verticalLeftToRight' | 'rotate90' | 'rotate270'.\n\
+                         vert_align: 'superscript' | 'subscript' on a run.\n\
+                         field: {kind: 'page' | 'numpages' | 'date' | 'time' | 'author' | 'title' | 'custom', format?: '<format-string>', instr?: '<raw field instr>'} for a Word field code. When set, the run renders as a live field instead of plain text (e.g. page number, current date).\n\
                          position can be 'before' or 'after' (default) to control where new elements are inserted relative to anchor_id.\n\
                          Tables are auto-detected from header/rows fields, no need to specify type='table'.\n\
                          Images: `path` must be an absolute local path to a png/jpeg/jpg/gif file; `width_emu`/`height_emu` are in EMU (914400=1in, 360000=1cm). Only inline insertion is supported in v1."
                     )),
                     ("deletes", "array", Some("Array of element IDs to delete. Works alongside elements[] with action:'delete'.")),
+                    ("sections", "array", Some(
+                        "Top-level document sections. Each entry maps to one `<w:sectPr>` block.\n\
+                         Shape: {id (required), section_type?, page_size_mm?, page_size_twips?, margins?, text_direction?, title_pg?, cols?, page_num_start?, page_num_format?, header_refs?, footer_refs?}.\n\
+                         - section_type: 'nextPage' (default) | 'continuous' | 'evenPage' | 'oddPage' | 'nextColumn'.\n\
+                         - page_size_mm: {width, height, orient?} (orient: 'portrait' | 'landscape'). E.g. {width:210, height:297} for A4 portrait.\n\
+                         - page_size_twips: {width, height, orient?} (1 inch = 1440 twips).\n\
+                         - margins: {top, right, bottom, left, header?, footer?, gutter?}. Twips.\n\
+                         - text_direction: 'horizontal' (default) | 'verticalRightToLeft' | 'verticalLeftToRight'.\n\
+                         - title_pg: true to give the first page of the section a different header/footer (cover page).\n\
+                         - cols: number of text columns. 1 = single column. >1 = multi-column.\n\
+                         - page_num_start: starting page number (omit to continue from previous section).\n\
+                         - page_num_format: 'decimal' (default) | 'upperRoman' | 'lowerRoman' | 'upperLetter' | 'lowerLetter'.\n\
+                         - header_refs: array of {header_id, kind?} where kind is 'default' (default) | 'first' | 'even'.\n\
+                         - footer_refs: array of {footer_id, kind?} with the same kind values.\n\
+                         For multi-section docs (e.g. cover page in landscape + body in portrait vertical), list each section in order; the LAST section's sectPr is the trailing one in the body, the rest are embedded as section breaks at the end of their section's content."
+                    )),
+                    ("headers", "array", Some(
+                        "Reusable header parts. Each entry becomes one `word/headerN.xml` file. Shape: {id, paragraphs: [...]}. paragraphs uses the same shape as elements[] paragraphs. Common contents: chapter title, page number (with runs:[{text:'', field:{kind:'page'}}]), date. Reference from sections via `sections[].header_refs[]`."
+                    )),
+                    ("footers", "array", Some(
+                        "Reusable footer parts. Each entry becomes one `word/footerN.xml` file. Shape: {id, paragraphs: [...]}. Common contents: 'Page X of Y' (with field:{kind:'page'} and field:{kind:'numpages'} runs), copyright, signature line. Reference from sections via `sections[].footer_refs[]`."
+                    )),
                 ],
             ),
         )
@@ -315,6 +463,8 @@ impl CreateWordDocTool {
             color: r.color,
             font_name: r.font_name,
             highlight: r.highlight,
+            vert_align: r.vert_align,
+            field: r.field,
         }
     }
 
@@ -328,6 +478,8 @@ impl CreateWordDocTool {
                     style: None,
                     runs: None,
                     numbering: None,
+                    alignment: None,
+                    text_direction: None,
                 }));
             }
             return Err("delete action requires an id".to_string());
@@ -354,6 +506,13 @@ impl CreateWordDocTool {
                 arr.iter().filter_map(|r| {
                     let text = r["text"].as_str().unwrap_or("").to_string();
                     if text.is_empty() { return None; }
+                    // `field` and `vert_align` round-trip via serde because
+                    // `FontRun` is `Serialize + Deserialize`. The other
+                    // booleans are cheap to extract by hand.
+                    let vert_align = r["vert_align"].as_str().map(|s| s.to_string());
+                    let field: Option<crate::office::FieldRef> = r
+                        .get("field")
+                        .and_then(|f| serde_json::from_value(f.clone()).ok());
                     Some(crate::office::FontRun {
                         text,
                         bold: r["bold"].as_bool().unwrap_or(false),
@@ -364,6 +523,8 @@ impl CreateWordDocTool {
                         color: r["color"].as_str().map(|s| s.to_string()),
                         font_name: r["font_name"].as_str().map(|s| s.to_string()),
                         highlight: r["highlight"].as_str().map(|s| s.to_string()),
+                        vert_align,
+                        field,
                     })
                 }).collect()
             })
@@ -377,6 +538,9 @@ impl CreateWordDocTool {
             Some(crate::office::NumberingRef { num_id, level })
         });
 
+        let alignment = v["alignment"].as_str().map(|s| s.to_string());
+        let text_direction = v["text_direction"].as_str().map(|s| s.to_string());
+
         Ok(Some(crate::office::DocElement::Paragraph {
             id: id.unwrap_or_else(|| format!("__new_p{}", uuid_simple())),
             text,
@@ -384,6 +548,8 @@ impl CreateWordDocTool {
             style,
             runs,
             numbering,
+            alignment,
+            text_direction,
         }))
     }
 
@@ -490,6 +656,133 @@ impl CreateWordDocTool {
         }))
     }
 
+    /// Convert the tool's section inputs into the model `WordSection` list.
+    fn convert_sections(
+        inputs: &[DocSectionInput],
+    ) -> Vec<crate::office::WordSection> {
+        inputs
+            .iter()
+            .map(|s| crate::office::WordSection {
+                id: s.id.clone(),
+                section_type: s.section_type.clone(),
+                page_size_twips: s.page_size_twips.as_ref().map(|p| crate::office::PageSize {
+                    width: p.width,
+                    height: p.height,
+                    orient: p.orient.clone(),
+                }),
+                page_size_mm: s.page_size_mm.as_ref().map(|p| crate::office::PageSizeMm {
+                    width: p.width,
+                    height: p.height,
+                    orient: p.orient.clone(),
+                }),
+                margins: s.margins.as_ref().map(|m| crate::office::PageMargins {
+                    top: m.top,
+                    right: m.right,
+                    bottom: m.bottom,
+                    left: m.left,
+                    header: m.header,
+                    footer: m.footer,
+                    gutter: m.gutter,
+                }),
+                text_direction: s.text_direction.clone(),
+                title_pg: s.title_pg.unwrap_or(false),
+                cols: s.cols,
+                page_num_start: s.page_num_start,
+                page_num_format: s.page_num_format.clone(),
+                header_refs: s
+                    .header_refs
+                    .as_ref()
+                    .map(|refs| {
+                        refs.iter()
+                            .map(|r| crate::office::HeaderPartRef {
+                                header_id: r.header_id.clone(),
+                                kind: r.kind.clone(),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                footer_refs: s
+                    .footer_refs
+                    .as_ref()
+                    .map(|refs| {
+                        refs.iter()
+                            .map(|r| crate::office::FooterPartRef {
+                                footer_id: r.footer_id.clone(),
+                                kind: r.kind.clone(),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            })
+            .collect()
+    }
+
+    /// Convert the tool's header part inputs into the model `HeaderPart` list.
+    fn convert_headers(
+        inputs: &[DocHeaderPart],
+    ) -> Vec<crate::office::HeaderPart> {
+        inputs
+            .iter()
+            .map(|h| {
+                let paragraphs = h
+                    .paragraphs
+                    .iter()
+                    .map(|p| crate::office::WordParagraph {
+                        id: p.id.clone().unwrap_or_else(|| format!("__new_p{}", uuid_simple())),
+                        text: p.text.clone(),
+                        style: p.style.clone(),
+                        runs: p
+                            .runs
+                            .as_ref()
+                            .map(|rvec| rvec.iter().map(|r| Self::to_font_run(r.clone())).collect()),
+                        numbering: p.numbering.clone().map(crate::office::NumberingRef::from),
+                        alignment: p.alignment.clone(),
+                        text_direction: p.text_direction.clone(),
+                    })
+                    .collect();
+                crate::office::HeaderPart {
+                    id: h.id.clone(),
+                    paragraphs,
+                    tables: Vec::new(),
+                    images: Vec::new(),
+                }
+            })
+            .collect()
+    }
+
+    /// Convert the tool's footer part inputs into the model `FooterPart` list.
+    fn convert_footers(
+        inputs: &[DocFooterPart],
+    ) -> Vec<crate::office::FooterPart> {
+        inputs
+            .iter()
+            .map(|f| {
+                let paragraphs = f
+                    .paragraphs
+                    .iter()
+                    .map(|p| crate::office::WordParagraph {
+                        id: p.id.clone().unwrap_or_else(|| format!("__new_p{}", uuid_simple())),
+                        text: p.text.clone(),
+                        style: p.style.clone(),
+                        runs: p
+                            .runs
+                            .as_ref()
+                            .map(|rvec| rvec.iter().map(|r| Self::to_font_run(r.clone())).collect()),
+                        numbering: p.numbering.clone().map(crate::office::NumberingRef::from),
+                        alignment: p.alignment.clone(),
+                        text_direction: p.text_direction.clone(),
+                    })
+                    .collect();
+                crate::office::FooterPart {
+                    id: f.id.clone(),
+                    paragraphs,
+                    tables: Vec::new(),
+                    images: Vec::new(),
+                }
+            })
+            .collect()
+    }
+
     pub async fn execute(&self, arguments: Value, workspace: Option<String>) -> Result<String, ToolError> {
         let params: CreateWordDocParams = serde_json::from_value(arguments).map_err(|e| {
             // serde's default "missing field `path`" message is technically
@@ -593,6 +886,8 @@ impl CreateWordDocTool {
                         style: p.style.clone(),
                         runs: p.runs.as_ref().map(|rvec| rvec.iter().map(|r| Self::to_font_run(r.clone())).collect()),
                         numbering: p.numbering.clone().map(crate::office::NumberingRef::from),
+                        alignment: p.alignment.clone(),
+                        text_direction: p.text_direction.clone(),
                     };
                     if file_exists && p.id.is_some() {
                         modifies.push(elem);
@@ -667,8 +962,8 @@ impl CreateWordDocTool {
                 let mut new_images = Vec::new();
                 for insert_elem in new_elements {
                     match insert_elem.element {
-                        crate::office::DocElement::Paragraph { id, text, style, runs, numbering, .. } => {
-                            new_paras.push(crate::office::WordParagraph { id, text, style, runs, numbering });
+                        crate::office::DocElement::Paragraph { id, text, style, runs, numbering, alignment, text_direction, .. } => {
+                            new_paras.push(crate::office::WordParagraph { id, text, style, runs, numbering, alignment, text_direction });
                         }
                         crate::office::DocElement::Table { id, position: _, header, rows } => {
                             let mut table_rows = vec![];
@@ -696,6 +991,22 @@ impl CreateWordDocTool {
                 existing.paragraphs.extend(new_paras);
                 existing.tables.extend(new_tables);
                 existing.images.extend(new_images);
+
+                if let Some(ref sections) = params.sections {
+                    if !sections.is_empty() {
+                        existing.sections = Self::convert_sections(sections);
+                    }
+                }
+                if let Some(ref headers) = params.headers {
+                    if !headers.is_empty() {
+                        existing.headers = Self::convert_headers(headers);
+                    }
+                }
+                if let Some(ref footers) = params.footers {
+                    if !footers.is_empty() {
+                        existing.footers = Self::convert_footers(footers);
+                    }
+                }
 
                 crate::office::write_word_document_to_path(&existing, path_obj, Some(&bytes))
                     .map_err(|e| ToolError::ExecutionError(format!("Failed to write doc: {}", e)))?;
@@ -735,6 +1046,22 @@ impl CreateWordDocTool {
 
             existing.modify(modifies, deletes, new_elements);
 
+            if let Some(ref sections) = params.sections {
+                if !sections.is_empty() {
+                    existing.sections = Self::convert_sections(sections);
+                }
+            }
+            if let Some(ref headers) = params.headers {
+                if !headers.is_empty() {
+                    existing.headers = Self::convert_headers(headers);
+                }
+            }
+            if let Some(ref footers) = params.footers {
+                if !footers.is_empty() {
+                    existing.footers = Self::convert_footers(footers);
+                }
+            }
+
             crate::office::write_word_document_to_path(&existing, path_obj, Some(&bytes))
                 .map_err(|e| ToolError::ExecutionError(format!("Failed to write doc: {}", e)))?;
             return Ok(format!("Successfully modified document: {}", params.path));
@@ -757,6 +1084,8 @@ impl CreateWordDocTool {
                     style: Some("Title".to_string()),
                     runs: None,
                     numbering: None,
+                    alignment: Some("center".to_string()),
+                    text_direction: None,
                 });
             }
         }
@@ -765,7 +1094,22 @@ impl CreateWordDocTool {
             elements_for_new.push(insert_elem.element);
         }
 
-        let doc = crate::office::WordDocument::from_elements(elements_for_new);
+        let mut doc = crate::office::WordDocument::from_elements(elements_for_new);
+        if let Some(ref sections) = params.sections {
+            if !sections.is_empty() {
+                doc.sections = Self::convert_sections(sections);
+            }
+        }
+        if let Some(ref headers) = params.headers {
+            if !headers.is_empty() {
+                doc.headers = Self::convert_headers(headers);
+            }
+        }
+        if let Some(ref footers) = params.footers {
+            if !footers.is_empty() {
+                doc.footers = Self::convert_footers(footers);
+            }
+        }
         crate::office::write_word_document_to_path(&doc, path_obj, None)
             .map_err(|e| ToolError::ExecutionError(format!("Failed to write Word document: {}", e)))?;
 
