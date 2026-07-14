@@ -832,6 +832,18 @@
   gap: 1px;
 }
 
+/*
+ * When the menu is rendered through React Portal to <body>, it uses
+ * `position: fixed` with explicit top/left from JS, so the absolute
+ * fallback above is harmless. But `min-width: 100%` would resolve against
+ * <body> — override it when the menu is portalled by relying on the
+ * inline `minWidth` set by DropdownPortal.
+ */
+.wDropdownMenu[style*="position: fixed"],
+.wDropdownMenu[style*="position:fixed"] {
+  min-width: 0;
+}
+
 .wDropdownOption {
   padding: 3px 8px;
   font-size: 11px;

@@ -361,6 +361,58 @@ export const WordEditor: React.FC<WordEditorProps> = ({
     editorRef.current?.focus();
   }, []);
 
+  const handleReplace = useCallback(() => {
+    // The editor binds Ctrl+H to its built-in replace dialog by default. We
+    // dispatch the key event from the document root so it reaches the editor's
+    // own keymap (which is mounted on the inner contenteditable surface).
+    const root = document.querySelector<HTMLElement>('[data-office-editor-root="word"]');
+    if (!root) {
+      editorRef.current?.focus();
+      return;
+    }
+    const evt = new KeyboardEvent('keydown', {
+      key: 'h',
+      code: 'KeyH',
+      keyCode: 72,
+      which: 72,
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    root.dispatchEvent(evt);
+    // As a safety net, fall back to focusing the editor — its keymap listens
+    // at the editor root via capture phase.
+    editorRef.current?.focus();
+  }, []);
+
+  /**
+   * Imperative handle the WordToolbar uses for undo/redo and for the few
+   * document-model actions (page color, header/footer) that don't have a
+   * ProseMirror command. The shape is intentionally narrow — the toolbar
+   * never gets the full DocxEditorRef, only the surfaces it needs.
+   */
+  const editorHandle = useMemo(
+    () => ({
+      undo: () => editorRef.current?.getEditorRef()?.undo() ?? false,
+      redo: () => editorRef.current?.getEditorRef()?.redo() ?? false,
+      getDocument: () => editorRef.current?.getEditorRef()?.getDocument() ?? null,
+      loadDocument: (doc: unknown) => {
+        editorRef.current?.loadDocument(doc as Parameters<DocxEditorRef['loadDocument']>[0]);
+      },
+    }),
+    [],
+  );
+
+  const notify = useCallback((kind: 'error' | 'info', message: string) => {
+    if (kind === 'error') {
+      // eslint-disable-next-line no-console
+      console.error('[WordToolbar]', message);
+    } else {
+      // eslint-disable-next-line no-console
+      console.info('[WordToolbar]', message);
+    }
+  }, []);
+
   const handleTriggerAI = useCallback(() => {
     // Force-focus the editor and dispatch a no-op txn so the inline-complete
     // machinery schedules a completion on the next render-frame. Falling
@@ -405,9 +457,12 @@ export const WordEditor: React.FC<WordEditorProps> = ({
         canSave={isDirty && !loading && !error}
         onTriggerAI={handleTriggerAI}
         onFind={handleFind}
+        onReplace={handleReplace}
         setZoom={handleZoom}
         getZoom={handleGetZoom}
         print={handlePrint}
+        editor={editorHandle}
+        notify={notify}
       />
       <div ref={containerRef} className={styles.docxContainer} data-office-editor-root="word">
         <DocxEditor
