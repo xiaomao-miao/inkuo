@@ -53,3 +53,34 @@ export function useMotionLevel(): {
 
   return { level, setLevel };
 }
+
+/**
+ * Synchronous read of the current effective motion level.
+ *
+ * Returns `'off'` if either:
+ *   - The user picked `off` / `gentle` (gentle still keeps transitions
+ *     but short; we treat it as "still animated" so it stays `'gentle'`).
+ *   - The OS reports `prefers-reduced-motion: reduce` — we deliberately
+ *     honour that system signal even if the user picked a higher level.
+ *
+ * Used by `ChatInput`'s `useLayoutEffect` so the height-toggle animation
+ * can branch *before* setting inline styles: when motion is off we skip
+ * the pin-then-RAF dance entirely, otherwise a `transition-duration: 0`
+ * forced by the global reduce-motion CSS would leave `el.style.height`
+ * pinned forever (the `transitionend` listener never fires).
+ *
+ * Falls back to `'standard'` during SSR / pre-mount — the effect that
+ * reads this only runs after the component is on the DOM, so the real
+ * value is already there by the time it matters.
+ */
+export function getEffectiveMotionLevel(): MotionLevel {
+  if (typeof window === 'undefined') return 'standard';
+  const systemReduce =
+    window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+  if (systemReduce) return 'off';
+  const stored = window.localStorage.getItem(STORAGE_KEY);
+  if ((MOTION_LEVELS as readonly string[]).includes(stored ?? '')) {
+    return stored as MotionLevel;
+  }
+  return 'standard';
+}

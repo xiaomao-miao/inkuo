@@ -467,7 +467,13 @@
 }
 
 /* Respect users who opted out of motion. We keep the state changes
- * instantaneous but preserve the visual outcome. */
+ * instantaneous but preserve the visual outcome. The earlier version of
+ * this block forced `.togglePanel { height: auto; opacity: 1 }` which
+ * overrode the JS-driven collapse path — under `prefers-reduced-motion:
+ * reduce` the panel never visually collapsed because the CSS kept it
+ * at full height regardless of the store's `expanded` flag. We now
+ * mirror the open/closed rules driven by `data-open`, just without
+ * any transition. */
 @media (prefers-reduced-motion: reduce) {
   .togglePanel,
   .togglePanel::after,
@@ -479,8 +485,34 @@
     animation: none !important;
   }
   .togglePanel {
-    height: auto !important;
-    transform: none !important;
-    opacity: 1 !important;
+    /* Default (collapsed) — only opacity / pointer-events / overflow;
+     * DO NOT touch `height` here. The JS layer sets the actual height
+     * inline, and clearing it via the data-attribute below is what
+     * lets the panel actually shrink when the store flips `expanded`. */
+    pointer-events: none;
+    overflow: hidden;
+    transform: translateY(-4px);
+    opacity: 0;
+  }
+  .togglePanel[data-open='true'] {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+  }
+  .togglePanel::after {
+    opacity: 0;
+    transform: scaleX(0.4);
+  }
+  .togglePanel[data-open='true']::after {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+  .togglePanel[data-open='true'] .toggleRow {
+    /* Skip the stagger animation under reduce-motion — the visual
+     * outcome (rows visible) is identical, but we drop the @keyframes
+     * so no work is scheduled. */
+    animation: none !important;
+    opacity: 1;
+    transform: none;
   }
 }

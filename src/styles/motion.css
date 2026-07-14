@@ -99,7 +99,25 @@
   *::after {
     animation-duration: 0ms !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 0ms !important;
+    /* NOTE: we deliberately do NOT zero `transition-duration` here.
+     *
+     * Setting `transition-duration: 0ms !important` globally breaks any
+     * component that drives its own transitions from JavaScript by
+     * listening to `transitionend` — a zero-duration transition never
+     * fires that event, so the listener's cleanup code never runs and
+     * the inline state it was supposed to clear stays pinned on the
+     * element forever. The ChatInput toggle panel is the most visible
+     * victim: under `prefers-reduced-motion: reduce` the panel would
+     * visually stay "stuck open" because `el.style.height = '0px'`
+     * from the JS height-collapse path was never cleared.
+     *
+     * Instead, components that want to honor reduce-motion read
+     * `getEffectiveMotionLevel()` and branch synchronously *before*
+     * setting any inline styles. Animation-style motion (keyframes,
+     * spinners, pulses) is still zeroed globally so that spinning
+     * loaders and pulsing skeletons stop animating for users who asked
+     * for reduced motion.
+     */
   }
 }
 

@@ -6,6 +6,7 @@ import {
 import { useAIPanelStore, useSettingsStore } from '../../store';
 import type { ChatMode, FeatureToggleId, FeatureToggleMap } from '../../types';
 import { Tooltip } from '../common/Tooltip';
+import { getEffectiveMotionLevel } from '../../hooks/useMotionLevel';
 import styles from './AIPanelInput.module.css';
 
 const MODE_LABELS: Record<ChatMode, string> = {
@@ -253,6 +254,17 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     (state) => state.setSessionFeatureToggle,
   );
   const panelRef = useRef<HTMLDivElement | null>(null);
+  // Persists the measured panel height across effect runs — needed because
+  // the old effect's cleanup clears `el.style.height` *before* the new
+  // effect body reads `getBoundingClientRect()`. Without this ref, a
+  // collapse → expand cycle would see height=0 (CSS already collapsed it)
+  // and the expand animation would have no height to restore from.
+  const measuredHeightRef = useRef<number | null>(null);
+
+  // Token incremented on every effect run; used to ignore stale settle
+  // callbacks after the cleanup fires (otherwise the old RAF / timer
+  // could clear the new inline height set by the next effect run).
+  const effectTokenRef = useRef(0);
 
   /**
    * Drive the panel height via JavaScript instead of `max-height` /
@@ -273,50 +285,125 @@ export const ChatInput: React.FC<ChatInputProps> = ({
    *
    * Net result: layout runs ~3 times total (expand) / ~3 times total
    * (collapse), instead of ~60 times per second while the animation runs.
+   *
+   * Reduced-motion shortcut: when the user (or the OS) has opted out of
+   * motion, the global `prefers-reduced-motion: reduce` rule forces
+   * `transition-duration: 0ms` — which means the `transitionend` listener
+   * we used to register never fires and `el.style.height` stays pinned
+   * forever, leaving the panel visually "stuck open". To avoid that, in
+   * the motion-off branch we skip the pin/RAF dance entirely and just
+   * write the target height synchronously. The cleanup function also
+   * clears the inline height unconditionally — that belt-and-suspenders
+   * is what guarantees the panel can always collapse even if React
+   * commits a new `expanded` value before the listener fires.
+   *
+   * When motion *is* on we also race a hard timeout (260ms) against the
+   * `transitionend` listener so a dropped event (WebView2 occasionally
+   * coalesces `transitionend` for `height`, or the value never starts a
+   * real transition because the start/end heights are equal) can't leave
+   * the inline value stuck on the element either.
    */
   useLayoutEffect(() => {
     const el = panelRef.current;
     if (!el) return;
 
+    const motion = getEffectiveMotionLevel();
+    const animate = motion !== 'off';
+
+    const token = ++effectTokenRef.current;
+
+    if (!animate) {
+      // Snap straight to the final height and leave it inline — clearing
+      // it in the same task as the write has no effect (the second write
+      // wins, the browser never paints the intermediate value), and the
+      // CSS rule `.togglePanel { height: 0 }` would otherwise lock the
+      // panel shut while `data-open=true` only flips opacity/transform.
+      // The effect re-runs when `expanded` flips, so the inline height
+      // always tracks the latest state — no settling or cleanup needed.
+      el.style.height = expanded ? `${el.scrollHeight}px` : '0px';
+      return;
+    }
+
+    let rafId = 0;
+    let fallbackTimer = 0;
+
+    const isStale = () => effectTokenRef.current !== token;
+
+    const scheduleHeightSettle = (done: () => void) => {
+      // Race `transitionend` against a hard timeout — see the
+      // reduced-motion note above for why we can't rely on the event
+      // alone (some WebView2 builds coalesce or skip the event entirely
+      // when the start/end values are very close, or the transition is
+      // suppressed by a higher-specificity rule).
+      let finished = false;
+      const finish = () => {
+        if (finished || isStale()) return;
+        finished = true;
+        window.clearTimeout(fallbackTimer);
+        el.removeEventListener('transitionend', onEnd);
+        done();
+      };
+      fallbackTimer = window.setTimeout(finish, 260);
+      const onEnd = (e: TransitionEvent) => {
+        if (e.propertyName !== 'height') return;
+        finish();
+      };
+      el.addEventListener('transitionend', onEnd);
+    };
+
     if (expanded) {
       // Measure the natural height of the children.
       const target = el.scrollHeight;
+      // Persist so the collapse branch can read it even if the old effect's
+      // cleanup already cleared the inline style.
+      measuredHeightRef.current = target;
       // If the panel was previously collapsed, jump straight to the
       // target (the CSS opacity/transform handles the visual entry).
       el.style.transition = 'none';
       el.style.height = `${target}px`;
       // Force a frame so the browser commits the height before we
       // re-enable the transition for the (now no-op) settle.
-      requestAnimationFrame(() => {
+      rafId = window.requestAnimationFrame(() => {
+        if (isStale()) return;
         el.style.transition = '';
-        // After the (very short) transition clears, hand the panel back
-        // to its natural height so it can adapt to content changes
-        // (e.g. row hover states, future copy changes).
-        const onEnd = (e: TransitionEvent) => {
-          if (e.propertyName !== 'height') return;
+        scheduleHeightSettle(() => {
+          if (isStale()) return;
           el.style.height = '';
-          el.removeEventListener('transitionend', onEnd);
-        };
-        el.addEventListener('transitionend', onEnd);
+        });
       });
     } else {
       // Pin current height first so the transition has a meaningful
       // start value (transitioning from '' to '0px' would otherwise
       // skip straight to zero on most browsers).
-      const current = el.getBoundingClientRect().height;
+      // Use the persisted height if available — the CSS may have already
+      // collapsed the element by the time this effect body runs (the old
+      // effect's cleanup clears the inline style before this effect runs).
+      const current = measuredHeightRef.current ?? el.getBoundingClientRect().height;
+      measuredHeightRef.current = null;
       el.style.transition = 'none';
       el.style.height = `${current}px`;
-      requestAnimationFrame(() => {
+      rafId = window.requestAnimationFrame(() => {
+        if (isStale()) return;
         el.style.transition = '';
         el.style.height = '0px';
-        const onEnd = (e: TransitionEvent) => {
-          if (e.propertyName !== 'height') return;
+        scheduleHeightSettle(() => {
+          if (isStale()) return;
           el.style.height = '';
-          el.removeEventListener('transitionend', onEnd);
-        };
-        el.addEventListener('transitionend', onEnd);
+        });
       });
     }
+
+    return () => {
+      window.cancelAnimationFrame(rafId);
+      // Bump the token so any in-flight settle callback becomes a no-op.
+      // NOTE: we intentionally do NOT clear `el.style.height` here. The
+      // previous version did, but that wiped the inline height before
+      // the next effect body could read `getBoundingClientRect()` — by
+      // that point the CSS had already collapsed the element and the
+      // measured height was 0, so the next expand had nothing to restore.
+      // The settle callback itself is what clears the inline style once
+      // the animation is genuinely done.
+    };
   }, [expanded]);
 
   // Collapse the toolbar when focus leaves the composer, or when the
