@@ -14,7 +14,7 @@ import { useDocumentSave } from './useDocumentSave';
 import { useExternalFileSync } from './useExternalFileSync';
 import { createDiffDecorationsField } from './diffDecorationsField';
 import { createEditorExtensions, languageExtensionForKind } from './editorExtensions';
-import { LazyImageViewer, LazyPdfViewer } from './LazyMediaViewers';
+import { LazyImageViewer, LazyPdfViewer, LazySvgViewer } from './LazyMediaViewers';
 import { EditorBody } from './EditorBody';
 import { useEditorInlineCompletion } from './useEditorInlineCompletion';
 import { useEditorKeyboardShortcuts, useEditorSelectionSync } from './useEditorInteraction';
@@ -354,6 +354,15 @@ export const Editor: React.FC = () => {
     activeFileType === 'data';
   const isImage = activeFileType === 'image';
   const isPdf = activeFileType === 'pdf';
+  // SVG files classify as `image` for the sidebar icon, but the editor
+  // route sends them to a specialised viewer (checker background, fit-to-
+  // viewport) rather than the raster ImageViewer — the raster viewer's
+  // white-on-white hide makes transparent regions hard to inspect.
+  const isSvg = useMemo(() => {
+    if (!selectedFile) return false;
+    const base = selectedFile.split(/[\\/]/).pop() ?? selectedFile;
+    return base.toLowerCase().endsWith('.svg');
+  }, [selectedFile]);
 
   return (
     <div className={styles.officeStack}>
@@ -378,7 +387,13 @@ export const Editor: React.FC = () => {
         </div>
       )}
 
-      {isImage && (
+      {isSvg && (
+        <div className={styles.officeStackItem}>
+          <LazySvgViewer filePath={selectedFile} />
+        </div>
+      )}
+
+      {isImage && !isSvg && (
         <div className={styles.officeStackItem}>
           <LazyImageViewer filePath={selectedFile} />
         </div>

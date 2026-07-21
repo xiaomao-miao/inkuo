@@ -1,0 +1,38 @@
+/* SvgViewer-specific styles. Shares most of its layout with ImageViewer
+ * (imported via plain `className={styles.foo}` references to the CSS module
+ * file next door) — the only SVG-specific extra is the checkerboard
+ * background that makes transparent regions obvious.
+ */
+
+.viewport {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  /* A 16x16 checker in the same warm-grey as our secondary surfaces.
+   * Using CSS background-image (not an inline SVG) keeps the file small
+   * and avoids nested-DOM quirks in the WebView2 renderer. */
+  background-color: var(--bg-secondary);
+  background-image:
+    linear-gradient(45deg, rgba(0, 0, 0, 0.04) 25%, transparent 25%),
+    linear-gradient(-45deg, rgba(0, 0, 0, 0.04) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, rgba(0, 0, 0, 0.04) 75%),
+    linear-gradient(-45deg, transparent 75%, rgba(0, 0, 0, 0.04) 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+
+.image {
+  /* The SVG viewer inlines the `<img>` in transparent regions to let the
+   * checker show through — no white `background-color` like ImageViewer. */
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  transition: transform 80ms linear;
+  transform-origin: center center;
+  user-select: none;
+  -webkit-user-drag: none;
+}

@@ -17,11 +17,11 @@ impl GetToolHelpTool {
         ToolDefinition::new_with_label(
             "get_tool_help",
             "加载工具帮助",
-            "Load detailed tool usage instructions for a business category. Use this when you need full parameter / behavior details beyond the one-line summary in the system prompt. Categories: `general` (read/write/edit/grep/glob/database_search), `word` (.docx), `excel` (.xlsx), `markdown` (long-form .md writing). The spec is injected into your context as the tool result and is not shown to the user.",
+            "Load detailed tool usage instructions for a business category. Use this when you need full parameter / behavior details beyond the one-line summary in the system prompt. Categories: `general` (read/write/edit/grep/glob/database_search), `word` (.docx), `excel` (.xlsx), `markdown` (long-form .md writing), `media` (read_image / read_pdf), `svg` (create_svg style guide). The spec is injected into your context as the tool result and is not shown to the user.",
             ToolParameters::new(
                 vec!["category"],
                 vec![
-                    ("category", "string", Some("Business category. One of: general, word, excel, markdown.")),
+                    ("category", "string", Some("Business category. One of: general, word, excel, markdown, media, svg.")),
                 ],
             ),
         )

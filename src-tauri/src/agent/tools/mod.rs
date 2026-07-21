@@ -275,6 +275,7 @@ mod meta_tools; // get_tool_help + delegate_to
 mod todo_tools; // update_todo (read-only meta-tool; see agent_loop::try_handle_meta_tool)
 mod plan_tools;  // create_plan  (read-only meta-tool; see agent_loop::try_handle_meta_tool)
 mod mermaid_tools; // render_mermaid  (in-process merman renderer, mermaid.js 11.15 parity)
+mod svg_tools;  // create_svg  (AI-authored standalone .svg files)
 mod web_search_tool; // web_search (external encyclopedia lookup; today Baike)
 mod media_tools; // read_image / read_pdf  (binary workspace files for multimodal LLMs)
 pub mod ask_user_tools; // ask_user   (meta-tool; see agent_loop::try_handle_meta_tool)
@@ -290,6 +291,7 @@ pub use meta_tools::{GetToolHelpTool, DelegateToTool};
 pub use todo_tools::{UpdateTodoTool, TodoItem};
 pub use plan_tools::{CreatePlanTool, CreatePlanArgs, PlanFileTouch};
 pub use mermaid_tools::RenderMermaidTool;
+pub use svg_tools::{CreateSvgTool, CreateSvgOutcome};
 pub use web_search_tool::WebSearchTool;
 pub use ask_user_tools::AskUserTool;
 pub use media_tools::{ReadImageTool, ReadPdfTool};
@@ -311,6 +313,7 @@ pub enum ToolExecutor {
     CreateExcel(office_tools::CreateExcelTool),
     InspectOffice(office_tools::InspectOfficeTool),
     RenderMermaid(mermaid_tools::RenderMermaidTool),
+    CreateSvg(svg_tools::CreateSvgTool),
     DatabaseSearch(database_tools::DatabaseSearchTool),
     WebSearch(web_search_tool::WebSearchTool),
     ReadImage(media_tools::ReadImageTool),
@@ -342,6 +345,7 @@ impl ToolExecutor {
             ToolExecutor::CreateExcel(_) => "create_excel",
             ToolExecutor::InspectOffice(_) => "inspect_office",
             ToolExecutor::RenderMermaid(_) => "render_mermaid",
+            ToolExecutor::CreateSvg(_) => "create_svg",
             ToolExecutor::DatabaseSearch(_) => "database_search",
             ToolExecutor::WebSearch(_) => "web_search",
             ToolExecutor::ReadImage(_) => "read_image",
@@ -371,6 +375,7 @@ impl ToolExecutor {
             ToolExecutor::CreateExcel(t) => t.definition(),
             ToolExecutor::InspectOffice(t) => t.definition(),
             ToolExecutor::RenderMermaid(t) => t.definition(),
+            ToolExecutor::CreateSvg(t) => t.definition(),
             ToolExecutor::DatabaseSearch(t) => t.definition(),
             ToolExecutor::WebSearch(t) => t.definition(),
             ToolExecutor::ReadImage(t) => t.definition(),
@@ -405,6 +410,20 @@ impl ToolExecutor {
             // event). Convert back to a plain String here; the registry
             // re-stitches the file_path below in `ToolRegistry::execute`.
             ToolExecutor::RenderMermaid(t) => {
+                let outcome = t.execute(arguments, workspace).await?;
+                Ok(outcome.output)
+            }
+            // `create_svg` returns a richer outcome that carries the
+            // output file path (so the registry can stamp `file_path` on
+            // the `ToolResult` and trigger the frontend's `file-written`
+            // event) and the raw svg_source (so the chat panel can
+            // inline-preview the SVG without an extra `read_file` trip).
+            // Convert back to a plain String here; the registry re-stitches
+            // the file_path below in `ToolRegistry::execute`. The richer
+            // `svg_source` is exposed via the `output` JSON the LLM sees
+            // — the frontend can re-parse it if it wants the inline
+            // preview.
+            ToolExecutor::CreateSvg(t) => {
                 let outcome = t.execute(arguments, workspace).await?;
                 Ok(outcome.output)
             }
@@ -541,6 +560,11 @@ impl ToolRegistry {
             ToolExecutor::CreateExcel(CreateExcelTool),
             ToolExecutor::InspectOffice(InspectOfficeTool),
             ToolExecutor::RenderMermaid(RenderMermaidTool::default()),
+            // `create_svg` lets the agent author a self-contained `.svg`
+            // file. Output lands in the workspace; the registry emits a
+            // `file-change` event so the sidebar tree refreshes and the
+            // in-app SVG viewer can auto-open the new file.
+            ToolExecutor::CreateSvg(CreateSvgTool::default()),
             // DatabaseSearchTool added lazily via with_app_handle()
             // `web_search` is registered here with a placeholder tool;
             // `set_app_handle()` swaps in the real implementation once
@@ -621,13 +645,14 @@ impl ToolRegistry {
 
         let workspace = self.workspace.clone();
 
-        // `render_mermaid` is a special case among file-modifying tools:
-        // its output path lives in `output_path` (not `path`) and the
-        // tool itself constructs a `RenderOutcome` carrying the path so
-        // we can stamp `file_path` on the `ToolResult` for the frontend's
-        // `file-written` event. Branch on the tool name first so we
-        // don't accidentally apply the generic `path` lookup below.
-        if tool_call.name == "render_mermaid" {
+        // `render_mermaid` and `create_svg` are both special cases among
+        // file-modifying tools: their output path lives in `output_path`
+        // (not `path`) and the tool itself constructs an `Outcome`-style
+        // struct carrying the path so we can stamp `file_path` on the
+        // `ToolResult` for the frontend's `file-written` event. Branch on
+        // the tool name first so we don't accidentally apply the generic
+        // `path` lookup below to either of them.
+        if tool_call.name == "render_mermaid" || tool_call.name == "create_svg" {
             let output_path = tool_call
                 .arguments
                 .get("output_path")

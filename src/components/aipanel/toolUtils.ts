@@ -16,6 +16,8 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   modify_excel: '修改 Excel',
   create_excel: '创建 Excel',
   inspect_office: '检查 Office 文件',
+  // Image / vector tools
+  create_svg: '生成 SVG 图片',
   // Meta / sub-agent tools
   get_tool_help: '加载工具帮助',
   delegate_to: '委派子代理',
@@ -165,6 +167,12 @@ const TOOL_FIELD_LABELS: Record<string, ToolField[]> = {
     { key: 'mode', label: '模式' },
     { key: 'sheet', label: '工作表' },
     { key: 'range', label: '区域' },
+  ],
+  // Image / vector tools
+  create_svg: [
+    { key: 'description', label: '描述' },
+    { key: 'output_path', label: '保存到' },
+    { key: 'aspect_ratio', label: '比例' },
   ],
 };
 

@@ -31,6 +31,10 @@ pub const PROFILES: &[ProfileDescriptor] = &[
             "read_file", "write_file", "edit_file",
             "list_dir", "glob", "grep",
             "database_search",
+            // `create_svg` lets the agent author a self-contained .svg
+            // file. No Office equivalent — SVG is portable to docx, the
+            // web, and the in-app viewer without going through Office.
+            "create_svg",
             "get_tool_help", "delegate_to",
             "update_todo",
         ],
@@ -147,6 +151,8 @@ pub const TOOL_SPECS: &[(&str, &str)] = &[
     ("word",     include_str!("../../prompts/tool_specs/word.md")),
     ("excel",    include_str!("../../prompts/tool_specs/excel.md")),
     ("markdown", include_str!("../../prompts/tool_specs/markdown.md")),
+    ("media",    include_str!("../../prompts/tool_specs/media.md")),
+    ("svg",      include_str!("../../prompts/tool_specs/svg.md")),
 ];
 
 /// Static description of a profile (compile-time constants).
