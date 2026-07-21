@@ -48,6 +48,16 @@ use tracing_subscriber::util::SubscriberInitExt;
 /// failures for normal users.)
 const MIN_WINDOWS_BUILD: u32 = 10_240;
 
+/// Return a per-user directory outside the source tree for runtime data.
+/// `dirs::data_local_dir` maps to `%LOCALAPPDATA%` on Windows and
+/// `$XDG_DATA_HOME` (usually `~/.local/share`) on Linux.
+pub(crate) fn app_data_dir() -> std::path::PathBuf {
+    dirs::data_local_dir()
+        .or_else(dirs::data_dir)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("com.inkuo.app")
+}
+
 /// Path of the on-disk startup log. Always written regardless of the
 /// build profile so a release build that crashes silently still leaves
 /// evidence behind for the user to copy back.
@@ -55,10 +65,7 @@ const MIN_WINDOWS_BUILD: u32 = 10_240;
 /// Layout: `%LOCALAPPDATA%\com.inkuo.app\startup.log` (Tauri's
 /// default per-app data dir on Windows).
 fn startup_log_path() -> std::path::PathBuf {
-    let base = std::env::var_os("LOCALAPPDATA")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from("."));
-    base.join("com.inkuo.app").join("startup.log")
+    app_data_dir().join("startup.log")
 }
 
 /// Append a single timestamped line to the startup log. We use

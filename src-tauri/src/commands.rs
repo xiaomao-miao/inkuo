@@ -2139,10 +2139,7 @@ static FRONTEND_LOG_FILE: Lazy<Mutex<Option<std::path::PathBuf>>> =
     Lazy::new(|| Mutex::new(None));
 
 fn frontend_log_path() -> std::path::PathBuf {
-    let mut p = std::env::var_os("LOCALAPPDATA")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| std::path::PathBuf::from("."));
-    p.push("com.inkuo.app");
+    let mut p = crate::app_data_dir();
     let _ = std::fs::create_dir_all(&p);
     p.push("frontend-console.log");
     p
