@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" width="1280" height="720">
+  <defs>
+    <linearGradient id="bg3" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0f0f23"/>
+      <stop offset="100%" style="stop-color:#1a1a3e"/>
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="720" fill="url(#bg3)"/>
+  <text x="80" y="110" font-family="system-ui, -apple-system, sans-serif" font-size="36" font-weight="bold" fill="#ffffff">AI 智能体系统</text>
+  <line x1="80" y1="125" x2="500" y2="125" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>
+  
+  <!-- Three modes -->
+  <rect x="80" y="180" width="340" height="200" rx="10" fill="rgba(0,210,255,0.06)" stroke="rgba(0,210,255,0.25)" stroke-width="1.5"/>
+  <rect x="80" y="180" width="340" height="44" rx="10" fill="rgba(0,210,255,0.12)"/>
+  <text x="250" y="208" font-family="system-ui, -apple-system, sans-serif" font-size="20" font-weight="bold" fill="#00d2ff" text-anchor="middle">Ask 问答模式</text>
+  <text x="110" y="260" font-family="system-ui, -apple-system, sans-serif" font-size="15" fill="#b0c4d8">快速提问，获取即时回答</text>
+  <text x="110" y="290" font-family="system-ui, -apple-system, sans-serif" font-size="15" fill="#b0c4d8">基于工作区知识库的语义搜索</text>
+  <text x="110" y="320" font-family="system-ui, -apple-system, sans-serif" font-size="15" fill="#b0c4d8">上下文感知的精准回复</text>
+  <text x="110" y="350" font-family="system-ui, -apple-system, sans-serif" font-size="15" fill="#b0c4d8">支持流式输出，实时生成</text>
+
+  <rect x="470" y="180" width="340" height="200" rx="10" fill="rgba(58,123,213,0.06)" stroke="rgba(58,123,213,0.25)" stroke-width="1.5"/>
+  <rect x="470" y="180" width="340" height="44" rx="10" fill="rgba(58,123,213,0.12)"/>
+  <text x="640" y="208" font-family="system-ui, -apple-system, sans-serif" font-size="20" font-weight="bold" fill="#5a9be5" text-anchor="middle">Plan 计划模式</text>
+  <text x="500" y="260" font-family="system-ui, -apple-system, sans-serif" font-size="15" fill="#b0c4d8">AI 分析需求，制定执行计划</text>
+  <text x="500" y="290" font-family="system-ui, -apple-system, sans-serif" font-size="15" fill="#b0c4d8">展示文件修改清单与风险评估</text>
+  <text x="500" y="320" font-family="system-ui, -apple-system, sans-serif" font-size="15" fill="#b0c4d8">用户确认后执行</text>
+  <text x="500" y="350" font-family="system-ui, -apple-system, sans-serif" font-size="15" fill="#b0c4d8">安全可控的操作流程</text>
+
+  <rect x="860" y="180" width="340" height="200" rx="10" fill="rgba(100,200,150,0.06)" stroke="rgba(100,200,150,0.25)" stroke-width="1.5"/>
+  <rect x="860" y="180" width="340" height="44" rx="10" fill="rgba(100,200,150,0.12)"/>
+  <text x="1030" y="208" font-family="system-ui, -apple-system, sans-serif" font-size="20" font-weight="bold" fill="#6cc8a0" text-anchor="middle">Agent 智能体模式</text>
+  <text x="890" y="260" font-family="system-ui, -apple-system, sans-serif" font-size="15" fill="#b0c4d8">全自动执行，自主调用工具</text>
+  <text x="890" y="290" font-family="system-ui, -apple-system, sans-serif" font-size="15" fill="#b0c4d8">子代理协作系统（多专家协同）</text>
+  <text x="890" y="320" font-family="system-ui, -apple-system, sans-serif" font-size="15" fill="#b0c4d8">文件读写、代码编辑、Office 操作</text>
+  <text x="890" y="350" font-family="system-ui, -apple-system, sans-serif" font-size="15" fill="#b0c4d8">端到端任务自动化</text>
+
+  <!-- Sub-agent section -->
+  <text x="80" y="450" font-family="system-ui, -apple-system, sans-serif" font-size="22" font-weight="bold" fill="#ffffff">子代理专家体系</text>
+  
+  <rect x="80" y="480" width="180" height="56" rx="6" fill="rgba(0,210,255,0.08)" stroke="rgba(0,210,255,0.15)" stroke-width="1"/>
+  <text x="170" y="510" font-family="system-ui, -apple-system, sans-serif" font-size="14" font-weight="bold" fill="#00d2ff" text-anchor="middle">Word 专家</text>
+  <text x="170" y="527" font-family="system-ui, -apple-system, sans-serif" font-size="11" fill="#7090b0" text-anchor="middle">文档创建/编辑</text>
+
+  <rect x="280" y="480" width="180" height="56" rx="6" fill="rgba(58,123,213,0.08)" stroke="rgba(58,123,213,0.15)" stroke-width="1"/>
+  <text x="370" y="510" font-family="system-ui, -apple-system, sans-serif" font-size="14" font-weight="bold" fill="#5a9be5" text-anchor="middle">Excel 专家</text>
+  <text x="370" y="527" font-family="system-ui, -apple-system, sans-serif" font-size="11" fill="#7090b0" text-anchor="middle">表格处理/分析</text>
+
+  <rect x="480" y="480" width="180" height="56" rx="6" fill="rgba(100,200,150,0.08)" stroke="rgba(100,200,150,0.15)" stroke-width="1"/>
+  <text x="570" y="510" font-family="system-ui, -apple-system, sans-serif" font-size="14" font-weight="bold" fill="#6cc8a0" text-anchor="middle">代码专家</text>
+  <text x="570" y="527" font-family="system-ui, -apple-system, sans-serif" font-size="11" fill="#7090b0" text-anchor="middle">代码审查/编写</text>
+
+  <rect x="680" y="480" width="180" height="56" rx="6" fill="rgba(200,150,80,0.08)" stroke="rgba(200,150,80,0.15)" stroke-width="1"/>
+  <text x="770" y="510" font-family="system-ui, -apple-system, sans-serif" font-size="14" font-weight="bold" fill="#c8a050" text-anchor="middle">Markdown 专家</text>
+  <text x="770" y="527" font-family="system-ui, -apple-system, sans-serif" font-size="11" fill="#7090b0" text-anchor="middle">长文撰写/排版</text>
+
+  <rect x="880" y="480" width="180" height="56" rx="6" fill="rgba(200,100,120,0.08)" stroke="rgba(200,100,120,0.15)" stroke-width="1"/>
+  <text x="970" y="510" font-family="system-ui, -apple-system, sans-serif" font-size="14" font-weight="bold" fill="#c86478" text-anchor="middle">流程图专家</text>
+  <text x="970" y="527" font-family="system-ui, -apple-system, sans-serif" font-size="11" fill="#7090b0" text-anchor="middle">图表渲染</text>
+
+  <rect x="80" y="560" width="180" height="56" rx="6" fill="rgba(150,100,200,0.08)" stroke="rgba(150,100,200,0.15)" stroke-width="1"/>
+  <text x="170" y="590" font-family="system-ui, -apple-system, sans-serif" font-size="14" font-weight="bold" fill="#9664c8" text-anchor="middle">批量编辑专家</text>
+  <text x="170" y="607" font-family="system-ui, -apple-system, sans-serif" font-size="11" fill="#7090b0" text-anchor="middle">批量文件操作</text>
+
+  <rect x="280" y="560" width="180" height="56" rx="6" fill="rgba(180,130,80,0.08)" stroke="rgba(180,130,80,0.15)" stroke-width="1"/>
+  <text x="370" y="590" font-family="system-ui, -apple-system, sans-serif" font-size="14" font-weight="bold" fill="#b48250" text-anchor="middle">研究专家</text>
+  <text x="370" y="607" font-family="system-ui, -apple-system, sans-serif" font-size="11" fill="#7090b0" text-anchor="middle">搜索与信息整理</text>
+</svg>

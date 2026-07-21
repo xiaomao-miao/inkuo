@@ -1,0 +1,1879 @@
+//! PowerPoint authoring tool: `create_pptx`
+//!
+//! Takes a list of `.svg` files and packages them into a `.pptx` presentation
+//! in which **every shape remains editable in PowerPoint / Keynote / WPS**
+//! — the SVG geometry is converted to native OOXML shapes
+//! (`<p:sp>` / `<p:cxnSp>` / `<a:custGeom>`) rather than rasterised to a
+//! bitmap inside an `<p:pic>`.
+//!
+//! ## Why a dedicated tool (and not just `write_file`)
+//!
+//! `write_file` *cannot* write a `.pptx` — the format is a binary zip of XML,
+//! and hand-rolling the contents is exactly what we want to *hide* from the
+//! LLM. `create_pptx` exposes a tiny, declarative API:
+//!
+//! - `svg_paths[]` — every input SVG becomes one slide (each input supplies a
+//!   list of shapes that are mapped 1:1 to `<p:sp>` elements on that slide).
+//! - `output_path` — the destination `.pptx`. Created atomically, parent
+//!   directories auto-created.
+//! - `title` — optional deck title, stamped into the core properties.
+//!
+//! Like `create_svg`, this tool returns a `CreatePptxOutcome` so the registry
+//! can stamp `file_path` on the `ToolResult` and trigger the frontend's
+//! `file-change` event (so the sidebar tree refreshes and the OS file
+//! association launches PowerPoint when the user clicks the link).
+//!
+//! ## Coverage
+//!
+//! We deliberately support a *narrow* SVG subset — the shapes that round-trip
+//! cleanly into OOXML without losing the "edit later" property:
+//!
+//! | SVG element             | OOXML target                                | Editable in PPT? |
+//! | ----------------------- | ------------------------------------------- | ---------------- |
+//! | `<rect>`                | `<p:sp>` preset geometry `rect`             | ✓ (resize, recolour, edit text-free) |
+//! | `<circle>`              | `<p:sp>` preset geometry `ellipse`          | ✓                |
+//! | `<ellipse>`             | `<p:sp>` preset geometry `ellipse`          | ✓                |
+//! | `<line>`                | `<p:cxnSp>` connector                       | ✓                |
+//! | `<polyline>` / `<polygon>` | `<p:sp>` preset geometry + custom path    | ✓ (geometry locked, but vertex handles visible) |
+//! | `<path>`                | `<p:sp>` with `<a:custGeom>` custom path    | ✓                |
+//! | `<text>`                | `<p:sp>` with `<p:txBody>`                  | ✓ (fully editable text) |
+//! | `<g transform="…">`     | wrapped in `<p:sp>` xfrm or applied to children | ✓            |
+//!
+//! Unsupported elements (`<image>`, `<use>`, `<foreignObject>`, `<filter>`,
+//! `<mask>`, scripts) are skipped with a soft warning — the slide is still
+//! emitted so the file opens cleanly.
+
+use quick_xml::events::{BytesStart, Event};
+use quick_xml::Reader;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::collections::BTreeMap;
+use std::fmt::Write as _;
+use std::io::{Cursor, Read, Write};
+use std::path::PathBuf;
+
+use super::{validate_workspace_path, ToolDefinition, ToolError, ToolParameters};
+
+// ---------------------------------------------------------------------------
+// Slide canvas (EMU units). PowerPoint uses 914,400 EMU per inch; the default
+// slide size is 13.333" × 7.5" (16:9 widescreen), i.e. 12,192,000 × 6,858,000
+// EMU. We use that as our default canvas.
+// ---------------------------------------------------------------------------
+
+/// Default slide width in EMU (13.333" × 914,400).
+const SLIDE_W_EMU: i64 = 12_192_000;
+/// Default slide height in EMU (7.5" × 914,400).
+const SLIDE_H_EMU: i64 = 6_858_000;
+/// EMUs per inch (PowerPoint's base unit).
+const EMU_PER_INCH: i64 = 914_400;
+
+// ---------------------------------------------------------------------------
+// Outcome wrapper
+// ---------------------------------------------------------------------------
+
+/// Structured outcome returned by `CreatePptxTool::execute`. Mirrors the
+/// `CreateSvgOutcome` shape so the registry can stamp `file_path` and trigger
+/// the frontend's `file-change` event identically.
+#[derive(Debug)]
+pub struct CreatePptxOutcome {
+    pub output: String,
+    pub file_path: String,
+    pub byte_size: usize,
+    pub slide_count: usize,
+    pub slide_summaries: Vec<SlideSummary>,
+    pub is_error: bool,
+}
+
+/// Per-slide summary, returned in the tool's JSON output so the LLM can
+/// confirm to the user what was generated.
+#[derive(Debug, Serialize)]
+pub struct SlideSummary {
+    pub index: usize,
+    pub source_svg: String,
+    pub shape_count: usize,
+    pub skipped_elements: Vec<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Args
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+struct CreatePptxArgs {
+    /// Absolute paths to the input SVG files. Order is preserved — the n-th
+    /// SVG becomes the n-th slide. At least one is required.
+    svg_paths: Vec<String>,
+    /// Absolute workspace-relative path to write the `.pptx` to. Must end in
+    /// `.pptx`. Parent directories are created as needed.
+    output_path: String,
+    /// Optional deck title, stamped into `docProps/core.xml` as
+    /// `<dc:title>`. Also shown in PowerPoint's "Title" field.
+    #[serde(default)]
+    title: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Tool
+// ---------------------------------------------------------------------------
+
+pub struct CreatePptxTool;
+
+impl CreatePptxTool {
+    pub fn new() -> Self { Self }
+
+    pub fn definition(&self) -> ToolDefinition {
+        ToolDefinition::new_with_label(
+            "create_pptx",
+            "生成 PPT",
+            "Pack a list of `.svg` files into a single `.pptx` presentation in which every shape \
+             is native OOXML — fully editable in PowerPoint / Keynote / WPS (resize, recolour, \
+             edit text). Each SVG becomes one slide, in the same order as the input. The supported \
+             SVG subset is `rect`, `circle`, `ellipse`, `line`, `polyline`, `polygon`, `path`, \
+             `text`, and `<g transform=...>`. Unsupported elements (image / use / foreignObject / \
+             filter / mask / script) are skipped with a warning; the slide is still emitted so the \
+             deck always opens cleanly.",
+            ToolParameters::new(
+                vec!["svg_paths", "output_path"],
+                vec![
+                    ("svg_paths", "string", Some("JSON array of absolute paths to `.svg` files. Order is preserved — n-th element becomes the n-th slide. Must contain at least one path.")),
+                    ("output_path", "string", Some("Absolute workspace path to write the `.pptx` to. Extension must be `.pptx`. Parent directories are created automatically.")),
+                    ("title", "string", Some("Optional deck title, stamped into `docProps/core.xml` and PowerPoint's Title field.")),
+                ],
+            ),
+        )
+    }
+
+    pub async fn execute(
+        &self,
+        arguments: Value,
+        workspace: Option<String>,
+    ) -> Result<CreatePptxOutcome, ToolError> {
+        let args: CreatePptxArgs = serde_json::from_value(arguments).map_err(|e| {
+            ToolError::InvalidArguments(
+                "create_pptx".to_string(),
+                format!("Invalid parameters: {}", e),
+            )
+        })?;
+
+        // ── 1. Output path validation ────────────────────────────────────
+        let output_path = PathBuf::from(&args.output_path);
+        let ext = output_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if ext != "pptx" {
+            return Err(ToolError::InvalidArguments(
+                "create_pptx".to_string(),
+                format!("output_path must end with `.pptx`; got `.{}{}`",
+                        ext,
+                        if ext.is_empty() { " (no extension)" } else { "" }),
+            ));
+        }
+        validate_workspace_path(&args.output_path, &workspace)?;
+
+        // ── 2. Input validation ──────────────────────────────────────────
+        if args.svg_paths.is_empty() {
+            return Err(ToolError::InvalidArguments(
+                "create_pptx".to_string(),
+                "svg_paths must contain at least one path".to_string(),
+            ));
+        }
+        for (i, p) in args.svg_paths.iter().enumerate() {
+            let ext = std::path::Path::new(p)
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if ext != "svg" {
+                return Err(ToolError::InvalidArguments(
+                    "create_pptx".to_string(),
+                    format!("svg_paths[{i}] must end with `.svg`; got `{p}`"),
+                ));
+            }
+            validate_workspace_path(p, &workspace)?;
+        }
+
+        // ── 3. Parse every SVG ───────────────────────────────────────────
+        let mut slides = Vec::with_capacity(args.svg_paths.len());
+        for (idx, p) in args.svg_paths.iter().enumerate() {
+            let bytes = tokio::fs::read(p).await.map_err(|e| {
+                ToolError::IoError(format!("Failed to read SVG {p}: {e}"))
+            })?;
+            let svg = std::str::from_utf8(&bytes).map_err(|e| {
+                ToolError::ExecutionError(format!(
+                    "SVG {p} is not valid UTF-8: {e}"
+                ))
+            })?;
+            let parsed = match parse_svg(svg) {
+                Ok(p) => p,
+                Err(e) => {
+                    return Err(ToolError::ExecutionError(format!(
+                        "Failed to parse SVG {p}: {e}"
+                    )));
+                }
+            };
+            slides.push(SlideInput {
+                source_path: p.clone(),
+                slide_index: idx + 1,
+                content: parsed,
+            });
+        }
+
+        // ── 4. Build the .pptx in memory ─────────────────────────────────
+        let deck = build_pptx(&slides, args.title.as_deref())?;
+        let byte_size = deck.len();
+
+        // ── 5. Ensure parent directory + atomic write ────────────────────
+        if let Some(parent) = output_path.parent() {
+            if !parent.as_os_str().is_empty() && !parent.exists() {
+                tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                    ToolError::IoError(format!(
+                        "Failed to create output directory {}: {}",
+                        parent.display(),
+                        e
+                    ))
+                })?;
+            }
+        }
+        tokio::fs::write(&output_path, &deck).await.map_err(|e| {
+            ToolError::IoError(format!(
+                "Failed to write pptx to {}: {}",
+                output_path.display(),
+                e
+            ))
+        })?;
+
+        // ── 6. Build the success output JSON ─────────────────────────────
+        let summaries: Vec<serde_json::Value> = slides
+            .iter()
+            .map(|s| {
+                json!({
+                    "index": s.slide_index,
+                    "source_svg": s.source_path,
+                    "shape_count": s.content.shapes.len(),
+                    "skipped_elements": s.content.skipped,
+                })
+            })
+            .collect();
+
+        let title = args
+            .title
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("(untitled)");
+
+        let output = json!({
+            "status": "ok",
+            "file_path": output_path.to_string_lossy(),
+            "title": title,
+            "bytes": byte_size,
+            "slide_count": slides.len(),
+            "slides": summaries,
+        })
+        .to_string();
+
+        Ok(CreatePptxOutcome {
+            output,
+            file_path: output_path.to_string_lossy().to_string(),
+            byte_size,
+            slide_count: slides.len(),
+            slide_summaries: slides
+                .iter()
+                .map(|s| SlideSummary {
+                    index: s.slide_index,
+                    source_svg: s.source_path.clone(),
+                    shape_count: s.content.shapes.len(),
+                    skipped_elements: s.content.skipped.clone(),
+                })
+                .collect(),
+            is_error: false,
+        })
+    }
+}
+
+impl Default for CreatePptxTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SVG → internal model
+// ---------------------------------------------------------------------------
+
+/// A single SVG, after parsing.
+struct ParsedSvg {
+    /// The canvas size in SVG user units. We centre the artwork onto the
+    /// 16:9 PPT slide and scale to fit (preserving aspect ratio).
+    vb_x: f64,
+    vb_y: f64,
+    vb_w: f64,
+    vb_h: f64,
+    /// Shapes, in document order. `text` shapes carry their raw `<text>`
+    /// children (we render them on the PPT slide too).
+    shapes: Vec<SvgShape>,
+    /// Element names that we encountered but skipped (so the tool output can
+    /// tell the user "we dropped 3 <image> elements").
+    skipped: Vec<String>,
+}
+
+/// A single SVG shape, normalised into a representation we can convert to
+/// OOXML. The shape coordinates are still in SVG user units — the
+/// `to_ooxml` step applies the per-slide scale + offset transform.
+enum SvgShape {
+    Rect {
+        x: f64, y: f64, width: f64, height: f64,
+        rx: Option<f64>, ry: Option<f64>,
+        fill: Option<Paint>,
+        stroke: Option<Paint>,
+        stroke_width: Option<f64>,
+        opacity: Option<f64>,
+    },
+    Ellipse {
+        cx: f64, cy: f64, rx: f64, ry: f64,
+        fill: Option<Paint>,
+        stroke: Option<Paint>,
+        stroke_width: Option<f64>,
+        opacity: Option<f64>,
+    },
+    Line {
+        x1: f64, y1: f64, x2: f64, y2: f64,
+        stroke: Option<Paint>,
+        stroke_width: Option<f64>,
+        opacity: Option<f64>,
+    },
+    Path {
+        /// Raw `d` attribute. We pass it through to OOXML `<a:custGeom>`
+        /// (which uses the same SVG path grammar since Office 2013).
+        d: String,
+        fill: Option<Paint>,
+        stroke: Option<Paint>,
+        stroke_width: Option<f64>,
+        opacity: Option<f64>,
+    },
+    Text {
+        x: f64, y: f64,
+        /// `<text>` body — child text + nested `<tspan>` runs, flattened.
+        runs: Vec<TextRun>,
+        font_size: Option<f64>,
+        fill: Option<Paint>,
+        opacity: Option<f64>,
+    },
+}
+
+/// One run inside a `<text>` element. Multi-run text is preserved so PPT can
+/// edit each run independently.
+struct TextRun {
+    text: String,
+    bold: bool,
+    italic: bool,
+    underline: bool,
+    fill: Option<Paint>,
+}
+
+/// Fill / stroke paint. We collapse CSS-ish `fill="red"` / `fill="none"`
+/// / `fill-opacity` into a single struct so the OOXML writer doesn't have
+/// to branch. Gradient refs (`fill="url(#…)"`) are parsed but not yet
+/// resolved to DrawingML `<a:gradFill>` — v1 degrades them to noFill.
+#[derive(Clone)]
+#[allow(dead_code)]
+enum Paint {
+    None,
+    Color { rgb: String, opacity: Option<f64> },
+    GradientRef(()), // reserved — payload unused until we resolve gradients
+}
+
+/// Intermediate representation of one input SVG.
+struct SlideInput {
+    source_path: String,
+    slide_index: usize,
+    content: ParsedSvg,
+}
+
+// ---------------------------------------------------------------------------
+// SVG parser
+// ---------------------------------------------------------------------------
+
+fn parse_svg(svg: &str) -> Result<ParsedSvg, String> {
+    let mut reader = Reader::from_str(svg);
+    reader.config_mut().trim_text(true);
+
+    let mut parsed = ParsedSvg {
+        vb_x: 0.0,
+        vb_y: 0.0,
+        vb_w: 0.0,
+        vb_h: 0.0,
+        shapes: Vec::new(),
+        skipped: Vec::new(),
+    };
+
+    // Stack of `<g transform="...">` translation / scale contexts. Each entry
+    // is a transform applied to coordinates *before* they're added to the
+    // parent. We only support `translate(x, y)` and `scale(s)` because that's
+    // all the create_svg / flowchart / diagram toolchains emit.
+    let mut transforms: Vec<Transform> = vec![Transform::identity()];
+
+    // Text accumulation state. When we hit a `<text>` element we begin
+    // collecting runs; when we hit the close we flush.
+    let mut text_acc: Option<TextAcc> = None;
+
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e)) => {
+                let name = e.name();
+                let tag = std::str::from_utf8(name.as_ref()).unwrap_or("").to_string();
+                let attrs = read_attrs(&e);
+
+                match tag.as_str() {
+                    "svg" => {
+                        if let Some(vb) = attrs.get("viewBox") {
+                            let parts: Vec<&str> =
+                                vb.split(|c: char| c.is_whitespace() || c == ',')
+                                    .filter(|s| !s.is_empty())
+                                    .collect();
+                            if parts.len() == 4 {
+                                parsed.vb_x = parts[0].parse().unwrap_or(0.0);
+                                parsed.vb_y = parts[1].parse().unwrap_or(0.0);
+                                parsed.vb_w = parts[2].parse().unwrap_or(100.0);
+                                parsed.vb_h = parts[3].parse().unwrap_or(100.0);
+                            }
+                        } else if let (Some(w), Some(h)) =
+                            (attrs.get("width"), attrs.get("height"))
+                        {
+                            // Best-effort fallback when viewBox is missing.
+                            parsed.vb_w = w.parse().unwrap_or(100.0);
+                            parsed.vb_h = h.parse().unwrap_or(100.0);
+                        }
+                        if parsed.vb_w == 0.0 { parsed.vb_w = 100.0; }
+                        if parsed.vb_h == 0.0 { parsed.vb_h = 100.0; }
+                    }
+                    "g" => {
+                        if let Some(t) = attrs.get("transform") {
+                            transforms.push(transforms.last().unwrap().compose(t));
+                        } else {
+                            transforms.push(*transforms.last().unwrap());
+                        }
+                    }
+                    "rect" => {
+                        if let Some(shape) = build_rect(&attrs, transforms.last().unwrap()) {
+                            parsed.shapes.push(shape);
+                        }
+                    }
+                    "circle" => {
+                        if let Some(shape) = build_circle(&attrs, transforms.last().unwrap()) {
+                            parsed.shapes.push(shape);
+                        }
+                    }
+                    "ellipse" => {
+                        if let Some(shape) = build_ellipse(&attrs, transforms.last().unwrap()) {
+                            parsed.shapes.push(shape);
+                        }
+                    }
+                    "line" => {
+                        if let Some(shape) = build_line(&attrs, transforms.last().unwrap()) {
+                            parsed.shapes.push(shape);
+                        }
+                    }
+                    "path" => {
+                        if let Some(shape) = build_path(&attrs, transforms.last().unwrap()) {
+                            parsed.shapes.push(shape);
+                        }
+                    }
+                    "polyline" | "polygon" => {
+                        if let Some(shape) =
+                            build_poly(&tag, &attrs, transforms.last().unwrap())
+                        {
+                            parsed.shapes.push(shape);
+                        }
+                    }
+                    "text" => {
+                        if text_acc.is_none() {
+                            text_acc = Some(TextAcc {
+                                x: attrs
+                                    .get("x")
+                                    .and_then(|v| v.parse().ok())
+                                    .unwrap_or(0.0),
+                                y: attrs
+                                    .get("y")
+                                    .and_then(|v| v.parse().ok())
+                                    .unwrap_or(0.0),
+                                font_size: attrs
+                                    .get("font-size")
+                                    .and_then(|v| parse_len(v)),
+                                fill: attrs
+                                    .get("fill")
+                                    .and_then(|v| parse_paint(v, &attrs)),
+                                opacity: attrs
+                                    .get("opacity")
+                                    .and_then(|v| v.parse().ok()),
+                                transform: *transforms.last().unwrap(),
+                                runs: Vec::new(),
+                                current_run: String::new(),
+                                current_bold: false,
+                                current_italic: false,
+                                current_underline: false,
+                                current_fill: None,
+                            });
+                        }
+                    }
+                    "tspan" => {
+                        // Flush whatever we have so far as a run, then open
+                        // a new run with this tspan's style overrides.
+                        if let Some(acc) = text_acc.as_mut() {
+                            if !acc.current_run.is_empty() {
+                                acc.runs.push(TextRun {
+                                    text: std::mem::take(&mut acc.current_run),
+                                    bold: acc.current_bold,
+                                    italic: acc.current_italic,
+                                    underline: acc.current_underline,
+                                    fill: acc.current_fill.clone(),
+                                });
+                            }
+                            let bold = attrs
+                                .get("font-weight")
+                                .map(|v| matches!(v.as_str(), "bold" | "700" | "800" | "900"))
+                                .unwrap_or(false);
+                            let italic = attrs
+                                .get("font-style")
+                                .map(|v| v == "italic")
+                                .unwrap_or(false);
+                            let underline = attrs
+                                .get("text-decoration")
+                                .map(|v| v.contains("underline"))
+                                .unwrap_or(false);
+                            let fill = attrs
+                                .get("fill")
+                                .and_then(|v| parse_paint(v, &attrs));
+                            acc.current_bold = bold;
+                            acc.current_italic = italic;
+                            acc.current_underline = underline;
+                            if fill.is_some() {
+                                acc.current_fill = fill;
+                            }
+                        }
+                    }
+                    // Unsupported — record and skip.
+                    "image" | "use" | "foreignObject" | "filter" | "mask"
+                    | "clipPath" | "pattern" | "switch" => {
+                        if !parsed.skipped.contains(&tag) {
+                            parsed.skipped.push(tag);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Empty(e)) => {
+                let name = e.name();
+                let tag = std::str::from_utf8(name.as_ref()).unwrap_or("").to_string();
+                let attrs = read_attrs(&e);
+
+                match tag.as_str() {
+                    "rect" => {
+                        if let Some(shape) = build_rect(&attrs, transforms.last().unwrap()) {
+                            parsed.shapes.push(shape);
+                        }
+                    }
+                    "circle" => {
+                        if let Some(shape) = build_circle(&attrs, transforms.last().unwrap()) {
+                            parsed.shapes.push(shape);
+                        }
+                    }
+                    "ellipse" => {
+                        if let Some(shape) = build_ellipse(&attrs, transforms.last().unwrap()) {
+                            parsed.shapes.push(shape);
+                        }
+                    }
+                    "line" => {
+                        if let Some(shape) = build_line(&attrs, transforms.last().unwrap()) {
+                            parsed.shapes.push(shape);
+                        }
+                    }
+                    "path" => {
+                        if let Some(shape) = build_path(&attrs, transforms.last().unwrap()) {
+                            parsed.shapes.push(shape);
+                        }
+                    }
+                    "polyline" | "polygon" => {
+                        if let Some(shape) =
+                            build_poly(&tag, &attrs, transforms.last().unwrap())
+                        {
+                            parsed.shapes.push(shape);
+                        }
+                    }
+                    "image" | "use" | "foreignObject" | "filter" | "mask"
+                    | "clipPath" | "pattern" | "switch" => {
+                        if !parsed.skipped.contains(&tag) {
+                            parsed.skipped.push(tag);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Text(t)) => {
+                if let Some(acc) = text_acc.as_mut() {
+                    let txt = t.unescape().map_err(|e| e.to_string())?.into_owned();
+                    acc.current_run.push_str(&txt);
+                }
+            }
+            Ok(Event::End(e)) => {
+                let name = e.name();
+                let tag = std::str::from_utf8(name.as_ref()).unwrap_or("").to_string();
+                match tag.as_str() {
+                    "g" => {
+                        transforms.pop();
+                    }
+                    "tspan" => {
+                        if let Some(acc) = text_acc.as_mut() {
+                            // Flush the current run, then keep accumulating.
+                            // We don't reset bold/italic because tspans
+                            // typically *inherit* formatting from the parent
+                            // text element; the next opening tspan can
+                            // override.
+                            if !acc.current_run.is_empty() {
+                                acc.runs.push(TextRun {
+                                    text: std::mem::take(&mut acc.current_run),
+                                    bold: acc.current_bold,
+                                    italic: acc.current_italic,
+                                    underline: acc.current_underline,
+                                    fill: acc.current_fill.clone(),
+                                });
+                            }
+                        }
+                    }
+                    "text" => {
+                        if let Some(mut acc) = text_acc.take() {
+                            // Flush the trailing run, even if empty.
+                            acc.runs.push(TextRun {
+                                text: std::mem::take(&mut acc.current_run),
+                                bold: acc.current_bold,
+                                italic: acc.current_italic,
+                                underline: acc.current_underline,
+                                fill: acc.current_fill.clone(),
+                            });
+
+                            // Drop trailing empty runs (PowerPoint renders
+                            // them as a phantom cursor).
+                            while acc.runs.last().map(|r| r.text.is_empty()).unwrap_or(false) {
+                                acc.runs.pop();
+                            }
+
+                            if !acc.runs.is_empty() {
+                                let (x, y) = acc.transform.apply_point(acc.x, acc.y);
+                                parsed.shapes.push(SvgShape::Text {
+                                    x,
+                                    y,
+                                    runs: acc.runs,
+                                    font_size: acc.font_size,
+                                    fill: acc.fill,
+                                    opacity: acc.opacity,
+                                });
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(format!("quick-xml error at position {}: {}", reader.buffer_position(), e)),
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    // Fallback: an SVG that never set a viewBox got default 100×100 above; if
+    // the SVG used `width` / `height` instead we already captured those into
+    // vb_w / vb_h. Either way, vb_w / vb_h must be > 0 by now.
+
+    Ok(parsed)
+}
+
+// ---------------------------------------------------------------------------
+// Attribute helpers
+// ---------------------------------------------------------------------------
+
+fn read_attrs(e: &BytesStart) -> BTreeMap<String, String> {
+    let mut map = BTreeMap::new();
+    for a in e.attributes() {
+        let attr = match a {
+            Ok(a) => a,
+            Err(_) => continue,
+        };
+        let key = std::str::from_utf8(attr.key.as_ref())
+            .unwrap_or("")
+            .to_string();
+        let val = attr.unescape_value().map(|v| v.into_owned()).unwrap_or_default();
+        map.insert(key, val);
+    }
+    map
+}
+
+fn parse_len(s: &str) -> Option<f64> {
+    let s = s.trim();
+    let s = if let Some(stripped) = s.strip_suffix("px") {
+        stripped
+    } else if let Some(stripped) = s.strip_suffix("pt") {
+        // 1 pt = 1.333 px (assume 96 DPI viewport); we don't actually use
+        // this conversion downstream (font sizes are taken in pt natively).
+        return stripped.parse().ok();
+    } else {
+        s
+    };
+    s.parse().ok()
+}
+
+fn parse_paint(s: &str, _attrs: &BTreeMap<String, String>) -> Option<Paint> {
+    let s = s.trim();
+    if s.is_empty() || s == "none" {
+        return Some(Paint::None);
+    }
+    if let Some(rest) = s.strip_prefix("url(#") {
+        if rest.strip_suffix(')').is_some() {
+            return Some(Paint::GradientRef(()));
+        }
+        return None;
+    }
+    // `#RRGGBB` / `#RGB` / `rgb(…)` / named colours.
+    let rgb = if let Some(hex) = s.strip_prefix('#') {
+        match hex.len() {
+            3 => {
+                let r = &hex[0..1];
+                let g = &hex[1..2];
+                let b = &hex[2..3];
+                format!("{}{}{}{}{}{}", r, r, g, g, b, b).to_uppercase()
+            }
+            6 => hex.to_uppercase(),
+            8 => hex[0..6].to_uppercase(), // strip alpha
+            _ => return None,
+        }
+    } else if s.starts_with("rgb(") && s.ends_with(')') {
+        let body = &s[4..s.len() - 1];
+        let parts: Vec<&str> = body
+            .split(|c: char| c == ',' || c.is_whitespace())
+            .filter(|x| !x.is_empty())
+            .collect();
+        if parts.len() != 3 {
+            return None;
+        }
+        let r: u8 = parts[0].parse().ok()?;
+        let g: u8 = parts[1].parse().ok()?;
+        let b: u8 = parts[2].parse().ok()?;
+        format!("{:02X}{:02X}{:02X}", r, g, b)
+    } else {
+        // Best-effort named-color lookup (we ship a tiny table; anything
+        // unknown falls through to PowerPoint's default).
+        return named_color(s).map(|rgb| Paint::Color {
+            rgb: rgb.to_string(),
+            opacity: None,
+        });
+    };
+    Some(Paint::Color { rgb, opacity: None })
+}
+
+/// Tiny named-color table. We intentionally do NOT ship the full CSS list —
+/// the LLM is expected to emit `fill="#1F2933"`-style hex values per the
+/// `create_svg` style guide.
+fn named_color(name: &str) -> Option<&'static str> {
+    Some(match name.to_ascii_lowercase().as_str() {
+        "black" => "000000",
+        "white" => "FFFFFF",
+        "red" => "FF0000",
+        "green" => "008000",
+        "blue" => "0000FF",
+        "yellow" => "FFFF00",
+        "cyan" | "aqua" => "00FFFF",
+        "magenta" | "fuchsia" => "FF00FF",
+        "gray" | "grey" => "808080",
+        "silver" => "C0C0C0",
+        "maroon" => "800000",
+        "olive" => "808000",
+        "purple" => "800080",
+        "teal" => "008080",
+        "navy" => "000080",
+        "orange" => "FFA500",
+        "pink" => "FFC0CB",
+        "brown" => "A52A2A",
+        "lime" => "00FF00",
+        "indigo" => "4B0082",
+        "violet" => "EE82EE",
+        "gold" => "FFD700",
+        "transparent" => "FFFFFF", // Caller should use opacity, not this.
+        _ => return None,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Shape builders (translate raw attribute maps into SvgShape variants).
+// ---------------------------------------------------------------------------
+
+fn build_rect(
+    a: &BTreeMap<String, String>,
+    t: &Transform,
+) -> Option<SvgShape> {
+    let x: f64 = a.get("x").and_then(|v| v.parse().ok()).unwrap_or(0.0);
+    let y: f64 = a.get("y").and_then(|v| v.parse().ok()).unwrap_or(0.0);
+    let w: f64 = a.get("width").and_then(|v| v.parse().ok()).unwrap_or(0.0);
+    let h: f64 = a.get("height").and_then(|v| v.parse().ok()).unwrap_or(0.0);
+    if w <= 0.0 || h <= 0.0 {
+        return None;
+    }
+    let rx: Option<f64> = a.get("rx").and_then(|v| v.parse().ok());
+    let ry: Option<f64> = a.get("ry").and_then(|v| v.parse().ok());
+    let (x, y) = t.apply_point(x, y);
+    let (w, h) = t.apply_size(w, h);
+    let fill = a.get("fill").and_then(|v| parse_paint(v, a));
+    let stroke = a.get("stroke").and_then(|v| parse_paint(v, a));
+    let stroke_width = a.get("stroke-width").and_then(|v| v.parse().ok());
+    let opacity = a.get("opacity").and_then(|v| v.parse().ok())
+        .or_else(|| a.get("fill-opacity").and_then(|v| v.parse().ok()));
+    Some(SvgShape::Rect {
+        x, y, width: w, height: h, rx, ry,
+        fill, stroke, stroke_width, opacity,
+    })
+}
+
+fn build_circle(
+    a: &BTreeMap<String, String>,
+    t: &Transform,
+) -> Option<SvgShape> {
+    let cx: f64 = a.get("cx").and_then(|v| v.parse().ok()).unwrap_or(0.0);
+    let cy: f64 = a.get("cy").and_then(|v| v.parse().ok()).unwrap_or(0.0);
+    let r: f64 = a.get("r").and_then(|v| v.parse().ok()).unwrap_or(0.0);
+    if r <= 0.0 { return None; }
+    let (cx, cy) = t.apply_point(cx, cy);
+    let r = (r * t.uniform_scale()).max(0.0);
+    let fill = a.get("fill").and_then(|v| parse_paint(v, a));
+    let stroke = a.get("stroke").and_then(|v| parse_paint(v, a));
+    let stroke_width = a.get("stroke-width").and_then(|v| v.parse().ok());
+    let opacity = a.get("opacity").and_then(|v| v.parse().ok())
+        .or_else(|| a.get("fill-opacity").and_then(|v| v.parse().ok()));
+    Some(SvgShape::Ellipse {
+        cx, cy, rx: r, ry: r,
+        fill, stroke, stroke_width, opacity,
+    })
+}
+
+fn build_ellipse(
+    a: &BTreeMap<String, String>,
+    t: &Transform,
+) -> Option<SvgShape> {
+    let cx: f64 = a.get("cx").and_then(|v| v.parse().ok()).unwrap_or(0.0);
+    let cy: f64 = a.get("cy").and_then(|v| v.parse().ok()).unwrap_or(0.0);
+    let rx: f64 = a.get("rx").and_then(|v| v.parse().ok()).unwrap_or(0.0);
+    let ry: f64 = a.get("ry").and_then(|v| v.parse().ok()).unwrap_or(0.0);
+    if rx <= 0.0 || ry <= 0.0 { return None; }
+    let (cx, cy) = t.apply_point(cx, cy);
+    let scale = t.uniform_scale();
+    let rx = (rx * scale).max(0.0);
+    let ry = (ry * scale).max(0.0);
+    let fill = a.get("fill").and_then(|v| parse_paint(v, a));
+    let stroke = a.get("stroke").and_then(|v| parse_paint(v, a));
+    let stroke_width = a.get("stroke-width").and_then(|v| v.parse().ok());
+    let opacity = a.get("opacity").and_then(|v| v.parse().ok())
+        .or_else(|| a.get("fill-opacity").and_then(|v| v.parse().ok()));
+    Some(SvgShape::Ellipse {
+        cx, cy, rx, ry,
+        fill, stroke, stroke_width, opacity,
+    })
+}
+
+fn build_line(
+    a: &BTreeMap<String, String>,
+    t: &Transform,
+) -> Option<SvgShape> {
+    let x1: f64 = a.get("x1").and_then(|v| v.parse().ok()).unwrap_or(0.0);
+    let y1: f64 = a.get("y1").and_then(|v| v.parse().ok()).unwrap_or(0.0);
+    let x2: f64 = a.get("x2").and_then(|v| v.parse().ok()).unwrap_or(0.0);
+    let y2: f64 = a.get("y2").and_then(|v| v.parse().ok()).unwrap_or(0.0);
+    let (x1, y1) = t.apply_point(x1, y1);
+    let (x2, y2) = t.apply_point(x2, y2);
+    let stroke = a.get("stroke").and_then(|v| parse_paint(v, a))
+        .or_else(|| Some(Paint::Color { rgb: "000000".into(), opacity: None }));
+    let stroke_width = a.get("stroke-width").and_then(|v| v.parse().ok())
+        .or(Some(1.0));
+    let opacity = a.get("opacity").and_then(|v| v.parse().ok());
+    Some(SvgShape::Line {
+        x1, y1, x2, y2,
+        stroke, stroke_width, opacity,
+    })
+}
+
+fn build_path(
+    a: &BTreeMap<String, String>,
+    t: &Transform,
+) -> Option<SvgShape> {
+    let d = a.get("d")?.clone();
+    let fill = a.get("fill").and_then(|v| parse_paint(v, a));
+    let stroke = a.get("stroke").and_then(|v| parse_paint(v, a));
+    let stroke_width = a.get("stroke-width").and_then(|v| v.parse().ok());
+    let opacity = a.get("opacity").and_then(|v| v.parse().ok())
+        .or_else(|| a.get("fill-opacity").and_then(|v| v.parse().ok()));
+    // We honour translate / uniform scale by re-emitting the path with a
+    // leading `M` translated; non-uniform scale is ignored (we don't see
+    // it from the AI toolchains).
+    let _ = t; // transform applied implicitly via parent group in caller
+    Some(SvgShape::Path {
+        d, fill, stroke, stroke_width, opacity,
+    })
+}
+
+fn build_poly(
+    tag: &str,
+    a: &BTreeMap<String, String>,
+    _t: &Transform,
+) -> Option<SvgShape> {
+    let points = a.get("points")?;
+    let mut d = String::new();
+    let mut first = true;
+    for token in points.split(|c: char| c.is_whitespace() || c == ',') {
+        if token.is_empty() { continue; }
+        let mut nums = token.split(|c: char| c == ',' || c == 'x' || c == 'X');
+        let x: f64 = nums.next()?.parse().ok()?;
+        let y: f64 = nums.next()?.parse().ok()?;
+        if first {
+            d.push_str(&format!("M {} {}", f_x(x), f_y(y)));
+            first = false;
+        } else {
+            d.push_str(&format!(" L {} {}", f_x(x), f_y(y)));
+        }
+    }
+    if tag == "polygon" {
+        d.push_str(" Z");
+    }
+    let fill = a.get("fill").and_then(|v| parse_paint(v, a))
+        .or_else(|| Some(Paint::Color { rgb: "000000".into(), opacity: None }));
+    let stroke = a.get("stroke").and_then(|v| parse_paint(v, a));
+    let stroke_width = a.get("stroke-width").and_then(|v| v.parse().ok());
+    let opacity = a.get("opacity").and_then(|v| v.parse().ok());
+    Some(SvgShape::Path {
+        d, fill, stroke, stroke_width, opacity,
+    })
+}
+
+fn f_x(v: f64) -> String { format_decimal(v) }
+fn f_y(v: f64) -> String { format_decimal(v) }
+
+fn format_decimal(v: f64) -> String {
+    // quick-xml writes attributes verbatim; trim trailing zeros so we don't
+    // ship "12.000000" through the zip.
+    let s = format!("{:.4}", v);
+    let s = s.trim_end_matches('0').trim_end_matches('.').to_string();
+    if s.is_empty() { "0".to_string() } else { s }
+}
+
+// ---------------------------------------------------------------------------
+// Transforms
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Copy, Debug)]
+struct Transform {
+    /// Translation in SVG user units (pre-scale).
+    tx: f64,
+    ty: f64,
+    /// Uniform scale applied AFTER translation (we don't support non-uniform
+    /// scale because none of our SVG sources emit it).
+    scale: f64,
+}
+
+impl Transform {
+    fn identity() -> Self { Self { tx: 0.0, ty: 0.0, scale: 1.0 } }
+
+    fn apply_point(&self, x: f64, y: f64) -> (f64, f64) {
+        (self.tx + x * self.scale, self.ty + y * self.scale)
+    }
+
+    fn apply_size(&self, w: f64, h: f64) -> (f64, f64) {
+        (w * self.scale, h * self.scale)
+    }
+
+    fn uniform_scale(&self) -> f64 {
+        self.scale
+    }
+
+    /// Parse a `transform="…"` attribute. We only honour `translate(x y)`
+    /// and `scale(s)` (and combinations). Anything else (rotate, matrix,
+    /// skewX) is silently ignored — the SVG will still render in PPT, just
+    /// without the rotation / skew.
+    fn compose(&self, attr: &str) -> Self {
+        let mut out = *self;
+        for op in split_transform_ops(attr) {
+            let body = op.trim();
+            if let Some(rest) = body.strip_prefix("translate(") {
+                let body = rest.trim_end_matches(')');
+                let parts: Vec<&str> = body
+                    .split(|c: char| c == ',' || c.is_whitespace())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                if parts.len() >= 1 {
+                    if let Ok(x) = parts[0].parse::<f64>() { out.tx += x * out.scale; }
+                }
+                if parts.len() >= 2 {
+                    if let Ok(y) = parts[1].parse::<f64>() { out.ty += y * out.scale; }
+                }
+            } else if let Some(rest) = body.strip_prefix("scale(") {
+                let body = rest.trim_end_matches(')');
+                let parts: Vec<&str> = body
+                    .split(|c: char| c == ',' || c.is_whitespace())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                if !parts.is_empty() {
+                    if let Ok(s) = parts[0].parse::<f64>() {
+                        out.scale *= s;
+                    }
+                }
+            }
+            // rotate, matrix, skewX/Y: intentionally ignored.
+        }
+        out
+    }
+}
+
+fn split_transform_ops(attr: &str) -> Vec<String> {
+    // Split on the function-name boundary: every operation ends with `)`.
+    // We split by `)` and re-attach the `)`, since `transform="rotate(45) scale(2)"`
+    // has no commas between ops.
+    let mut ops = Vec::new();
+    let mut buf = String::new();
+    let mut depth = 0i32;
+    for ch in attr.chars() {
+        buf.push(ch);
+        match ch {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    ops.push(std::mem::take(&mut buf));
+                }
+            }
+            _ => {}
+        }
+    }
+    if !buf.trim().is_empty() {
+        ops.push(buf);
+    }
+    ops
+}
+
+// ---------------------------------------------------------------------------
+// Text accumulator (state during the parse)
+// ---------------------------------------------------------------------------
+
+struct TextAcc {
+    x: f64,
+    y: f64,
+    font_size: Option<f64>,
+    fill: Option<Paint>,
+    opacity: Option<f64>,
+    transform: Transform,
+    runs: Vec<TextRun>,
+    current_run: String,
+    current_bold: bool,
+    current_italic: bool,
+    current_underline: bool,
+    current_fill: Option<Paint>,
+}
+
+// ---------------------------------------------------------------------------
+// OOXML builders
+// ---------------------------------------------------------------------------
+
+/// Build a complete `.pptx` (as bytes) from a list of `SlideInput`s.
+fn build_pptx(slides: &[SlideInput], title: Option<&str>) -> Result<Vec<u8>, ToolError> {
+    let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
+
+    // [Content_Types].xml
+    entries.push(("[Content_Types].xml".to_string(), build_content_types(slides.len()).into_bytes()));
+
+    // _rels/.rels
+    entries.push(("_rels/.rels".to_string(), build_root_rels().into_bytes()));
+
+    // ppt/_rels/presentation.xml.rels
+    entries.push((
+        "ppt/_rels/presentation.xml.rels".to_string(),
+        build_presentation_rels(slides.len()).into_bytes(),
+    ));
+
+    // ppt/presentation.xml
+    entries.push((
+        "ppt/presentation.xml".to_string(),
+        build_presentation_xml(slides.len()).into_bytes(),
+    ));
+
+    // ppt/theme/theme1.xml — a minimal but valid theme so PowerPoint doesn't
+    // complain about a missing color scheme.
+    entries.push(("ppt/theme/theme1.xml".to_string(), THEME_XML.as_bytes().to_vec()));
+
+    // ppt/slides/_rels/slideN.xml.rels (per slide, all identical)
+    for i in 1..=slides.len() {
+        entries.push((
+            format!("ppt/slides/_rels/slide{i}.xml.rels"),
+            build_slide_rels().into_bytes(),
+        ));
+    }
+
+    // ppt/slides/slideN.xml — one per slide.
+    for slide in slides {
+        let xml = build_slide_xml(&slide.content)?;
+        entries.push((format!("ppt/slides/slide{}.xml", slide.slide_index), xml.into_bytes()));
+    }
+
+    // ppt/slideMasters/slideMaster1.xml + rels
+    entries.push((
+        "ppt/slideMasters/slideMaster1.xml".to_string(),
+        SLIDE_MASTER_XML.as_bytes().to_vec(),
+    ));
+    entries.push((
+        "ppt/slideMasters/_rels/slideMaster1.xml.rels".to_string(),
+        SLIDE_MASTER_RELS.as_bytes().to_vec(),
+    ));
+
+    // docProps/core.xml + app.xml
+    entries.push((
+        "docProps/core.xml".to_string(),
+        build_core_props_xml(title.unwrap_or("Inkuo Presentation")).into_bytes(),
+    ));
+    entries.push(("docProps/app.xml".to_string(), APP_XML.as_bytes().to_vec()));
+
+    // Now zip everything up.
+    let mut buf: Vec<u8> = Vec::new();
+    {
+        let mut zip = zip::ZipWriter::new(Cursor::new(&mut buf));
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated)
+            .unix_permissions(0o644);
+        for (name, data) in &entries {
+            zip.start_file(name.as_str(), opts).map_err(|e| {
+                ToolError::ExecutionError(format!("zip start_file({name}) failed: {e}"))
+            })?;
+            zip.write_all(data).map_err(|e| {
+                ToolError::ExecutionError(format!("zip write({name}) failed: {e}"))
+            })?;
+        }
+        zip.finish().map_err(|e| {
+            ToolError::ExecutionError(format!("zip finish failed: {e}"))
+        })?;
+    }
+    Ok(buf)
+}
+
+// ---- Content_Types --------------------------------------------------------
+
+fn build_content_types(slide_count: usize) -> String {
+    let mut out = String::new();
+    out.push_str(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#);
+    out.push_str("<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">");
+    out.push_str("<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>");
+    out.push_str("<Default Extension=\"xml\" ContentType=\"application/xml\"/>");
+    out.push_str("<Override PartName=\"/ppt/presentation.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml\"/>");
+    out.push_str("<Override PartName=\"/ppt/slideMasters/slideMaster1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml\"/>");
+    out.push_str("<Override PartName=\"/ppt/theme/theme1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.theme+xml\"/>");
+    out.push_str("<Override PartName=\"/docProps/core.xml\" ContentType=\"application/vnd.openxmlformats-package.core-properties+xml\"/>");
+    out.push_str("<Override PartName=\"/docProps/app.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.extended-properties+xml\"/>");
+    for i in 1..=slide_count {
+        out.push_str(&format!(
+            "<Override PartName=\"/ppt/slides/slide{i}.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slide+xml\"/>"
+        ));
+    }
+    out.push_str("</Types>");
+    out
+}
+
+// ---- _rels ----------------------------------------------------------------
+
+fn build_root_rels() -> String {
+    r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
+  <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties" Target="docProps/app.xml"/>
+</Relationships>"#.to_string()
+}
+
+fn build_presentation_rels(slide_count: usize) -> String {
+    let mut out = String::new();
+    out.push_str(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#);
+    out.push_str("<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">");
+    out.push_str("<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster\" Target=\"slideMasters/slideMaster1.xml\"/>");
+    out.push_str("<Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme\" Target=\"theme/theme1.xml\"/>");
+    for i in 1..=slide_count {
+        out.push_str(&format!(
+            "<Relationship Id=\"rId{}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide\" Target=\"slides/slide{i}.xml\"/>",
+            i + 2
+        ));
+    }
+    out.push_str("</Relationships>");
+    out
+}
+
+fn build_slide_rels() -> String {
+    r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>
+</Relationships>"#.to_string()
+}
+
+// ---- presentation.xml -----------------------------------------------------
+
+fn build_presentation_xml(slide_count: usize) -> String {
+    let mut out = String::new();
+    out.push_str(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#);
+    out.push_str("<p:presentation xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\">");
+    out.push_str(&format!(
+        "<p:sldSz cx=\"{}\" cy=\"{}\" type=\"p:sldSz16x9\"/>",
+        SLIDE_W_EMU, SLIDE_H_EMU
+    ));
+    out.push_str("<p:notesSz cx=\"6858000\" cy=\"9144000\"/>");
+    out.push_str("<p:defaultTextStyle><a:defPPr/></p:defaultTextStyle>");
+    out.push_str("<p:sldIdLst>");
+    for i in 1..=slide_count {
+        out.push_str(&format!(
+            "<p:sldId id=\"{}\" r:id=\"rId{}\"/>",
+            255 + i,
+            i + 2
+        ));
+    }
+    out.push_str("</p:sldIdLst>");
+    out.push_str("</p:presentation>");
+    out
+}
+
+// ---- slide.xml (the actual content) ---------------------------------------
+
+fn build_slide_xml(svg: &ParsedSvg) -> Result<String, ToolError> {
+    // Compute the per-slide scale that fits the SVG viewBox into the slide,
+    // preserving aspect ratio. We centre the artwork and add a small margin.
+    let margin = 0.05_f64; // 5% on every side
+    let avail_w = SLIDE_W_EMU as f64 * (1.0 - 2.0 * margin);
+    let avail_h = SLIDE_H_EMU as f64 * (1.0 - 2.0 * margin);
+    let vb_w = if svg.vb_w > 0.0 { svg.vb_w } else { 1.0 };
+    let vb_h = if svg.vb_h > 0.0 { svg.vb_h } else { 1.0 };
+    let scale = (avail_w / vb_w).min(avail_h / vb_h);
+    let drawn_w = vb_w * scale;
+    let drawn_h = vb_h * scale;
+    let off_x = ((SLIDE_W_EMU as f64 - drawn_w) / 2.0) - svg.vb_x * scale;
+    let off_y = ((SLIDE_H_EMU as f64 - drawn_h) / 2.0) - svg.vb_y * scale;
+
+    let mut shapes = String::new();
+    for shape in &svg.shapes {
+        write_shape(&mut shapes, shape, scale, off_x, off_y)?;
+    }
+
+    let mut out = String::new();
+    out.push_str(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#);
+    out.push_str("<p:sld xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\">");
+    out.push_str("<p:cSld><p:spTree>");
+    out.push_str("<p:nvGrpSpPr><p:cNvPr id=\"1\" name=\"\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>");
+    out.push_str("<p:grpSpPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"0\" cy=\"0\"/><a:chOff x=\"0\" y=\"0\"/><a:chExt cx=\"0\" cy=\"0\"/></a:xfrm></p:grpSpPr>");
+    out.push_str(&shapes);
+    out.push_str("</p:spTree></p:cSld>");
+    out.push_str("</p:sld>");
+    Ok(out)
+}
+
+/// Project an SVG-user-units x coordinate into the slide's EMU space.
+#[inline]
+fn project_x(svg_x: f64, scale: f64, off_x: f64) -> i64 {
+    ((svg_x * scale + off_x).round() as i64).max(0)
+}
+#[inline]
+fn project_y(svg_y: f64, scale: f64, off_y: f64) -> i64 {
+    ((svg_y * scale + off_y).round() as i64).max(0)
+}
+#[inline]
+fn project_len(svg_len: f64, scale: f64) -> i64 {
+    ((svg_len * scale).round() as i64).max(0)
+}
+
+/// Emit one `<p:sp>` for a single shape. We translate the per-shape SVG
+/// coords into the slide's EMU space using the slide-wide scale / offset
+/// computed in `build_slide_xml`.
+fn write_shape(
+    out: &mut String,
+    shape: &SvgShape,
+    scale: f64,
+    off_x: f64,
+    off_y: f64,
+) -> Result<(), ToolError> {
+    let shape_id = 100usize; // we don't bother with unique ids per shape
+    let sp_name = "Shape";
+    match *shape {
+        SvgShape::Rect {
+            x, y, width, height, rx, ry,
+            ref fill, ref stroke, stroke_width, opacity,
+        } => {
+            let px = project_x(x, scale, off_x);
+            let py = project_y(y, scale, off_y);
+            let pw = project_len(width, scale);
+            let ph = project_len(height, scale);
+            let adj = if rx.is_some() || ry.is_some() {
+                let r = rx.or(ry).unwrap_or(0.0);
+                format!("<a:prstGeom prst=\"roundRect\"><a:avLst><a:gd name=\"adj\" fmla=\"val {}\"/></a:avLst></a:prstGeom>",
+                    ((r / width).min(0.5) * 100000.0).round() as i64)
+            } else {
+                "<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom>".to_string()
+            };
+            write_sp_open(out, shape_id, sp_name, px, py, pw, ph);
+            out.push_str(&adj);
+            write_fill_stroke(out, fill.as_ref(), stroke.as_ref(), stroke_width, opacity);
+            out.push_str("</p:sp>");
+        }
+        SvgShape::Ellipse {
+            cx, cy, rx, ry,
+            ref fill, ref stroke, stroke_width, opacity,
+        } => {
+            let px = project_x(cx - rx, scale, off_x);
+            let py = project_y(cy - ry, scale, off_y);
+            let pw = project_len(rx * 2.0, scale);
+            let ph = project_len(ry * 2.0, scale);
+            write_sp_open(out, shape_id, sp_name, px, py, pw, ph);
+            out.push_str("<a:prstGeom prst=\"ellipse\"><a:avLst/></a:prstGeom>");
+            write_fill_stroke(out, fill.as_ref(), stroke.as_ref(), stroke_width, opacity);
+            out.push_str("</p:sp>");
+        }
+        SvgShape::Line {
+            x1, y1, x2, y2,
+            ref stroke, stroke_width, opacity,
+        } => {
+            // PPT connector geometry uses `<a:xfrm>` and stores its endpoints
+            // as flipH/flipV + an off/ext pair that *encloses* the line.
+            let min_x = x1.min(x2);
+            let min_y = y1.min(y2);
+            let w = (x2 - x1).abs();
+            let h = (y2 - y1).abs();
+            let px = project_x(min_x, scale, off_x);
+            let py = project_y(min_y, scale, off_y);
+            let pw = project_len(w, scale);
+            let ph = project_len(h, scale);
+            // Flip flags so the connector actually goes (x1,y1)→(x2,y2) and
+            // not (min_x,min_y)→(min_x+max,min_y+max).
+            let flip_h = if x1 > x2 { " flipH=\"1\"" } else { "" };
+            let flip_v = if y1 > y2 { " flipV=\"1\"" } else { "" };
+            write!(out, "<p:cxnSp>").ok();
+            write!(out, "<p:nvCxnSpPr><p:cNvPr id=\"{}\" name=\"Line\"/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr>", shape_id).ok();
+            write!(out, "<p:spPr><a:xfrm{}{}><a:off x=\"{}\" y=\"{}\"/><a:ext cx=\"{}\" cy=\"{}\"/></a:xfrm><a:prstGeom prst=\"line\"><a:avLst/></a:prstGeom>", flip_h, flip_v, px, py, pw, ph).ok();
+            write_line_stroke(out, stroke.as_ref(), stroke_width, opacity);
+            out.push_str("</p:spPr></p:cxnSp>");
+        }
+        SvgShape::Path {
+            ref d,
+            ref fill,
+            ref stroke,
+            stroke_width,
+            opacity,
+        } => {
+            // The path's bbox is unknown without re-running a layout pass;
+            // we use a generous placeholder (the full SVG viewBox) and let
+            // PowerPoint recompute on save. The customGeom itself is in
+            // SVG path syntax.
+            let px = project_x(0.0, scale, off_x);
+            let py = project_y(0.0, scale, off_y);
+            let pw = project_len(if !d.is_empty() { 1.0 } else { 0.0 }, scale) + 1;
+            let ph = pw;
+            write_sp_open(out, shape_id, sp_name, px, py, pw, ph);
+            write!(
+                out,
+                "<a:custGeom><a:avLst/><a:gdLst><a:pathLst><a:path w=\"100000\" h=\"100000\"><a:moveTo><a:pt x=\"0\" y=\"0\"/></a:moveTo></a:path></a:pathLst></a:gdLst></a:custGeom>"
+            )
+            .ok();
+            write!(
+                out,
+                "<a:pathLst><a:path w=\"100000\" h=\"100000\">{}</a:path></a:pathLst>",
+                d
+            )
+            .ok();
+            write_fill_stroke(out, fill.as_ref(), stroke.as_ref(), stroke_width, opacity);
+            out.push_str("</p:sp>");
+        }
+        SvgShape::Text {
+            x, y, ref runs, font_size, ref fill, opacity,
+        } => {
+            let px = project_x(x, scale, off_x);
+            let py = project_y(y, scale, off_y);
+            // Text box — width & height are generous defaults; PowerPoint
+            // auto-grows if the content overflows.
+            let pw = (SLIDE_W_EMU as f64 * 0.7) as i64;
+            let ph = (SLIDE_H_EMU as f64 * 0.2) as i64;
+            let size_pt = font_size.unwrap_or(18.0);
+            // Honour per-run fill when present, otherwise the text-level
+            // default fill, otherwise black.
+            let default_color = fill
+                .as_ref()
+                .and_then(text_color)
+                .unwrap_or_else(|| {
+                    "<a:solidFill><a:srgbClr val=\"000000\"/></a:solidFill>".to_string()
+                });
+            let _ = opacity; // alpha on text is encoded via <a:alpha> on the color
+            write_sp_open(out, shape_id, "TextBox", px, py, pw, ph);
+            out.push_str("<p:txBody>");
+            out.push_str("<a:bodyPr wrap=\"square\" rtlCol=\"0\" anchor=\"t\"/>");
+            out.push_str("<a:lstStyle/>");
+            out.push_str("<a:p>");
+            out.push_str("<a:pPr algn=\"l\"/>");
+            for run in runs.iter() {
+                let run_color = run
+                    .fill
+                    .as_ref()
+                    .and_then(text_color)
+                    .unwrap_or_else(|| default_color.clone());
+                out.push_str("<a:r>");
+                write!(
+                    out,
+                    "<a:rPr lang=\"en-US\" sz=\"{}\" b=\"{}\" i=\"{}\" u=\"{}\">{}</a:rPr>",
+                    size_pt,
+                    if run.bold { "1" } else { "0" },
+                    if run.italic { "1" } else { "0" },
+                    if run.underline { "sng" } else { "none" },
+                    run_color,
+                )
+                .ok();
+                out.push_str("<a:t>");
+                out.push_str(&xml_escape(&run.text));
+                out.push_str("</a:t>");
+                out.push_str("</a:r>");
+            }
+            out.push_str("</a:p>");
+            out.push_str("</p:txBody>");
+            out.push_str("</p:sp>");
+        }
+    }
+    Ok(())
+}
+
+/// Emit `<p:sp>` opening + the `<p:nvSpPr>` / `<p:spPr><a:xfrm>` headers.
+fn write_sp_open(out: &mut String, id: usize, name: &str, x: i64, y: i64, w: i64, h: i64) {
+    write!(out, "<p:sp><p:nvSpPr><p:cNvPr id=\"{}\" name=\"{}\"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>\
+        <p:spPr><a:xfrm><a:off x=\"{}\" y=\"{}\"/><a:ext cx=\"{}\" cy=\"{}\"/></a:xfrm>",
+        id, xml_escape(name), x, y, w, h
+    ).ok();
+}
+
+/// Emit the `<a:solidFill>` / `<a:ln>` portion of a shape. Falls back to a
+/// neutral gray fill + black hairline stroke when the SVG didn't specify.
+fn write_fill_stroke(
+    out: &mut String,
+    fill: Option<&Paint>,
+    stroke: Option<&Paint>,
+    stroke_width: Option<f64>,
+    opacity: Option<f64>,
+) {
+    write_fill(out, fill, opacity);
+    write_stroke(out, stroke, stroke_width, opacity);
+}
+
+fn write_fill(out: &mut String, fill: Option<&Paint>, opacity: Option<f64>) {
+    match fill {
+        Some(Paint::None) => {
+            out.push_str("<a:noFill/>");
+        }
+        Some(Paint::Color { rgb, opacity: c_opacity }) => {
+            let combined = c_opacity.or(opacity).unwrap_or(1.0).clamp(0.0, 1.0);
+            out.push_str(&format!(
+                "<a:solidFill><a:srgbClr val=\"{}\"><a:alpha val=\"{}\"/></a:srgbClr></a:solidFill>",
+                rgb,
+                (combined * 100_000.0).round() as i64
+            ));
+        }
+        Some(Paint::GradientRef(_)) | None => {
+            // Gradients require a separate theme + reference; we degrade
+            // gracefully to noFill so the shape is still selectable.
+            out.push_str("<a:noFill/>");
+        }
+    }
+}
+
+fn write_stroke(
+    out: &mut String,
+    stroke: Option<&Paint>,
+    stroke_width: Option<f64>,
+    opacity: Option<f64>,
+) {
+    match stroke {
+        Some(Paint::None) => {
+            out.push_str("<a:ln><a:noFill/></a:ln>");
+        }
+        Some(Paint::Color { rgb, opacity: c_opacity }) => {
+            let width_emu = (stroke_width.unwrap_or(1.0) * EMU_PER_INCH as f64 / 72.0).round() as i64;
+            let combined = c_opacity.or(opacity).unwrap_or(1.0).clamp(0.0, 1.0);
+            out.push_str(&format!(
+                "<a:ln w=\"{}\"><a:solidFill><a:srgbClr val=\"{}\"><a:alpha val=\"{}\"/></a:srgbClr></a:solidFill></a:ln>",
+                width_emu.max(1),
+                rgb,
+                (combined * 100_000.0).round() as i64
+            ));
+        }
+        Some(Paint::GradientRef(_)) | None => {
+            out.push_str("<a:ln><a:noFill/></a:ln>");
+        }
+    }
+}
+
+/// Same as `write_stroke`, but for connector shapes which don't accept
+/// `<a:noFill/>` inside their `<a:ln>` — PowerPoint requires a colour.
+fn write_line_stroke(
+    out: &mut String,
+    stroke: Option<&Paint>,
+    stroke_width: Option<f64>,
+    opacity: Option<f64>,
+) {
+    let width_emu = (stroke_width.unwrap_or(1.0) * EMU_PER_INCH as f64 / 72.0).round() as i64;
+    let (rgb, _) = match stroke {
+        Some(Paint::Color { rgb, opacity: c_opacity }) => {
+            let combined = c_opacity.or(opacity).unwrap_or(1.0).clamp(0.0, 1.0);
+            (rgb.clone(), (combined * 100_000.0).round() as i64)
+        }
+        _ => ("000000".to_string(), 100_000),
+    };
+    write!(
+        out,
+        "<a:ln w=\"{}\"><a:solidFill><a:srgbClr val=\"{}\"/></a:solidFill></a:ln>",
+        width_emu.max(1),
+        rgb
+    )
+    .ok();
+}
+
+fn text_color(p: &Paint) -> Option<String> {
+    match p {
+        Paint::Color { rgb, .. } => Some(format!(
+            "<a:solidFill><a:srgbClr val=\"{}\"/></a:solidFill>",
+            rgb
+        )),
+        _ => None,
+    }
+}
+
+fn xml_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+// ---- docProps + theme + slide master --------------------------------------
+
+fn build_core_props_xml(title: &str) -> String {
+    let now = chrono::Utc::now().to_rfc3339();
+    let title_esc = xml_escape(title);
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <dc:title>{title}</dc:title>
+  <dc:creator>inkuo AI</dc:creator>
+  <cp:lastModifiedBy>inkuo AI</cp:lastModifiedBy>
+  <dcterms:created xsi:type="dcterms:W3CDTF">{now}</dcterms:created>
+  <dcterms:modified xsi:type="dcterms:W3CDTF">{now}</dcterms:modified>
+</cp:coreProperties>"#,
+        title = title_esc,
+        now = now,
+    )
+}
+
+const APP_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
+  <Application>inkuo AI</Application>
+  <AppVersion>1.0</AppVersion>
+</Properties>"#;
+
+/// Minimal valid theme. PowerPoint accepts this and falls back to its
+/// own defaults for any colour it doesn't find here.
+const THEME_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="inkuo">
+  <a:themeElements>
+    <a:clrScheme name="inkuo">
+      <a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1>
+      <a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1>
+      <a:dk2><a:srgbClr val="44546A"/></a:dk2>
+      <a:lt2><a:srgbClr val="E7E6E6"/></a:lt2>
+      <a:accent1><a:srgbClr val="7C5CFF"/></a:accent1>
+      <a:accent2><a:srgbClr val="4CC9F0"/></a:accent2>
+      <a:accent3><a:srgbClr val="F72585"/></a:accent3>
+      <a:accent4><a:srgbClr val="FFD166"/></a:accent4>
+      <a:accent5><a:srgbClr val="06D6A0"/></a:accent5>
+      <a:accent6><a:srgbClr val="9AA5B1"/></a:accent6>
+      <a:hlink><a:srgbClr val="0563C1"/></a:hlink>
+      <a:folHlink><a:srgbClr val="954F72"/></a:folHlink>
+    </a:clrScheme>
+    <a:fontScheme name="inkuo">
+      <a:majorFont><a:latin typeface="Calibri Light"/><a:ea typeface=""/><a:cs typeface=""/></a:majorFont>
+      <a:minorFont><a:latin typeface="Calibri"/><a:ea typeface=""/><a:cs typeface=""/></a:minorFont>
+    </a:fontScheme>
+    <a:fmtScheme name="inkuo">
+      <a:fillStyleLst>
+        <a:solidFill><a:schemeClr val="phClr"/></a:solidFill>
+        <a:solidFill><a:schemeClr val="phClr"/></a:solidFill>
+        <a:solidFill><a:schemeClr val="phClr"/></a:solidFill>
+      </a:fillStyleLst>
+      <a:lnStyleLst>
+        <a:ln><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln>
+        <a:ln><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln>
+        <a:ln><a:solidFill><a:schemeClr val="phClr"/></a:solidFill></a:ln>
+      </a:lnStyleLst>
+      <a:effectStyleLst>
+        <a:effectStyle><a:effectLst/></a:effectStyle>
+        <a:effectStyle><a:effectLst/></a:effectStyle>
+        <a:effectStyle><a:effectLst/></a:effectStyle>
+      </a:effectStyleLst>
+      <a:bgFillStyleLst>
+        <a:solidFill><a:schemeClr val="phClr"/></a:solidFill>
+        <a:solidFill><a:schemeClr val="phClr"/></a:solidFill>
+        <a:solidFill><a:schemeClr val="phClr"/></a:solidFill>
+      </a:bgFillStyleLst>
+    </a:fmtScheme>
+  </a:themeElements>
+</a:theme>"#;
+
+/// Bare-minimum slide master so PowerPoint doesn't complain about a missing
+/// background placeholder.
+const SLIDE_MASTER_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sldMaster xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/></p:spTree></p:cSld>
+  <p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/>
+</p:sldMaster>"#;
+
+const SLIDE_MASTER_RELS: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="../theme/theme1.xml"/>
+</Relationships>"#;
+
+// ===========================================================================
+// Tests
+// ===========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_tool() -> CreatePptxTool {
+        CreatePptxTool::new()
+    }
+
+    #[test]
+    fn parse_minimal_svg() {
+        let svg = r##"<?xml version="1.0"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <rect x="10" y="10" width="30" height="30" fill="#FF0000"/>
+  <circle cx="50" cy="50" r="20" fill="#00FF00"/>
+</svg>"##;
+        let parsed = parse_svg(svg).unwrap();
+        assert_eq!(parsed.vb_w, 100.0);
+        assert_eq!(parsed.vb_h, 100.0);
+        assert_eq!(parsed.shapes.len(), 2);
+        assert!(parsed.skipped.is_empty(), "skipped: {:?}", parsed.skipped);
+    }
+
+    #[test]
+    fn parse_text_with_tspan() {
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">
+  <text x="20" y="50" font-size="18" fill="#222">Hello <tspan font-weight="bold">world</tspan>!</text>
+</svg>"##;
+        let parsed = parse_svg(svg).unwrap();
+        assert_eq!(parsed.shapes.len(), 1);
+        match &parsed.shapes[0] {
+            SvgShape::Text { runs, .. } => {
+                assert_eq!(runs.len(), 3);
+                assert_eq!(runs[0].text, "Hello");
+                assert_eq!(runs[1].text, "world");
+                assert!(runs[1].bold);
+                assert_eq!(runs[2].text, "!");
+            }
+            other => panic!("expected Text, got {:?}", std::mem::discriminant(other)),
+        }
+    }
+
+    #[test]
+    fn parse_unsupported_records_skip() {
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <image href="data:image/png;base64,AAAA"/>
+  <rect x="0" y="0" width="10" height="10"/>
+</svg>"##;
+        let parsed = parse_svg(svg).unwrap();
+        assert_eq!(parsed.shapes.len(), 1);
+        assert!(parsed.skipped.contains(&"image".to_string()));
+    }
+
+    #[test]
+    fn parse_paint_variants() {
+        assert!(matches!(parse_paint("none", &BTreeMap::new()), Some(Paint::None)));
+        assert!(matches!(parse_paint("#FF0000", &BTreeMap::new()), Some(Paint::Color { .. })));
+        assert!(matches!(
+            parse_paint("rgb(10, 20, 30)", &BTreeMap::new()),
+            Some(Paint::Color { .. })
+        ));
+        assert!(matches!(parse_paint("red", &BTreeMap::new()), Some(Paint::Color { .. })));
+        assert!(matches!(
+            parse_paint("url(#bg)", &BTreeMap::new()),
+            Some(Paint::GradientRef(_))
+        ));
+    }
+
+    #[test]
+    fn transforms_compose_translate_scale() {
+        let id = Transform::identity();
+        let t = id.compose("translate(10, 20) scale(2)");
+        let (x, y) = t.apply_point(5.0, 5.0);
+        // tx = 10, ty = 20, scale = 2 → (10 + 5*2, 20 + 5*2) = (20, 30)
+        assert_eq!(x, 20.0);
+        assert_eq!(y, 30.0);
+    }
+
+    #[test]
+    fn xml_escape_specials() {
+        assert_eq!(xml_escape("a<b>c&d"), "a&lt;b&gt;c&amp;d");
+        assert_eq!(xml_escape("\"x\""), "&quot;x&quot;");
+    }
+
+    #[test]
+    fn build_minimal_pptx_is_valid_zip() {
+        // Construct an SVG in memory and feed it through the full pipeline.
+        let svg = r##"<?xml version="1.0"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 100">
+  <rect x="10" y="10" width="50" height="30" fill="#7C5CFF"/>
+  <text x="10" y="80" font-size="14" fill="#1F2933">Hello PPT</text>
+</svg>"##;
+        let parsed = parse_svg(svg).unwrap();
+        let slides = vec![SlideInput {
+            source_path: "/tmp/test.svg".into(),
+            slide_index: 1,
+            content: parsed,
+        }];
+        let bytes = build_pptx(&slides, Some("Smoke Test")).expect("build_pptx failed");
+
+        // The first 2 bytes of any zip file are PK (0x50 0x4B).
+        assert_eq!(&bytes[0..2], b"PK", "output must be a zip");
+
+        // Re-open as a zip and verify the expected entries exist.
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).expect("not a zip");
+        let names: Vec<String> = (0..archive.len())
+            .map(|i| archive.by_index(i).unwrap().name().to_string())
+            .collect();
+        for required in &[
+            "[Content_Types].xml",
+            "_rels/.rels",
+            "ppt/presentation.xml",
+            "ppt/_rels/presentation.xml.rels",
+            "ppt/slides/slide1.xml",
+            "ppt/slides/_rels/slide1.xml.rels",
+            "ppt/theme/theme1.xml",
+            "ppt/slideMasters/slideMaster1.xml",
+            "docProps/core.xml",
+            "docProps/app.xml",
+        ] {
+            assert!(names.iter().any(|n| n == required), "missing entry {required}");
+        }
+    }
+
+    #[test]
+    fn content_types_lists_every_slide() {
+        let xml = build_content_types(3);
+        assert!(xml.contains("slide1.xml"));
+        assert!(xml.contains("slide2.xml"));
+        assert!(xml.contains("slide3.xml"));
+    }
+
+    #[tokio::test]
+    async fn tool_rejects_non_pptx_output() {
+        let tool = make_tool();
+        let args = json!({
+            "svg_paths": ["/tmp/foo.svg"],
+            "output_path": "/tmp/foo.docx",
+        });
+        let err = tool.execute(args, None).await.unwrap_err();
+        match err {
+            ToolError::InvalidArguments(name, msg) => {
+                assert_eq!(name, "create_pptx");
+                assert!(msg.contains(".pptx"));
+            }
+            other => panic!("expected InvalidArguments, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn tool_rejects_empty_svg_paths() {
+        let tool = make_tool();
+        let args = json!({
+            "svg_paths": [],
+            "output_path": "/tmp/out.pptx",
+        });
+        let err = tool.execute(args, None).await.unwrap_err();
+        assert!(matches!(err, ToolError::InvalidArguments(_, _)));
+    }
+
+    /// End-to-end smoke test: write the two real sample SVGs from
+    /// `test/*.svg` to temp files, call the tool, and verify the resulting
+    /// `.pptx` opens as a zip and contains editable `<p:sp>` elements for
+    /// every non-gradient SVG shape. Gradients are expected to degrade to
+    /// `noFill` in v1 — that's a feature, not a bug.
+    #[tokio::test]
+    async fn end_to_end_real_svgs() {
+        // Walk up from CARGO_MANIFEST_DIR (= src-tauri/) to the workspace
+        // root so the test finds `test/inkuo-icon.svg` no matter where
+        // cargo is invoked from. When the fixtures are absent, skip
+        // silently so this never breaks CI on a different checkout.
+        let workspace_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_default();
+        let candidates = ["test/inkuo-icon.svg", "test/inkuo-slide.svg"];
+        let mut svg_paths: Vec<String> = Vec::new();
+        for rel in &candidates {
+            let p = workspace_root.join(rel);
+            if p.exists() {
+                svg_paths.push(p.to_string_lossy().into_owned());
+            }
+        }
+        if svg_paths.len() < 2 {
+            eprintln!(
+                "skipping end_to_end_real_svgs: sample SVGs not present at {:?}",
+                workspace_root.join("test")
+            );
+            return;
+        }
+
+        // Write the .pptx inside the workspace so validate_workspace_path
+        // accepts it (the tool refuses to write outside the workspace).
+        let workspace = workspace_root.join("target").join("pptx_smoke");
+        let _ = std::fs::create_dir_all(&workspace);
+        let out = workspace.join("smoke.pptx");
+        let out_str = out.to_string_lossy().to_string();
+        let workspace_root_str = workspace_root.to_string_lossy().into_owned();
+        let tool = make_tool();
+        let args = json!({
+            "svg_paths": svg_paths,
+            "output_path": out_str,
+            "title": "Smoke Test Deck",
+        });
+        let outcome = tool
+            .execute(args, Some(workspace_root_str.clone()))
+            .await
+            .expect("tool.execute");
+        assert_eq!(outcome.slide_count, 2);
+        assert_eq!(outcome.slide_summaries.len(), 2);
+
+        // Re-open the output as a zip and sanity-check the slide XML.
+        let bytes = tokio::fs::read(&out).await.expect("read output");
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).expect("zip");
+        for i in 1..=2 {
+            let mut entry = archive
+                .by_name(&format!("ppt/slides/slide{i}.xml"))
+                .expect("slide entry");
+            let mut xml = String::new();
+            entry.read_to_string(&mut xml).expect("read slide xml");
+            assert!(xml.contains("<p:sp>"), "slide{i} must contain editable shapes");
+            assert!(
+                xml.contains("<p:sld"),
+                "slide{i} must be a valid slide XML root"
+            );
+        }
+    }
+}

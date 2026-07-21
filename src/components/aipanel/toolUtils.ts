@@ -18,6 +18,7 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   inspect_office: '检查 Office 文件',
   // Image / vector tools
   create_svg: '生成 SVG 图片',
+  create_pptx: '生成 PPT',
   // Meta / sub-agent tools
   get_tool_help: '加载工具帮助',
   delegate_to: '委派子代理',
@@ -28,6 +29,7 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
 const EXPERT_DISPLAY_NAMES: Record<string, string> = {
   office_word_expert: 'Word 文档专家',
   office_excel_expert: 'Excel 文档专家',
+  office_pptx_expert: 'PPT 演示专家',
   md_writer: 'Markdown 写作专家',
   researcher: '调研员',
   batch_editor: '批量编辑员',
@@ -58,6 +60,7 @@ export const FILE_MODIFICATION_TOOLS = new Set([
   'create_word_doc',
   'modify_excel',
   'create_excel',
+  'create_pptx',
 ]);
 
 export const PREVIEW_STRING_KEYS = new Set([
@@ -173,6 +176,10 @@ const TOOL_FIELD_LABELS: Record<string, ToolField[]> = {
     { key: 'description', label: '描述' },
     { key: 'output_path', label: '保存到' },
     { key: 'aspect_ratio', label: '比例' },
+  ],
+  create_pptx: [
+    { key: 'output_path', label: '保存到' },
+    { key: 'title', label: '标题' },
   ],
 };
 

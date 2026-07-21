@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" width="1280" height="720">
+  <defs>
+    <linearGradient id="bg4" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0f0f23"/>
+      <stop offset="100%" style="stop-color:#1a1a3e"/>
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="720" fill="url(#bg4)"/>
+  <text x="80" y="110" font-family="system-ui, -apple-system, sans-serif" font-size="36" font-weight="bold" fill="#ffffff">多格式编辑器</text>
+  <line x1="80" y1="125" x2="500" y2="125" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>
+  
+  <!-- 3x3 grid of editor cards -->
+  <!-- Row 1 -->
+  <rect x="80" y="170" width="350" height="140" rx="10" fill="rgba(0,210,255,0.06)" stroke="rgba(0,210,255,0.2)" stroke-width="1"/>
+  <text x="110" y="210" font-family="system-ui, -apple-system, sans-serif" font-size="18" font-weight="bold" fill="#00d2ff">Markdown</text>
+  <text x="110" y="235" font-family="system-ui, -apple-system, sans-serif" font-size="14" fill="#b0c4d8">所见即所得的 Markdown 编辑</text>
+  <text x="110" y="258" font-family="system-ui, -apple-system, sans-serif" font-size="14" fill="#b0c4d8">实时预览 · 扩展语法（GFM）</text>
+  <text x="110" y="281" font-family="system-ui, -apple-system, sans-serif" font-size="14" fill="#b0c4d8">代码高亮 · 数学公式</text>
+
+  <rect x="465" y="170" width="350" height="140" rx="10" fill="rgba(58,123,213,0.06)" stroke="rgba(58,123,213,0.2)" stroke-width="1"/>
+  <text x="495" y="210" font-family="system-ui, -apple-system, sans-serif" font-size="18" font-weight="bold" fill="#5a9be5">Word 文档</text>
+  <text x="495" y="235" font-family="system-ui, -apple-system, sans-serif" font-size="14" fill="#b0c4d8">基于 ProseMirror 的富文本编辑</text>
+  <text x="495" y="258" font-family="system-ui, -apple-system, sans-serif" font-size="14" fill="#b0c4d8">完整样式支持 · 段落/表格</text>
+  <text x="495" y="281" font-family="system-ui, -apple-system, sans-serif" font-size="14" fill="#b0c4d8">页眉页脚 · 多节布局</text>
+
+  <rect x="850" y="170" width="350" height="140" rx="10" fill="rgba(100,200,150,0.06)" stroke="rgba(100,200,150,0.2)" stroke-width="1"/>
+  <text x="880" y="210" font-family="system-ui, -apple-system, sans-serif" font-size="18" font-weight="bold" fill="#6cc8a0">Excel 电子表格</text>
+  <text x="880" y="235" font-family="system-ui, -apple-system, sans-serif" font-size="14" fill="#b0c4d8">基于 FortuneSheet 的表格引擎</text>
+  <text x="880" y="258" font-family="system-ui, -apple-system, sans-serif" font-size="14" fill="#b0c4d8">公式支持 · 数据操作</text>
+  <text x="880" y="281" font-family="system-ui, -apple-system, sans-serif" font-size="14" fill="#b0c4d8">合并单元格 · 样式设置</text>
+
+  <!-- Row 2 -->
+  <rect x="80" y="340" width="350" height="140" rx="10" fill="rgba(200,150,80,0.06)" stroke="rgba(200,150,80,0.2)" stroke-width="1"/>
+  <text x="110" y="380" font-family="system-ui, -apple-system, sans-serif" font-size="18" font-weight="bold" fill="#c8a050">代码编辑器</text>
+  <text x="110" y="405" font-family="system-ui, -apple-system, sans-serif" font-size="14" fill="#b0c4d8">基于 CodeMirror</text>
+  <text x="110" y="428" font-family="system-ui, -apple-system, sans-serif" font-size="14" fill="#b0c4d8">20+ 编程语言语法高亮</text>
+  <text x="110" y="451" font-family="system-ui, -apple-system, sans-serif" font-size="14" fill="#b0c4d8">代码补全 · 搜索替换</text>
+
+  <rect x="465" y="340" width="350" height="140" rx="10" fill="rgba(150,100,200,0.06)" stroke="rgba(150,100,200,0.2)" stroke-width="1"/>
+  <text x="495" y="380" font-family="system-ui, -apple-system, sans-serif" font-size="18" font-weight="bold" fill="#9664c8">PDF 阅读器</text>
+  <text x="495" y="405" font-family="system-ui, -apple-system, sans-serif" font-size="14" fill="#b0c4d8">内嵌 pdf.js 引擎</text>
+  <text x="495" y="428" font-family="system-ui, -apple-system, sans-serif" font-size="14" fill="#b0c4d8">流畅翻页 · 文本选择</text>
+  <text x="495" y="451" font-family="system-ui, -apple-system, sans-serif" font-size="14" fill="#b0c4d8">支持大文件分页加载</text>
+
+  <rect x="850" y="340" width="350" height="140" rx="10" fill="rgba(200,80,120,0.06)" stroke="rgba(200,80,120,0.2)" stroke-width="1"/>
+  <text x="880" y="380" font-family="system-ui, -apple-system, sans-serif" font-size="18" font-weight="bold" fill="#c85078">SVG 图形编辑器</text>
+  <text x="880" y="405" font-family="system-ui, -apple-system, sans-serif" font-size="14" fill="#b0c4d8">原生 SVG 编辑能力</text>
+  <text x="880" y="428" font-family="system-ui, -apple-system, sans-serif" font-size="14" fill="#b0c4d8">矢量图形 · 缩放不失真</text>
+  <text x="880" y="451" font-family="system-ui, -apple-system, sans-serif" font-size="14" fill="#b0c4d8">可导出为标准 SVG</text>
+
+  <!-- Bottom note -->
+  <rect x="80" y="530" width="1120" height="50" rx="8" fill="rgba(255,255,255,0.04)" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>
+  <text x="640" y="560" font-family="system-ui, -apple-system, sans-serif" font-size="15" fill="#7090b0" text-anchor="middle">统一的标签页管理 · 拖拽排序 · 智能文件类型识别 · 自动保存</text>
+</svg>

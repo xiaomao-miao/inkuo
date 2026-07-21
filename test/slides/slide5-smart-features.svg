@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" width="1280" height="720">
+  <defs>
+    <linearGradient id="bg5" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0f0f23"/>
+      <stop offset="100%" style="stop-color:#1a1a3e"/>
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="720" fill="url(#bg5)"/>
+  <text x="80" y="110" font-family="system-ui, -apple-system, sans-serif" font-size="36" font-weight="bold" fill="#ffffff">智能特性</text>
+  <line x1="80" y1="125" x2="400" y2="125" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>
+
+  <!-- Left: Smart diff -->
+  <rect x="80" y="170" width="540" height="240" rx="12" fill="rgba(0,210,255,0.04)" stroke="rgba(0,210,255,0.2)" stroke-width="1.5"/>
+  <rect x="80" y="170" width="540" height="44" rx="12" fill="rgba(0,210,255,0.08)"/>
+  <text x="110" y="198" font-family="system-ui, -apple-system, sans-serif" font-size="20" font-weight="bold" fill="#00d2ff">智能差异对比</text>
+  
+  <text x="110" y="250" font-family="system-ui, -apple-system, sans-serif" font-size="15" fill="#c0d0e8">AI 修改建议以行级差异对比呈现</text>
+  <text x="110" y="280" font-family="system-ui, -apple-system, sans-serif" font-size="15" fill="#c0d0e8">逐行高亮显示增加/删除/修改</text>
+  <text x="110" y="310" font-family="system-ui, -apple-system, sans-serif" font-size="15" fill="#c0d0e8">用户可逐条审阅、接受或拒绝</text>
+  <text x="110" y="340" font-family="system-ui, -apple-system, sans-serif" font-size="15" fill="#c0d0e8">完全掌控编辑过程，安全透明</text>
+  <text x="110" y="375" font-family="system-ui, -apple-system, sans-serif" font-size="13" fill="#6090b0">支持 Markdown、Word、代码等多种格式的差异对比</text>
+
+  <!-- Right: Knowledge base -->
+  <rect x="660" y="170" width="540" height="240" rx="12" fill="rgba(100,200,150,0.04)" stroke="rgba(100,200,150,0.2)" stroke-width="1.5"/>
+  <rect x="660" y="170" width="540" height="44" rx="12" fill="rgba(100,200,150,0.08)"/>
+  <text x="690" y="198" font-family="system-ui, -apple-system, sans-serif" font-size="20" font-weight="bold" fill="#6cc8a0">知识库系统</text>
+  
+  <text x="690" y="250" font-family="system-ui, -apple-system, sans-serif" font-size="15" fill="#c0d0e8">工作区语义知识库构建</text>
+  <text x="690" y="280" font-family="system-ui, -apple-system, sans-serif" font-size="15" fill="#c0d0e8">自动文档索引与向量化</text>
+  <text x="690" y="310" font-family="system-ui, -apple-system, sans-serif" font-size="15" fill="#c0d0e8">智能语义检索（相似度搜索）</text>
+  <text x="690" y="340" font-family="system-ui, -apple-system, sans-serif" font-size="15" fill="#c0d0e8">上下文感知的 AI 问答</text>
+  <text x="690" y="375" font-family="system-ui, -apple-system, sans-serif" font-size="13" fill="#6090b0">支持多种嵌入模型：bge-small/large-zh</text>
+
+  <!-- Bottom: Cloud features -->
+  <rect x="80" y="450" width="1120" height="150" rx="12" fill="rgba(58,123,213,0.04)" stroke="rgba(58,123,213,0.2)" stroke-width="1.5"/>
+  <rect x="80" y="450" width="1120" height="44" rx="12" fill="rgba(58,123,213,0.08)"/>
+  <text x="110" y="478" font-family="system-ui, -apple-system, sans-serif" font-size="20" font-weight="bold" fill="#5a9be5">云服务与模型支持</text>
+
+  <text x="110" y="520" font-family="system-ui, -apple-system, sans-serif" font-size="15" fill="#c0d0e8">inkuo Cloud 集成 · 多模型提供商切换（OpenAI / DeepSeek / Ollama 等）</text>
+  <text x="110" y="550" font-family="system-ui, -apple-system, sans-serif" font-size="15" fill="#c0d0e8">可配置的 API 设置 · 温度/最大 Token 参数 · 灵活的模型路由</text>
+</svg>

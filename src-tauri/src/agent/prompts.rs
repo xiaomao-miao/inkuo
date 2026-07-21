@@ -52,6 +52,20 @@ pub const PROFILES: &[ProfileDescriptor] = &[
         max_iterations: 50,
     },
     ProfileDescriptor {
+        name: "office_pptx_expert",
+        label: "PowerPoint Expert",
+        system_prompt: include_str!("../../prompts/subagents/office_pptx_expert.md"),
+        // Packs pre-existing SVGs into an editable .pptx. One tool — no
+        // incremental edit API in v1; users re-author the source SVGs and
+        // re-call.
+        tools: &[
+            "read_file", "write_file",
+            "list_dir", "glob", "grep",
+            "create_pptx",
+        ],
+        max_iterations: 50,
+    },
+    ProfileDescriptor {
         name: "office_excel_expert",
         label: "Excel Spreadsheet Expert",
         system_prompt: include_str!("../../prompts/subagents/office_excel_expert.md"),
@@ -150,6 +164,7 @@ pub const TOOL_SPECS: &[(&str, &str)] = &[
     ("general",  include_str!("../../prompts/tool_specs/general.md")),
     ("word",     include_str!("../../prompts/tool_specs/word.md")),
     ("excel",    include_str!("../../prompts/tool_specs/excel.md")),
+    ("pptx",     include_str!("../../prompts/tool_specs/pptx.md")),
     ("markdown", include_str!("../../prompts/tool_specs/markdown.md")),
     ("media",    include_str!("../../prompts/tool_specs/media.md")),
     ("svg",      include_str!("../../prompts/tool_specs/svg.md")),

@@ -276,6 +276,7 @@ mod todo_tools; // update_todo (read-only meta-tool; see agent_loop::try_handle_
 mod plan_tools;  // create_plan  (read-only meta-tool; see agent_loop::try_handle_meta_tool)
 mod mermaid_tools; // render_mermaid  (in-process merman renderer, mermaid.js 11.15 parity)
 mod svg_tools;  // create_svg  (AI-authored standalone .svg files)
+mod pptx_tools; // create_pptx (packs SVGs into editable .pptx; see office_pptx_expert)
 mod web_search_tool; // web_search (external encyclopedia lookup; today Baike)
 mod media_tools; // read_image / read_pdf  (binary workspace files for multimodal LLMs)
 pub mod ask_user_tools; // ask_user   (meta-tool; see agent_loop::try_handle_meta_tool)
@@ -292,6 +293,7 @@ pub use todo_tools::{UpdateTodoTool, TodoItem};
 pub use plan_tools::{CreatePlanTool, CreatePlanArgs, PlanFileTouch};
 pub use mermaid_tools::RenderMermaidTool;
 pub use svg_tools::{CreateSvgTool, CreateSvgOutcome};
+pub use pptx_tools::{CreatePptxTool, CreatePptxOutcome};
 pub use web_search_tool::WebSearchTool;
 pub use ask_user_tools::AskUserTool;
 pub use media_tools::{ReadImageTool, ReadPdfTool};
@@ -314,6 +316,7 @@ pub enum ToolExecutor {
     InspectOffice(office_tools::InspectOfficeTool),
     RenderMermaid(mermaid_tools::RenderMermaidTool),
     CreateSvg(svg_tools::CreateSvgTool),
+    CreatePptx(pptx_tools::CreatePptxTool),
     DatabaseSearch(database_tools::DatabaseSearchTool),
     WebSearch(web_search_tool::WebSearchTool),
     ReadImage(media_tools::ReadImageTool),
@@ -346,6 +349,7 @@ impl ToolExecutor {
             ToolExecutor::InspectOffice(_) => "inspect_office",
             ToolExecutor::RenderMermaid(_) => "render_mermaid",
             ToolExecutor::CreateSvg(_) => "create_svg",
+    ToolExecutor::CreatePptx(_) => "create_pptx",
             ToolExecutor::DatabaseSearch(_) => "database_search",
             ToolExecutor::WebSearch(_) => "web_search",
             ToolExecutor::ReadImage(_) => "read_image",
@@ -376,6 +380,7 @@ impl ToolExecutor {
             ToolExecutor::InspectOffice(t) => t.definition(),
             ToolExecutor::RenderMermaid(t) => t.definition(),
             ToolExecutor::CreateSvg(t) => t.definition(),
+    ToolExecutor::CreatePptx(t) => t.definition(),
             ToolExecutor::DatabaseSearch(t) => t.definition(),
             ToolExecutor::WebSearch(t) => t.definition(),
             ToolExecutor::ReadImage(t) => t.definition(),
@@ -424,6 +429,15 @@ impl ToolExecutor {
             // — the frontend can re-parse it if it wants the inline
             // preview.
             ToolExecutor::CreateSvg(t) => {
+                let outcome = t.execute(arguments, workspace).await?;
+                Ok(outcome.output)
+            }
+            // `create_pptx` returns a richer outcome that carries the output
+            // file path (so the registry can stamp `file_path` on the
+            // `ToolResult` and trigger the frontend's `file-written` event).
+            // Convert back to a plain String here; the registry re-stitches
+            // the file_path below in `ToolRegistry::execute`.
+            ToolExecutor::CreatePptx(t) => {
                 let outcome = t.execute(arguments, workspace).await?;
                 Ok(outcome.output)
             }
@@ -565,6 +579,12 @@ impl ToolRegistry {
             // `file-change` event so the sidebar tree refreshes and the
             // in-app SVG viewer can auto-open the new file.
             ToolExecutor::CreateSvg(CreateSvgTool::default()),
+            // `create_pptx` packs a list of `.svg` files into a single
+            // `.pptx` deck where every shape is native OOXML (editable in
+            // PowerPoint / Keynote / WPS). Output lands in the workspace
+            // and triggers the same `file-change` event as the other
+            // file-modifying tools.
+            ToolExecutor::CreatePptx(CreatePptxTool::default()),
             // DatabaseSearchTool added lazily via with_app_handle()
             // `web_search` is registered here with a placeholder tool;
             // `set_app_handle()` swaps in the real implementation once
@@ -652,7 +672,7 @@ impl ToolRegistry {
         // `ToolResult` for the frontend's `file-written` event. Branch on
         // the tool name first so we don't accidentally apply the generic
         // `path` lookup below to either of them.
-        if tool_call.name == "render_mermaid" || tool_call.name == "create_svg" {
+        if tool_call.name == "render_mermaid" || tool_call.name == "create_svg" || tool_call.name == "create_pptx" {
             let output_path = tool_call
                 .arguments
                 .get("output_path")
