@@ -280,6 +280,7 @@ mod pptx_tools; // create_pptx (packs SVGs into editable .pptx; see office_pptx_
 mod pptx_animation_tools; // create_pptx_animation + add_pptx_animation
 mod web_search_tool; // web_search (external encyclopedia lookup; today Baike)
 mod media_tools; // read_image / read_pdf  (binary workspace files for multimodal LLMs)
+pub mod asset_registry; // binary side-channel: stores asset://<id> entries so LLM context never sees base64
 pub mod ask_user_tools; // ask_user   (meta-tool; see agent_loop::try_handle_meta_tool)
 
 pub use file_tools::{ReadFileTool, WriteFileTool, EditFileTool, CreateDirTool, MoveFileTool};

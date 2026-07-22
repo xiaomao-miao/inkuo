@@ -30,10 +30,13 @@
 //! The richer style guide lives in `prompts/tool_specs/svg.md`, loaded on
 //! demand via `get_tool_help`.
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
+use super::asset_registry;
 use super::{validate_workspace_path, ToolDefinition, ToolError, ToolParameters};
 
 /// Structured outcome returned by `CreateSvgTool::execute`. Carries
@@ -96,10 +99,16 @@ impl CreateSvgTool {
              You decide width / height / viewBox yourself — pick the aspect ratio that \
              fits the content. Aesthetics guidelines: limited harmonious palette \
              (3-5 colours), generous whitespace, consistent stroke widths, real \
-             text labels (not paths-as-text), no external references (no <image href=>, \
-             no xlink:href to remote URLs), no scripts. For diagrams prefer simple \
-             geometric primitives (rect / circle / path / line / text) over bitmap \
-             filters. Load `get_tool_help(category=\"svg\")` for the full style guide.",
+             text labels (not paths-as-text), no external references (no <image href= to \
+             remote URLs, no xlink:href to remote URLs), no scripts. To embed a PNG / JPEG \
+             you loaded with `read_image`, reference it via the `asset://<asset_id>` URI \
+             returned by that tool — e.g. `<image href=\"asset://asset-12345678\" x=\"0\" \
+             y=\"0\" width=\"640\" height=\"480\"/>`. The tool will replace every such \
+             reference with the actual image bytes at write time, so the bytes never need \
+             to enter your context. Inline data: URLs are also supported as a fallback. \
+             For diagrams prefer simple geometric primitives (rect / circle / path / line \
+             / text) over bitmap filters. Load `get_tool_help(category=\"svg\")` for the \
+             full style guide.",
             ToolParameters::new(
                 vec!["svg_source", "output_path"],
                 vec![
@@ -221,7 +230,17 @@ impl CreateSvgTool {
             }
         }
 
-        // ── 3. Write the file ────────────────────────────────────────────
+        // ── 3. Resolve asset:// references into inline data URLs ────────
+        //
+        // The LLM may have emitted `<image href="asset://<id>"/>` placeholders
+        // for PNGs/JPEGs it loaded via `read_image`. We substitute the real
+        // bytes here, just before writing — so the bytes never needed to
+        // traverse the conversation history. Resolution failures are loud
+        // errors (the LLM gets a clear "asset expired" / "unknown id" message
+        // and can re-call `read_image`).
+        let resolved_source = resolve_asset_references(&args.svg_source)?;
+
+        // ── 4. Write the file ────────────────────────────────────────────
         if let Some(parent) = output_path.parent() {
             if !parent.as_os_str().is_empty() && !parent.exists() {
                 tokio::fs::create_dir_all(parent).await.map_err(|e| {
@@ -234,7 +253,7 @@ impl CreateSvgTool {
             }
         }
 
-        let bytes = args.svg_source.as_bytes();
+        let bytes = resolved_source.as_bytes();
         tokio::fs::write(&output_path, bytes).await.map_err(|e| {
             ToolError::IoError(format!(
                 "Failed to write SVG to {}: {}",
@@ -263,7 +282,7 @@ impl CreateSvgTool {
         Ok(CreateSvgOutcome {
             output,
             file_path: output_path.to_string_lossy().to_string(),
-            svg_source: args.svg_source,
+            svg_source: resolved_source,
             byte_size,
             view_box,
             is_error: false,
@@ -313,6 +332,93 @@ fn parse_aspect_ratio(s: &str) -> Option<(f64, f64)> {
         return None;
     }
     Some((a, b))
+}
+
+/// Scan an SVG source string for `asset://<id>` references inside any
+/// `href="..."` / `xlink:href="..."` attribute, and substitute each one
+/// with an inline `data:<mime>;base64,<...>` URL backed by the asset
+/// registry. Returns the rewritten source.
+///
+/// We deliberately do this with a simple `find` loop instead of a full
+/// XML parser: SVG attributes are quoted, the asset id charset is a known
+/// ASCII subset (`asset-` + lowercase hex), and we want to be tolerant of
+/// whitespace, single vs. double quotes, and `xlink:href` aliases. If the
+/// LLM emits malformed XML the higher-level SVG validator (or the browser)
+/// will catch it; this pass only deals with the asset substitution.
+fn resolve_asset_references(svg: &str) -> Result<String, ToolError> {
+    let prefix = "asset://";
+    let mut out = String::with_capacity(svg.len());
+    let mut cursor = 0;
+    let mut found_any = false;
+
+    while let Some(idx) = svg[cursor..].find(prefix) {
+        let abs_idx = cursor + idx;
+        // Walk back to find the opening quote of the attribute value.
+        // We accept `"`, `'`, or end-of-prev-tag as the boundary; SVG
+        // authors also use `xlink:href=` so we look for either prefix.
+        let prefix_start = abs_idx;
+        // Find the closing quote (or single quote) that terminates this
+        // attribute value.
+        let after = &svg[prefix_start + prefix.len()..];
+        let end_rel = after
+            .find(|c: char| c == '"' || c == '\'' || c.is_whitespace())
+            .unwrap_or(after.len());
+        let id = &after[..end_rel];
+
+        // The id grammar is `asset-` + hex; any other shape is a typo.
+        if !is_asset_id(id) {
+            return Err(ToolError::InvalidArguments(
+                "create_svg".to_string(),
+                format!(
+                    "asset reference `{}{}` is malformed (expected `asset://asset-XXXXXXXX`); \
+                     re-issue with the `asset_id` returned by `read_image`",
+                    prefix, id
+                ),
+            ));
+        }
+
+        // Pull the bytes from the registry. Missing or expired entries
+        // surface as a clear error so the LLM can re-call `read_image`.
+        let entry = asset_registry::lookup(id).ok_or_else(|| {
+            ToolError::InvalidArguments(
+                "create_svg".to_string(),
+                format!(
+                    "asset `{}` is unknown or expired (>1 hour old). Call `read_image` again \
+                     on the source image and use the fresh `asset_id`.",
+                    id
+                ),
+            )
+        })?;
+
+        // Emit everything up to (and including) the asset id, then the
+        // data: URL, then continue parsing from after the closing quote.
+        out.push_str(&svg[cursor..prefix_start]);
+        out.push_str("data:");
+        out.push_str(&entry.mime);
+        out.push_str(";base64,");
+        out.push_str(&BASE64.encode(&entry.data));
+
+        // Skip past the id we just consumed. The next char is the
+        // attribute's closing quote (or whitespace), which we leave in
+        // place so the resulting `href="data:..."` stays well-formed.
+        cursor = prefix_start + prefix.len() + end_rel;
+        found_any = true;
+    }
+
+    out.push_str(&svg[cursor..]);
+    debug_assert!(
+        found_any || !svg.contains(prefix),
+        "found_any / prefix presence out of sync"
+    );
+    Ok(out)
+}
+
+fn is_asset_id(s: &str) -> bool {
+    let rest = match s.strip_prefix("asset-") {
+        Some(r) => r,
+        None => return false,
+    };
+    !rest.is_empty() && rest.len() <= 32 && rest.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 // `Serialize` is implemented so the outcome can be round-tripped through
@@ -366,5 +472,141 @@ mod tests {
         assert_eq!(parse_aspect_ratio("wide"), None);
         assert_eq!(parse_aspect_ratio("0:9"), None);
         assert_eq!(parse_aspect_ratio(""), None);
+    }
+
+    // ─── resolve_asset_references ──────────────────────────────────────
+
+    fn register_test_asset(id: &str, mime: &str, ext: &str, data: &[u8]) {
+        use std::time::Instant;
+        asset_registry::insert(
+            id.to_string(),
+            asset_registry::AssetEntry {
+                mime: mime.to_string(),
+                ext: ext.to_string(),
+                data: data.to_vec(),
+                inserted_at: Instant::now(),
+                source_path: format!("/tmp/{id}.{ext}"),
+            },
+        );
+    }
+
+    #[test]
+    fn resolve_substitutes_data_url() {
+        asset_registry::clear();
+        register_test_asset("asset-deadbeef", "image/png", "png", b"PNGDATA");
+
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg"><image href="asset://asset-deadbeef" x="0" y="0" width="100" height="100"/></svg>"#;
+        let out = resolve_asset_references(svg).expect("resolve ok");
+        assert!(out.contains("data:image/png;base64,UE5HREFUQQ=="), "got: {out}");
+        assert!(!out.contains("asset://"), "asset reference must be gone");
+        // Attribute structure preserved: the closing `"` should still be there.
+        assert!(out.contains(r#"data:image/png;base64,UE5HREFUQQ==""#));
+    }
+
+    #[test]
+    fn resolve_handles_xlink_href() {
+        asset_registry::clear();
+        register_test_asset("asset-1234abcd", "image/jpeg", "jpg", b"\xFF\xD8\xFF");
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"><image xlink:href="asset://asset-1234abcd"/></svg>"#;
+        let out = resolve_asset_references(svg).expect("resolve ok");
+        assert!(out.contains("data:image/jpeg;base64,"));
+        assert!(!out.contains("asset://"));
+    }
+
+    #[test]
+    fn resolve_handles_single_quotes() {
+        asset_registry::clear();
+        register_test_asset("asset-0001", "image/png", "png", b"X");
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg"><image href='asset://asset-0001'/></svg>"#;
+        let out = resolve_asset_references(svg).expect("resolve ok");
+        assert!(out.contains("data:image/png;base64,"));
+    }
+
+    #[test]
+    fn resolve_no_references_is_passthrough() {
+        asset_registry::clear();
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>"#;
+        let out = resolve_asset_references(svg).expect("resolve ok");
+        assert_eq!(out, svg);
+    }
+
+    #[test]
+    fn resolve_unknown_id_is_error() {
+        asset_registry::clear();
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg"><image href="asset://asset-0123abcd"/></svg>"#;
+        let err = resolve_asset_references(svg).expect_err("unknown id must error");
+        let msg = err.to_string();
+        assert!(msg.contains("unknown or expired"), "msg: {msg}");
+    }
+
+    #[test]
+    fn resolve_malformed_id_is_error() {
+        asset_registry::clear();
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg"><image href="asset://nothex!"/></svg>"#;
+        let err = resolve_asset_references(svg).expect_err("malformed id must error");
+        let msg = err.to_string();
+        assert!(msg.contains("malformed"), "msg: {msg}");
+    }
+
+    #[test]
+    fn resolve_multiple_references() {
+        asset_registry::clear();
+        register_test_asset("asset-aaaa", "image/png", "png", b"AAAA");
+        register_test_asset("asset-bbbb", "image/jpeg", "jpg", b"BBBB");
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg">
+  <image href="asset://asset-aaaa" width="10"/>
+  <image href="asset://asset-bbbb" width="20"/>
+</svg>"#;
+        let out = resolve_asset_references(svg).expect("resolve ok");
+        assert!(out.contains("data:image/png;base64,QUFBQQ=="), "missing png data");
+        assert!(out.contains("data:image/jpeg;base64,QkJCQg=="), "missing jpeg data");
+        // The png and jpeg base64 strings are distinct.
+        let png_pos = out.find("QUFBQQ==").unwrap();
+        let jpeg_pos = out.find("QkJCQg==").unwrap();
+        assert_ne!(png_pos, jpeg_pos);
+    }
+
+    /// End-to-end: call `CreateSvgTool::execute` with an `asset://` reference
+    /// and confirm the bytes that hit disk contain the substituted data URL.
+    /// This is the user-facing contract: AI emits `<image href="asset://...">`,
+    /// tool produces a self-contained SVG.
+    #[tokio::test]
+    async fn execute_writes_resolved_svg_to_disk() {
+        asset_registry::clear();
+        register_test_asset("asset-12345678", "image/png", "png", b"PNGBYTES");
+        let dir = std::env::temp_dir().join("inkuo-svg-asset-test");
+        let _ = std::fs::create_dir_all(&dir);
+        let out_path = dir.join("out.svg");
+        // Clean up any prior file so we read the one we just wrote.
+        let _ = std::fs::remove_file(&out_path);
+
+        let svg = r#"<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <image href="asset://asset-12345678" x="0" y="0" width="100" height="100"/>
+</svg>"#;
+
+        let tool = CreateSvgTool::new();
+        let outcome = tool
+            .execute(
+                serde_json::json!({
+                    "description": "test",
+                    "svg_source": svg,
+                    "output_path": out_path.to_string_lossy(),
+                }),
+                None,
+            )
+            .await
+            .expect("create_svg execute ok");
+
+        // The returned `svg_source` is the resolved copy (so the frontend
+        // preview chip can render the embedded image without re-running
+        // resolution).
+        assert!(outcome.svg_source.contains("data:image/png;base64,UE5HQllURVM="));
+        assert!(!outcome.svg_source.contains("asset://"));
+
+        // Same content on disk.
+        let on_disk = std::fs::read_to_string(&out_path).expect("read back");
+        assert!(on_disk.contains("data:image/png;base64,UE5HQllURVM="));
+        assert!(!on_disk.contains("asset://"));
     }
 }

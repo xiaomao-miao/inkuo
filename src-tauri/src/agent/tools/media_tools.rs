@@ -6,19 +6,24 @@
 //! frontend's `read_file_for_viewer` command but expose the result
 //! in an LLM-friendly format:
 //!
-//!   - `read_image` returns the image as a base64 data URL plus the
-//!     file metadata. The agent runtime can attach the data URL as a
-//!     multimodal `image_url` content part for vision-capable models.
+//!   - `read_image` reads the image bytes into the process-wide
+//!     [`asset_registry`] and returns a short `asset_id` plus metadata.
+//!     The LLM never sees the raw bytes — instead it references the asset
+//!     via `asset://<id>` inside `<image href="...">` placeholders, and a
+//!     downstream tool (e.g. `create_svg`, `create_pptx`) resolves the
+//!     reference at the moment of writing the final file to disk.
+//!     This sidesteps the failure mode where a 1 MB PNG would otherwise
+//!     inflate the conversation context by ~250k base64-encoded tokens.
 //!   - `read_pdf` extracts the embedded text page-by-page (best-effort)
 //!     so the model can read long PDFs without needing 50 MB of base64
 //!     in the message. Binary extraction uses `pdf-extract` to keep the
 //!     dependency surface small (pure-Rust, no native bindings).
 
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD as BASE64;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
+use super::asset_registry::{self, AssetEntry};
 use super::{ToolDefinition, ToolError, ToolParameters, validate_workspace_path};
 
 /// Maximum image payload (bytes) the agent will load. Larger images
@@ -58,11 +63,16 @@ impl ReadImageTool {
         ToolDefinition::new_with_label(
             "read_image",
             "读取图片",
-            "Read an image file (PNG / JPG / GIF / WebP / BMP / SVG) from \
-             the workspace and return a base64 data URL plus size and MIME \
-             type. The agent runtime typically attaches the data URL as a \
-             multimodal `image_url` content part for vision-capable models. \
-             Use this for visual context — UI screenshots, diagrams, photos.",
+            "Read an image file (PNG / JPG / GIF / WebP / BMP / SVG) into a private \
+             asset registry and return a short `asset_id`. The raw bytes NEVER enter \
+             your context window — only the id + filename + size + format do. To use \
+             the image in a downstream tool, emit the reference `asset://<asset_id>` \
+             wherever the tool expects an image source, e.g. inside the SVG's \
+             `<image href=\"asset://<asset_id>\" x=\"...\" y=\"...\" width=\"...\" height=\"...\"/>` \
+             element when calling `create_svg`. The asset stays available for one \
+             hour; the next tool that needs it will resolve it back to the original \
+             bytes just before writing the output file to disk. Call this tool \
+             once per image you want to embed.",
             ToolParameters::new(
                 vec!["path"],
                 vec![
@@ -100,19 +110,46 @@ impl ReadImageTool {
         let bytes = std::fs::read(&path)
             .map_err(|e| ToolError::IoError(format!("Failed to read {}: {}", path, e)))?;
 
-        let data_base64 = BASE64.encode(&bytes);
-        let data_url = format!("data:{};base64,{}", mime, data_base64);
+        let size_human = if bytes.len() < 1024 {
+            format!("{} B", bytes.len())
+        } else if bytes.len() < 1024 * 1024 {
+            format!("{:.1} KB", bytes.len() as f64 / 1024.0)
+        } else {
+            format!("{:.1} MB", bytes.len() as f64 / (1024.0 * 1024.0))
+        };
+
+        // Hand the bytes off to the asset registry. The id flows back
+        // to the LLM; the bytes do not. `create_svg` (and friends) will
+        // resolve `asset://<id>` against the registry at write time.
+        let ext = path_buf
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("bin")
+            .to_ascii_lowercase();
+        let id = asset_registry::insert(
+            asset_registry::fresh_id(),
+            AssetEntry {
+                mime: mime.to_string(),
+                ext: ext.clone(),
+                data: bytes,
+                inserted_at: Instant::now(),
+                source_path: path.to_string(),
+            },
+        );
 
         Ok(json!({
+            "asset_id": id,
+            "asset_ref": asset_registry::reference(&id),
             "path": path,
             "name": path_buf
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default(),
-            "size": metadata.len(),
+            "size_bytes": metadata.len(),
+            "size_human": size_human,
             "mime": mime,
-            "data_url": data_url,
-            "note": "Attach data_url as an image_url content part for multimodal models."
+            "ext": ext,
+            "usage": "Embed via `<image href=\"asset://<asset_id>\" .../>` in create_svg, or via the equivalent image_refs parameter of create_pptx. The bytes are NOT in your context."
         })
         .to_string())
     }
