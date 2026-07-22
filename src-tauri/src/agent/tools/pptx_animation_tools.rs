@@ -31,7 +31,7 @@ use crate::agent::tools::pptx_tools::{
     build_content_types, build_core_props_xml, build_presentation_rels,
     build_presentation_xml, build_root_rels, build_slide_rels, parse_color, parse_svg,
     write_shape, xml_escape, EMU_PER_INCH, SLIDE_H_EMU, SLIDE_W_EMU,
-    APP_XML, SLIDE_MASTER_RELS, SLIDE_MASTER_XML, THEME_XML,
+    APP_XML, SLIDE_LAYOUT_RELS, SLIDE_LAYOUT_XML, SLIDE_MASTER_RELS, SLIDE_MASTER_XML, THEME_XML,
     ParsedSvg as PptxParsedSvg, SvgShape as PptxSvgShape,
 };
 
@@ -823,6 +823,8 @@ fn build_pptx_anim(slides: &[SlideWithAnim], title: Option<&str>) -> Result<Vec<
 
     entries.push(("ppt/slideMasters/slideMaster1.xml".into(), SLIDE_MASTER_XML.as_bytes().to_vec()));
     entries.push(("ppt/slideMasters/_rels/slideMaster1.xml.rels".into(), SLIDE_MASTER_RELS.as_bytes().to_vec()));
+    entries.push(("ppt/slideLayouts/slideLayout1.xml".into(), SLIDE_LAYOUT_XML.as_bytes().to_vec()));
+    entries.push(("ppt/slideLayouts/_rels/slideLayout1.xml.rels".into(), SLIDE_LAYOUT_RELS.as_bytes().to_vec()));
     entries.push(("docProps/core.xml".into(), build_core_props_xml(title.unwrap_or("Animated Presentation")).into_bytes()));
     entries.push(("docProps/app.xml".into(), APP_XML.as_bytes().to_vec()));
 
