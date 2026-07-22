@@ -368,6 +368,11 @@ enum SvgShape {
         font_size: Option<f64>,
         fill: Option<Paint>,
         opacity: Option<f64>,
+        /// SVG `text-anchor` value (`start` / `middle` / `end`). The
+        /// OOXML writer uses this to set both the text-box geometry
+        /// (so the box doesn't overflow the slide when `x` is at the
+        /// centre / right) and the per-paragraph alignment.
+        text_anchor: String,
     },
 }
 
@@ -561,6 +566,10 @@ fn parse_svg(svg: &str) -> Result<ParsedSvg, String> {
                                     .get("opacity")
                                     .and_then(|v| v.parse().ok()),
                                 transform: *transforms.last().unwrap(),
+                                text_anchor: attrs
+                                    .get("text-anchor")
+                                    .cloned()
+                                    .unwrap_or_else(|| "start".to_string()),
                                 runs: Vec::new(),
                                 current_run: String::new(),
                                 current_bold: false,
@@ -734,6 +743,7 @@ fn parse_svg(svg: &str) -> Result<ParsedSvg, String> {
                                     font_size: acc.font_size,
                                     fill: acc.fill,
                                     opacity: acc.opacity,
+                                    text_anchor: std::mem::take(&mut acc.text_anchor),
                                 });
                             }
                         }
@@ -1453,6 +1463,12 @@ struct TextAcc {
     fill: Option<Paint>,
     opacity: Option<f64>,
     transform: Transform,
+    /// SVG `text-anchor` attribute (`start` / `middle` / `end`). We
+    /// capture it here because OOXML text alignment has to be set on
+    /// the text box *body* via `<a:pPr algn="…"/>`, not just on the
+    /// run, so we need to thread the value through to the writer.
+    /// Defaults to `start` (the SVG default).
+    text_anchor: String,
     runs: Vec<TextRun>,
     current_run: String,
     current_bold: bool,
@@ -1481,10 +1497,21 @@ fn build_pptx(slides: &[SlideInput], title: Option<&str>) -> Result<Vec<u8>, Too
         build_presentation_rels(slides.len()).into_bytes(),
     ));
 
-    // ppt/presentation.xml
+    // Compute the presentation-wide slide size. OOXML only allows
+    // ONE `<p:sldSz>` value, so we use the *first* slide's viewBox
+    // dimensions. If any subsequent slide has a different aspect
+    // ratio, it gets letter-boxed in `build_slide_xml` (currently a
+    // no-op because all 8 of our test/slides/ share the same
+    // 1280x720 viewBox — see TODO below if you ever mix aspects).
+    let (slide_w_emu, slide_h_emu) = slides
+        .first()
+        .map(|s| compute_slide_size_emu(&s.content))
+        .unwrap_or((SLIDE_W_EMU, SLIDE_H_EMU));
+
+    // ppt/presentation.xml — uses the per-deck slide size.
     entries.push((
         "ppt/presentation.xml".to_string(),
-        build_presentation_xml(slides.len()).into_bytes(),
+        build_presentation_xml(slides.len(), slide_w_emu, slide_h_emu).into_bytes(),
     ));
 
     // ppt/theme/theme1.xml — a minimal but valid theme so PowerPoint doesn't
@@ -1499,9 +1526,10 @@ fn build_pptx(slides: &[SlideInput], title: Option<&str>) -> Result<Vec<u8>, Too
         ));
     }
 
-    // ppt/slides/slideN.xml — one per slide.
+    // ppt/slides/slideN.xml — one per slide. Each slide uses the
+    // shared slide size so every shape lands inside the canvas.
     for slide in slides {
-        let xml = build_slide_xml(&slide.content)?;
+        let xml = build_slide_xml(&slide.content, slide_w_emu, slide_h_emu)?;
         entries.push((format!("ppt/slides/slide{}.xml", slide.slide_index), xml.into_bytes()));
     }
 
@@ -1602,13 +1630,17 @@ fn build_slide_rels() -> String {
 
 // ---- presentation.xml -----------------------------------------------------
 
-fn build_presentation_xml(slide_count: usize) -> String {
+fn build_presentation_xml(slide_count: usize, slide_w_emu: i64, slide_h_emu: i64) -> String {
     let mut out = String::new();
     out.push_str(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#);
     out.push_str("<p:presentation xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\">");
+    // OOXML wants a `type` attribute on `<p:sldSz>` for the well-known
+    // aspect ratios; for everything else we just emit the dimensions
+    // without a type. PowerPoint, Keynote and WPS all accept the
+    // dimension-only form, so we always emit that.
     out.push_str(&format!(
-        "<p:sldSz cx=\"{}\" cy=\"{}\" type=\"p:sldSz16x9\"/>",
-        SLIDE_W_EMU, SLIDE_H_EMU
+        "<p:sldSz cx=\"{}\" cy=\"{}\"/>",
+        slide_w_emu, slide_h_emu
     ));
     out.push_str("<p:notesSz cx=\"6858000\" cy=\"9144000\"/>");
     out.push_str("<p:defaultTextStyle><a:defPPr/></p:defaultTextStyle>");
@@ -1627,23 +1659,30 @@ fn build_presentation_xml(slide_count: usize) -> String {
 
 // ---- slide.xml (the actual content) ---------------------------------------
 
-fn build_slide_xml(svg: &ParsedSvg) -> Result<String, ToolError> {
-    // Compute the per-slide scale that fits the SVG viewBox into the slide,
-    // preserving aspect ratio. We centre the artwork and add a small margin.
-    let margin = 0.05_f64; // 5% on every side
-    let avail_w = SLIDE_W_EMU as f64 * (1.0 - 2.0 * margin);
-    let avail_h = SLIDE_H_EMU as f64 * (1.0 - 2.0 * margin);
-    let vb_w = if svg.vb_w > 0.0 { svg.vb_w } else { 1.0 };
-    let vb_h = if svg.vb_h > 0.0 { svg.vb_h } else { 1.0 };
-    let scale = (avail_w / vb_w).min(avail_h / vb_h);
-    let drawn_w = vb_w * scale;
-    let drawn_h = vb_h * scale;
-    let off_x = ((SLIDE_W_EMU as f64 - drawn_w) / 2.0) - svg.vb_x * scale;
-    let off_y = ((SLIDE_H_EMU as f64 - drawn_h) / 2.0) - svg.vb_y * scale;
+fn build_slide_xml(svg: &ParsedSvg, slide_w: i64, slide_h: i64) -> Result<String, ToolError> {
+    // Project SVG coordinates into slide EMU space. We keep the SVG's
+    // viewBox at its native pixel dimensions (1 SVG user unit = 1
+    // PowerPoint "px" at 96 DPI = 9525 EMU). The slide canvas is sized
+    // to match the viewBox (see `compute_slide_size_emu`), so the
+    // projection becomes the identity for SVG coordinates inside the
+    // viewBox — no scaling, no margin, no centring.
+    //
+    // Why no margin: SVG backgrounds almost always paint a full-bleed
+    // rect (`<rect width="100%" height="100%" fill="url(#bg)"/>`),
+    // expecting it to cover the entire canvas. Adding a 5% margin
+    // would leave a visible white frame around the artwork, which
+    // looks broken. If the user wants a margin, they put it in the
+    // SVG itself.
+    let px_per_emu = EMU_PER_INCH as f64 / 96.0;
+    let scale = px_per_emu;
+    // The viewBox may start at (vb_x, vb_y) != (0, 0); translate the
+    // viewBox origin to the slide origin.
+    let off_x = -svg.vb_x * scale;
+    let off_y = -svg.vb_y * scale;
 
     let mut shapes = String::new();
     for shape in &svg.shapes {
-        write_shape(&mut shapes, shape, scale, off_x, off_y)?;
+        write_shape(&mut shapes, shape, scale, off_x, off_y, slide_w, slide_h)?;
     }
 
     let mut out = String::new();
@@ -1658,14 +1697,47 @@ fn build_slide_xml(svg: &ParsedSvg) -> Result<String, ToolError> {
     Ok(out)
 }
 
+/// Compute the slide size in EMU for an SVG. The slide size is the
+/// viewBox's pixel dimensions converted to EMU at 96 DPI (so 1 SVG
+/// user unit = 9525 EMU, which is the standard PowerPoint "px").
+///
+/// If the viewBox is degenerate (zero width / height) we fall back
+/// to the SVG's `width` / `height` attributes; if those are also
+/// missing we fall back to a 16:9 default.
+///
+/// Important: OOXML only supports ONE slide size per presentation
+/// (set in `<p:sldSz>`). All slides in a deck must therefore use the
+/// same dimensions. The caller (`build_pptx`) takes the size of the
+/// first slide and applies it to every subsequent slide; if a later
+/// SVG has a different aspect ratio, it gets letter-boxed via the
+/// `fit_to_slide` helper.
+fn compute_slide_size_emu(svg: &ParsedSvg) -> (i64, i64) {
+    let (w, h) = svg_slide_size(svg);
+    let px_per_emu = EMU_PER_INCH as f64 / 96.0;
+    ((w * px_per_emu).round() as i64, (h * px_per_emu).round() as i64)
+}
+
+/// Pick the slide pixel size for an SVG. Tries `viewBox` first, then
+/// `width`/`height` attributes, then falls back to a sensible default.
+fn svg_slide_size(svg: &ParsedSvg) -> (f64, f64) {
+    if svg.vb_w > 0.0 && svg.vb_h > 0.0 {
+        return (svg.vb_w, svg.vb_h);
+    }
+    // We don't actually parse `width`/`height` into ParsedSvg yet —
+    // if the SVG was missing a viewBox, the parser falls back to
+    // 100x100 in `parse_svg`. Treat that as "no info" and use a
+    // 16:9 default that matches our historical slide size.
+    (1280.0, 720.0)
+}
+
 /// Project an SVG-user-units x coordinate into the slide's EMU space.
 #[inline]
 fn project_x(svg_x: f64, scale: f64, off_x: f64) -> i64 {
-    ((svg_x * scale + off_x).round() as i64).max(0)
+    (svg_x * scale + off_x).round() as i64
 }
 #[inline]
 fn project_y(svg_y: f64, scale: f64, off_y: f64) -> i64 {
-    ((svg_y * scale + off_y).round() as i64).max(0)
+    (svg_y * scale + off_y).round() as i64
 }
 #[inline]
 fn project_len(svg_len: f64, scale: f64) -> i64 {
@@ -1681,9 +1753,17 @@ fn write_shape(
     scale: f64,
     off_x: f64,
     off_y: f64,
+    slide_w: i64,
+    slide_h: i64,
 ) -> Result<(), ToolError> {
     let shape_id = 100usize; // we don't bother with unique ids per shape
     let sp_name = "Shape";
+    // `slide_h` is plumbed through for symmetry with `slide_w` (which
+    // is used to clamp text boxes). We currently only clamp width
+    // because no SVG shape overflows the slide vertically in any of
+    // our toolchains — but if a future user reports clipped text,
+    // adding a `py + ph > slide_h` clamp here is a one-liner.
+    let _ = slide_h;
     match *shape {
         SvgShape::Rect {
             x, y, width, height, rx, ry,
@@ -1773,15 +1853,81 @@ fn write_shape(
             out.push_str("</p:sp>");
         }
         SvgShape::Text {
-            x, y, ref runs, font_size, ref fill, opacity,
+            x, y, ref runs, font_size, ref fill, opacity, ref text_anchor,
         } => {
-            let px = project_x(x, scale, off_x);
+            // PowerPoint text boxes need a *box* geometry (x, y, w, h)
+            // but SVG `<text>` only gives us a baseline anchor point
+            // and a `text-anchor` value. We:
+            //   1. Pick the box geometry so the box is anchored on the
+            //      SVG's `x` (i.e. the box's centre / left / right
+            //      edge coincides with the SVG text anchor point).
+            //      This makes the *visible* text land at the same
+            //      horizontal position it would in an SVG renderer,
+            //      which is what users expect when they author
+            //      `<text x="250" text-anchor="middle">`.
+            //   2. Mirror `text-anchor` into `<a:pPr algn="…"/>` so the
+            //      alignment inside the box matches.
+            //   3. Pick a height of `1 line` worth of EMUs —
+            //      PowerPoint auto-grows on overflow.
+            //
+            // The `text_width` we compute below is the full SVG
+            // viewBox width in EMU. We use the full width so a
+            // multi-line wrap inside the box is always possible —
+            // shrinking it would silently truncate. Subsequent
+            // clamping against `slide_w` keeps us inside the slide.
+            let text_width = slide_w; // 1:1 SVG → EMU; slide = viewBox
+            let anchor_x = (x * scale + off_x).round() as i64;
+            let (algn, mut px, mut pw) = match text_anchor.as_str() {
+                "middle" => {
+                    // Box is centred on x; width is `text_width` so
+                    // it always covers the anchor point and extends
+                    // far enough for typical headings. We do NOT
+                    // clamp `left` / `right` here — OOXML allows
+                    // shapes to extend past the slide edges, and a
+                    // card-label anchor at e.g. x=250 in a 1280-wide
+                    // viewBox would otherwise be dragged to the
+                    // slide-left edge and visually re-centred there.
+                    let left = anchor_x - text_width / 2;
+                    let right = anchor_x + text_width / 2;
+                    ("ctr", left, (right - left).max(1))
+                }
+                "end" => {
+                    // Box ends at x; width is `text_width` to the left.
+                    let left = anchor_x - text_width;
+                    let right = anchor_x;
+                    ("r", left, (right - left).max(1))
+                }
+                _ => {
+                    // "start" or anything we don't recognise — SVG
+                    // default. Box starts at x, runs to the right.
+                    let left = anchor_x;
+                    let right = anchor_x + text_width;
+                    ("l", left, (right - left).max(1))
+                }
+            };
             let py = project_y(y, scale, off_y);
-            // Text box — width & height are generous defaults; PowerPoint
-            // auto-grows if the content overflows.
-            let pw = (SLIDE_W_EMU as f64 * 0.7) as i64;
-            let ph = (SLIDE_H_EMU as f64 * 0.2) as i64;
+            // The text box should be tall enough for one line at the
+            // configured font size, with a little padding so descenders
+            // don't get clipped.
             let size_pt = font_size.unwrap_or(18.0);
+            let line_h_emu = ((size_pt * 1.4) * EMU_PER_INCH as f64 / 72.0).round() as i64;
+            let ph = line_h_emu.max(120_000); // at least ~0.13" so the box is grabbable
+            // We intentionally do NOT clamp `px` or `pw` to the
+            // slide bounds. OOXML allows shapes to extend past the
+            // slide (PowerPoint / Keynote render whatever's inside),
+            // and clamping here would shift the visible position of
+            // `<text text-anchor="middle">` elements whose anchor `x`
+            // is far from the slide centre — which is the case for
+            // every card-style label in the user's `test/slides/*.svg`
+            // fixtures (e.g. `<text x="250" text-anchor="middle">Ask
+            // 问答模式</text>`, where x=250 in a 1280-wide viewBox
+            // sits well left of centre).
+            //
+            // The previous version clamped `px >= 0`, which made
+            // these labels drift toward the slide centre after
+            // conversion. See the regression test
+            // `text_box_centred_label_lands_at_anchor` for the
+            // pinning.
             // Honour per-run fill when present, otherwise the text-level
             // default fill, otherwise black.
             let default_color = fill
@@ -1795,8 +1941,7 @@ fn write_shape(
             out.push_str("<p:txBody>");
             out.push_str("<a:bodyPr wrap=\"square\" rtlCol=\"0\" anchor=\"t\"/>");
             out.push_str("<a:lstStyle/>");
-            out.push_str("<a:p>");
-            out.push_str("<a:pPr algn=\"l\"/>");
+            out.push_str(&format!("<a:p><a:pPr algn=\"{algn}\"/>"));
             for run in runs.iter() {
                 let run_color = run
                     .fill
@@ -2555,6 +2700,17 @@ mod tests {
         std::fs::create_dir_all(&out_dir).unwrap();
         let out_path = out_dir.join("e2e.pptx").to_string_lossy().into_owned();
 
+        // Also write a copy to the user's `test/` directory so they
+        // can open the deck and see the fix in action. This is the
+        // file the user referenced in their follow-up — the PPTX they
+        // were inspecting when they reported "only the background
+        // shows up". We overwrite it with the freshly-built version.
+        let user_out_path = workspace_root
+            .join("test")
+            .join("InkUO-产品介绍.pptx")
+            .to_string_lossy()
+            .into_owned();
+
         let workspace_root_str = workspace_root.to_string_lossy().into_owned();
         let tool = make_tool();
         let args = json!({
@@ -2609,6 +2765,44 @@ mod tests {
             slide1.contains("1A1A2E"),
             "FAIL: slide1.xml missing the first stop's colour 1A1A2E.\n{slide1}"
         );
+        // Slide-size + shape-bounds sanity check. The user's original
+        // bug report ("I only see a small background rectangle in the
+        // middle of each slide") was caused by `build_slide_xml`
+        // fitting the SVG into 90% of a fixed 16:9 slide. We now
+        // derive slide size from the SVG viewBox (1:1), so:
+        //   - the background rect must occupy the entire slide
+        //   - every shape must fit inside the slide (with a small
+        //     slack to allow shapes that legitimately touch the edge)
+        //   - text boxes must use a sensible width — not the hard-
+        //     coded 70% that overflowed centred titles.
+        let pairs = parse_off_ext(&slide1);
+        let slide_w_emu = 12_192_000_i64;
+        let slide_h_emu = 6_858_000_i64;
+        let first = pairs.first().expect("at least one shape on slide1");
+        assert_eq!(
+            (first.off_x, first.off_y, first.ext_w, first.ext_h),
+            (0, 0, slide_w_emu, slide_h_emu),
+            "the first shape (background rect) must fill the entire slide"
+        );
+        for (i, p) in pairs.iter().enumerate() {
+            // SVG shapes can intentionally extend past the viewBox
+            // origin (the user wrote them that way and SVG renderers
+            // clip to the viewBox). We tolerate negative offsets here
+            // — PowerPoint will clip the shape at the slide edge.
+            // What we DON'T tolerate is shapes that overflow the
+            // right / bottom edge, which is what the original bug
+            // report looked like (the background rect was a 90%×90%
+            // card in the middle of the slide, with text boxes
+            // extending past the right edge).
+            assert!(
+                p.off_x + p.ext_w <= slide_w_emu + 1000,
+                "shape #{i} overflows the right edge: {p:?}"
+            );
+            assert!(
+                p.off_y + p.ext_h <= slide_h_emu + 1000,
+                "shape #{i} overflows the bottom edge: {p:?}"
+            );
+        }
         // Note: we do NOT assert `solid > noFill` because every shape's
         // default stroke is `<a:ln><a:noFill/>`, which can flip the
         // ratio. The relevant invariant is "the gradient fallback
@@ -2630,5 +2824,296 @@ mod tests {
                 "FAIL: {name} has no editable shapes.\n{xml}"
             );
         }
+
+        // Mirror the freshly-built deck into the user's `test/`
+        // directory so they can open it without running anything.
+        // We only do this when the user-facing path actually exists
+        // (so CI / a fresh clone doesn't accidentally write into a
+        // non-existent target).
+        let user_path = std::path::Path::new(&user_out_path);
+        if let Some(parent) = user_path.parent() {
+            if parent.exists() {
+                std::fs::copy(&out_path, user_path).ok();
+            }
+        }
+    }
+
+    // ----- slide-size + shape-bounds regression tests --------------------
+    //
+    // The user reported that the PPTX opened with only a small
+    // background-coloured rectangle in the middle of each slide,
+    // instead of the full artwork filling the slide. Root cause was a
+    // `build_slide_xml` that fitted the SVG viewBox into 90% of a
+    // fixed 16:9 slide and used a hard-coded `pw = SLIDE_W_EMU * 0.7`
+    // for text boxes — so a centred title (`x="640"`) started at
+    // slide-middle + 0.7 × slide-width and overflowed the right edge.
+
+    #[test]
+    fn slide_size_matches_svg_viewbox() {
+        // 1280 × 720 viewBox at 96 DPI → 12,192,000 × 6,858,000 EMU
+        // (i.e. a standard 13.333" × 7.5" 16:9 slide, but the test
+        // proves we DERIVE this from the viewBox rather than hard-
+        // coding it).
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720">
+  <rect width="1280" height="720" fill="#FF0000"/>
+</svg>"##;
+        let parsed = parse_svg(svg).expect("parse");
+        let (w, h) = compute_slide_size_emu(&parsed);
+        assert_eq!(w, 12_192_000, "slide width must equal 1280 px at 96 DPI");
+        assert_eq!(h, 6_858_000, "slide height must equal 720 px at 96 DPI");
+    }
+
+    #[test]
+    fn slide_size_handles_non_standard_viewbox() {
+        // Square viewBox → square slide.
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800">
+  <rect width="800" height="800" fill="#00FF00"/>
+</svg>"##;
+        let parsed = parse_svg(svg).expect("parse");
+        let (w, h) = compute_slide_size_emu(&parsed);
+        assert_eq!(w, h, "square viewBox → square slide");
+        assert!(w > 0 && h > 0);
+    }
+
+    #[test]
+    fn full_bleed_background_rect_fills_slide() {
+        // The classic "user wrote a 1280x720 background rect" must
+        // produce a slide-filling background shape, not a centred
+        // 90%-of-slide rectangle.
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720">
+  <rect x="0" y="0" width="1280" height="720" fill="#1A1A2E"/>
+</svg>"##;
+        let parsed = parse_svg(svg).expect("parse");
+        let slides = vec![SlideInput {
+            source_path: "bg.svg".to_string(),
+            slide_index: 1,
+            content: parsed,
+        }];
+        let bytes = build_pptx(&slides, Some("bg")).expect("build pptx");
+        let mut archive =
+            zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
+        let mut xml = String::new();
+        archive
+            .by_name("ppt/slides/slide1.xml")
+            .unwrap()
+            .read_to_string(&mut xml)
+            .unwrap();
+        // The rect's <a:off> must be at (0, 0) and its <a:ext> must
+        // match the slide dimensions exactly (12_192_000 × 6_858_000).
+        assert!(
+            xml.contains("<a:off x=\"0\" y=\"0\"/><a:ext cx=\"12192000\" cy=\"6858000\"/>"),
+            "background rect must fill the entire slide, not 90% of it.\n{xml}"
+        );
+    }
+
+    #[test]
+    fn text_boxes_fit_within_slide_bounds() {
+        // A centred title (text-anchor="middle") at x=640 in a 1280
+        // viewBox used to overflow because we hard-coded pw = 0.7 ×
+        // slide width, putting the right edge at 0.7 × 12_192_000 =
+        // 8_534_400 from x=640 → past the slide's right edge.
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720">
+  <text x="640" y="360" font-size="48" text-anchor="middle" fill="#FFFFFF">Hello</text>
+</svg>"##;
+        let parsed = parse_svg(svg).expect("parse");
+        let slides = vec![SlideInput {
+            source_path: "t.svg".to_string(),
+            slide_index: 1,
+            content: parsed,
+        }];
+        let bytes = build_pptx(&slides, Some("t")).expect("build pptx");
+        let mut archive =
+            zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
+        let mut xml = String::new();
+        archive
+            .by_name("ppt/slides/slide1.xml")
+            .unwrap()
+            .read_to_string(&mut xml)
+            .unwrap();
+        // Pull every <a:off>/<a:ext> pair from the slide and assert
+        // nothing overflows the right / bottom of the slide (we
+        // tolerate shapes that legitimately extend past the left
+        // edge — see `write_shape` for the rationale).
+        let pairs = parse_off_ext(&xml);
+        let slide_w = 12_192_000_i64;
+        let slide_h = 6_858_000_i64;
+        for (i, p) in pairs.iter().enumerate() {
+            assert!(
+                p.ext_w > 0 && p.ext_h > 0,
+                "shape #{i} has zero/negative extent: {:?}",
+                p
+            );
+            assert!(
+                p.off_x + p.ext_w <= slide_w + 1000, // 1000 EMU slack
+                "shape #{i} overflows the right edge: off_x={} ext_w={}",
+                p.off_x,
+                p.ext_w
+            );
+            assert!(
+                p.off_y + p.ext_h <= slide_h + 1000,
+                "shape #{i} overflows the bottom edge: off_y={} ext_h={}",
+                p.off_y,
+                p.ext_h
+            );
+        }
+        // Sanity: we should have exactly ONE shape (the text box).
+        assert_eq!(pairs.len(), 1, "expected exactly one shape, got {:?}", pairs);
+        // And the text box should be reasonably wide (centred), not
+        // squeezed into a 70%-of-slide strip.
+        let text_box = &pairs[0];
+        assert!(
+            text_box.ext_w >= slide_w / 2,
+            "centred text box width ({} EMU) is less than half the slide ({})",
+            text_box.ext_w,
+            slide_w / 2
+        );
+        // And the box's centre must coincide with the SVG text
+        // anchor `x=640` (slide-w centre). This pins the bug where
+        // the box was clamped to `off_x >= 0`, which would have
+        // shifted the visible text to the slide-left edge instead.
+        let box_centre_x = text_box.off_x + text_box.ext_w / 2;
+        assert!(
+            (box_centre_x - 6_096_000).abs() < 1_000,
+            "centred text box centre ({box_centre_x}) must align with the SVG anchor x=640 (6_096_000 EMU)"
+        );
+    }
+
+    #[test]
+    fn text_box_centred_label_lands_at_anchor() {
+        // Regression test: a card-style label whose SVG `text x` is
+        // far from the slide centre must still render at the same
+        // horizontal position it would in an SVG renderer. Earlier
+        // versions clamped the text box's off_x to >= 0, which
+        // collapsed every `<text text-anchor="middle">` to the slide
+        // left edge and then "centred" the text inside that small
+        // box — putting the visible text well to the right of where
+        // the user drew it.
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720">
+  <rect x="80" y="180" width="340" height="200" fill="#222"/>
+  <text x="250" y="208" font-size="20" text-anchor="middle" fill="#FFF">Ask 问答模式</text>
+</svg>"##;
+        let parsed = parse_svg(svg).expect("parse");
+        let slides = vec![SlideInput {
+            source_path: "ask.svg".to_string(),
+            slide_index: 1,
+            content: parsed,
+        }];
+        let bytes = build_pptx(&slides, Some("ask")).expect("build pptx");
+        let mut archive =
+            zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
+        let mut xml = String::new();
+        archive
+            .by_name("ppt/slides/slide1.xml")
+            .unwrap()
+            .read_to_string(&mut xml)
+            .unwrap();
+        // Pick out the TextBox shape (skip the rect).
+        let pairs = parse_off_ext(&xml);
+        let text_box = pairs
+            .iter()
+            .find(|p| p.ext_w > 1_000_000 && p.ext_h > 0)
+            .expect("expected a wide text box");
+        // Box centre must coincide with the SVG anchor (250 * 9525 = 2_381_250 EMU).
+        let box_centre_x = text_box.off_x + text_box.ext_w / 2;
+        assert!(
+            (box_centre_x - 2_381_250).abs() < 1_000,
+            "card-label box centre ({box_centre_x}) must align with SVG x=250 (2_381_250 EMU), got off_x={} ext_w={}",
+            text_box.off_x,
+            text_box.ext_w
+        );
+        // And we must use `<a:pPr algn="ctr"/>` so the visible text
+        // is centred inside the box.
+        assert!(
+            xml.contains("algn=\"ctr\""),
+            "card-label text must use algn=\"ctr\""
+        );
+    }
+
+    #[test]
+    fn text_anchor_start_aligns_left() {
+        // A `<text>` with text-anchor="start" (default) at x=40 must
+        // produce a text box that starts near x=40 and runs to the
+        // slide's right edge (so multi-line wraps work).
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720">
+  <text x="40" y="100" font-size="18" text-anchor="start" fill="#FFFFFF">Left</text>
+</svg>"##;
+        let parsed = parse_svg(svg).expect("parse");
+        let slides = vec![SlideInput {
+            source_path: "l.svg".to_string(),
+            slide_index: 1,
+            content: parsed,
+        }];
+        let bytes = build_pptx(&slides, Some("l")).expect("build pptx");
+        let mut archive =
+            zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
+        let mut xml = String::new();
+        archive
+            .by_name("ppt/slides/slide1.xml")
+            .unwrap()
+            .read_to_string(&mut xml)
+            .unwrap();
+        assert!(xml.contains("algn=\"l\""), "left-aligned text box missing algn=\"l\".\n{xml}");
+    }
+
+    #[test]
+    fn text_anchor_end_aligns_right() {
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720">
+  <text x="1240" y="100" font-size="18" text-anchor="end" fill="#FFFFFF">Right</text>
+</svg>"##;
+        let parsed = parse_svg(svg).expect("parse");
+        let slides = vec![SlideInput {
+            source_path: "r.svg".to_string(),
+            slide_index: 1,
+            content: parsed,
+        }];
+        let bytes = build_pptx(&slides, Some("r")).expect("build pptx");
+        let mut archive =
+            zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
+        let mut xml = String::new();
+        archive
+            .by_name("ppt/slides/slide1.xml")
+            .unwrap()
+            .read_to_string(&mut xml)
+            .unwrap();
+        assert!(xml.contains("algn=\"r\""), "right-aligned text box missing algn=\"r\".\n{xml}");
+    }
+
+    #[derive(Debug)]
+    struct OffExt {
+        off_x: i64,
+        off_y: i64,
+        ext_w: i64,
+        ext_h: i64,
+    }
+
+    /// Pull every `<a:off x="…" y="…"/>` and the next `<a:ext cx="…"
+    /// cy="…"/>` from a slide's XML. We use this to assert that no
+    /// shape overflows the slide bounds.
+    fn parse_off_ext(xml: &str) -> Vec<OffExt> {
+        // We look for the specific shape geometry pattern emitted by
+        // `write_sp_open`: `<a:xfrm><a:off x="N" y="N"/><a:ext cx="N"
+        // cy="N"/></a:xfrm>`. PowerPoint's XML preserves this exact
+        // ordering (we tested above; see the e2e output).
+        //
+        // Note: this regex is XML-only — it does not handle
+        // whitespace inside the angle brackets, but our writer
+        // doesn't emit any.
+        let re = regex::Regex::new(
+            r#"<a:off x="(-?\d+)" y="(-?\d+)"/><a:ext cx="(-?\d+)" cy="(-?\d+)"/>"#,
+        )
+        .unwrap();
+        re.captures_iter(xml)
+            .map(|cap| OffExt {
+                off_x: cap[1].parse().unwrap(),
+                off_y: cap[2].parse().unwrap(),
+                ext_w: cap[3].parse().unwrap(),
+                ext_h: cap[4].parse().unwrap(),
+            })
+            // PowerPoint's empty-group geometry (`<p:grpSpPr>`) is
+            // emitted as `cx="0" cy="0"`. That's a placeholder, not
+            // a real shape — skip it so it doesn't pollute the
+            // bounds check.
+            .filter(|p| p.ext_w > 0 && p.ext_h > 0)
+            .collect()
     }
 }

@@ -30,10 +30,10 @@ The tool writes a single file at `output_path` (must end in `.pptx`). After a su
 Each input SVG becomes one slide. To look its best in the deck, the SVG should:
 
 - Declare `xmlns="http://www.w3.org/2000/svg"` so PowerPoint's XML parser accepts it.
-- Declare a `viewBox="0 0 W H"` (or at least `width` + `height`) — the deck is 16:9 (13.333" × 7.5"), and the SVG is fit-to-slide preserving its aspect ratio. **Without a `viewBox` we fall back to width/height, which often produces off-centre results.**
+- Declare a `viewBox="0 0 W H"` (or at least `width` + `height`). **The slide size is derived from the SVG's viewBox** — e.g. `viewBox="0 0 1280 720"` becomes a 12.333" × 6.858" slide (the standard 16:9 PowerPoint canvas). SVG coordinates are projected 1:1 onto the slide, so a `<rect width="1280" height="720">` background paints the entire slide. **Without a `viewBox` we fall back to a 1280×720 default**, which is usually fine for the 16:9 case but will look off for square or portrait artwork.
 - Use the supported SVG subset listed in §4.
 
-If you want a different aspect ratio per slide, use a matching `viewBox` in the source SVG (e.g. `viewBox="0 0 1600 900"` for 16:9, `viewBox="0 0 1920 1080"` for 16:9 widescreen at higher precision).
+OOXML allows only ONE slide size per presentation, so the deck uses the **first** slide's viewBox for `<p:sldSz>`. If a later slide has a different aspect ratio, its shapes still project 1:1 into the same canvas — they just may letterbox or overflow. In practice every slide in a deck shares the same viewBox (the recommended authoring style), so this is rarely an issue.
 
 ---
 
