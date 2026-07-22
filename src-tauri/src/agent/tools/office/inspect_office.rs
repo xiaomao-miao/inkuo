@@ -230,7 +230,11 @@ async fn inspect_xlsx_metadata(path: &str, arguments: &Value) -> Result<String, 
             .map(|c| {
                 serde_json::json!({
                     "address": crate::office::cell_address(c.row, c.col),
-                    "formula": c.formula.as_ref().unwrap(),
+                    // Filter above guarantees `formula` is Some, but a
+                    // bare unwrap would still panic if the invariant
+                    // ever drifts — use expect with an actionable
+                    // message instead.
+                    "formula": c.formula.as_deref().expect("formula filter above"),
                 })
             })
             .collect();

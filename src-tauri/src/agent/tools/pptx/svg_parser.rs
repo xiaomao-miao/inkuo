@@ -18,6 +18,23 @@ use std::collections::BTreeMap;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 
+/// Return a reference to the innermost open `<g transform="…">` context,
+/// or identity if the stack is empty.
+///
+/// Used in place of `transforms.last().unwrap()` everywhere in the SVG
+/// walk: a malformed `<g>` close can underflow the stack and a stray
+/// shape outside any group used to panic the parser. Treating "no open
+/// group" as identity is a safe fallback — every shape builder applies
+/// its own group transform on top, so the resulting OOXML is still
+/// well-formed.
+#[inline]
+fn current_transform<'a>(transforms: &'a [Transform]) -> &'a Transform {
+    static IDENTITY_FALLBACK: std::sync::OnceLock<Transform> = std::sync::OnceLock::new();
+    transforms
+        .last()
+        .unwrap_or_else(|| IDENTITY_FALLBACK.get_or_init(Transform::identity))
+}
+
 /// A single SVG, after parsing.
 pub struct ParsedSvg {
     /// The canvas size in SVG user units. We centre the artwork onto the
@@ -201,9 +218,9 @@ pub fn parse_svg(svg: &str) -> Result<ParsedSvg, String> {
                     }
                     "g" => {
                         if let Some(t) = attrs.get("transform") {
-                            transforms.push(transforms.last().unwrap().compose(t));
+                            transforms.push(current_transform(&transforms).compose(t));
                         } else {
-                            transforms.push(*transforms.last().unwrap());
+                            transforms.push(*current_transform(&transforms));
                         }
                     }
                     "linearGradient" | "radialGradient" => {
@@ -236,33 +253,33 @@ pub fn parse_svg(svg: &str) -> Result<ParsedSvg, String> {
                         }
                     }
                     "rect" => {
-                        if let Some(shape) = build_rect(&attrs, transforms.last().unwrap(), &parsed.defs) {
+                        if let Some(shape) = build_rect(&attrs, current_transform(&transforms), &parsed.defs) {
                             parsed.shapes.push(shape);
                         }
                     }
                     "circle" => {
-                        if let Some(shape) = build_circle(&attrs, transforms.last().unwrap(), &parsed.defs) {
+                        if let Some(shape) = build_circle(&attrs, current_transform(&transforms), &parsed.defs) {
                             parsed.shapes.push(shape);
                         }
                     }
                     "ellipse" => {
-                        if let Some(shape) = build_ellipse(&attrs, transforms.last().unwrap(), &parsed.defs) {
+                        if let Some(shape) = build_ellipse(&attrs, current_transform(&transforms), &parsed.defs) {
                             parsed.shapes.push(shape);
                         }
                     }
                     "line" => {
-                        if let Some(shape) = build_line(&attrs, transforms.last().unwrap(), &parsed.defs) {
+                        if let Some(shape) = build_line(&attrs, current_transform(&transforms), &parsed.defs) {
                             parsed.shapes.push(shape);
                         }
                     }
                     "path" => {
-                        if let Some(shape) = build_path(&attrs, transforms.last().unwrap(), &parsed.defs) {
+                        if let Some(shape) = build_path(&attrs, current_transform(&transforms), &parsed.defs) {
                             parsed.shapes.push(shape);
                         }
                     }
                     "polyline" | "polygon" => {
                         if let Some(shape) =
-                            build_poly(&tag, &attrs, transforms.last().unwrap(), &parsed.defs)
+                            build_poly(&tag, &attrs, current_transform(&transforms), &parsed.defs)
                         {
                             parsed.shapes.push(shape);
                         }
@@ -287,7 +304,7 @@ pub fn parse_svg(svg: &str) -> Result<ParsedSvg, String> {
                                 opacity: attrs
                                     .get("opacity")
                                     .and_then(|v| v.parse().ok()),
-                                transform: *transforms.last().unwrap(),
+                                transform: *current_transform(&transforms),
                                 text_anchor: attrs
                                     .get("text-anchor")
                                     .cloned()
@@ -372,33 +389,33 @@ pub fn parse_svg(svg: &str) -> Result<ParsedSvg, String> {
 
                 match tag.as_str() {
                     "rect" => {
-                        if let Some(shape) = build_rect(&attrs, transforms.last().unwrap(), &parsed.defs) {
+                        if let Some(shape) = build_rect(&attrs, current_transform(&transforms), &parsed.defs) {
                             parsed.shapes.push(shape);
                         }
                     }
                     "circle" => {
-                        if let Some(shape) = build_circle(&attrs, transforms.last().unwrap(), &parsed.defs) {
+                        if let Some(shape) = build_circle(&attrs, current_transform(&transforms), &parsed.defs) {
                             parsed.shapes.push(shape);
                         }
                     }
                     "ellipse" => {
-                        if let Some(shape) = build_ellipse(&attrs, transforms.last().unwrap(), &parsed.defs) {
+                        if let Some(shape) = build_ellipse(&attrs, current_transform(&transforms), &parsed.defs) {
                             parsed.shapes.push(shape);
                         }
                     }
                     "line" => {
-                        if let Some(shape) = build_line(&attrs, transforms.last().unwrap(), &parsed.defs) {
+                        if let Some(shape) = build_line(&attrs, current_transform(&transforms), &parsed.defs) {
                             parsed.shapes.push(shape);
                         }
                     }
                     "path" => {
-                        if let Some(shape) = build_path(&attrs, transforms.last().unwrap(), &parsed.defs) {
+                        if let Some(shape) = build_path(&attrs, current_transform(&transforms), &parsed.defs) {
                             parsed.shapes.push(shape);
                         }
                     }
                     "polyline" | "polygon" => {
                         if let Some(shape) =
-                            build_poly(&tag, &attrs, transforms.last().unwrap(), &parsed.defs)
+                            build_poly(&tag, &attrs, current_transform(&transforms), &parsed.defs)
                         {
                             parsed.shapes.push(shape);
                         }
