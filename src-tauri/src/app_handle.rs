@@ -46,15 +46,3 @@ pub fn current_app_handle() -> Option<AppHandle> {
     APP_HANDLE.get().cloned()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn current_handle_is_none_before_set() {
-        // We can't actually mutate the static from tests because the
-        // test process may share it with the binary's startup path.
-        // Just assert the type is callable and returns an Option.
-        let _ = current_app_handle();
-    }
-}

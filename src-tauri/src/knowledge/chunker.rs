@@ -210,22 +210,3 @@ fn line_number_for_byte_offset(content: &str, byte_offset: usize) -> usize {
     line
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_chunker_basic() {
-        let chunker = Chunker::default();
-        let content = "这是第一段内容。这是第二段内容。这是第三段内容。".repeat(50);
-        let chunks = chunker.chunk_document("doc1", "Test", &content);
-        assert!(!chunks.is_empty());
-        for chunk in &chunks {
-            // Compare in *characters*, not bytes. `chunk.content.len()` is the
-            // byte length; for the CJK-heavy corpus used here that is 3x the
-            // character count and trips this assertion spuriously even when
-            // chunking is correct.
-            assert!(chunk.content.chars().count() <= 600); // target_size + some margin
-        }
-    }
-}

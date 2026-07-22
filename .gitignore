@@ -34,6 +34,12 @@ src-tauri/target/
 
 # Local-only test/scratch workspace (never commit)
 test（nogit）/
+# test/ is the user's runtime scratch dir for one-off agent runs and
+# regenerable output samples (docx / pptx / svg / png / py). Anything
+# real lives under test/slides/ (committed demo assets) or under
+# dedicated test infrastructure; everything else is throwaway.
+test/*
+!test/slides/
 
 # workspace-local inkuo runtime data (snapshots, knowledge cache, etc.)
 .inkuo/

@@ -296,7 +296,7 @@ pub use plan_tools::{CreatePlanTool, CreatePlanArgs, PlanFileTouch};
 pub use mermaid_tools::RenderMermaidTool;
 pub use svg_tools::{CreateSvgTool, CreateSvgOutcome};
 pub use pptx_tools::{CreatePptxTool, CreatePptxOutcome};
-pub use pptx_animation_tools::{CreatePptxAnimationToolImpl as CreatePptxAnimationTool, AddAnimationToolImpl as AddAnimationTool};
+pub use pptx_animation_tools::{CreatePptxAnimationTool, AddAnimationTool};
 pub use web_search_tool::WebSearchTool;
 pub use ask_user_tools::AskUserTool;
 pub use media_tools::{ReadImageTool, ReadPdfTool};
