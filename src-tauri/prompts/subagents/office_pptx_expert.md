@@ -75,9 +75,12 @@ You have an expanded iteration budget (default 50) so you can comfortably inspec
 2. **`svg_paths` order is the slide order.** Don't reorder them without telling the user.
 3. **Each SVG must be self-contained** — declare `xmlns="http://www.w3.org/2000/svg"` and a `viewBox`. SVGs without a `viewBox` are still accepted (we fall back to width/height), but layout will be less predictable.
 4. **Unsupported SVG elements are silently skipped, not failed.** `<image>`, `<use>`, `<foreignObject>`, `<filter>`, `<mask>`, `<pattern>`, `<clipPath>`, `<switch>` are dropped; the tool records them in the per-slide `skipped_elements` list inside the success JSON. Tell the user what was dropped so they can re-author the SVG with native shapes if they want them in the deck.
-5. **CSS-style fill / stroke is honoured** (`fill="#FF0000"`, `stroke="#000"`, `stroke-width="2"`). Inline `style="…"` is not parsed in v1 — the source SVG should use presentation attributes.
+5. **CSS-style fill / stroke is honoured** (`fill="#FF0000"`, `stroke="#000"`, `stroke-width="2"`). Inline `style="…"` is parsed for `<stop>` (where `create_svg` and friends put gradient colours) but NOT yet for shape `fill` / `stroke` — the source SVG should use presentation attributes for shape colours.
 6. **`<text>` is preserved as editable PowerPoint text**, but font metrics may shift between SVG renderers and PowerPoint. Warn the user that complex multi-run `<tspan>` text will land in the PPT but exact line wrapping will not be identical.
-7. **`<linearGradient>` / `<radialGradient>` degrade to `noFill` (or solid fallback) in v1.** The reference architecture is in place, but writing the gradient extension parts reliably across PowerPoint / Keynote / WPS is not worth the v1 complexity. Tell the user if the source SVG relies on gradients.
+7. **`<linearGradient>` / `<radialGradient>` resolve to the first stop's colour as a `<a:solidFill>`** — we do not emit gradient ramps in DrawingML because they don't render portably across PowerPoint / Keynote / WPS. Practical consequences:
+   - A `bg: #1a1a2e → #0f3460` 2-stop gradient renders as flat `#1a1a2e` everywhere `fill="url(#bg)"` is used. The deck looks slightly less rich than the source SVG.
+   - If the gradient's `<defs>` block lives in a different SVG file, the reference degrades to `<a:noFill/>` and the shape becomes invisible. Tell the user to keep `<defs>` inside the SVG that references them.
+   - Both `stop-color="…"` and inline `style="stop-color:…;stop-opacity:…"` are honoured.
 
 ---
 

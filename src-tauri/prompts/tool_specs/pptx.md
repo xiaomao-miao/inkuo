@@ -59,9 +59,18 @@ Every element below becomes a native PowerPoint shape — fully editable:
 | `<filter>` / `<mask>` / `<clipPath>`     | DrawingML filter stacks are not portable; we'd need per-renderer fallbacks. |
 | `<pattern>`                      | Pattern fills require a separate theme part.                   |
 | `<switch>`                       | SVG runtime content-negotiation; not meaningful in PPT.        |
-| `<linearGradient>` / `<radialGradient>` | v1 degrades to `noFill`. Mention this to the user if their SVG uses gradients. |
 
-CSS-style presentation attributes are honoured (`fill="..."`, `stroke="..."`, `stroke-width="..."`, `fill-opacity="..."`, `opacity="..."`). Inline `style="…"` declarations are NOT parsed in v1 — the source SVG should prefer presentation attributes.
+### `<linearGradient>` / `<radialGradient>` — first-stop fallback
+
+Shapes filled with `url(#id)` references **are** supported: the parser walks the `<defs>` block, captures the first `<stop>`'s colour (and `stop-opacity`), and emits that as the shape's `<a:solidFill>`. Subsequent stops in the same gradient are intentionally ignored — we don't try to recreate the colour ramp in DrawingML because the ramp doesn't render portably across PowerPoint / Keynote / WPS. Practical consequences:
+
+- A 2-stop `bg: #1a1a2e → #0f3460` gradient resolves to `#1a1a2e` everywhere the SVG uses `fill="url(#bg)"`. The deck looks slightly less rich than the source SVG; that's the trade-off for portability.
+- If the gradient lives in a different SVG (no matching `<linearGradient id="…">` block in the source file), the reference degrades to `<a:noFill/>` and the shape becomes invisible. The `skipped_elements` field doesn't list this case, so always tell the user to expect solid-colour fills when they ask for gradients.
+- Both the standalone `stop-color="…"` attribute and the inline `style="stop-color:…"` form are honoured.
+
+If the user actually wants the full gradient ramp to land in PPT, the only escape hatch today is `render_mermaid`-style raster output — recommend that instead.
+
+CSS-style presentation attributes are honoured (`fill="..."`, `stroke="..."`, `stroke-width="..."`, `fill-opacity="..."`, `opacity="..."`). Inline `style="…"` declarations on shape elements are NOT parsed in v1 — the source SVG should prefer presentation attributes. (Inline `style="…"` IS parsed for `<stop>` because that's where `create_svg` and friends put gradient colours.)
 
 ---
 
@@ -77,13 +86,11 @@ CSS-style presentation attributes are honoured (`fill="..."`, `stroke="..."`, `s
 }
 ```
 
-### 5.3 Re-author an SVG to fix a gradient
+### 5.3 SVG uses `<g transform="translate(x, y) scale(s)">`
 
-If the source SVG uses `<linearGradient>` and the user complains the PPT shapes are empty:
+No special handling needed — `create_pptx` walks the SVG, applies the parent transform to every child coordinate (including `<path>` `d` attributes), and emits the result as a native OOXML shape. So `<g transform="translate(100, 50)"><path d="M 10 20 L 30 40 Z"/></g>` becomes a path with points `(110, 70) → (130, 90)` on the slide.
 
-1. Read the SVG with `read_file`.
-2. Re-author: replace `<rect fill="url(#bg)"/>` with a solid `<rect fill="#7C5CFF"/>`, or duplicate the gradient as solid colour stops via separate stacked rects.
-3. Re-call `create_pptx` with the same arguments.
+Only `translate` + uniform `scale` are honoured. `rotate`, `skewX/Y`, and `matrix(...)` are silently ignored — the shape will still draw, just untransformed.
 
 ---
 
@@ -95,7 +102,7 @@ If the source SVG uses `<linearGradient>` and the user complains the PPT shapes 
 | Tool rejects: empty `svg_paths`                      | Add at least one SVG path.                                                                |
 | Tool rejects: a `svg_paths` entry doesn't end in `.svg` | Fix the path.                                                                            |
 | Tool returns: per-slide `skipped_elements` non-empty | Tell the user which elements were dropped (e.g. "slide 1 lost 1 `<image>` element"). Suggest re-authoring if the dropped elements matter. |
-| PowerPoint opens the deck but a shape is invisible   | The source SVG used `fill="none"` or a gradient — re-author with a solid fill.            |
+| PowerPoint opens the deck but a shape is invisible   | The source SVG explicitly used `fill="none"` for that shape — re-author with a solid fill, OR the SVG referenced a gradient whose `<defs>` block is in a different file (we degrade to noFill in that case — re-author or merge the gradients into the SVG itself). |
 | User wanted rasterised images for fidelity           | This tool does NOT do that — switch to `render_mermaid` (PNG) for raster output.         |
 
 ---
@@ -104,7 +111,7 @@ If the source SVG uses `<linearGradient>` and the user complains the PPT shapes 
 
 1. **Confirm the user wants an editable deck, not a flat image sequence.** The single biggest reason for rework is the user expecting raster fidelity and getting editable shapes instead.
 2. **Verify every input SVG exists** (`list_dir` / `glob`).
-3. **Check the SVGs are compatible** with §4's supported subset. If unsure, peek at the source with `read_file` — `<image>` / `<use>` / `<foreignObject>` / gradients are the common surprises.
+3. **Check the SVGs are compatible** with §4's supported subset. If unsure, peek at the source with `read_file` — `<image>` / `<use>` / `<foreignObject>` are the common surprises. Gradients are supported but resolve to the first stop's colour, so manage user expectations accordingly.
 4. **Call `create_pptx`** with the full `svg_paths[]` in the order the user wants.
 5. **Tell the user what was made** — file path, slide count, any skipped elements.
 6. **If the user wants tweaks**, re-author the source SVG and re-call `create_pptx` with the same `output_path` (the tool overwrites).
