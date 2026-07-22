@@ -23,7 +23,6 @@ export function serializeSvg(svg: SVGSVGElement): string {
   const cloned = svg.cloneNode(true) as SVGSVGElement;
 
   const EDIT_HANDLE_ATTR = "data-svg-edit-handle";
-  const EDIT_ID_ATTR = "data-svg-edit-id";
   const wrappers = cloned.querySelectorAll(`[${EDIT_HANDLE_ATTR}]`);
   wrappers.forEach((node) => {
     node.removeAttribute(EDIT_HANDLE_ATTR);

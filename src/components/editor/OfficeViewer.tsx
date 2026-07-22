@@ -439,10 +439,8 @@ export const WordEditor: React.FC<WordEditorProps> = ({
 
   const notify = useCallback((kind: 'error' | 'info', message: string) => {
     if (kind === 'error') {
-      // eslint-disable-next-line no-console
       console.error('[WordToolbar]', message);
     } else {
-      // eslint-disable-next-line no-console
       console.info('[WordToolbar]', message);
     }
   }, []);

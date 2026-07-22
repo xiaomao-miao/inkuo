@@ -1,5 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { EditorView } from 'prosemirror-view';
 import type { Mark, MarkType, Node as PMNode } from 'prosemirror-model';
 import {
@@ -87,362 +86,50 @@ import {
   PanelTop,
   PanelBottom,
   PencilLine,
-  type LucideIcon,
 } from 'lucide-react';
 import styles from './WordToolbar.module.css';
+import {
+  FONT_FAMILIES,
+  FONT_SIZES_PT,
+  TEXT_COLORS,
+  HIGHLIGHT_COLORS,
+  PARAGRAPH_STYLES,
+  ZOOM_LEVELS,
+  LINE_SPACING_OPTIONS,
+  SYMBOLS,
+  WATERMARK_COLORS,
+  WATERMARK_FONTS,
+  MATH_PRESETS,
+} from './constants';
+import { hpToPt, rgbToHex, isViewReady, runCommand } from './helpers';
+import {
+  IconButton,
+  Dropdown,
+  DropdownPortal,
+  FormPopover,
+} from './primitives';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-
-const FONT_FAMILIES = [
-  'Microsoft YaHei',
-  'SimSun',
-  'SimHei',
-  'KaiTi',
-  'FangSong',
-  'Arial',
-  'Times New Roman',
-  'Calibri',
-  'Helvetica',
-  'Georgia',
-  'Tahoma',
-  'Verdana',
-];
-
-const FONT_SIZES_PT = [8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 28, 32, 36, 48, 72, 96];
-
-const TEXT_COLORS = [
-  '#000000', '#434343', '#666666', '#999999', '#B7B7B7', '#CCCCCC', '#D9D9D9', '#EFEFEF', '#F3F3F3', '#FFFFFF',
-  '#980000', '#FF0000', '#FF9900', '#FFFF00', '#00FF00', '#00FFFF', '#4A86E8', '#0000FF', '#9900FF', '#FF00FF',
-  '#E6B8B7', '#F4CCCC', '#FCE5CD', '#FFF2CC', '#D9EAD3', '#D0E0E3', '#C9DAF8', '#CFE2F3', '#D9D2E9', '#EAD1DC',
-];
-
-const HIGHLIGHT_COLORS = [
-  'none', 'yellow', 'green', 'cyan', 'magenta', 'red', 'blue', 'darkBlue', 'darkCyan', 'darkGreen',
-  'darkMagenta', 'darkRed', 'darkYellow', 'darkGray', 'lightGray', 'black', 'white',
-];
-
-const PARAGRAPH_STYLES: Array<{ value: string; label: string }> = [
-  { value: 'Normal', label: '正文' },
-  { value: 'Heading1', label: '标题 1' },
-  { value: 'Heading2', label: '标题 2' },
-  { value: 'Heading3', label: '标题 3' },
-  { value: 'Heading4', label: '标题 4' },
-  { value: 'Heading5', label: '标题 5' },
-  { value: 'Heading6', label: '标题 6' },
-  { value: 'Title', label: '标题' },
-  { value: 'Subtitle', label: '副标题' },
-  { value: 'Quote', label: '引用' },
-  { value: 'IntenseQuote', label: '明显引用' },
-  { value: 'ListParagraph', label: '列表段落' },
-  { value: 'NoSpacing', label: '无间距' },
-];
-
-const ZOOM_LEVELS = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3];
-
-const LINE_SPACING_OPTIONS = [
-  { value: '1', label: '1.0' },
-  { value: '1.15', label: '1.15' },
-  { value: '1.5', label: '1.5' },
-  { value: '2', label: '2.0' },
-  { value: '2.5', label: '2.5' },
-  { value: '3', label: '3.0' },
-];
-
-// (kept for reference; rows/cols are bounded directly inside TablePicker)
-
-const SYMBOLS = [
-  '§', '©', '®', '™', '¶', '†', '‡', '•', '…', '–', '—', '·',
-  '€', '£', '¥', '¢', '₹', '₽', '₩', '₪', '¢', '¤',
-  '°', '′', '″', 'µ', 'π', 'Ω', '∞', '√', '÷', '×', '±', '≈', '≠', '≤', '≥', '∑',
-  '←', '→', '↑', '↓', '↔', '⇒', '⇔',
-  '★', '☆', '♠', '♡', '♢', '♣', '♪', '♫', '♥', '♦', '♀', '♂',
-  '☺', '☻', '✓', '✗', '✔', '✘',
-  '☎', '✉', '✂', '✏', '✒', '⚙', '⚡', '⚠', '☂', '❤',
-];
+//
+// Constants live in `./constants.ts`. They were previously inlined here; the
+// split keeps the toolbar file focused on layout + behaviour and lets other
+// surfaces (Excel toolbar, future command-palette UI) reuse the same lists.
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-// Returns true only if the view is alive AND has a valid state to dispatch
-// against. ProseMirror nulls `view.state` during teardown, so a stale `view`
-// ref captured by a click handler can survive a tab switch / file reload and
-// cause `Cannot read properties of undefined (reading 'schema')` deep inside
-// `chainCommands`. Treat that as "no view" rather than passing it on. The
-// schema check is non-obvious but matters: during the very first render after
-// `EditorView` construction, `view.state` is set synchronously but `schema`
-// is wired in slightly later by prosemirror internals; calling any of our
-// query helpers in that gap throws and unmounts the whole React tree.
-function isViewReady(view: EditorView | null): view is EditorView {
-  return !!view && !!view.state && !!view.state.schema;
-}
-
-// ProseMirror command-runner code (e.g. `chunk-STIS5BU3.js:4713`) destructures
-// `state.schema` at the very top of many commands, including `insertPageBreak`
-// from `@eigenpal/docx-editor-core`. If `state` is undefined that throws an
-// uncatchable TypeError out of the click handler. Belt-and-suspenders: guard at
-// the dispatch site too, so even if a future call leaks past `isViewReady` we
-// degrade to a no-op rather than a black-screen crash.
-function runCommand(view: EditorView | null, command: (state: any, dispatch?: any, view?: any) => boolean) {
-  if (!isViewReady(view)) return;
-  try {
-    command(view.state, view.dispatch, view);
-  } catch (err) {
-    // Swallow command-runner crashes during teardown races. The view will be
-    // re-created on the next legitimate interaction; we never want a transient
-    // ProseMirror teardown to bring down the React tree (and the Tauri window).
-    if (import.meta.env?.DEV) {
-      // eslint-disable-next-line no-console
-      console.warn('[WordToolbar] command dispatch ignored:', err);
-    }
-  }
-}
-
-function hpToPt(hp: unknown): number | null {
-  if (hp == null) return null;
-  const n = typeof hp === 'number' ? hp : Number(hp);
-  if (!Number.isFinite(n)) return null;
-  return Math.round(n / 2);
-}
-
-function rgbToHex(rgb: unknown): string | null {
-  if (!rgb) return null;
-  const s = String(rgb);
-  return s.startsWith('#') ? s : `#${s}`;
-}
+//
+// `isViewReady`, `runCommand`, `hpToPt`, `rgbToHex`, and the
+// `useDropdownPosition` / `useEscapeToClose` / `usePlacementTransform` hooks
+// live in `./helpers.ts`. They are pulled out so the dispatch path can be
+// shared with other ProseMirror consumers without importing the entire
+// toolbar component.
 
 // ─── Sub-buttons ──────────────────────────────────────────────────────────────
-
-interface IconButtonProps {
-  icon: LucideIcon | React.ComponentType<{ size?: number }>;
-  title: string;
-  active?: boolean;
-  disabled?: boolean;
-  onClick: () => void;
-  size?: number;
-  /** Forwarded to the underlying <button> so callers can anchor popovers. */
-  buttonRef?: React.RefObject<HTMLButtonElement | null>;
-}
-
-const IconButton: React.FC<IconButtonProps> = ({
-  icon: Icon,
-  title,
-  active,
-  disabled,
-  onClick,
-  size,
-  buttonRef,
-}) => (
-  <button
-    ref={buttonRef}
-    type="button"
-    className={`${styles.wToolbarIconBtn} ${active ? styles.wToolbarIconBtnActive : ''}`}
-    title={title}
-    aria-label={title}
-    aria-pressed={active}
-    disabled={disabled}
-    onMouseDown={(e) => e.preventDefault() /* keep editor focus */}
-    onClick={onClick}
-  >
-    <Icon size={size ?? 13} />
-  </button>
-);
-
-interface DropdownPortalLayout {
-  top: number;
-  left: number;
-  width: number;
-  /** Whether the menu opens below or above the trigger. */
-  placement: 'bottom' | 'top';
-}
-
-/**
- * Compute the fixed-position coordinates for a dropdown menu anchored to a
- * trigger element. Works regardless of any `overflow: hidden` / `contain`
- * ancestors the trigger sits inside, because the menu itself is rendered
- * into a portal at `document.body` (see `DropdownPortal`).
- */
-function useDropdownPosition(
-  triggerRef: React.RefObject<HTMLElement | null>,
-  open: boolean,
-): DropdownPortalLayout | null {
-  const [layout, setLayout] = useState<DropdownPortalLayout | null>(null);
-
-  useLayoutEffect(() => {
-    if (!open) {
-      setLayout(null);
-      return;
-    }
-    const compute = () => {
-      const el = triggerRef.current;
-      if (!el) return;
-      const rect = el.getBoundingClientRect();
-      const GAP = 2;
-      const MARGIN = 8;
-      const MIN_BELOW = 160; // heuristic: prefer flipping up if below space is tiny
-      const viewportH = window.innerHeight;
-      const spaceBelow = viewportH - rect.bottom - MARGIN;
-      const spaceAbove = rect.top - MARGIN;
-      const placement: 'bottom' | 'top' =
-        spaceBelow >= MIN_BELOW || spaceBelow >= spaceAbove ? 'bottom' : 'top';
-      setLayout({
-        top: placement === 'bottom' ? rect.bottom + GAP : rect.top - GAP,
-        left: rect.left,
-        width: rect.width,
-        placement,
-      });
-    };
-    compute();
-    window.addEventListener('resize', compute);
-    window.addEventListener('scroll', compute, true);
-    return () => {
-      window.removeEventListener('resize', compute);
-      window.removeEventListener('scroll', compute, true);
-    };
-  }, [open, triggerRef]);
-
-  return layout;
-}interface DropdownPortalProps {
-  triggerRef: React.RefObject<HTMLElement | null>;
-  open: boolean;
-  onClose: () => void;
-  /** Class name applied to the menu panel. */
-  menuClassName?: string;
-  /** Optional style override for the menu panel (used to anchor placement / width). */
-  menuStyle?: React.CSSProperties;
-  children: React.ReactNode;
-}
-
-/**
- * Renders a backdrop + menu into `document.body` so the menu escapes any
- * `overflow: hidden` / `contain` ancestors of the trigger (e.g. the toolbar
- * root and the office stack). Closes on backdrop click and on Escape.
- */
-const DropdownPortal: React.FC<DropdownPortalProps> = ({
-  triggerRef,
-  open,
-  onClose,
-  menuClassName,
-  menuStyle,
-  children,
-}) => {
-  const layout = useDropdownPosition(triggerRef, open);
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.stopPropagation();
-        onClose();
-      }
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [open, onClose]);
-
-  // Re-apply the upward translate whenever the menu mounts or `placement`
-  // changes (e.g. after a resize that pushes the trigger close to the bottom
-  // of the viewport and flips the menu to open upward). Without this,
-  // the ref callback alone would only run on initial mount.
-  useLayoutEffect(() => {
-    const el = menuRef.current;
-    if (!el || !layout) return;
-    if (layout.placement === 'top') {
-      el.style.transform = `translateY(-${el.offsetHeight}px)`;
-    } else {
-      el.style.transform = '';
-    }
-  }, [layout, open]);
-
-  if (typeof document === 'undefined') return null;
-  if (!open || !layout) return null;
-
-  const anchorStyle: React.CSSProperties = {
-    position: 'fixed',
-    top: layout.top,
-    left: layout.left,
-    minWidth: layout.width,
-    zIndex: 1000,
-  };
-
-  return createPortal(
-    <>
-      <div
-        className={styles.wDropdownBackdrop}
-        onMouseDown={(e) => {
-          // Prevent the editor's mousedown handler from stealing focus
-          // before we close.
-          e.preventDefault();
-          e.stopPropagation();
-          onClose();
-        }}
-      />
-      <div
-        ref={menuRef}
-        className={`${styles.wDropdownMenu} ${menuClassName ?? ''}`}
-        style={{ ...anchorStyle, ...menuStyle }}
-      >
-        {children}
-      </div>
-    </>,
-    document.body,
-  );
-};
-
-interface DropdownProps {
-  value: string;
-  options: Array<{ value: string; label: string }>;
-  onChange: (value: string) => void;
-  title: string;
-  width?: number;
-  displayValue?: string;
-  icon?: LucideIcon;
-}
-
-const Dropdown: React.FC<DropdownProps> = ({
-  value,
-  options,
-  onChange,
-  title,
-  width,
-  displayValue,
-  icon: Icon,
-}) => {
-  const [open, setOpen] = useState(false);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const current = options.find((o) => o.value === value);
-  const close = useCallback(() => setOpen(false), []);
-  return (
-    <div className={styles.wDropdown} style={width ? { width } : undefined}>
-      <button
-        ref={triggerRef}
-        type="button"
-        className={styles.wDropdownTrigger}
-        title={title}
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => setOpen((o) => !o)}
-      >
-        {Icon && <Icon size={12} />}
-        <span className={styles.wDropdownLabel}>{displayValue ?? current?.label ?? value}</span>
-        <ChevronDown size={11} />
-      </button>
-      <DropdownPortal triggerRef={triggerRef} open={open} onClose={close}>
-        {options.map((o) => (
-          <button
-            key={o.value}
-            type="button"
-            className={`${styles.wDropdownOption} ${o.value === value ? styles.wDropdownOptionActive : ''}`}
-            onClick={() => {
-              onChange(o.value);
-              setOpen(false);
-            }}
-          >
-            {o.label}
-          </button>
-        ))}
-      </DropdownPortal>
-    </div>
-  );
-};
+//
+// `IconButton`, `Dropdown`, `DropdownPortal`, and `FormPopover` live in
+// `./primitives.tsx`. They were previously inlined here; extracting them lets
+// the Excel/PowerPoint toolbars reuse the same chrome without re-declaring
+// the menu positioning logic, and keeps this file focused on the WordToolbar
+// layout itself.
 
 interface FontSizeDropdownProps {
   value: number;
@@ -749,141 +436,11 @@ const SymbolPicker: React.FC<SymbolPickerProps> = ({ onInsert }) => {
 };
 
 // ─── Settings popovers (replace window.prompt with in-app panels) ─────────────
-
-/**
- * `FormPopover` wraps `DropdownPortal` and adds a consistent settings-panel
- * chrome (title bar + footer with Cancel/Confirm). Triggered by a toolbar
- * button; renders into a portal at `<body>` so it escapes any `overflow:hidden`
- * ancestor. Used to replace the legacy `window.prompt` calls with an in-app
- * panel themed to match the rest of the toolbar.
- */
-interface FormPopoverProps {
-  triggerRef: React.RefObject<HTMLElement | null>;
-  open: boolean;
-  onClose: () => void;
-  /** Header label shown above the form body. */
-  title: string;
-  /** Optional leading icon next to the title (lucide component or string char). */
-  titleIcon?: React.ReactNode;
-  /** Approximate menu width in px. */
-  width?: number;
-  /** Body content (form fields). */
-  children: React.ReactNode;
-  /** Footer button labels. Defaults: "取消" / "确定". */
-  confirmLabel?: string;
-  cancelLabel?: string;
-  /** Disable the confirm button (e.g. invalid form). */
-  confirmDisabled?: boolean;
-  /** Confirm handler. */
-  onConfirm: () => void;
-}
-
-/**
- * Renders a settings panel into a portal at `<body>`. The panel shares
- * styling with the existing dropdown menus but lays out vertically: a
- * header row, a scrollable body, and a footer row with action buttons.
- */
-const FormPopover: React.FC<FormPopoverProps> = ({
-  triggerRef,
-  open,
-  onClose,
-  title,
-  titleIcon,
-  width = 320,
-  children,
-  confirmLabel = '确定',
-  cancelLabel = '取消',
-  confirmDisabled,
-  onConfirm,
-}) => {
-  const layout = useDropdownPosition(triggerRef, open);
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  // Reset the upward translate whenever the menu opens or placement changes.
-  useLayoutEffect(() => {
-    const el = menuRef.current;
-    if (!el || !layout) return;
-    if (layout.placement === 'top') {
-      el.style.transform = `translateY(-${el.offsetHeight}px)`;
-    } else {
-      el.style.transform = '';
-    }
-  }, [layout, open]);
-
-  // Submit on Enter, cancel on Escape (handled by DropdownPortal's keydown,
-  // we only handle Enter here to keep the wiring self-contained).
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Enter' && !e.shiftKey && !e.altKey) {
-        const tag = (e.target as HTMLElement | null)?.tagName;
-        // Avoid hijacking Enter inside multi-line textareas.
-        if (tag === 'TEXTAREA') return;
-        if (confirmDisabled) return;
-        e.preventDefault();
-        onConfirm();
-      }
-    };
-    window.addEventListener('keydown', onKey, true);
-    return () => window.removeEventListener('keydown', onKey, true);
-  }, [open, confirmDisabled, onConfirm]);
-
-  if (typeof document === 'undefined') return null;
-  if (!open || !layout) return null;
-
-  const anchorStyle: React.CSSProperties = {
-    position: 'fixed',
-    top: layout.top,
-    left: layout.left,
-    width,
-    zIndex: 1000,
-  };
-
-  return createPortal(
-    <>
-      <div
-        className={styles.wDropdownBackdrop}
-        onMouseDown={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          onClose();
-        }}
-      />
-      <div
-        ref={menuRef}
-        className={`${styles.wDropdownMenu} ${styles.wFormMenu}`}
-        style={anchorStyle}
-        role="dialog"
-        aria-label={title}
-        onMouseDown={(e) => e.stopPropagation()}
-      >
-        <div className={styles.wFormHeader}>
-          {titleIcon && <span className={styles.wFormHeaderIcon}>{titleIcon}</span>}
-          <span className={styles.wFormHeaderTitle}>{title}</span>
-        </div>
-        <div className={styles.wFormBody}>{children}</div>
-        <div className={styles.wFormFooter}>
-          <button
-            type="button"
-            className={styles.wFormBtnSecondary}
-            onClick={onClose}
-          >
-            {cancelLabel}
-          </button>
-          <button
-            type="button"
-            className={styles.wFormBtnPrimary}
-            disabled={confirmDisabled}
-            onClick={onConfirm}
-          >
-            {confirmLabel}
-          </button>
-        </div>
-      </div>
-    </>,
-    document.body,
-  );
-};
+//
+// `FormPopover` lives in `./primitives.tsx`. Word-specific panels
+// (LinkPopover, MathPopover, WatermarkPopover, HeaderFooterPopover) stay here
+// because they hold domain-specific layout + LaTeX / watermark / page-number
+// presets that have no value outside the Word editor.
 
 // ─── LinkPopover ──────────────────────────────────────────────────────────────
 
@@ -992,17 +549,10 @@ const LinkPopover: React.FC<LinkPopoverProps> = ({
 };
 
 // ─── MathPopover ──────────────────────────────────────────────────────────────
-
-const MATH_PRESETS = [
-  { label: 'x²+y²=r²', latex: 'x^2 + y^2 = r^2' },
-  { label: '√(a²+b²)', latex: '\\sqrt{a^2 + b^2}' },
-  { label: 'a/b 分数', latex: '\\frac{a}{b}' },
-  { label: 'Σ 求和', latex: '\\sum_{i=1}^{n} x_i' },
-  { label: '∫ 积分', latex: '\\int_a^b f(x)\\,dx' },
-  { label: 'lim 极限', latex: '\\lim_{x \\to 0} \\frac{\\sin x}{x}' },
-  { label: '矩阵', latex: '\\begin{bmatrix} a & b \\\\ c & d \\end{bmatrix}' },
-  { label: '希腊 αβγ', latex: '\\alpha\\,\\beta\\,\\gamma' },
-];
+//
+// MATH_PRESETS now lives in `./constants.ts` (imported at the top of the file)
+// so the Excel and future toolbars can reuse the same equation chips if they
+// ever ship a math-insertion flow.
 
 interface MathPopoverProps {
   triggerRef: React.RefObject<HTMLElement | null>;
@@ -1069,25 +619,9 @@ const MathPopover: React.FC<MathPopoverProps> = ({ triggerRef, open, onClose, on
 };
 
 // ─── WatermarkPopover ─────────────────────────────────────────────────────────
-
-const WATERMARK_COLORS = [
-  '#C0C0C0', '#808080', '#404040', '#000000',
-  '#D9D9D9', '#F2F2F2', '#FFFFFF',
-  '#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A',
-  '#980000', '#0066CC', '#3D9970', '#FFB400',
-];
-
-const WATERMARK_FONTS = [
-  'Microsoft YaHei',
-  'SimSun',
-  'SimHei',
-  'KaiTi',
-  'Arial',
-  'Calibri',
-  'Times New Roman',
-  'Helvetica',
-  'Georgia',
-];
+//
+// WATERMARK_COLORS and WATERMARK_FONTS now live in `./constants.ts` so they
+// can be shared with a future watermark settings dialog outside the toolbar.
 
 interface WatermarkPopoverProps {
   triggerRef: React.RefObject<HTMLElement | null>;
