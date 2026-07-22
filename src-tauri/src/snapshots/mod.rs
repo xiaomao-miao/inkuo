@@ -27,7 +27,7 @@ use thiserror::Error;
 use tauri::AppHandle;
 
 use crate::backup::get_backup_dir;
-use crate::commands::{get_settings_cached, AppCommandError, Settings};
+use crate::commands::{get_settings_cached, Settings};
 use crate::file_watcher::{emit_file_change, FileChangeEvent};
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -195,12 +195,6 @@ pub enum SnapshotError {
     BackupFailed(String),
     #[error("File write failed: {0}")]
     FileWrite(String),
-}
-
-impl From<SnapshotError> for AppCommandError {
-    fn from(e: SnapshotError) -> Self {
-        AppCommandError::SnapshotReadFailed(e.to_string())
-    }
 }
 
 // ── LRU cap helper ─────────────────────────────────────────────────────────

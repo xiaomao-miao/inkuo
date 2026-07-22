@@ -1,8 +1,13 @@
 //! Tauri commands module
 //!
 //! Exposes Rust backend functionality to the frontend via IPC.
+//!
+//! The cancellation helpers (`is_stream_cancelled`, `StreamCancelGuard`,
+//! etc.) used to live here. They moved to `crate::runtime::cancel` so that
+//! `agent_loop.rs` and other downstream modules can reach them without
+//! importing this file (which would otherwise form a cycle once snapshots
+//! or settings helpers are also pulled out).
 
-use std::collections::HashSet;
 use std::io::Write;
 use std::sync::Arc;
 
@@ -10,170 +15,36 @@ use once_cell::sync::Lazy;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
-use thiserror::Error;
+
+pub use crate::runtime::cancel::{
+    clear_stream_cancelled, is_stream_cancelled, mark_stream_cancelled, StreamCancelGuard,
+};
+
+/// Legacy alias kept so existing `AppCommandError::Foo(...)` call sites
+/// continue to compile. The real enum lives in `crate::error::AppError` —
+/// see that module for the `From` impls that bridge the sub-module errors.
+pub type AppCommandError = crate::error::AppError;
+
+// Re-export the `Settings` schema + cache helpers from `settings_state` so
+// that the existing `crate::commands::Settings` /
+// `crate::commands::get_settings_cached` / etc. call sites keep compiling
+// unchanged while the canonical implementation lives in its own module.
+pub use crate::settings_state::{
+    atomic_write_settings, clear_settings_cache_account, get_chunk_overlap, get_chunk_size,
+    get_embedding_model, get_settings_cached, get_settings_path, get_web_search_settings,
+    patch_settings_cache_account, read_settings_from_disk, settings_cache_populated,
+    update_settings_cache, ApiConfig, CloudSettings, Settings, SnapshotSettings,
+    WebSearchProviderConfig, WebSearchSettings,
+};
+
+pub mod logging;
+pub use logging::{frontend_log, frontend_log_path, FrontendLogPayload};
 
 use crate::backup::{create_backup_path, get_backup_dir, request_backup_cleanup};
 use crate::file_watcher::{emit_file_change, FileChangeEvent};
 use crate::office;
 use crate::{ai, ai_config::{self, AITestResult, AIProviderKind, TestApiConfigRequest}, diff, document, file_watcher};
 use tauri_plugin_opener::OpenerExt;
-
-pub static STREAM_CANCELLED: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
-
-/// True if the given session has been marked cancelled. Use this rather
-/// than reaching for `STREAM_CANCELLED.lock()` directly at every call site
-/// so the lock acquisition pattern stays uniform (and so we have a single
-/// place to swap in a more sophisticated cancellation queue later).
-pub fn is_stream_cancelled(session_id: &str) -> bool {
-    STREAM_CANCELLED.lock().contains(session_id)
-}
-
-/// Mark a session as cancelled. Cheaply idempotent — the existing key
-/// stays put if already present.
-pub fn mark_stream_cancelled(session_id: &str) {
-    STREAM_CANCELLED.lock().insert(session_id.to_string());
-}
-
-/// Drop the cancellation flag for `session_id`, returning whether one was
-/// actually removed. Callers usually want to suppress the regular "done"
-/// event when this returns `true`.
-pub fn clear_stream_cancelled(session_id: &str) -> bool {
-    STREAM_CANCELLED.lock().remove(session_id)
-}
-
-/// RAII guard that clears the cancellation flag for `session_id` on drop.
-/// Use [`scoped_stream_cleanup`] to obtain one.
-///
-/// Why this exists: cancellation flags are a global `HashSet<String>`, and
-/// every code path that calls `mark_stream_cancelled` MUST call
-/// `clear_stream_cancelled` (or leave the flag in a way that prevents the
-/// next request from being misclassified as cancelled). A `?` early-return,
-/// a panic, or a refactor that adds a new error branch all silently leak
-/// the flag, which then blocks every subsequent stream for that session_id.
-/// The guard makes the cleanup unconditional.
-///
-/// Note: this guard does NOT mark the session as cancelled on creation.
-/// Cancellation is set by the `ai_*_cancel` command, not by the start of a
-/// stream; this guard only guarantees cleanup on the stream side.
-pub struct StreamCancelGuard {
-    session_id: String,
-    cleared: bool,
-}
-
-impl StreamCancelGuard {
-    /// Create a guard that will clear the cancellation flag for
-    /// `session_id` on drop. The flag is NOT set by this constructor.
-    pub fn new(session_id: &str) -> Self {
-        Self {
-            session_id: session_id.to_string(),
-            cleared: false,
-        }
-    }
-
-    /// Explicitly clear the flag without waiting for drop, returning
-    /// `true` if the flag was still set when this was called. Consumes
-    /// the guard so its `Drop` does not run a second clear.
-    pub fn clear(mut self) -> bool {
-        if !self.cleared {
-            self.cleared = true;
-            clear_stream_cancelled(&self.session_id)
-        } else {
-            false
-        }
-    }
-}
-
-impl Drop for StreamCancelGuard {
-    fn drop(&mut self) {
-        if !self.cleared {
-            let _ = clear_stream_cancelled(&self.session_id);
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Error)]
-pub enum AppCommandError {
-    #[error("Failed to read document: {0}")]
-    ReadDocument(String),
-    #[error("Failed to parse document: {0}")]
-    ParseDocument(String),
-    #[error("Failed to create backup directory: {0}")]
-    CreateBackupDirectory(String),
-    #[error("Failed to create backup: {0}")]
-    CreateBackup(String),
-    #[error("Failed to write document: {0}")]
-    WriteDocument(String),
-    #[error("Failed to list directory: {0}")]
-    ListDirectory(String),
-    #[error("Failed to watch directory: {0}")]
-    WatchDirectory(String),
-    #[error("AI edit failed: {0}")]
-    AIEdit(String),
-    #[error("AI connection test failed: {0}")]
-    TestAIConnection(String),
-    #[error("Failed to read settings: {0}")]
-    ReadSettings(String),
-    #[error("Failed to parse settings: {0}")]
-    ParseSettings(String),
-    #[error("Failed to create config directory: {0}")]
-    CreateConfigDirectory(String),
-    #[error("Failed to serialize settings: {0}")]
-    SerializeSettings(String),
-    #[error("Failed to write settings: {0}")]
-    WriteSettings(String),
-    #[error("Invalid AI configuration: {0}")]
-    AIConfig(String),
-    #[error("Failed to read office file: {0}")]
-    ReadOfficeFile(String),
-    #[error("Failed to serialize office document: {0}")]
-    SerializeOfficeDocument(String),
-    #[error("Failed to write office file: {0}")]
-    WriteOfficeFile(String),
-    #[error("Invalid config path")]
-    InvalidConfigPath,
-    #[error("Failed to create file or folder: {0}")]
-    CreateEntry(String),
-    #[error("Failed to rename path: {0}")]
-    RenamePath(String),
-    #[error("Failed to delete path: {0}")]
-    DeletePath(String),
-    #[error("Failed to copy path: {0}")]
-    CopyPath(String),
-    #[error("Failed to move path: {0}")]
-    MovePath(String),
-    #[error("Failed to open path with default app: {0}")]
-    OpenWithDefaultApp(String),
-    #[error("Failed to reveal path in file manager: {0}")]
-    RevealInFileManager(String),
-    #[error("Target already exists")]
-    TargetExists,
-    #[error("Failed to read workspace snapshots: {0}")]
-    ReadWorkspaceSnapshots(String),
-    #[error("Failed to write workspace snapshots: {0}")]
-    WriteWorkspaceSnapshots(String),
-    #[error("Failed to parse workspace snapshots: {0}")]
-    ParseWorkspaceSnapshots(String),
-    #[error("Invalid workspace snapshots path: {0}")]
-    InvalidWorkspaceSnapshotsPath(String),
-    #[error("Snapshot not found: {0}")]
-    SnapshotNotFound(String),
-    #[error("Snapshot manifest corrupt: {0}")]
-    SnapshotCorrupt(String),
-    #[error("Workspace path is not absolute: {0}")]
-    InvalidWorkspacePath(String),
-    #[error("Snapshot write failed: {0}")]
-    SnapshotWriteFailed(String),
-    #[error("Snapshot read failed: {0}")]
-    SnapshotReadFailed(String),
-    #[error("Workspace path not found or not a directory: {0}")]
-    PlanWorkspaceMissing(String),
-    #[error("Failed to save plan file: {0}")]
-    PlanSaveFailed(String),
-    #[error("Failed to read plan file: {0}")]
-    PlanReadFailed(String),
-    #[error("Failed to delete plan file: {0}")]
-    PlanDeleteFailed(String),
-}
 
 pub struct AppState {
     /// Async resolver that produces a fresh `AIConfig` on demand.
@@ -316,7 +187,8 @@ pub async fn write_document(
     Ok(())
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, ts_rs::TS)]
+#[ts(export, export_to = "FileEntry.ts")]
 pub struct FileEntry {
     pub name: String,
     pub path: String,
@@ -423,83 +295,42 @@ pub async fn search_directory(
         return Ok(vec![]);
     }
 
+    use crate::fs_utils::{walk_dir_safe, WalkEntry};
+
     let query_lower = query.to_lowercase();
     let mut results: Vec<FileEntry> = Vec::new();
-    let mut visited: std::collections::HashSet<std::path::PathBuf> = std::collections::HashSet::new();
 
-    fn walk_dir(
-        dir: &std::path::Path,
-        query: &str,
-        results: &mut Vec<FileEntry>,
-        max_results: usize,
-        visited: &mut std::collections::HashSet<std::path::PathBuf>,
-    ) {
-        if results.len() >= max_results {
-            return;
-        }
-
-        // Canonicalise so symlink cycles within the workspace (e.g. a dir
-        // pointing back to an ancestor) get caught the second time we try
-        // to descend into them. Failing canonicalise (e.g. dangling link)
-        // means the path isn't readable anyway, so we skip it.
-        let canonical = match std::fs::canonicalize(dir) {
-            Ok(p) => p,
-            Err(_) => return,
-        };
-        if !visited.insert(canonical) {
-            return;
-        }
-
-        let entries = match std::fs::read_dir(dir) {
-            Ok(e) => e,
-            Err(_) => return,
-        };
-
-        for entry in entries.filter_map(|e| e.ok()) {
-            if results.len() >= max_results {
-                break;
+    walk_dir_safe(
+        std::path::Path::new(&path),
+        |entry: WalkEntry| {
+            if results.len() >= 100 {
+                return;
+            }
+            let path = entry.path;
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            if name.is_empty() {
+                return;
             }
 
-            let path = entry.path();
-            let name = entry.file_name().to_string_lossy().to_string();
-
-            if name.starts_with('.') {
-                continue;
+            if !name.to_lowercase().contains(&query_lower) {
+                return;
             }
 
-            let file_type = match entry.file_type() {
-                Ok(t) => t,
-                Err(_) => continue,
-            };
-            // Skip symlinks — they can create cycles or escape the
-            // workspace. We deliberately don't follow them during search;
-            // users who want to search them can `read_link` themselves.
-            if file_type.is_symlink() {
-                continue;
-            }
+            let file_kind = classify_file_kind(&path);
+            let is_markdown = matches!(file_kind, "markdown" | "text");
 
-            let is_dir = file_type.is_dir();
-
-            if name.to_lowercase().contains(query) {
-                let file_kind = classify_file_kind(&path);
-                let is_markdown = matches!(file_kind, "markdown" | "text");
-
-                results.push(FileEntry {
-                    name,
-                    path: path.to_string_lossy().to_string(),
-                    is_dir,
-                    file_kind: file_kind.to_string(),
-                    is_markdown,
-                });
-            }
-
-            if is_dir {
-                walk_dir(&path, query, results, max_results, visited);
-            }
-        }
-    }
-
-    walk_dir(std::path::Path::new(&path), &query_lower, &mut results, 100, &mut visited);
+            results.push(FileEntry {
+                name,
+                path: path.to_string_lossy().to_string(),
+                is_dir: entry.is_dir,
+                file_kind: file_kind.to_string(),
+                is_markdown,
+            });
+        },
+    );
 
     // Sort results: directories first, then by relevance (shorter paths first).
     // Depth is measured in `Path` components so we count correctly on both
@@ -609,457 +440,16 @@ pub async fn ai_edit(
         .map_err(|e| AppCommandError::AIEdit(e.to_string()))
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ApiConfig {
-    pub id: String,
-    pub name: String,
-    pub provider: AIProviderKind,
-    pub base_url: String,
-    pub api_key: Option<String>,
-    pub model: String,
-    pub is_default: bool,
-    pub enabled: bool,
-    pub temperature: f32,
-    pub max_tokens: Option<u32>,
-}
+/// Settings schema + cache helpers live in `crate::settings_state`. They
+/// are re-exported above (see `pub use crate::settings_state::*` near the
+/// top of this file) so that downstream callers can keep using
+/// `crate::commands::Settings` / `crate::commands::get_settings_cached` /
+/// etc. without changing every call site during the staged split.
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct SnapshotSettings {
-    #[serde(default = "default_snapshot_max_count")]
-    pub max_count: usize,
-    #[serde(default = "default_snapshot_auto_baseline")]
-    pub auto_baseline: bool,
-}
-
-fn default_snapshot_max_count() -> usize {
-    50
-}
-
-fn default_snapshot_auto_baseline() -> bool {
-    true
-}
-
-/// Per-provider configuration for the `web_search` tool. Each provider
-/// owns its own key/secret so we can extend the registry (Google, Bing,
-/// Tavily, ...) without changing the wire format.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WebSearchProviderConfig {
-    /// Provider id (e.g. `"baike"`). The web_search tool reads this to
-    /// dispatch to the right backend.
-    pub id: String,
-    /// Optional user-provided API key / appid / token. When `None` the
-    /// backend may fall back to a built-in default (subject to rate
-    /// limits); e.g. the Baidu Baike public endpoint accepts a default
-    /// appid when the user hasn't supplied their own.
-    #[serde(default)]
-    pub api_key: Option<String>,
-    /// Optional override for the provider's endpoint. When `None` the
-    /// tool uses the compile-time default URL for the provider. Letting
-    /// the user override is mostly there for testing / proxies.
-    #[serde(default)]
-    pub base_url: Option<String>,
-    /// Per-provider kill switch. Lets the user keep their key saved but
-    /// turn a specific provider off without deleting it.
-    #[serde(default = "default_web_search_provider_enabled")]
-    pub enabled: bool,
-}
-
-fn default_web_search_provider_enabled() -> bool {
-    true
-}
-
-impl Default for WebSearchProviderConfig {
-    fn default() -> Self {
-        Self {
-            id: "baike".to_string(),
-            api_key: None,
-            base_url: None,
-            enabled: true,
-        }
-    }
-}
-
-/// Top-level configuration for the `web_search` tool. Persisted under
-/// `settings.web_search` so the user can manage it from the settings
-/// panel and the Rust side can read it without IPC.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WebSearchSettings {
-    /// Master kill switch. When `false`, the tool reports a friendly
-    /// "web search is disabled in settings" error on every call instead
-    /// of hitting the network.
-    #[serde(default = "default_web_search_enabled")]
-    pub enabled: bool,
-    /// Provider-specific configs, keyed by provider id. Today only
-    /// `"baike"` is wired up; the schema is forward-compatible with
-    /// future providers.
-    #[serde(default)]
-    pub providers: Vec<WebSearchProviderConfig>,
-    /// Hard cap on how many results the tool will surface to the LLM
-    /// per call. Clamped to `[1, 20]` by the tool itself.
-    #[serde(default = "default_web_search_max_results")]
-    pub max_results: usize,
-    /// Where to send `web_search` tool calls when the user is logged
-    /// into the cloud. `"local"` (default) uses the user's own Baidu
-    /// AppBuilder key; `"cloud"` forwards the call through the cloud
-    /// server so the operator-managed key is used instead.
-    ///
-    /// Stored as a free-form `String` (rather than a strict enum) so a
-    /// future `"hybrid"` / `"ask-each-time"` mode can land without a
-    /// schema migration. The tool itself only knows about `local` and
-    /// `cloud`; anything else falls back to `local` so a typo in the
-    /// settings file never disables search silently.
-    #[serde(default = "default_web_search_routing")]
-    pub routing: String,
-}
-
-fn default_web_search_enabled() -> bool {
-    true
-}
-
-fn default_web_search_max_results() -> usize {
-    5
-}
-
-fn default_web_search_routing() -> String {
-    "local".to_string()
-}
-
-impl Default for WebSearchSettings {
-    fn default() -> Self {
-        Self {
-            enabled: default_web_search_enabled(),
-            providers: vec![WebSearchProviderConfig::default()],
-            max_results: default_web_search_max_results(),
-            routing: default_web_search_routing(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct CloudSettings {
-    /// Whether the cloud-mode toggle is currently active. `false` (the
-    /// default) means the user is in local-LLM mode and the existing
-    /// `api_configs[]` array is in charge.
-    #[serde(default)]
-    pub cloud_mode_enabled: bool,
-    /// The logged-in cloud account. `None` when the user has not logged in
-    /// or has explicitly logged out.
-    #[serde(default)]
-    pub account: Option<crate::cloud::CloudAccount>,
-    /// Cached list of cloud models, refreshed by the frontend on login and
-    /// every time the user reopens the settings panel.
-    #[serde(default)]
-    pub cached_models: Vec<crate::cloud::CloudModelEntry>,
-    /// The `id` (server-side model_config id) of the currently selected
-    /// cloud model. Matches `cached_models[].id`.
-    #[serde(default)]
-    pub active_cloud_model_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Settings {
-    pub theme: String,
-    pub accent_color: String,
-    pub editor_font_size: u32,
-    pub editor_font_family: String,
-    pub editor_word_wrap: bool,
-    pub editor_line_numbers: bool,
-    pub api_configs: Vec<ApiConfig>,
-    pub active_api_config_id: Option<String>,
-    pub embedding_model: String,
-    pub embedding_model_path: Option<String>,
-    pub chunk_size: usize,
-    pub chunk_overlap: usize,
-    #[serde(default)]
-    pub snapshot: SnapshotSettings,
-    /// Optional so legacy settings files (saved before the web_search
-    /// tool existed) keep loading — the field defaults via
-    /// `Default::default()` when missing.
-    #[serde(default)]
-    pub web_search: WebSearchSettings,
-    /// Optional so legacy settings files (saved before cloud mode
-    /// existed) keep loading. When absent the user is in pure local
-    /// mode and nothing about cloud mode is even rendered.
-    #[serde(default)]
-    pub cloud: CloudSettings,
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        let default_api_config = ApiConfig {
-            id: uuid::Uuid::new_v4().to_string(),
-            name: "DeepSeek V3".to_string(),
-            provider: AIProviderKind::DeepSeek,
-            base_url: "https://api.deepseek.com".to_string(),
-            api_key: None,
-            model: "deepseek-chat".to_string(),
-            is_default: true,
-            enabled: true,
-            temperature: 0.7,
-            max_tokens: Some(4096),
-        };
-
-        Self {
-            theme: "inkuo-dark".to_string(),
-            accent_color: "#7C5CFF".to_string(),
-            editor_font_size: 14,
-            editor_font_family: "JetBrains Mono, monospace".to_string(),
-            editor_word_wrap: true,
-            editor_line_numbers: true,
-            api_configs: vec![default_api_config.clone()],
-            active_api_config_id: Some(default_api_config.id),
-            embedding_model: "BAAI/bge-small-zh-v1.5".to_string(),
-            embedding_model_path: None,
-            chunk_size: 500,
-            chunk_overlap: 50,
-            snapshot: SnapshotSettings::default(),
-            web_search: WebSearchSettings::default(),
-            cloud: CloudSettings::default(),
-        }
-    }
-}
-
-/// Cached settings to avoid repeated disk reads.
-/// Updated whenever save_settings is called.
-static SETTINGS_CACHE: Lazy<Mutex<Option<Settings>>> = Lazy::new(|| Mutex::new(None));
-
-/// Get cached settings, reading from disk only when cache is empty.
-pub fn get_settings_cached() -> Result<Settings, AppCommandError> {
-    // Fast path: cache hit. We do the read inside the lock so that the
-    // "warm cache" check is consistent with the eventual write to the
-    // cache. Without this, two callers racing on the empty cache could
-    // both see `None`, both read from disk, and the slower one would
-    // overwrite the fresh result with its own copy. The result is still
-    // correct (same JSON content most of the time), just wasteful.
-    {
-        let guard = SETTINGS_CACHE.lock();
-        if let Some(ref settings) = *guard {
-            return Ok(settings.clone());
-        }
-    }
-    let settings = read_settings_from_disk()?;
-    let mut guard = SETTINGS_CACHE.lock();
-    // Re-check: another thread may have populated the cache while we
-    // were reading the disk. Theirs is at least as fresh as ours (they
-    // read the same file under the same lock-guarded path), and writing
-    // ours on top would discard any mutations made after their read
-    // (e.g. `update_settings_cache`).
-    if let Some(existing) = guard.clone() {
-        return Ok(existing);
-    }
-    *guard = Some(settings.clone());
-    Ok(settings)
-}
-
-/// Update the settings cache when settings are called.
-pub fn update_settings_cache(settings: Settings) {
-    let mut guard = SETTINGS_CACHE.lock();
-    *guard = Some(settings);
-}
-
-/// Patch the in-memory settings cache in-place so callers that read
-/// `settings.cloud.account` (e.g. `build_settings_ai_config`) see
-/// freshly rotated tokens without having to reload from disk.
-///
-/// **Does NOT write to disk.** Persistence is the caller's
-/// responsibility — most callers (login / logout / `save_settings`)
-/// already do their own write, and `CloudClient::persist_current_account`
-/// spawns a separate task to avoid holding the in-memory mutex while
-/// hitting the filesystem.
-pub fn patch_settings_cache_account(account: crate::cloud::CloudAccount) {
-    let mut guard = SETTINGS_CACHE.lock();
-    if let Some(ref mut settings) = *guard {
-        settings.cloud.account = Some(account);
-    }
-}
-
-/// Clear the in-memory account snapshot when the user logs out or the
-/// refresh token is rejected by the server. Same caveat as
-/// `patch_settings_cache_account` — disk persistence is separate.
-pub fn clear_settings_cache_account() {
-    let mut guard = SETTINGS_CACHE.lock();
-    if let Some(ref mut settings) = *guard {
-        settings.cloud.account = None;
-    }
-}
-
-/// Get embedding model name from settings
-pub fn get_embedding_model() -> String {
-    get_settings_cached()
-        .map(|s| s.embedding_model)
-        .unwrap_or_else(|_| "BAAI/bge-small-zh-v1.5".to_string())
-}
-
-/// Get chunk size from settings
-pub fn get_chunk_size() -> usize {
-    get_settings_cached()
-        .map(|s| s.chunk_size)
-        .unwrap_or(500)
-}
-
-/// Get chunk overlap from settings
-pub fn get_chunk_overlap() -> usize {
-    get_settings_cached()
-        .map(|s| s.chunk_overlap)
-        .unwrap_or(50)
-}
-
-/// Get a snapshot of the current web search configuration. Always
-/// returns a value (defaulting when the cache is empty or the field is
-/// missing from a legacy settings file), so callers don't need to
-/// handle `Option`s.
-pub fn get_web_search_settings() -> WebSearchSettings {
-    get_settings_cached()
-        .map(|s| s.web_search)
-        .unwrap_or_default()
-}
-
-pub fn get_settings_path() -> std::path::PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| std::path::PathBuf::from("."))
-        .join("inkuo")
-        .join("settings.json")
-}
-
-/// Atomically write the serialized settings to disk.
-///
-/// The previous behaviour was a bare `std::fs::write(&path, content)` which
-/// truncates the destination file before the new bytes are flushed. A power
-/// loss, OS kill, or process panic in that tiny window leaves
-/// `settings.json` empty / partial — which on the next launch surfaces as
-/// "I have to log in again" because the persisted `cloud.account` (and every
-/// other setting) was just lost. Settings are the on-disk source of truth for
-/// the cloud token, so this matters more than the average file write.
-///
-/// Strategy mirrors `write_document` / `flush_snapshots_to_disk`:
-/// 1. Write to a sibling temp file (with a process-unique suffix so concurrent
-///    writers don't clobber each other's temp).
-/// 2. `fsync` the temp so its bytes are durable before the rename.
-/// 3. `rename` temp → final path. On POSIX this is atomic; on Windows the
-///    underlying `MoveFileExW(..., MOVEFILE_REPLACE_EXISTING)` is atomic too.
-/// 4. Best-effort cleanup of any stale `*.tmp` siblings from prior crashed
-///    writes — keeps the config dir tidy.
-///
-/// If anything fails after the temp file is created we remove it so we never
-/// leak `.tmp` siblings across restarts.
-pub fn atomic_write_settings(
-    path: &std::path::Path,
-    content: &str,
-) -> Result<(), AppCommandError> {
-    use std::io::Write;
-
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| AppCommandError::CreateConfigDirectory(e.to_string()))?;
-    }
-
-    let unique_suffix = format!(
-        "{}.{}.tmp",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    );
-    let temp_path = path.with_extension(format!("json.{}", unique_suffix));
-
-    // Open + write + flush + fsync so the bytes hit disk before we rename.
-    // `std::fs::write` would skip the fsync, which is the entire point of
-    // doing this ourselves.
-    let write_result = (|| -> std::io::Result<()> {
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temp_path)?;
-        f.write_all(content.as_bytes())?;
-        f.flush()?;
-        f.sync_all()?;
-        Ok(())
-    })();
-
-    if let Err(e) = write_result {
-        let _ = std::fs::remove_file(&temp_path);
-        return Err(AppCommandError::WriteSettings(format!(
-            "write temp settings: {}",
-            e
-        )));
-    }
-
-    if let Err(e) = std::fs::rename(&temp_path, path) {
-        let _ = std::fs::remove_file(&temp_path);
-        return Err(AppCommandError::WriteSettings(format!(
-            "rename temp settings: {}",
-            e
-        )));
-    }
-
-    // Best-effort sweep of any stale `*.tmp` siblings left behind by a
-    // crashed previous write. Failures are swallowed — this is a tidy-up,
-    // not a correctness step.
-    if let Some(parent) = path.parent() {
-        if let Ok(entries) = std::fs::read_dir(parent) {
-            for entry in entries.flatten() {
-                let p = entry.path();
-                if p == path {
-                    continue;
-                }
-                let Some(name) = p.file_name().and_then(|n| n.to_str()) else {
-                    continue;
-                };
-                // Match both `settings.json.<pid>.<nanos>.tmp` (current shape)
-                // and the older `json.tmp` style from `flush_snapshots_to_disk`
-                // — that helper doesn't touch settings.json but defensive
-                // cleanup here costs nothing.
-                if name.starts_with("settings.json.") && name.ends_with(".tmp") {
-                    let _ = std::fs::remove_file(&p);
-                }
-            }
-        }
-    }
-
-    Ok(())
-}
-
-pub fn read_settings_from_disk() -> Result<Settings, AppCommandError> {
-    let path = get_settings_path();
-
-    if !path.exists() {
-        return Ok(Settings::default());
-    }
-
-    let content = std::fs::read_to_string(&path)
-        .map_err(|e| AppCommandError::ReadSettings(e.to_string()))?;
-
-    match serde_json::from_str::<Settings>(&content) {
-        Ok(settings) => Ok(settings),
-        Err(e) => {
-            tracing::warn!("Failed to parse settings ({}), trying merged format", e);
-
-            let value: serde_json::Value = serde_json::from_str(&content)
-                .map_err(|e| AppCommandError::ParseSettings(format!("settings JSON: {}", e)))?;
-
-            if let Some(object) = value.as_object() {
-                let mut merged = serde_json::to_value(Settings::default())
-                    .map_err(|e| AppCommandError::SerializeSettings(format!("default settings: {}", e)))?;
-
-                if let Some(merged_object) = merged.as_object_mut() {
-                    for (key, value) in object {
-                        merged_object.insert(key.clone(), value.clone());
-                    }
-                }
-
-                if let Ok(settings) = serde_json::from_value::<Settings>(merged) {
-                    return Ok(settings);
-                }
-            }
-
-            Err(AppCommandError::ParseSettings(format!(
-                "settings format is invalid and no longer supports legacy single-config fields: {}",
-                e
-            )))
-        }
-    }
-}
+/// Settings persistence helpers (`atomic_write_settings`,
+/// `read_settings_from_disk`) and the cache helpers above are now defined
+/// in `crate::settings_state`. The remaining IPC commands below operate
+/// exclusively on them.
 
 #[tauri::command]
 pub async fn get_settings() -> Result<Settings, AppCommandError> {
@@ -1500,8 +890,6 @@ use std::collections::HashMap;
 use parking_lot::Mutex as PlMutex;
 use tauri::{AppHandle as TauriAppHandle, Manager};
 
-use AppCommandError::InvalidWorkspaceSnapshotsPath;
-
 /// Global in-memory map of workspace path → JSON snapshot. Initialised from
 /// disk in `init_workspace_snapshots` during the app's `setup` phase.
 ///
@@ -1538,7 +926,7 @@ fn resolve_snapshots_path(app_handle: &TauriAppHandle) -> Result<std::path::Path
     let resolved = app_handle
         .path()
         .app_config_dir()
-        .map_err(|e| InvalidWorkspaceSnapshotsPath(e.to_string()))?
+        .map_err(|e| crate::error::AppError::InvalidWorkspaceSnapshotsPath(e.to_string()))?
         .join("workspace_snapshots.json");
     *WORKSPACE_SNAPSHOTS_PATH.lock() = Some(resolved.clone());
     Ok(resolved)
@@ -2116,94 +1504,6 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
 }
 
 // =====================================================================
-// Frontend diagnostic bridge
+// Frontend diagnostic bridge lives in `commands/logging.rs`.
 // =====================================================================
-//
-// During release-mode debugging of WebView2 rendering issues we need the
-// frontend's `console.*` output (and uncaught errors) to land in a file
-// the user can inspect.  The webview2 renderer does NOT forward console
-// to stdout, and F12 / right-click "Inspect Element" is gated by
-// `tauri.conf.json` -> `app.windows[].devtools`.  Even when it works
-// the user might not be able to copy/paste out of it.
-//
-// `frontend_log` is the IPC sink the injected init-script uses.  We
-// deliberately route to a *file* under `%LOCALAPPDATA%\com.inkuo.app\`
-// rather than stdout because the release exe is `windows_subsystem =
-// "windows"` and has no console attached.
-//
-// Safe under concurrent webviews: writes are serialized behind a
-// Mutex; we never block the IPC thread for more than a single
-// small write + flush.
-
-static FRONTEND_LOG_FILE: Lazy<Mutex<Option<std::path::PathBuf>>> =
-    Lazy::new(|| Mutex::new(None));
-
-fn frontend_log_path() -> std::path::PathBuf {
-    let mut p = crate::app_data_dir();
-    let _ = std::fs::create_dir_all(&p);
-    p.push("frontend-console.log");
-    p
-}
-
-#[derive(Debug, Deserialize)]
-pub struct FrontendLogPayload {
-    pub level: String,
-    pub message: String,
-    /// Optional URL where the message originated (best-effort).
-    #[serde(default)]
-    pub url: Option<String>,
-    /// Optional stack trace (for errors / rejections).
-    #[serde(default)]
-    pub stack: Option<String>,
-}
-
-#[tauri::command]
-pub async fn frontend_log(payload: FrontendLogPayload) -> Result<(), String> {
-    let path = {
-        let mut guard = FRONTEND_LOG_FILE.lock();
-        guard.get_or_insert_with(frontend_log_path).clone()
-    };
-
-    let ts = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis())
-        .unwrap_or(0);
-
-    let line = format!(
-        "[{}] [{}] [{}] {}{}\n",
-        ts,
-        payload.level.to_uppercase(),
-        payload
-            .url
-            .clone()
-            .unwrap_or_else(|| "<unknown>".to_string()),
-        payload.message,
-        payload
-            .stack
-            .as_deref()
-            .filter(|s| !s.is_empty())
-            .map(|s| format!("\n  stack: {}", s))
-            .unwrap_or_default(),
-    );
-
-    // Mirror to tracing so the same line shows up in stdout/file log too.
-    let trimmed = line.trim_end();
-    match payload.level.as_str() {
-        "error" => tracing::error!(target: "frontend", "{}", trimmed),
-        "warn" => tracing::warn!(target: "frontend", "{}", trimmed),
-        _ => tracing::info!(target: "frontend", "{}", trimmed),
-    }
-
-    // Append to the file.  Best-effort — never propagate IO failures
-    // back into the frontend (would create an error log loop).
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-    {
-        let _ = f.write_all(line.as_bytes());
-        let _ = f.flush();
-    }
-    Ok(())
-}
 

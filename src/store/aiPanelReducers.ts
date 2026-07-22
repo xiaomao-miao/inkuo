@@ -6,7 +6,7 @@ import type {
   OutputItem,
 } from '../types';
 
-import { parseStreamingPlan } from '../components/aipanel/planStream';
+import { parseStreamingPlan } from '../utils/planStream';
 
 export type OutputItemMatchKey = { toolCallId: string } | { contentContains: string };
 

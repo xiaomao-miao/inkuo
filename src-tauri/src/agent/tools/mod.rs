@@ -29,75 +29,22 @@ pub enum ToolError {
 
 pub type ToolOpResult<T> = Result<T, ToolError>;
 
+// Re-exported from `crate::security` so that the agent tool impls and
+// the future general-purpose commands share a single implementation.
+// Adding a wrapper here would make every tool pick up the security fix
+// for free; if you need a tool-specific error wrapper, layer it on
+// top via the SecurityError enum.
+pub use crate::security::SecurityError;
+
 /// Validates that a path is within the workspace boundary (security check).
-/// This does NOT check if the path exists - use validate_path_exists for that.
-///
-/// Uses canonicalization to resolve relative paths and symlinks,
-/// ensuring the final resolved path is within the workspace.
+/// Delegates to `crate::security::validate_workspace_path` for the actual
+/// implementation and wraps errors in the tool-specific `ToolError` so
+/// downstream code keeps the same signature it had before the security
+/// module was extracted.
 pub fn validate_workspace_path(path: &str, workspace: &Option<String>) -> Result<(), ToolError> {
-    let Some(workspace_root) = workspace else {
-        return Ok(());
-    };
-
-    let canonical_workspace = match std::fs::canonicalize(workspace_root) {
-        Ok(p) => p,
-        Err(_) => {
-            return Err(ToolError::PathValidationError(
-                format!("Workspace path does not exist: {}", workspace_root)
-            ));
-        }
-    };
-
-    // For security, we need to resolve the actual path to catch symlinks
-    // But we allow the path to not exist yet (for write operations)
-    let canonical_requested = match std::fs::canonicalize(Path::new(path)) {
-        Ok(p) => p,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            // Path doesn't exist yet — this is OK for write operations.
-            // Validate that the *resolved* parent directory lives inside the
-            // workspace, so a path like `/workspace/../../etc/passwd` (whose
-            // canonicalized parent is `/etc`) can't sneak through. Without
-            // this check the function would `return Ok(())` here and bypass
-            // the sandbox entirely, which is a path-traversal vulnerability.
-            let parent = Path::new(path).parent().ok_or_else(|| {
-                ToolError::PathValidationError(format!(
-                    "Cannot determine parent directory for path: {}",
-                    path
-                ))
-            })?;
-            let canonical_parent = std::fs::canonicalize(parent).map_err(|e| {
-                ToolError::PathValidationError(format!(
-                    "Parent directory does not exist or is inaccessible: {} ({})",
-                    parent.display(),
-                    e
-                ))
-            })?;
-            if !canonical_parent.starts_with(&canonical_workspace) {
-                return Err(ToolError::PathValidationError(format!(
-                    "Path '{}' is outside the workspace directory '{}'. \
-                    Access is denied for security reasons.",
-                    path, workspace_root
-                )));
-            }
-            return Ok(());
-        }
-        Err(e) => {
-            return Err(ToolError::PathValidationError(
-                format!("Path is inaccessible: {} ({})", path, e)
-            ));
-        }
-    };
-
-    if !canonical_requested.starts_with(&canonical_workspace) {
-        return Err(ToolError::PathValidationError(
-            format!(
-                "Path '{}' is outside the workspace directory '{}'. Access is denied for security reasons.",
-                path, workspace_root
-            )
-        ));
-    }
-
-    Ok(())
+    crate::security::validate_workspace_path(path, workspace).map_err(|e| match e {
+        SecurityError::PathValidation(msg) => ToolError::PathValidationError(msg),
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -269,15 +216,15 @@ impl ToolResult {
 // Re-export tool structs and their enum variants for the unified ToolExecutor
 mod file_tools;
 mod search_tools;
-mod office_tools;
+mod office;
 mod database_tools;
 mod meta_tools; // get_tool_help + delegate_to
 mod todo_tools; // update_todo (read-only meta-tool; see agent_loop::try_handle_meta_tool)
 mod plan_tools;  // create_plan  (read-only meta-tool; see agent_loop::try_handle_meta_tool)
 mod mermaid_tools; // render_mermaid  (in-process merman renderer, mermaid.js 11.15 parity)
 mod svg_tools;  // create_svg  (AI-authored standalone .svg files)
-mod pptx_tools; // create_pptx (packs SVGs into editable .pptx; see office_pptx_expert)
-mod pptx_animation_tools; // create_pptx_animation + add_pptx_animation
+mod pptx; // create_pptx (packs SVGs into editable .pptx; see office_pptx_expert)
+mod pptx_anim; // create_pptx_animation + add_pptx_animation
 mod web_search_tool; // web_search (external encyclopedia lookup; today Baike)
 mod media_tools; // read_image / read_pdf  (binary workspace files for multimodal LLMs)
 pub mod asset_registry; // binary side-channel: stores asset://<id> entries so LLM context never sees base64
@@ -285,7 +232,7 @@ pub mod ask_user_tools; // ask_user   (meta-tool; see agent_loop::try_handle_met
 
 pub use file_tools::{ReadFileTool, WriteFileTool, EditFileTool, CreateDirTool, MoveFileTool};
 pub use search_tools::{ListDirTool, GlobTool, GrepTool};
-pub use office_tools::{
+pub use office::{
     ReadOfficeFileTool, CreateWordDocTool, CompareWordDocsTool, ModifyExcelTool,
     CreateExcelTool, InspectOfficeTool,
 };
@@ -295,8 +242,8 @@ pub use todo_tools::{UpdateTodoTool, TodoItem};
 pub use plan_tools::{CreatePlanTool, CreatePlanArgs, PlanFileTouch};
 pub use mermaid_tools::RenderMermaidTool;
 pub use svg_tools::{CreateSvgTool, CreateSvgOutcome};
-pub use pptx_tools::{CreatePptxTool, CreatePptxOutcome};
-pub use pptx_animation_tools::{CreatePptxAnimationTool, AddAnimationTool};
+pub use pptx::{CreatePptxTool, CreatePptxOutcome};
+pub use pptx_anim::{CreatePptxAnimationTool, AddAnimationTool};
 pub use web_search_tool::WebSearchTool;
 pub use ask_user_tools::AskUserTool;
 pub use media_tools::{ReadImageTool, ReadPdfTool};
@@ -311,17 +258,17 @@ pub enum ToolExecutor {
     ListDir(search_tools::ListDirTool),
     Glob(search_tools::GlobTool),
     Grep(search_tools::GrepTool),
-    ReadOfficeFile(office_tools::ReadOfficeFileTool),
-    CreateWordDoc(office_tools::CreateWordDocTool),
-    CompareWordDocs(office_tools::CompareWordDocsTool),
-    ModifyExcel(office_tools::ModifyExcelTool),
-    CreateExcel(office_tools::CreateExcelTool),
-    InspectOffice(office_tools::InspectOfficeTool),
+    ReadOfficeFile(office::ReadOfficeFileTool),
+    CreateWordDoc(office::CreateWordDocTool),
+    CompareWordDocs(office::CompareWordDocsTool),
+    ModifyExcel(office::ModifyExcelTool),
+    CreateExcel(office::CreateExcelTool),
+    InspectOffice(office::InspectOfficeTool),
     RenderMermaid(mermaid_tools::RenderMermaidTool),
     CreateSvg(svg_tools::CreateSvgTool),
-    CreatePptx(pptx_tools::CreatePptxTool),
-    CreatePptxAnimation(pptx_animation_tools::CreatePptxAnimationTool),
-    AddPptxAnimation(pptx_animation_tools::AddAnimationTool),
+    CreatePptx(pptx::CreatePptxTool),
+    CreatePptxAnimation(pptx_anim::CreatePptxAnimationTool),
+    AddPptxAnimation(pptx_anim::AddAnimationTool),
     DatabaseSearch(database_tools::DatabaseSearchTool),
     WebSearch(web_search_tool::WebSearchTool),
     ReadImage(media_tools::ReadImageTool),
@@ -601,8 +548,8 @@ impl ToolRegistry {
             // and triggers the same `file-change` event as the other
             // file-modifying tools.
             ToolExecutor::CreatePptx(CreatePptxTool::default()),
-            ToolExecutor::CreatePptxAnimation(pptx_animation_tools::CreatePptxAnimationTool::new()),
-            ToolExecutor::AddPptxAnimation(pptx_animation_tools::AddAnimationTool::new()),
+            ToolExecutor::CreatePptxAnimation(pptx_anim::CreatePptxAnimationTool::new()),
+            ToolExecutor::AddPptxAnimation(pptx_anim::AddAnimationTool::new()),
             // DatabaseSearchTool added lazily via with_app_handle()
             // `web_search` is registered here with a placeholder tool;
             // `set_app_handle()` swaps in the real implementation once

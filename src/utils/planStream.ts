@@ -12,7 +12,7 @@
  * "candidate JSON" section.
  */
 
-import type { PlanOutput } from '../../types';
+import type { PlanOutput } from '../types';
 
 const PLAN_FENCE = '```plan';
 

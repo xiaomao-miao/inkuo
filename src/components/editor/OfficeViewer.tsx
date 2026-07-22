@@ -5,7 +5,7 @@ import { Workbook } from '@fortune-sheet/react';
 import type { WorkbookInstance } from '@fortune-sheet/react';
 import type { Sheet as FortuneSheetCoreSheet } from '@fortune-sheet/core';
 import { Save, Table2 } from 'lucide-react';
-import { WordToolbar } from './WordToolbar';
+import { WordToolbar } from './word-toolbar';
 import { useKeyboardSave } from './useKeyboardSave';
 import { useSidebarStore, useEditorStore, useInlineCompleteStore, useNotificationStore } from '../../store';
 import {

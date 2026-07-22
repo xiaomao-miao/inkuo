@@ -14,13 +14,7 @@ pub use xlsx::{
     CellModification, read_xlsx_structured,
     incremental_write_xlsx, create_xlsx_workbook, write_excel_document,
     cell_address, parse_cell_address,
-    // Unified operation enum
     ExcelOperation,
-    // New sheet/merge/rowcol operations
-    merge_cells_xlsx, MergeModification, MergeOp,
-    resize_rows_cols_xlsx, RowColModification,
-    create_sheet_xlsx, rename_sheet_xlsx,
-    delete_sheet_xlsx, set_sheet_state_xlsx,
 };
 
 use std::path::Path;
@@ -29,12 +23,6 @@ use std::path::Path;
 pub enum OfficeFileType {
     Word(docx::WordDocument),
     Excel(xlsx::ExcelWorkbook),
-}
-
-/// Structured elements for Word documents (paragraphs + tables with IDs).
-#[allow(dead_code)] // reserved for a future structured-elements API
-pub struct WordElements {
-    pub elements: Vec<DocElement>,
 }
 
 pub fn read_office_file(path: &Path) -> Result<(OfficeFileType, String), OfficeError> {

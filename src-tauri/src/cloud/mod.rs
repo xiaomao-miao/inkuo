@@ -16,7 +16,6 @@
 //! the Rust side — the frontend store is the source of truth.
 
 use crate::ai_config::AIProviderKind;
-use crate::commands::AppCommandError;
 use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -41,12 +40,6 @@ pub enum CloudError {
     Parse(String),
     #[error("{0}")]
     Other(String),
-}
-
-impl From<CloudError> for AppCommandError {
-    fn from(e: CloudError) -> Self {
-        AppCommandError::AIConfig(e.to_string())
-    }
 }
 
 /// Internal bucketing of a single `/auth/refresh` response. Used by

@@ -1,5 +1,7 @@
 //! Word (.docx) document parsing and writing
 
+pub mod types;
+
 use serde::{Deserialize, Serialize};
 use std::io::{Read, Write};
 
