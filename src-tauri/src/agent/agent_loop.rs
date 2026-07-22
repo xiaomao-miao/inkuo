@@ -26,6 +26,11 @@ use crate::diff;
 use crate::streaming::{StreamPayload, FileDiffSummary, StreamDiffHunk, StreamDiffChange, OfficeFileModified, PlanResultData, PlanFileTouchItem, AskUserStreamPayload};
 use crate::agent::tools::ask_user_tools::{register_pending, cancel_pending};
 
+use crate::agent::agent_helpers::{
+    chrono_from_timestamp, generate_plan_id_for_session, is_leap_year, parse_tool_call_message,
+    save_plan_to_workspace, DeltaFunction, DeltaResponse, DeltaToolCall,
+};
+
 /// Check if a session has been cancelled
 fn is_session_cancelled(session_id: &str) -> bool {
     crate::commands::is_stream_cancelled(session_id)
@@ -103,7 +108,7 @@ impl Message {
 
 /// Tool call as it appears in messages (for serialization)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolCallMessage {
+pub(crate) struct ToolCallMessage {
     pub id: String,
     #[serde(rename = "type")]
     pub call_type: String,
@@ -111,7 +116,7 @@ pub struct ToolCallMessage {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolCallFunction {
+pub(crate) struct ToolCallFunction {
     pub name: String,
     pub arguments: String, // JSON string
 }
@@ -1569,156 +1574,6 @@ impl AgentExecutor {
 /// representation. Any missing or wrong-typed field is treated as a hard
 /// failure (we never silently coerce), so the caller can decide whether the
 /// error is recoverable.
-fn parse_tool_call_message(tc: &serde_json::Value) -> Result<ToolCallMessage, String> {
-    let id = tc
-        .get("id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "missing or non-string `id`".to_string())?;
-    let call_type = tc
-        .get("type")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "missing or non-string `type`".to_string())?;
-    let function = tc
-        .get("function")
-        .ok_or_else(|| "missing `function` object".to_string())?;
-    let name = function
-        .get("name")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "missing or non-string `function.name`".to_string())?;
-    let arguments = function
-        .get("arguments")
-        .and_then(|v| match v {
-            serde_json::Value::String(s) => Some(s.clone()),
-            serde_json::Value::Object(map) => Some(serde_json::to_string(map).unwrap_or_default()),
-            _ => None,
-        })
-        .ok_or_else(|| "missing or unsupported `function.arguments`".to_string())?;
-
-    Ok(ToolCallMessage {
-        id: id.to_string(),
-        call_type: call_type.to_string(),
-        function: ToolCallFunction {
-            name: name.to_string(),
-            arguments,
-        },
-    })
-}
-
-#[derive(Debug)]
-struct DeltaResponse {
-    content: Option<String>,
-    reasoning_content: Option<String>,
-    tool_calls: Option<Vec<DeltaToolCall>>,
-}
-
-#[derive(Debug)]
-struct DeltaToolCall {
-    index: usize,
-    id: Option<String>,
-    function: DeltaFunction,
-}
-
-#[derive(Debug)]
-struct DeltaFunction {
-    name: Option<String>,
-    arguments: Option<String>,
-}
-
-/// Format: `plan-YYYYMMDD-HHmmss-<6-char-base36>` — stable across sessions.
-fn generate_plan_id_for_session() -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = now.as_secs();
-    let t = chrono_from_timestamp(secs);
-    let pad = |n: u64| format!("{:02}", n);
-    let stamp = format!(
-        "{}{}{}-{}-{}{}",
-        t.0, pad(t.1), pad(t.2),
-        pad(t.3), pad(t.4), pad(t.5)
-    );
-    let suffix = (secs % (36u64.pow(6)))
-        .to_string()
-        .chars()
-        .map(|c| {
-            let v = c.to_digit(10).unwrap_or(0);
-            "0123456789abcdefghijklmnopqrstuvwxyz"
-                .chars()
-                .nth(v as usize)
-                .unwrap_or('0')
-        })
-        .collect::<String>();
-    format!("plan-{}-{}", stamp, suffix)
-}
-
-fn chrono_from_timestamp(secs: u64) -> (u64, u64, u64, u64, u64, u64) {
-    // (year, month, day, hour, min, sec) using simple calendar math
-    let mut rem = secs;
-    let sec = rem % 60; rem /= 60;
-    let min = rem % 60; rem /= 60;
-    let hour = rem % 24; rem /= 24;
-    // Days since epoch; approximate year/month
-    let mut year = 1970u64;
-    let mut year_days = 365;
-    while rem >= year_days {
-        rem -= year_days;
-        year += 1;
-        year_days = if is_leap_year(year) { 366 } else { 365 };
-    }
-    let mut month = 1u64;
-    let month_days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    while rem >= month_days[(month - 1) as usize] {
-        rem -= month_days[(month - 1) as usize];
-        if month == 2 && is_leap_year(year) && rem > 0 {
-            rem -= 1;
-        }
-        month += 1;
-    }
-    let day = rem + 1;
-    (year, month, day, hour, min, sec)
-}
-
-fn is_leap_year(year: u64) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
-}
-
-const PLANS_DIR: &str = ".inkuo";
-const PLANS_SUBDIR: &str = "plans";
-
-/// Write plan markdown to `<workspace>/.inkuo/plans/<plan_id>.md`.
-async fn save_plan_to_workspace(
-    workspace: &str,
-    plan_id: &str,
-    content: &str,
-) -> Result<String, String> {
-    let ws_dir = std::path::Path::new(workspace);
-    if !ws_dir.is_dir() {
-        return Err(format!("Workspace not found: {}", workspace));
-    }
-    let plans_dir = ws_dir.join(PLANS_DIR).join(PLANS_SUBDIR);
-    tokio::fs::create_dir_all(&plans_dir)
-        .await
-        .map_err(|e| format!("create plans dir: {}", e))?;
-
-    let safe_id: String = plan_id
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    let safe_id = if safe_id.is_empty() { "plan" } else { &safe_id };
-    let path = plans_dir.join(format!("{}.md", safe_id));
-
-    tokio::fs::write(&path, content)
-        .await
-        .map_err(|e| format!("write plan file: {}", e))?;
-
-    Ok(path.to_string_lossy().to_string())
-}
 
 /// Create a new agent executor
 pub fn create_agent_executor(config: AIConfig) -> AgentExecutor {
