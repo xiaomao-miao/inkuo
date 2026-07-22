@@ -89,7 +89,7 @@ import {
   PencilLine,
   type LucideIcon,
 } from 'lucide-react';
-import styles from './OfficeViewer.module.css';
+import styles from './WordToolbar.module.css';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
