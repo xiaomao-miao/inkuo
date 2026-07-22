@@ -327,6 +327,18 @@ export const Editor: React.FC = () => {
     return [{ tab, fileType: fileType as RenderableOfficeTab['fileType'] }];
   }), [openTabs]);
 
+  // SVG files classify as `image` for the sidebar icon, but the editor
+  // route sends them to a specialised viewer (checker background, fit-to-
+  // viewport) rather than the raster ImageViewer — the raster viewer's
+  // white-on-white hide makes transparent regions hard to inspect.
+  // Hooks must run unconditionally on every render, so this lives ABOVE
+  // the early returns below; the `selectedFile` guard happens inside.
+  const isSvg = useMemo(() => {
+    if (!selectedFile) return false;
+    const base = selectedFile.split(/[\\/]/).pop() ?? selectedFile;
+    return base.toLowerCase().endsWith('.svg');
+  }, [selectedFile]);
+
   if (isSettingsTab) {
     return <SettingsState />;
   }
@@ -354,15 +366,6 @@ export const Editor: React.FC = () => {
     activeFileType === 'data';
   const isImage = activeFileType === 'image';
   const isPdf = activeFileType === 'pdf';
-  // SVG files classify as `image` for the sidebar icon, but the editor
-  // route sends them to a specialised viewer (checker background, fit-to-
-  // viewport) rather than the raster ImageViewer — the raster viewer's
-  // white-on-white hide makes transparent regions hard to inspect.
-  const isSvg = useMemo(() => {
-    if (!selectedFile) return false;
-    const base = selectedFile.split(/[\\/]/).pop() ?? selectedFile;
-    return base.toLowerCase().endsWith('.svg');
-  }, [selectedFile]);
 
   return (
     <div className={styles.officeStack}>
