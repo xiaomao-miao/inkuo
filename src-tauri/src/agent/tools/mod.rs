@@ -277,6 +277,7 @@ mod plan_tools;  // create_plan  (read-only meta-tool; see agent_loop::try_handl
 mod mermaid_tools; // render_mermaid  (in-process merman renderer, mermaid.js 11.15 parity)
 mod svg_tools;  // create_svg  (AI-authored standalone .svg files)
 mod pptx_tools; // create_pptx (packs SVGs into editable .pptx; see office_pptx_expert)
+mod pptx_animation_tools; // create_pptx_animation + add_pptx_animation
 mod web_search_tool; // web_search (external encyclopedia lookup; today Baike)
 mod media_tools; // read_image / read_pdf  (binary workspace files for multimodal LLMs)
 pub mod ask_user_tools; // ask_user   (meta-tool; see agent_loop::try_handle_meta_tool)
@@ -294,6 +295,7 @@ pub use plan_tools::{CreatePlanTool, CreatePlanArgs, PlanFileTouch};
 pub use mermaid_tools::RenderMermaidTool;
 pub use svg_tools::{CreateSvgTool, CreateSvgOutcome};
 pub use pptx_tools::{CreatePptxTool, CreatePptxOutcome};
+pub use pptx_animation_tools::{CreatePptxAnimationToolImpl as CreatePptxAnimationTool, AddAnimationToolImpl as AddAnimationTool};
 pub use web_search_tool::WebSearchTool;
 pub use ask_user_tools::AskUserTool;
 pub use media_tools::{ReadImageTool, ReadPdfTool};
@@ -317,6 +319,8 @@ pub enum ToolExecutor {
     RenderMermaid(mermaid_tools::RenderMermaidTool),
     CreateSvg(svg_tools::CreateSvgTool),
     CreatePptx(pptx_tools::CreatePptxTool),
+    CreatePptxAnimation(pptx_animation_tools::CreatePptxAnimationTool),
+    AddPptxAnimation(pptx_animation_tools::AddAnimationTool),
     DatabaseSearch(database_tools::DatabaseSearchTool),
     WebSearch(web_search_tool::WebSearchTool),
     ReadImage(media_tools::ReadImageTool),
@@ -349,7 +353,9 @@ impl ToolExecutor {
             ToolExecutor::InspectOffice(_) => "inspect_office",
             ToolExecutor::RenderMermaid(_) => "render_mermaid",
             ToolExecutor::CreateSvg(_) => "create_svg",
-    ToolExecutor::CreatePptx(_) => "create_pptx",
+            ToolExecutor::CreatePptx(_) => "create_pptx",
+            ToolExecutor::CreatePptxAnimation(_) => "create_pptx_animation",
+            ToolExecutor::AddPptxAnimation(_) => "add_pptx_animation",
             ToolExecutor::DatabaseSearch(_) => "database_search",
             ToolExecutor::WebSearch(_) => "web_search",
             ToolExecutor::ReadImage(_) => "read_image",
@@ -381,6 +387,8 @@ impl ToolExecutor {
             ToolExecutor::RenderMermaid(t) => t.definition(),
             ToolExecutor::CreateSvg(t) => t.definition(),
     ToolExecutor::CreatePptx(t) => t.definition(),
+            ToolExecutor::CreatePptxAnimation(t) => t.definition(),
+            ToolExecutor::AddPptxAnimation(t) => t.definition(),
             ToolExecutor::DatabaseSearch(t) => t.definition(),
             ToolExecutor::WebSearch(t) => t.definition(),
             ToolExecutor::ReadImage(t) => t.definition(),
@@ -440,6 +448,13 @@ impl ToolExecutor {
             ToolExecutor::CreatePptx(t) => {
                 let outcome = t.execute(arguments, workspace).await?;
                 Ok(outcome.output)
+            }
+            ToolExecutor::CreatePptxAnimation(t) => {
+                let outcome = t.execute(arguments, workspace).await?;
+                Ok(serde_json::to_string(&outcome).unwrap_or(outcome.output))
+            }
+            ToolExecutor::AddPptxAnimation(t) => {
+                t.execute(arguments, workspace).await
             }
             ToolExecutor::DatabaseSearch(t) => t.execute(arguments, workspace).await,
             ToolExecutor::WebSearch(t) => t.execute(arguments, workspace).await,
@@ -585,6 +600,8 @@ impl ToolRegistry {
             // and triggers the same `file-change` event as the other
             // file-modifying tools.
             ToolExecutor::CreatePptx(CreatePptxTool::default()),
+            ToolExecutor::CreatePptxAnimation(pptx_animation_tools::CreatePptxAnimationTool::new()),
+            ToolExecutor::AddPptxAnimation(pptx_animation_tools::AddAnimationTool::new()),
             // DatabaseSearchTool added lazily via with_app_handle()
             // `web_search` is registered here with a placeholder tool;
             // `set_app_handle()` swaps in the real implementation once
@@ -672,7 +689,7 @@ impl ToolRegistry {
         // `ToolResult` for the frontend's `file-written` event. Branch on
         // the tool name first so we don't accidentally apply the generic
         // `path` lookup below to either of them.
-        if tool_call.name == "render_mermaid" || tool_call.name == "create_svg" || tool_call.name == "create_pptx" {
+        if tool_call.name == "render_mermaid" || tool_call.name == "create_svg" || tool_call.name == "create_pptx" || tool_call.name == "create_pptx_animation" || tool_call.name == "add_pptx_animation" {
             let output_path = tool_call
                 .arguments
                 .get("output_path")

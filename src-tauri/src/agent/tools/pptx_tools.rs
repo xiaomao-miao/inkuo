@@ -60,12 +60,12 @@ use super::{validate_workspace_path, ToolDefinition, ToolError, ToolParameters};
 // EMU. We use that as our default canvas.
 // ---------------------------------------------------------------------------
 
-/// Default slide width in EMU (13.333" × 914,400).
-const SLIDE_W_EMU: i64 = 12_192_000;
-/// Default slide height in EMU (7.5" × 914,400).
-const SLIDE_H_EMU: i64 = 6_858_000;
 /// EMUs per inch (PowerPoint's base unit).
-const EMU_PER_INCH: i64 = 914_400;
+pub const EMU_PER_INCH: i64 = 914_400;
+/// Default slide width in EMU (13.333" × 914,400).
+pub const SLIDE_W_EMU: i64 = 12_192_000;
+/// Default slide height in EMU (7.5" × 914,400).
+pub const SLIDE_H_EMU: i64 = 6_858_000;
 
 // ---------------------------------------------------------------------------
 // Outcome wrapper
@@ -137,7 +137,7 @@ impl CreatePptxTool {
             ToolParameters::new(
                 vec!["svg_paths", "output_path"],
                 vec![
-                    ("svg_paths", "string", Some("JSON array of absolute paths to `.svg` files. Order is preserved — n-th element becomes the n-th slide. Must contain at least one path.")),
+                    ("svg_paths", "array", Some("JSON array of absolute paths to `.svg` files. Order is preserved — n-th element becomes the n-th slide. Must contain at least one path.")),
                     ("output_path", "string", Some("Absolute workspace path to write the `.pptx` to. Extension must be `.pptx`. Parent directories are created automatically.")),
                     ("title", "string", Some("Optional deck title, stamped into `docProps/core.xml` and PowerPoint's Title field.")),
                 ],
@@ -306,16 +306,16 @@ impl Default for CreatePptxTool {
 // ---------------------------------------------------------------------------
 
 /// A single SVG, after parsing.
-struct ParsedSvg {
+pub struct ParsedSvg {
     /// The canvas size in SVG user units. We centre the artwork onto the
     /// 16:9 PPT slide and scale to fit (preserving aspect ratio).
-    vb_x: f64,
-    vb_y: f64,
-    vb_w: f64,
-    vb_h: f64,
+    pub vb_x: f64,
+    pub vb_y: f64,
+    pub vb_w: f64,
+    pub vb_h: f64,
     /// Shapes, in document order. `text` shapes carry their raw `<text>`
     /// children (we render them on the PPT slide too).
-    shapes: Vec<SvgShape>,
+    pub shapes: Vec<SvgShape>,
     /// Element names that we encountered but skipped (so the tool output can
     /// tell the user "we dropped 3 <image> elements").
     skipped: Vec<String>,
@@ -330,7 +330,7 @@ struct ParsedSvg {
 /// OOXML. The shape coordinates are still in SVG user units — the
 /// `to_ooxml` step applies the per-slide scale + offset transform.
 #[derive(Debug)]
-enum SvgShape {
+pub enum SvgShape {
     Rect {
         x: f64, y: f64, width: f64, height: f64,
         rx: Option<f64>, ry: Option<f64>,
@@ -379,7 +379,7 @@ enum SvgShape {
 /// One run inside a `<text>` element. Multi-run text is preserved so PPT can
 /// edit each run independently.
 #[derive(Debug)]
-struct TextRun {
+pub struct TextRun {
     text: String,
     bold: bool,
     italic: bool,
@@ -396,7 +396,7 @@ struct TextRun {
 /// emits gradients purely for visual richness, never as data-bearing
 /// colour ramps.
 #[derive(Clone, Debug)]
-enum Paint {
+pub enum Paint {
     None,
     Color { rgb: String, opacity: Option<f64> },
     /// `url(#id)` resolved to the first stop of the matching gradient
@@ -406,17 +406,17 @@ enum Paint {
 }
 
 /// Intermediate representation of one input SVG.
-struct SlideInput {
+pub struct SlideInput {
     source_path: String,
     slide_index: usize,
     content: ParsedSvg,
 }
 
 // ---------------------------------------------------------------------------
-// SVG parser
+// SVG parser (public so pptx_animation_tools can re-use it)
 // ---------------------------------------------------------------------------
 
-fn parse_svg(svg: &str) -> Result<ParsedSvg, String> {
+pub fn parse_svg(svg: &str) -> Result<ParsedSvg, String> {
     let mut reader = Reader::from_str(svg);
     reader.config_mut().trim_text(true);
 
@@ -844,12 +844,8 @@ fn parse_paint(
     })
 }
 
-/// Hex / rgb / named colour → "RRGGBB" uppercase. Used by `parse_paint`
-/// for `fill` / `stroke`, and by the gradient-stop capture in
-/// `parse_svg` to resolve `<stop stop-color="…">` to a concrete colour.
-/// Returns `None` for unrecognised input so the caller can decide
-/// whether to fall back (named-colour table, gradient lookup, etc.).
-fn parse_color(s: &str) -> Option<String> {
+/// See `parse_paint` for docs.
+pub fn parse_color(s: &str) -> Option<String> {
     parse_color_with_alpha(s).map(|(rgb, _)| rgb)
 }
 
@@ -921,7 +917,7 @@ fn hex_alpha(hex: &str) -> f64 {
 /// the `Paint::GradientRef` doc-comment for why we don't try to render
 /// the ramp in DrawingML.
 #[derive(Clone)]
-struct GradientStop {
+pub struct GradientStop {
     rgb: String,
     opacity: Option<f64>,
 }
@@ -1390,7 +1386,7 @@ fn flush_path_cmd(out: &mut String, cmd: char, args: &[f64], tx: f64, ty: f64, s
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy, Debug)]
-struct Transform {
+pub struct Transform {
     /// Translation in SVG user units (pre-scale).
     tx: f64,
     ty: f64,
@@ -1600,7 +1596,8 @@ fn build_pptx(slides: &[SlideInput], title: Option<&str>) -> Result<Vec<u8>, Too
 
 // ---- Content_Types --------------------------------------------------------
 
-fn build_content_types(slide_count: usize) -> String {
+/// See `parse_paint` for docs.
+pub fn build_content_types(slide_count: usize) -> String {
     let mut out = String::new();
     out.push_str(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#);
     out.push_str("<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">");
@@ -1622,7 +1619,7 @@ fn build_content_types(slide_count: usize) -> String {
 
 // ---- _rels ----------------------------------------------------------------
 
-fn build_root_rels() -> String {
+pub fn build_root_rels() -> String {
     r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/>
@@ -1631,7 +1628,7 @@ fn build_root_rels() -> String {
 </Relationships>"#.to_string()
 }
 
-fn build_presentation_rels(slide_count: usize) -> String {
+pub fn build_presentation_rels(slide_count: usize) -> String {
     let mut out = String::new();
     out.push_str(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#);
     out.push_str("<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">");
@@ -1647,7 +1644,7 @@ fn build_presentation_rels(slide_count: usize) -> String {
     out
 }
 
-fn build_slide_rels() -> String {
+pub fn build_slide_rels() -> String {
     r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>
@@ -1656,7 +1653,7 @@ fn build_slide_rels() -> String {
 
 // ---- presentation.xml -----------------------------------------------------
 
-fn build_presentation_xml(slide_count: usize, slide_w_emu: i64, slide_h_emu: i64) -> String {
+pub fn build_presentation_xml(slide_count: usize, slide_w_emu: i64, slide_h_emu: i64) -> String {
     let mut out = String::new();
     out.push_str(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#);
     out.push_str("<p:presentation xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\">");
@@ -1779,8 +1776,8 @@ fn project_len(svg_len: f64, scale: f64) -> i64 {
 
 /// Emit one `<p:sp>` for a single shape. We translate the per-shape SVG
 /// coords into the slide's EMU space using the slide-wide scale / offset
-/// computed in `build_slide_xml`.
-fn write_shape(
+/// computed in `build_slide_xml`. Public so pptx_animation_tools can re-use it.
+pub fn write_shape(
     out: &mut String,
     shape: &SvgShape,
     scale: f64,
@@ -2181,7 +2178,7 @@ fn text_color(p: &Paint) -> Option<String> {
     }
 }
 
-fn xml_escape(s: &str) -> String {
+pub fn xml_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for ch in s.chars() {
         match ch {
@@ -2198,7 +2195,7 @@ fn xml_escape(s: &str) -> String {
 
 // ---- docProps + theme + slide master --------------------------------------
 
-fn build_core_props_xml(title: &str) -> String {
+pub fn build_core_props_xml(title: &str) -> String {
     let now = chrono::Utc::now().to_rfc3339();
     let title_esc = xml_escape(title);
     format!(
@@ -2215,15 +2212,14 @@ fn build_core_props_xml(title: &str) -> String {
     )
 }
 
-const APP_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+pub const APP_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
   <Application>inkuo AI</Application>
   <AppVersion>1.0</AppVersion>
 </Properties>"#;
 
-/// Minimal valid theme. PowerPoint accepts this and falls back to its
-/// own defaults for any colour it doesn't find here.
-const THEME_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+/// Minimal valid theme.
+pub const THEME_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="inkuo">
   <a:themeElements>
     <a:clrScheme name="inkuo">
@@ -2271,13 +2267,13 @@ const THEME_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"
 
 /// Bare-minimum slide master so PowerPoint doesn't complain about a missing
 /// background placeholder.
-const SLIDE_MASTER_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+pub const SLIDE_MASTER_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <p:sldMaster xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
   <p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/></p:spTree></p:cSld>
   <p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/>
 </p:sldMaster>"#;
 
-const SLIDE_MASTER_RELS: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+pub const SLIDE_MASTER_RELS: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>
   <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="../theme/theme1.xml"/>
