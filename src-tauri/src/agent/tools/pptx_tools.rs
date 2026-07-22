@@ -827,10 +827,21 @@ fn parse_paint(
         return Some(Paint::None);
     }
     // `#RRGGBB` / `#RGB` / `rgb(…)` / named colours.
-    let rgb = parse_color(s).or_else(|| {
-        named_color(s).map(|s| s.to_string())
+    //
+    // For `rgba(…)` we keep the alpha — it controls the
+    // semi-transparent "glass" effect that the user's SVG deck
+    // depends on (e.g. `rgba(255,255,255,0.03)` strokes on the
+    // decorative circles in `slide1-title.svg`). The earlier
+    // version silently dropped the alpha here, which made every
+    // stroke render fully opaque — losing the glass look.
+    let (rgb, alpha) = parse_color_with_alpha(s).or_else(|| {
+        let rgb = named_color(s).map(|s| s.to_string())?;
+        Some((rgb, None))
     })?;
-    Some(Paint::Color { rgb, opacity: None })
+    Some(Paint::Color {
+        rgb,
+        opacity: alpha,
+    })
 }
 
 /// Hex / rgb / named colour → "RRGGBB" uppercase. Used by `parse_paint`
@@ -839,6 +850,16 @@ fn parse_paint(
 /// Returns `None` for unrecognised input so the caller can decide
 /// whether to fall back (named-colour table, gradient lookup, etc.).
 fn parse_color(s: &str) -> Option<String> {
+    parse_color_with_alpha(s).map(|(rgb, _)| rgb)
+}
+
+/// Like [`parse_color`] but also returns the alpha channel from
+/// `rgba(…)` inputs so the writer can emit the correct
+/// `<a:alpha val="…"/>` for the semi-transparent "glass" strokes
+/// the SVG deck relies on. Returns `(rgb, Some(alpha))` for
+/// `rgba(…)`, `(rgb, None)` for everything else (the writer
+/// defaults to fully opaque).
+fn parse_color_with_alpha(s: &str) -> Option<(String, Option<f64>)> {
     let s = s.trim();
     if let Some(hex) = s.strip_prefix('#') {
         return match hex.len() {
@@ -846,10 +867,12 @@ fn parse_color(s: &str) -> Option<String> {
                 let r = &hex[0..1];
                 let g = &hex[1..2];
                 let b = &hex[2..3];
-                Some(format!("{}{}{}{}{}{}", r, r, g, g, b, b).to_uppercase())
+                Some((format!("{}{}{}{}{}{}", r, r, g, g, b, b).to_uppercase(), None))
             }
-            6 => Some(hex.to_uppercase()),
-            8 => Some(hex[0..6].to_uppercase()), // strip alpha
+            6 => Some((hex.to_uppercase(), None)),
+            // `#RRGGBBAA` — keep the alpha so semi-transparent fills
+            // survive the round-trip into PowerPoint.
+            8 => Some((hex[0..6].to_uppercase(), Some(hex_alpha(&hex[6..8])))),
             _ => None,
         };
     }
@@ -865,11 +888,8 @@ fn parse_color(s: &str) -> Option<String> {
         let r: u8 = parts[0].parse().ok()?;
         let g: u8 = parts[1].parse().ok()?;
         let b: u8 = parts[2].parse().ok()?;
-        return Some(format!("{:02X}{:02X}{:02X}", r, g, b));
+        return Some((format!("{:02X}{:02X}{:02X}", r, g, b), None));
     }
-    // `rgba(r, g, b, a)` — strip the alpha, same trick we already
-    // play for `#RRGGBBAA`. The alpha is captured at the paint level
-    // by the caller, not by `parse_color`, so this is consistent.
     if s.starts_with("rgba(") && s.ends_with(')') {
         let body = &s[5..s.len() - 1];
         let parts: Vec<&str> = body
@@ -882,11 +902,17 @@ fn parse_color(s: &str) -> Option<String> {
         let r: u8 = parts[0].parse().ok()?;
         let g: u8 = parts[1].parse().ok()?;
         let b: u8 = parts[2].parse().ok()?;
-        // Alpha ignored here — see the doc-comment above.
-        let _alpha: f64 = parts[3].parse().ok()?;
-        return Some(format!("{:02X}{:02X}{:02X}", r, g, b));
+        let a: f64 = parts[3].parse().ok()?;
+        return Some((format!("{:02X}{:02X}{:02X}", r, g, b), Some(a)));
     }
     None
+}
+
+/// Convert a two-char hex byte (e.g. `"40"` = 64/255) into the
+/// `0.0..=1.0` alpha that `<a:alpha val="…"/>` expects.
+fn hex_alpha(hex: &str) -> f64 {
+    let v = u8::from_str_radix(hex, 16).unwrap_or(255);
+    f64::from(v) / 255.0
 }
 
 /// A single resolved gradient stop. We capture the colour + opacity of the
@@ -1917,6 +1943,13 @@ fn write_shape(
             // configured font size, with a little padding so descenders
             // don't get clipped.
             let size_pt = font_size.unwrap_or(18.0);
+            // OOXML `<a:rPr sz="…"/>` is in HUNDREDTHS of a point, not
+            // raw points. SVG's `font-size="64"` is 64 pt; we have to
+            // emit `sz="6400"` or PowerPoint renders the run as
+            // ~0.64 pt — invisible at typical zoom. The previous
+            // version emitted `size_pt` directly, which is why the
+            // user opened the deck and saw the artwork but no text.
+            let size_hundredths = (size_pt * 100.0).round() as i64;
             let line_h_emu = ((size_pt * 1.4) * EMU_PER_INCH as f64 / 72.0).round() as i64;
             let ph = line_h_emu.max(120_000); // at least ~0.13" so the box is grabbable
             // We intentionally do NOT clamp `px` or `pw` to the
@@ -1966,7 +1999,7 @@ fn write_shape(
                 write!(
                     out,
                     "<a:rPr lang=\"en-US\" sz=\"{}\" b=\"{}\" i=\"{}\" u=\"{}\">{}</a:rPr>",
-                    size_pt,
+                    size_hundredths,
                     if run.bold { "1" } else { "0" },
                     if run.italic { "1" } else { "0" },
                     if run.underline { "sng" } else { "none" },
@@ -3053,6 +3086,99 @@ mod tests {
         assert!(
             hello_re.is_match(&xml),
             "expected <a:t>Hello</a:t> in slide1.xml:\n{xml}"
+        );
+    }
+
+    #[test]
+    fn font_size_is_emitted_in_hundredths_of_a_point() {
+        // OOXML `<a:rPr sz="…"/>` is in HUNDREDTHS of a point, so
+        // an SVG `font-size="48"` (48 pt) must become `sz="4800"`,
+        // not `sz="48"`. The previous version wrote the raw pt
+        // value, which rendered the text at ~0.48 pt — invisible
+        // at any normal zoom. The user opened the deck and saw the
+        // artwork but no text.
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720">
+  <text x="100" y="100" font-size="48" fill="#FFF">Big text</text>
+  <text x="100" y="200" font-size="18" fill="#FFF">Small text</text>
+  <text x="100" y="300" fill="#FFF">Default text</text>
+</svg>"##;
+        let parsed = parse_svg(svg).expect("parse");
+        let slides = vec![SlideInput {
+            source_path: "sizes.svg".to_string(),
+            slide_index: 1,
+            content: parsed,
+        }];
+        let bytes = build_pptx(&slides, Some("sizes")).expect("build pptx");
+        let mut archive =
+            zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
+        let mut xml = String::new();
+        archive
+            .by_name("ppt/slides/slide1.xml")
+            .unwrap()
+            .read_to_string(&mut xml)
+            .unwrap();
+        // 48 pt → sz="4800", 18 pt → sz="1800", default (18 pt) → sz="1800".
+        assert!(
+            xml.contains(r#"sz="4800""#),
+            "expected sz=\"4800\" for 48pt text, got:\n{xml}"
+        );
+        assert!(
+            xml.contains(r#"sz="1800""#),
+            "expected sz=\"1800\" for 18pt text, got:\n{xml}"
+        );
+        // And the raw values (sz="48" or sz="18") must NOT appear —
+        // they're off by a factor of 100 and would render the text
+        // invisible.
+        for raw in [r#"sz="48""#, r#"sz="18""#] {
+            assert!(
+                !xml.contains(raw),
+                "{raw} should not appear — sz must be in hundredths of a pt. xml:\n{xml}"
+            );
+        }
+    }
+
+    #[test]
+    fn rgba_alpha_round_trips_into_ooxml() {
+        // SVG `rgba(r, g, b, a)` carries the alpha channel for
+        // the "glass" semi-transparent strokes / fills. The earlier
+        // version of `parse_paint` silently dropped the alpha,
+        // which made every stroke fully opaque — losing the glass
+        // look the user originally authored.
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720">
+  <circle cx="100" cy="100" r="50" fill="none" stroke="rgba(255,255,255,0.03)" stroke-width="2"/>
+  <circle cx="300" cy="100" r="50" fill="rgba(0,210,255,0.25)"/>
+  <rect width="100" height="100" fill="#FF000080"/>
+</svg>"##;
+        let parsed = parse_svg(svg).expect("parse");
+        let slides = vec![SlideInput {
+            source_path: "glass.svg".to_string(),
+            slide_index: 1,
+            content: parsed,
+        }];
+        let bytes = build_pptx(&slides, Some("glass")).expect("build pptx");
+        let mut archive =
+            zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
+        let mut xml = String::new();
+        archive
+            .by_name("ppt/slides/slide1.xml")
+            .unwrap()
+            .read_to_string(&mut xml)
+            .unwrap();
+        // rgba(255,255,255,0.03) → alpha = 0.03 * 100_000 = 3000
+        assert!(
+            xml.contains(r#"<a:alpha val="3000""#),
+            "expected <a:alpha val=\"3000\"/> for rgba(255,255,255,0.03) stroke, got:\n{xml}"
+        );
+        // rgba(0,210,255,0.25) → alpha = 0.25 * 100_000 = 25000
+        assert!(
+            xml.contains(r#"<a:alpha val="25000""#),
+            "expected <a:alpha val=\"25000\"/> for rgba(0,210,255,0.25) fill, got:\n{xml}"
+        );
+        // #RRGGBBAA where AA=0x80 → alpha = 128/255 ≈ 0.502
+        //   * 100_000 = 50196 (rounded)
+        assert!(
+            xml.contains(r#"<a:alpha val="50196""#),
+            "expected <a:alpha val=\"50196\"/> for #FF000080 fill (alpha 128/255), got:\n{xml}"
         );
     }
 
