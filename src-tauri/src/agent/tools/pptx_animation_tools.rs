@@ -29,10 +29,10 @@ use zip;
 use super::{validate_workspace_path, ToolDefinition, ToolError, ToolParameters};
 use crate::agent::tools::pptx_tools::{
     build_content_types, build_core_props_xml, build_presentation_rels,
-    build_presentation_xml, build_root_rels, build_slide_rels, parse_color, parse_svg,
+    build_presentation_xml, build_root_rels, build_slide_rels, parse_svg,
     write_shape, xml_escape, EMU_PER_INCH, SLIDE_H_EMU, SLIDE_W_EMU,
     APP_XML, SLIDE_LAYOUT_RELS, SLIDE_LAYOUT_XML, SLIDE_MASTER_RELS, SLIDE_MASTER_XML, THEME_XML,
-    ParsedSvg as PptxParsedSvg, SvgShape as PptxSvgShape,
+    ParsedSvg as PptxParsedSvg,
 };
 
 // ===========================================================================

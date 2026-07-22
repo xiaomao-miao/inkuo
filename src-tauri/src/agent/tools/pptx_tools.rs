@@ -37,9 +37,10 @@
 //! | `<polyline>` / `<polygon>` | `<p:sp>` preset geometry + custom path    | ✓ (geometry locked, but vertex handles visible) |
 //! | `<path>`                | `<p:sp>` with `<a:custGeom>` custom path    | ✓                |
 //! | `<text>`                | `<p:sp>` with `<p:txBody>`                  | ✓ (fully editable text) |
+//! | `<image>` (data: URL)   | `<p:pic>` with embedded `<a:blip>`           | ✓ (resize, recolour) |
 //! | `<g transform="…">`     | wrapped in `<p:sp>` xfrm or applied to children | ✓            |
 //!
-//! Unsupported elements (`<image>`, `<use>`, `<foreignObject>`, `<filter>`,
+//! Unsupported elements (`<use>`, `<foreignObject>`, `<filter>`,
 //! `<mask>`, scripts) are skipped with a soft warning — the slide is still
 //! emitted so the file opens cleanly.
 
@@ -132,7 +133,7 @@ impl CreatePptxTool {
              `text`, and `<g transform=...>`. Linear / radial gradients resolve to the first \
              `<stop>`'s colour as a `<a:solidFill>` (we don't try to recreate the gradient ramp \
              because it doesn't render portably across PowerPoint / Keynote / WPS). Unsupported \
-             elements (image / use / foreignObject / filter / mask / script) are skipped with a \
+             elements (use / foreignObject / filter / mask / script) are skipped with a \
              warning; the slide is still emitted so the deck always opens cleanly.",
             ToolParameters::new(
                 vec!["svg_paths", "output_path"],
@@ -329,7 +330,7 @@ pub struct ParsedSvg {
 /// A single SVG shape, normalised into a representation we can convert to
 /// OOXML. The shape coordinates are still in SVG user units — the
 /// `to_ooxml` step applies the per-slide scale + offset transform.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum SvgShape {
     Rect {
         x: f64, y: f64, width: f64, height: f64,
@@ -374,11 +375,27 @@ pub enum SvgShape {
         /// centre / right) and the per-paragraph alignment.
         text_anchor: String,
     },
+    /// An embedded raster image (`<image href="data:image/png;base64,..."/>`).
+    /// The PNG/JPEG bytes are stored as-is; the PPTX writer embeds them
+    /// as `Media/placeholderN.{ext}` entries and references them via
+    /// `<a:blip fill="sblipRgd">`.
+    Image {
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+        /// Raw image bytes (PNG or JPEG).
+        data: Vec<u8>,
+        /// MIME type: "image/png" or "image/jpeg".
+        mime: String,
+        /// Extension used in the ZIP file: "png" or "jpg".
+        ext: String,
+    },
 }
 
 /// One run inside a `<text>` element. Multi-run text is preserved so PPT can
 /// edit each run independently.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TextRun {
     text: String,
     bold: bool,
@@ -616,10 +633,28 @@ pub fn parse_svg(svg: &str) -> Result<ParsedSvg, String> {
                         }
                     }
                     // Unsupported — record and skip.
-                    "image" | "use" | "foreignObject" | "filter" | "mask"
+                    "use" | "foreignObject" | "filter" | "mask"
                     | "clipPath" | "pattern" | "switch" => {
                         if !parsed.skipped.contains(&tag) {
                             parsed.skipped.push(tag);
+                        }
+                    }
+                    "image" => {
+                        // Try to parse inline data: URL; skip only if it fails.
+                        if let Some(href) = attrs.get("href")
+                            .or_else(|| attrs.get("{http://www.w3.org/1999/xlink}href"))
+                        {
+                            let x = attrs.get("x").and_then(|v| v.parse().ok()).unwrap_or(0.0);
+                            let y = attrs.get("y").and_then(|v| v.parse().ok()).unwrap_or(0.0);
+                            let w = attrs.get("width").and_then(|v| v.parse().ok());
+                            let h = attrs.get("height").and_then(|v| v.parse().ok());
+                            if let Some(shape) = build_image(href, x, y, w, h) {
+                                parsed.shapes.push(shape);
+                            } else if !parsed.skipped.contains(&"image".to_string()) {
+                                parsed.skipped.push("image".to_string());
+                            }
+                        } else if !parsed.skipped.contains(&"image".to_string()) {
+                            parsed.skipped.push("image".to_string());
                         }
                     }
                     _ => {}
@@ -674,10 +709,27 @@ pub fn parse_svg(svg: &str) -> Result<ParsedSvg, String> {
                             try_capture_gradient_stop(&mut parsed.defs, parent_id, &attrs);
                         }
                     }
-                    "image" | "use" | "foreignObject" | "filter" | "mask"
+                    "use" | "foreignObject" | "filter" | "mask"
                     | "clipPath" | "pattern" | "switch" => {
                         if !parsed.skipped.contains(&tag) {
                             parsed.skipped.push(tag);
+                        }
+                    }
+                    "image" => {
+                        if let Some(href) = attrs.get("href")
+                            .or_else(|| attrs.get("{http://www.w3.org/1999/xlink}href"))
+                        {
+                            let x = attrs.get("x").and_then(|v| v.parse().ok()).unwrap_or(0.0);
+                            let y = attrs.get("y").and_then(|v| v.parse().ok()).unwrap_or(0.0);
+                            let w = attrs.get("width").and_then(|v| v.parse().ok());
+                            let h = attrs.get("height").and_then(|v| v.parse().ok());
+                            if let Some(shape) = build_image(href, x, y, w, h) {
+                                parsed.shapes.push(shape);
+                            } else if !parsed.skipped.contains(&"image".to_string()) {
+                                parsed.skipped.push("image".to_string());
+                            }
+                        } else if !parsed.skipped.contains(&"image".to_string()) {
+                            parsed.skipped.push("image".to_string());
                         }
                     }
                     _ => {}
@@ -1176,12 +1228,140 @@ fn build_poly(
     })
 }
 
+/// Parse an `<image>` element with an inline data: URL.
+/// Supports `data:image/png;base64,...` and `data:image/jpeg;base64,...`.
+/// Returns `None` if the href is absent, not a data URL, or the base64
+/// decoding fails.
+fn build_image(
+    href: &str,
+    x: f64,
+    y: f64,
+    width: Option<f64>,
+    height: Option<f64>,
+) -> Option<SvgShape> {
+    // We only accept inline data: URLs — no external http/https.
+    let href = href.trim();
+    if !href.starts_with("data:image/") {
+        return None;
+    }
+    // Split "data:image/png;base64,..." into (mime, body)
+    let body = href.strip_prefix("data:")?;
+    let (mime, rest) = body.split_once(';')?;
+    let encoding = rest.strip_prefix("base64,")?;
+    let decoded = match base64_decode(encoding.as_bytes()) {
+        Some(d) => d,
+        None => return None, // decode error → image skipped
+    };
+    // Determine extension + strict MIME check.
+    let mime = mime.to_lowercase();
+    let ext = match mime.as_str() {
+        "image/png" => "png",
+        "image/jpeg" | "image/jpg" => "jpg",
+        _ => return None, // only PNG/JPEG supported
+    };
+    Some(SvgShape::Image {
+        x, y,
+        width: width.unwrap_or(100.0),
+        height: height.unwrap_or(100.0),
+        data: decoded,
+        mime: mime.clone(),
+        ext: ext.to_string(),
+    })
+}
+
 fn format_decimal(v: f64) -> String {
     // quick-xml writes attributes verbatim; trim trailing zeros so we don't
     // ship "12.000000" through the zip.
     let s = format!("{:.4}", v);
     let s = s.trim_end_matches('0').trim_end_matches('.').to_string();
     if s.is_empty() { "0".to_string() } else { s }
+}
+
+/// Decode base64 from a slice of ASCII bytes. Returns `None` on invalid input.
+fn base64_decode(input: &[u8]) -> Option<Vec<u8>> {
+    const DECODE_TABLE: [i8; 256] = {
+        let mut t = [-1i8; 256];
+        // A-Z
+        t[b'A' as usize] = 0; t[b'B' as usize] = 1; t[b'C' as usize] = 2;
+        t[b'D' as usize] = 3; t[b'E' as usize] = 4; t[b'F' as usize] = 5;
+        t[b'G' as usize] = 6; t[b'H' as usize] = 7; t[b'I' as usize] = 8;
+        t[b'J' as usize] = 9; t[b'K' as usize] = 10; t[b'L' as usize] = 11;
+        t[b'M' as usize] = 12; t[b'N' as usize] = 13; t[b'O' as usize] = 14;
+        t[b'P' as usize] = 15; t[b'Q' as usize] = 16; t[b'R' as usize] = 17;
+        t[b'S' as usize] = 18; t[b'T' as usize] = 19; t[b'U' as usize] = 20;
+        t[b'V' as usize] = 21; t[b'W' as usize] = 22; t[b'X' as usize] = 23;
+        t[b'Y' as usize] = 24; t[b'Z' as usize] = 25;
+        // a-z
+        t[b'a' as usize] = 26; t[b'b' as usize] = 27; t[b'c' as usize] = 28;
+        t[b'd' as usize] = 29; t[b'e' as usize] = 30; t[b'f' as usize] = 31;
+        t[b'g' as usize] = 32; t[b'h' as usize] = 33; t[b'i' as usize] = 34;
+        t[b'j' as usize] = 35; t[b'k' as usize] = 36; t[b'l' as usize] = 37;
+        t[b'm' as usize] = 38; t[b'n' as usize] = 39; t[b'o' as usize] = 40;
+        t[b'p' as usize] = 41; t[b'q' as usize] = 42; t[b'r' as usize] = 43;
+        t[b's' as usize] = 44; t[b't' as usize] = 45; t[b'u' as usize] = 46;
+        t[b'v' as usize] = 47; t[b'w' as usize] = 48; t[b'x' as usize] = 49;
+        t[b'y' as usize] = 50; t[b'z' as usize] = 51;
+        // 0-9
+        t[b'0' as usize] = 52; t[b'1' as usize] = 53; t[b'2' as usize] = 54;
+        t[b'3' as usize] = 55; t[b'4' as usize] = 56; t[b'5' as usize] = 57;
+        t[b'6' as usize] = 58; t[b'7' as usize] = 59; t[b'8' as usize] = 60;
+        t[b'9' as usize] = 61;
+        t[b'+' as usize] = 62; t[b'/' as usize] = 63; t[b'=' as usize] = 64;
+        t
+    };
+
+    let input = input.trim_ascii();
+    if input.is_empty() { return Some(Vec::new()); }
+
+    // Pad to multiple of 4
+    let padding = (4 - (input.len() % 4)) % 4;
+    let len = input.len() + padding;
+    let mut buf = Vec::with_capacity(len * 3 / 4);
+
+    let mut i = 0;
+    while i < len {
+        let get = |idx: usize| -> i8 {
+            if idx >= input.len() { return -1 }
+            DECODE_TABLE[input[idx] as usize]
+        };
+        let a = get(i); let b = get(i+1); let c = get(i+2); let d = get(i+3);
+        if a < 0 || b < 0 { return None; }
+        buf.push(((a as u8) << 2) | ((b as u8) >> 4));
+        if c >= 0 {
+            buf.push(((b as u8) & 0x0F) << 4 | ((c as u8) >> 2));
+        }
+        if d >= 0 && (i + 3 < input.len() || padding < 3) {
+            buf.push(((c as u8) & 0x03) << 6 | (d as u8));
+        }
+        i += 4;
+    }
+    Some(buf)
+}
+
+/// Standard base64 encode (URL-safe alphabet variant not used here since
+/// PPTX uses standard base64 in data: URLs and the XML comment).
+fn base64_encode(input: &[u8]) -> String {
+    const ENCODE_TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    let chunks = input.chunks(3);
+    for chunk in chunks {
+        let b0 = chunk[0] as usize;
+        let b1 = chunk.get(1).copied().unwrap_or(0) as usize;
+        let b2 = chunk.get(2).copied().unwrap_or(0) as usize;
+        out.push(ENCODE_TABLE[(b0 >> 2)] as char);
+        out.push(ENCODE_TABLE[((b0 & 0x03) << 4) | (b1 >> 4)] as char);
+        if chunk.len() > 1 {
+            out.push(ENCODE_TABLE[((b1 & 0x0F) << 2) | (b2 >> 6)] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(ENCODE_TABLE[b2 & 0x3F] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
 }
 
 /// Rewrite an SVG path `d` attribute so every coordinate is transformed
@@ -1503,12 +1683,146 @@ struct TextAcc {
 // OOXML builders
 // ---------------------------------------------------------------------------
 
+/// Image data extracted from SVG `<image>` elements during build_pptx.
+struct SlideImage {
+    shape_id: usize,
+    ext: String,
+    data: Vec<u8>,
+}
+
+/// Collect all `<!--IMG|...|-->` markers from slide XML and extract the
+/// embedded image data. Returns (processed_xml, images).
+fn extract_images_from_slide(xml: &str) -> (String, Vec<SlideImage>) {
+    let mut images = Vec::new();
+    let marker_prefix = "<!--IMG|";
+    let mut result = String::new();
+    let mut last_end = 0;
+
+    while let Some(start) = xml[last_end..].find(marker_prefix) {
+        let abs_start = last_end + start;
+        if let Some(end_offset) = xml[abs_start..].find("|-->") {
+            let marker_end = abs_start + end_offset + 4;
+            let inner = &xml[abs_start + 5..marker_end - 3]; // strip <!--IMG| and |-->
+            let parts: Vec<&str> = inner.split('|').collect();
+            if parts.len() >= 7 {
+                if let (Ok(shape_id), Some(ext), Some(b64)) = (
+                    parts[0].parse::<usize>(),
+                    parts.get(5),
+                    parts.get(6),
+                ) {
+                    if let Some(data) = base64_decode(b64.as_bytes()) {
+                        images.push(SlideImage {
+                            shape_id,
+                            ext: ext.to_string(),
+                            data,
+                        });
+                    }
+                }
+            }
+            result.push_str(&xml[last_end..abs_start]);
+            last_end = marker_end;
+        } else {
+            break;
+        }
+    }
+    result.push_str(&xml[last_end..]);
+    (result, images)
+}
+
+/// Update a slide's XML to replace placeholder rIdS{shape_id} with the real
+/// media relationship id (rIdM{media_idx}) assigned by build_pptx.
+fn patch_slide_image_refs(xml: &str, shape_id: usize, media_rid: &str) -> String {
+    xml.replace(&format!("rIdS{shape_id}"), media_rid)
+}
+
+/// Build the `[Content_Types].xml` with optional PNG/JPEG overrides.
+fn build_content_types_with_images(slide_count: usize, has_png: bool, has_jpg: bool) -> String {
+    let mut out = String::new();
+    out.push_str(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#);
+    out.push_str("<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">");
+    out.push_str("<Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>");
+    out.push_str("<Default Extension=\"xml\" ContentType=\"application/xml\"/>");
+    if has_png {
+        out.push_str("<Default Extension=\"png\" ContentType=\"image/png\"/>");
+    }
+    if has_jpg {
+        out.push_str("<Default Extension=\"jpg\" ContentType=\"image/jpeg\"/>");
+        out.push_str("<Default Extension=\"jpeg\" ContentType=\"image/jpeg\"/>");
+    }
+    out.push_str("<Override PartName=\"/ppt/presentation.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml\"/>");
+    out.push_str("<Override PartName=\"/ppt/slideMasters/slideMaster1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml\"/>");
+    out.push_str("<Override PartName=\"/ppt/slideLayouts/slideLayout1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml\"/>");
+    out.push_str("<Override PartName=\"/ppt/theme/theme1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.theme+xml\"/>");
+    out.push_str("<Override PartName=\"/docProps/core.xml\" ContentType=\"application/vnd.openxmlformats-package.core-properties+xml\"/>");
+    out.push_str("<Override PartName=\"/docProps/app.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.extended-properties+xml\"/>");
+    for i in 1..=slide_count {
+        out.push_str(&format!(
+            "<Override PartName=\"/ppt/slides/slide{i}.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slide+xml\"/>"
+        ));
+    }
+    out.push_str("</Types>");
+    out
+}
+
+/// Build slide rels with optional image relationships.
+/// media_rels: [(media_idx, ext)] — maps media_idx to its file extension.
+fn build_slide_rels_with_images(media_rels: &[(usize, String)]) -> String {
+    let mut out = String::new();
+    out.push_str(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#);
+    out.push_str("<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">");
+    out.push_str("<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout\" Target=\"../slideLayouts/slideLayout1.xml\"/>");
+    for (media_idx, ext) in media_rels {
+        let rid = format!("rIdM{}", media_idx);
+        let target = format!("../media/image{}.{}", media_idx, ext);
+        let ct = if ext == "png" { "image/png" } else { "image/jpeg" };
+        out.push_str(&format!(
+            "<Relationship Id=\"{}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"{}\" ContentType=\"{}\"/>",
+            rid, target, ct
+        ));
+    }
+    out.push_str("</Relationships>");
+    out
+}
+
 /// Build a complete `.pptx` (as bytes) from a list of `SlideInput`s.
 fn build_pptx(slides: &[SlideInput], title: Option<&str>) -> Result<Vec<u8>, ToolError> {
     let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
 
+    // Compute the presentation-wide slide size (OOXML: one size per deck).
+    let (slide_w_emu, slide_h_emu) = slides
+        .first()
+        .map(|s| compute_slide_size_emu(&s.content))
+        .unwrap_or((SLIDE_W_EMU, SLIDE_H_EMU));
+
+    // First pass: extract images from each slide and patch the XML.
+    let mut all_media: Vec<SlideImage> = Vec::new();
+    // Map from (slide_idx, shape_id) → media_idx in all_media
+    let mut slide_image_map: Vec<Vec<(usize, usize)>> = Vec::new(); // slide_idx → [(media_idx, shape_id)]
+    let mut patched_slides: Vec<String> = Vec::new();
+
+    for (slide_idx, slide) in slides.iter().enumerate() {
+        let xml = build_slide_xml(&slide.content, slide_w_emu, slide_h_emu)?;
+        let (patched, images) = extract_images_from_slide(&xml);
+        let mut local_map: Vec<(usize, usize)> = Vec::new();
+        for img in images {
+            let shape_id = img.shape_id;
+            let media_idx = all_media.len();
+            all_media.push(img);
+            local_map.push((media_idx, shape_id));
+        }
+        slide_image_map.push(local_map);
+        patched_slides.push(patched);
+    }
+
+    // Determine if we need PNG/JPEG content types.
+    let has_png = all_media.iter().any(|m| m.ext == "png");
+    let has_jpg = all_media.iter().any(|m| m.ext == "jpg");
+
     // [Content_Types].xml
-    entries.push(("[Content_Types].xml".to_string(), build_content_types(slides.len()).into_bytes()));
+    entries.push((
+        "[Content_Types].xml".to_string(),
+        build_content_types_with_images(slides.len(), has_png, has_jpg).into_bytes(),
+    ));
 
     // _rels/.rels
     entries.push(("_rels/.rels".to_string(), build_root_rels().into_bytes()));
@@ -1519,40 +1833,53 @@ fn build_pptx(slides: &[SlideInput], title: Option<&str>) -> Result<Vec<u8>, Too
         build_presentation_rels(slides.len()).into_bytes(),
     ));
 
-    // Compute the presentation-wide slide size. OOXML only allows
-    // ONE `<p:sldSz>` value, so we use the *first* slide's viewBox
-    // dimensions. If any subsequent slide has a different aspect
-    // ratio, it gets letter-boxed in `build_slide_xml` (currently a
-    // no-op because all 8 of our test/slides/ share the same
-    // 1280x720 viewBox — see TODO below if you ever mix aspects).
+    // Compute the presentation-wide slide size.
     let (slide_w_emu, slide_h_emu) = slides
         .first()
         .map(|s| compute_slide_size_emu(&s.content))
         .unwrap_or((SLIDE_W_EMU, SLIDE_H_EMU));
 
-    // ppt/presentation.xml — uses the per-deck slide size.
+    // ppt/presentation.xml
     entries.push((
         "ppt/presentation.xml".to_string(),
         build_presentation_xml(slides.len(), slide_w_emu, slide_h_emu).into_bytes(),
     ));
 
-    // ppt/theme/theme1.xml — a minimal but valid theme so PowerPoint doesn't
-    // complain about a missing color scheme.
+    // ppt/theme/theme1.xml
     entries.push(("ppt/theme/theme1.xml".to_string(), THEME_XML.as_bytes().to_vec()));
 
-    // ppt/slides/_rels/slideN.xml.rels (per slide, all identical)
-    for i in 1..=slides.len() {
+    // ppt/slides/_rels/slideN.xml.rels (with image refs)
+    for (slide_idx, _) in slides.iter().enumerate() {
+        let media_rels: Vec<(usize, String)> = slide_image_map
+            .get(slide_idx)
+            .map(|v| v.clone())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(media_idx, _shape_id)| {
+                (media_idx, all_media.get(media_idx).map(|m| m.ext.clone()).unwrap_or_default())
+            })
+            .collect();
+        let rels_xml = build_slide_rels_with_images(&media_rels);
         entries.push((
-            format!("ppt/slides/_rels/slide{i}.xml.rels"),
-            build_slide_rels().into_bytes(),
+            format!("ppt/slides/_rels/slide{}.xml.rels", slide_idx + 1),
+            rels_xml.into_bytes(),
         ));
     }
 
-    // ppt/slides/slideN.xml — one per slide. Each slide uses the
-    // shared slide size so every shape lands inside the canvas.
-    for slide in slides {
-        let xml = build_slide_xml(&slide.content, slide_w_emu, slide_h_emu)?;
-        entries.push((format!("ppt/slides/slide{}.xml", slide.slide_index), xml.into_bytes()));
+    // ppt/slides/slideN.xml (patched, without IMG markers)
+    for (slide_idx, patched) in patched_slides.iter().enumerate() {
+        let mut final_xml = patched.to_string();
+        // Patch all image refs in this slide
+        if let Some(local_map) = slide_image_map.get(slide_idx) {
+            for &(media_idx, shape_id) in local_map {
+                let rid = format!("rIdM{}", media_idx);
+                final_xml = patch_slide_image_refs(&final_xml, shape_id, &rid);
+            }
+        }
+        entries.push((
+            format!("ppt/slides/slide{}.xml", slide_idx + 1),
+            final_xml.into_bytes(),
+        ));
     }
 
     // ppt/slideMasters/slideMaster1.xml + rels
@@ -1581,6 +1908,12 @@ fn build_pptx(slides: &[SlideInput], title: Option<&str>) -> Result<Vec<u8>, Too
         build_core_props_xml(title.unwrap_or("Inkuo Presentation")).into_bytes(),
     ));
     entries.push(("docProps/app.xml".to_string(), APP_XML.as_bytes().to_vec()));
+
+    // Write media files
+    for (media_idx, img) in all_media.iter().enumerate() {
+        let path = format!("ppt/media/image{}.{}", media_idx, img.ext);
+        entries.push((path, img.data.clone()));
+    }
 
     // Now zip everything up.
     let mut buf: Vec<u8> = Vec::new();
@@ -2058,8 +2391,55 @@ pub fn write_shape(
             out.push_str("</p:txBody>");
             out.push_str("</p:sp>");
         }
+        SvgShape::Image {
+            x: img_x, y: img_y, width: img_w, height: img_h,
+            mime: _, ref ext, ref data,
+        } => {
+            let px = project_x(img_x, scale, off_x);
+            let py = project_y(img_y, scale, off_y);
+            let pw = project_len(img_w, scale);
+            let ph = project_len(img_h, scale);
+            if pw == 0 || ph == 0 { return Ok(()); }
+            // Emit both the real <p:pic> (which build_pptx will post-process
+            // to fix the rId) and a marker comment carrying the binary data
+            // so build_pptx can extract it without re-visiting shapes.
+            let b64 = base64_encode(&data);
+            // Placeholder rId — build_pptx replaces rIdS{shape_id} → rId{media_id}
+            write_image_pic(out, px, py, pw, ph, shape_id,
+                &format!("rIdS{shape_id}"), &b64, ext.as_str());
+        }
     }
     Ok(())
+}
+
+/// Emit one `<p:pic>` for a raster image embedded in the ZIP.
+fn write_image_pic(
+    out: &mut String,
+    x: i64,
+    y: i64,
+    w: i64,
+    h: i64,
+    shape_id: usize,
+    r_id: &str,
+    b64_data: &str,
+    ext: &str,
+) {
+    // Write the real <p:pic> element with the (possibly placeholder) rId.
+    // build_pptx post-processes the slide XML to replace rIdS{id} with the
+    // real media relationship id and adds the binary file to the ZIP.
+    write!(
+        out,
+        "<p:pic><p:nvPicPr><p:cNvPr id=\"{}\" name=\"Image\"/>\
+         <p:cNvPicPr><a:picLocks noChangeAspect=\"1\"/></p:cNvPicPr><p:nvPr/></p:nvPicPr>\
+         <p:blipFill><a:blip r:embed=\"{}\"/><a:stretch><a:fillRect/></a:stretch></p:blipFill>\
+         <p:spPr><a:xfrm><a:off x=\"{}\" y=\"{}\"/><a:ext cx=\"{}\" cy=\"{}\"/></a:xfrm>\
+         <a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></p:spPr></p:pic>",
+        shape_id, r_id, x, y, w, h
+    ).ok();
+    // The marker comment lets build_pptx extract the binary image data without
+    // re-visiting shapes. Format: <!--IMG|shape_id|x|y|w|h|ext|b64|-->
+    write!(out, "<!--IMG|{}|{}|{}|{}|{}|{}|{}|-->",
+        shape_id, x, y, w, h, ext, b64_data).ok();
 }
 
 /// Emit `<p:sp>` opening + the `<p:nvSpPr>` / `<p:spPr><a:xfrm>` headers.
@@ -2367,13 +2747,16 @@ mod tests {
 
     #[test]
     fn parse_unsupported_records_skip() {
+        // `<image>` with data: URL is now SUPPORTED (returns an Image shape).
+        // Only truly unsupported elements (e.g. `<use>`) should be in skipped list.
         let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
   <image href="data:image/png;base64,AAAA"/>
   <rect x="0" y="0" width="10" height="10"/>
 </svg>"##;
         let parsed = parse_svg(svg).unwrap();
-        assert_eq!(parsed.shapes.len(), 1);
-        assert!(parsed.skipped.contains(&"image".to_string()));
+        assert_eq!(parsed.shapes.len(), 2);
+        assert!(parsed.skipped.is_empty(), "image with data: URL should not be skipped");
+        assert!(matches!(parsed.shapes[0], SvgShape::Image { .. }));
     }
 
     #[test]
@@ -2753,14 +3136,14 @@ mod tests {
         let parsed = parse_svg(svg).expect("parse");
         let slides = vec![SlideInput {
             source_path: "test.svg".to_string(),
-            slide_index: 0,
+            slide_index: 1, // NOTE: build_pptx uses 1-based slide indices in filenames
             content: parsed,
         }];
         let bytes = build_pptx(&slides, Some("Gradients")).expect("build pptx");
         let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
         let mut xml = String::new();
         archive
-            .by_name("ppt/slides/slide0.xml")
+            .by_name("ppt/slides/slide1.xml")
             .unwrap()
             .read_to_string(&mut xml)
             .unwrap();
