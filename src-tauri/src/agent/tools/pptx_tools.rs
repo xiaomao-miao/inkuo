@@ -1681,8 +1681,15 @@ fn build_slide_xml(svg: &ParsedSvg, slide_w: i64, slide_h: i64) -> Result<String
     let off_y = -svg.vb_y * scale;
 
     let mut shapes = String::new();
-    for shape in &svg.shapes {
-        write_shape(&mut shapes, shape, scale, off_x, off_y, slide_w, slide_h)?;
+    // Every `<p:cNvPr id="…"/>` inside a slide must be unique —
+    // PowerPoint silently drops subsequent shapes that share an id
+    // with an earlier one (we observed that the first shape on a
+    // slide drew fine but every following shape disappeared — even
+    // though the OOXML rendered correctly in macOS Keynote and
+    // python-pptx). `id=1` is reserved for the group's own
+    // `<p:cNvPr>`, so we start the per-shape counter at 2.
+    for (idx, shape) in svg.shapes.iter().enumerate() {
+        write_shape(&mut shapes, shape, scale, off_x, off_y, slide_w, slide_h, idx + 2)?;
     }
 
     let mut out = String::new();
@@ -1755,8 +1762,8 @@ fn write_shape(
     off_y: f64,
     slide_w: i64,
     slide_h: i64,
+    shape_id: usize,
 ) -> Result<(), ToolError> {
-    let shape_id = 100usize; // we don't bother with unique ids per shape
     let sp_name = "Shape";
     // `slide_h` is plumbed through for symmetry with `slide_w` (which
     // is used to clamp text boxes). We currently only clamp width
@@ -2904,6 +2911,58 @@ mod tests {
             xml.contains("<a:off x=\"0\" y=\"0\"/><a:ext cx=\"12192000\" cy=\"6858000\"/>"),
             "background rect must fill the entire slide, not 90% of it.\n{xml}"
         );
+    }
+
+    #[test]
+    fn all_shape_ids_are_unique_within_a_slide() {
+        // PowerPoint silently drops every shape whose `<p:cNvPr id>`
+        // collides with an earlier one — the deck renders as if only
+        // the first shape exists. The first user-visible symptom
+        // was "only the background rectangle shows up", because the
+        // background was always emitted with `id=100` and so was
+        // every subsequent shape.
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720">
+  <rect width="1280" height="720" fill="#1A1A2E"/>
+  <circle cx="200" cy="200" r="80" fill="#FF0000"/>
+  <circle cx="400" cy="400" r="80" fill="#00FF00"/>
+  <circle cx="600" cy="600" r="80" fill="#0000FF"/>
+  <text x="640" y="360" font-size="40" text-anchor="middle" fill="#FFF">Hello</text>
+</svg>"##;
+        let parsed = parse_svg(svg).expect("parse");
+        let slides = vec![SlideInput {
+            source_path: "ids.svg".to_string(),
+            slide_index: 1,
+            content: parsed,
+        }];
+        let bytes = build_pptx(&slides, Some("ids")).expect("build pptx");
+        let mut archive =
+            zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
+        let mut xml = String::new();
+        archive
+            .by_name("ppt/slides/slide1.xml")
+            .unwrap()
+            .read_to_string(&mut xml)
+            .unwrap();
+        // Pull every cNvPr id out of the slide (both the group
+        // `<p:nvGrpSpPr><p:cNvPr id="…"/>` and every per-shape one).
+        let ids: Vec<String> = regex::Regex::new(r#"<p:cNvPr id="(\d+)""#)
+            .unwrap()
+            .captures_iter(&xml)
+            .map(|cap| cap[1].to_string())
+            .collect();
+        // Sanity: we should have at least the group's id + 5 shapes.
+        assert!(
+            ids.len() >= 6,
+            "expected at least 6 ids (group + 5 shapes), got {} in:\n{xml}",
+            ids.len()
+        );
+        let mut seen = std::collections::HashSet::new();
+        for id in &ids {
+            assert!(
+                seen.insert(id.clone()),
+                "duplicate <p:cNvPr id=\"{id}\"> in slide1.xml:\n{xml}"
+            );
+        }
     }
 
     #[test]
