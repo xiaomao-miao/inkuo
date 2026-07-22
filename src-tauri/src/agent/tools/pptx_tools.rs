@@ -1949,7 +1949,14 @@ fn write_shape(
             // ~0.64 pt — invisible at typical zoom. The previous
             // version emitted `size_pt` directly, which is why the
             // user opened the deck and saw the artwork but no text.
-            let size_hundredths = (size_pt * 100.0).round() as i64;
+            // SVG font sizes are specified in SVG pixels (user units at
+            // 96dpi). PowerPoint font sizes are in points (1/72"). Because
+            // 1 SVG px = 96/72 = 1.333 pt, the correct conversion is
+            // SVG_px × 0.75 = PowerPoint_pt. Without this factor, text
+            // renders 33% too large in PowerPoint compared to the SVG
+            // preview — the "text is bigger in PPT" symptom the user
+            // reported.
+            let size_hundredths = (size_pt * 75.0).round() as i64;
             let line_h_emu = ((size_pt * 1.4) * EMU_PER_INCH as f64 / 72.0).round() as i64;
             let ph = line_h_emu.max(120_000); // at least ~0.13" so the box is grabbable
             // SVG `<text y="…"/>` positions the glyph **baseline** at
@@ -1968,17 +1975,17 @@ fn write_shape(
             // rather than the full line height. Using the line height
             // × 0.8 (the typographic ascent ratio) was a slight
             // over-correction and left the text too high.
+            //
             // Empirical fit: PowerPoint with `anchor="t"` and a default-font
-            // run draws the baseline ≈ `font_size * 0.95` pt below the
-            // box top (this is the typographic "x-height to baseline"
-            // ratio, not the full ascent — and it happens to match
-            // what Word/PowerPoint use for Arial/Calibri at typical
-            // sizes). Pure `font_size * 1.0` was about 1.6% of slide
-            // height too low, `0.85` was about the same distance too
-            // high; 0.95 lands the baseline on the SVG `<text y>`
-            // value to within ~0.1% of slide height.
-            let ascent_emu = (size_pt * 0.95 * EMU_PER_INCH as f64 / 72.0).round() as i64;
-            let py = py_baseline - ascent_emu;
+            // run draws the baseline ≈ `sz_pt × 0.95` pt below the box
+            // top. Since `sz_pt` (PPT pt) = SVG px × 0.75, the combined
+            // SVG px → baseline shift coefficient is 0.75 × 0.95 = 0.7125.
+            // Previously we used `size_pt × 0.95` where `size_pt` was the
+            // SVG px value — too large by a factor of 1.333, which pushed
+            // the baseline up by that ratio and made text start too high.
+            let baseline_shift_emu =
+                (size_pt * 0.7125 * EMU_PER_INCH as f64 / 72.0).round() as i64;
+            let py = py_baseline - baseline_shift_emu;
             // We intentionally do NOT clamp `px` or `pw` to the
             // slide bounds. OOXML allows shapes to extend past the
             // slide (PowerPoint / Keynote render whatever's inside),
@@ -3118,12 +3125,15 @@ mod tests {
 
     #[test]
     fn font_size_is_emitted_in_hundredths_of_a_point() {
-        // OOXML `<a:rPr sz="…"/>` is in HUNDREDTHS of a point, so
-        // an SVG `font-size="48"` (48 pt) must become `sz="4800"`,
-        // not `sz="48"`. The previous version wrote the raw pt
-        // value, which rendered the text at ~0.48 pt — invisible
-        // at any normal zoom. The user opened the deck and saw the
-        // artwork but no text.
+        // OOXML `<a:rPr sz="…"/>` is in HUNDREDTHS of a point, and
+        // SVG font sizes are in SVG px (at 96dpi). Because
+        // 1 SVG px = 96/72 = 1.333 pt, the correct conversion is
+        // SVG_px × 0.75 = PowerPoint_pt (so sz = SVG_px × 75 in
+        // hundredths of a point). Without the ×0.75 factor, text
+        // renders 33% too large in PowerPoint compared to the SVG
+        // preview. Previously the code emitted the raw SVG px value
+        // (e.g. `sz="48"` for font-size="48") which PowerPoint
+        // rendered as 0.48 pt — invisible at normal zoom.
         let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720">
   <text x="100" y="100" font-size="48" fill="#FFF">Big text</text>
   <text x="100" y="200" font-size="18" fill="#FFF">Small text</text>
@@ -3144,22 +3154,23 @@ mod tests {
             .unwrap()
             .read_to_string(&mut xml)
             .unwrap();
-        // 48 pt → sz="4800", 18 pt → sz="1800", default (18 pt) → sz="1800".
+        // SVG font-size="48" px → 48 × 0.75 = 36 pt → sz="3600"
+        // SVG font-size="18" px → 18 × 0.75 = 13.5 pt → sz="1350"
+        // Default (18 px) → sz="1350"
         assert!(
-            xml.contains(r#"sz="4800""#),
-            "expected sz=\"4800\" for 48pt text, got:\n{xml}"
+            xml.contains(r#"sz="3600""#),
+            "expected sz=\"3600\" for SVG font-size=\"48\" px (→ 36pt), got:\n{xml}"
         );
         assert!(
-            xml.contains(r#"sz="1800""#),
-            "expected sz=\"1800\" for 18pt text, got:\n{xml}"
+            xml.contains(r#"sz="1350""#),
+            "expected sz=\"1350\" for SVG font-size=\"18\" px (→ 13.5pt), got:\n{xml}"
         );
-        // And the raw values (sz="48" or sz="18") must NOT appear —
-        // they're off by a factor of 100 and would render the text
-        // invisible.
+        // The old buggy values (raw SVG px as raw hundredths-of-pt)
+        // must NOT appear.
         for raw in [r#"sz="48""#, r#"sz="18""#] {
             assert!(
                 !xml.contains(raw),
-                "{raw} should not appear — sz must be in hundredths of a pt. xml:\n{xml}"
+                "{raw} should not appear — sz must be in hundredths of a pt after ×0.75 conversion. xml:\n{xml}"
             );
         }
     }
@@ -3290,10 +3301,11 @@ mod tests {
         // `py_baseline` as the box top directly, which dropped every
         // text run roughly one ascent lower than the SVG authored.
         //
-        // Empirically PowerPoint's `anchor="t"` puts the baseline at
-        // `≈ size_pt × 0.95` pt below the box top — the typographic
-        // x-height ratio for default fonts (Arial / Calibri). We
-        // subtract that from the box top so `off_y + ascent == y`.
+        // The sz values in the XML are SVG_px × 75 (SVG px → PPT pt
+        // is ×0.75). The baseline in PowerPoint with `anchor="t"` is
+        // at box_top + sz_pt × 0.95. We verify the baseline lands on
+        // the SVG `y` by reading the XML `sz` back, dividing by 75 to
+        // recover SVG px, then verifying the baseline position.
         let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720">
   <text x="640" y="100" font-size="64"  text-anchor="middle" fill="#FFF">Big</text>
   <text x="640" y="250" font-size="28"  text-anchor="middle" fill="#FFF">Mid</text>
@@ -3317,32 +3329,44 @@ mod tests {
             .unwrap();
         let pairs = parse_off_ext(&xml);
         // Pull the first `<a:rPr sz="…"/>` from each text box in
-        // document order — that's the run size for that box.
+        // document order. These are in hundredths of PPT pt (sz =
+        // SVG_px × 75). Dividing by 75 recovers the SVG px; dividing
+        // by 100 gives PPT pt.
         let sz_re = regex::Regex::new(r#"<a:rPr[^>]*sz="(\d+)""#).unwrap();
-        let szs: Vec<i64> = sz_re
+        let szs_svg_px: Vec<f64> = sz_re
             .captures_iter(&xml)
-            .map(|c| c[1].parse::<i64>().unwrap())
+            .map(|c| c[1].parse::<i64>().unwrap() as f64 / 75.0)
             .collect();
         assert_eq!(
-            szs.len(),
+            szs_svg_px.len(),
             4,
-            "expected four <a:rPr sz=\"…\"/> runs, got {} in:\n{xml}",
-            szs.len()
+            "expected four <a:rPr sz=\"…\"/> runs in:\n{xml}",
         );
-        // 4 text boxes in input order. For each, the baseline (in SVG
-        // units) must equal the original `<text y>` to within 1 SVG
-        // unit (≈ 0.08% of the 720-px-tall slide).
+        // The four SVG px values (hardcoded above in the SVG string).
+        let szs_svg_px_expected = [64.0_f64, 28.0, 18.0, 14.0];
+        // Verify the SVG px → PPT pt conversion (×0.75) round-trips correctly.
+        for (i, (got, expected)) in szs_svg_px.iter().zip(szs_svg_px_expected.iter()).enumerate() {
+            assert!(
+                (got - expected).abs() < 0.5,
+                "text #{i}: sz in XML (sz/75={got} SVG px) doesn't match SVG px={expected}",
+            );
+        }
+        // For each text box, verify its baseline lands on the SVG `y`.
+        // PowerPoint anchor="t": baseline = box_top + sz_ppt_pt × 0.95 (in pt)
+        // SVG_px → PPT_pt = SVG_px × 0.75
+        // baseline_emu = off_y + SVG_px × 0.75 × 0.95 / 72 × 914400
         let targets = [100.0_f64, 250.0, 400.0, 600.0];
         for (i, target) in targets.iter().enumerate() {
             let p = &pairs[i];
-            let sz_pt = szs[i] as f64 / 100.0;
-            let ascent_emu = sz_pt * 0.95 / 72.0 * 914_400.0;
-            let baseline_emu = p.off_y as f64 + ascent_emu;
+            let sz_svg_px = szs_svg_px[i];
+            let sz_ppt_pt = sz_svg_px * 0.75;
+            let baseline_emu =
+                p.off_y as f64 + sz_ppt_pt * 0.95 / 72.0 * 914_400.0;
             let baseline_svg = baseline_emu / 9525.0;
             assert!(
                 (baseline_svg - target).abs() < 1.0,
                 "text #{i}: baseline drifted from SVG y={target} (got {baseline_svg:.2}); \
-                 off_y={}, sz={sz_pt}pt",
+                 off_y={}, sz={sz_svg_px}px (→ {sz_ppt_pt}pt)",
                 p.off_y,
             );
         }
