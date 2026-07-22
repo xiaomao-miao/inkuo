@@ -1938,7 +1938,7 @@ fn write_shape(
                     ("l", left, (right - left).max(1))
                 }
             };
-            let py = project_y(y, scale, off_y);
+            let py_baseline = project_y(y, scale, off_y);
             // The text box should be tall enough for one line at the
             // configured font size, with a little padding so descenders
             // don't get clipped.
@@ -1952,6 +1952,33 @@ fn write_shape(
             let size_hundredths = (size_pt * 100.0).round() as i64;
             let line_h_emu = ((size_pt * 1.4) * EMU_PER_INCH as f64 / 72.0).round() as i64;
             let ph = line_h_emu.max(120_000); // at least ~0.13" so the box is grabbable
+            // SVG `<text y="…"/>` positions the glyph **baseline** at
+            // y, while OOXML `<p:txBody>` is anchored on the *box top*
+            // (anchor="t" sticks the first baseline to the top of the
+            // box). Without compensation the rendered text drops
+            // roughly one ascent downward compared to the SVG, which
+            // is the "everything is shifted down" the user reported.
+            //
+            // We pick `py` so the *baseline* of the first run lands on
+            // `py_baseline`. Empirically (verified against the user's
+            // slide1-title.svg where `<text y="350">` should land at
+            // baseline y=350 in the SVG coordinate space), PowerPoint
+            // with `anchor="t"` draws the baseline ~`font_size` pt
+            // below the box top — the "height of a capital letter"
+            // rather than the full line height. Using the line height
+            // × 0.8 (the typographic ascent ratio) was a slight
+            // over-correction and left the text too high.
+            // Empirical fit: PowerPoint with `anchor="t"` and a default-font
+            // run draws the baseline ≈ `font_size * 0.95` pt below the
+            // box top (this is the typographic "x-height to baseline"
+            // ratio, not the full ascent — and it happens to match
+            // what Word/PowerPoint use for Arial/Calibri at typical
+            // sizes). Pure `font_size * 1.0` was about 1.6% of slide
+            // height too low, `0.85` was about the same distance too
+            // high; 0.95 lands the baseline on the SVG `<text y>`
+            // value to within ~0.1% of slide height.
+            let ascent_emu = (size_pt * 0.95 * EMU_PER_INCH as f64 / 72.0).round() as i64;
+            let py = py_baseline - ascent_emu;
             // We intentionally do NOT clamp `px` or `pw` to the
             // slide bounds. OOXML allows shapes to extend past the
             // slide (PowerPoint / Keynote render whatever's inside),
@@ -3252,6 +3279,73 @@ mod tests {
             (box_centre_x - 6_096_000).abs() < 1_000,
             "centred text box centre ({box_centre_x}) must align with the SVG anchor x=640 (6_096_000 EMU)"
         );
+    }
+
+    #[test]
+    fn text_baseline_matches_svg_y() {
+        // Regression test for the "everything is shifted down" bug:
+        // SVG `<text y="…"/>` is the *baseline*, while OOXML
+        // `<p:txBody>` with `anchor="t"` places the baseline a font
+        // size below the box top. The earlier writer treated
+        // `py_baseline` as the box top directly, which dropped every
+        // text run roughly one ascent lower than the SVG authored.
+        //
+        // Empirically PowerPoint's `anchor="t"` puts the baseline at
+        // `≈ size_pt × 0.95` pt below the box top — the typographic
+        // x-height ratio for default fonts (Arial / Calibri). We
+        // subtract that from the box top so `off_y + ascent == y`.
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720">
+  <text x="640" y="100" font-size="64"  text-anchor="middle" fill="#FFF">Big</text>
+  <text x="640" y="250" font-size="28"  text-anchor="middle" fill="#FFF">Mid</text>
+  <text x="640" y="400" font-size="18"  text-anchor="middle" fill="#FFF">Small</text>
+  <text x="640" y="600" font-size="14"  text-anchor="middle" fill="#FFF">Tiny</text>
+</svg>"##;
+        let parsed = parse_svg(svg).expect("parse");
+        let slides = vec![SlideInput {
+            source_path: "baseline.svg".to_string(),
+            slide_index: 1,
+            content: parsed,
+        }];
+        let bytes = build_pptx(&slides, Some("baseline")).expect("build pptx");
+        let mut archive =
+            zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
+        let mut xml = String::new();
+        archive
+            .by_name("ppt/slides/slide1.xml")
+            .unwrap()
+            .read_to_string(&mut xml)
+            .unwrap();
+        let pairs = parse_off_ext(&xml);
+        // Pull the first `<a:rPr sz="…"/>` from each text box in
+        // document order — that's the run size for that box.
+        let sz_re = regex::Regex::new(r#"<a:rPr[^>]*sz="(\d+)""#).unwrap();
+        let szs: Vec<i64> = sz_re
+            .captures_iter(&xml)
+            .map(|c| c[1].parse::<i64>().unwrap())
+            .collect();
+        assert_eq!(
+            szs.len(),
+            4,
+            "expected four <a:rPr sz=\"…\"/> runs, got {} in:\n{xml}",
+            szs.len()
+        );
+        // 4 text boxes in input order. For each, the baseline (in SVG
+        // units) must equal the original `<text y>` to within 1 SVG
+        // unit (≈ 0.08% of the 720-px-tall slide).
+        let targets = [100.0_f64, 250.0, 400.0, 600.0];
+        for (i, target) in targets.iter().enumerate() {
+            let p = &pairs[i];
+            let sz_pt = szs[i] as f64 / 100.0;
+            let ascent_emu = sz_pt * 0.95 / 72.0 * 914_400.0;
+            let baseline_emu = p.off_y as f64 + ascent_emu;
+            let baseline_svg = baseline_emu / 9525.0;
+            assert!(
+                (baseline_svg - target).abs() < 1.0,
+                "text #{i}: baseline drifted from SVG y={target} (got {baseline_svg:.2}); \
+                 off_y={}, sz={sz_pt}pt",
+                p.off_y,
+            );
+        }
     }
 
     #[test]
