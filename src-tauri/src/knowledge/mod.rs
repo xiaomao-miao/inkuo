@@ -11,9 +11,16 @@ mod chunker;
 pub mod commands;
 mod config;
 mod embedder;
+pub mod embedding_models;
 mod metadata;
 mod scanner;
 mod vector_store;
+
+// Re-export the embedding-model types so the `#[tauri::command]`
+// wrappers in `commands.rs` (and any other caller that historically
+// imported `commands::EmbeddingModelInfo`) keep compiling unchanged
+// while the canonical definition lives in `embedding_models.rs`.
+pub use embedding_models::EmbeddingModelInfo;
 
 pub use chunker::*;
 pub use commands::*;
