@@ -1790,7 +1790,7 @@ fn write_shape(
             write_sp_open(out, shape_id, sp_name, px, py, pw, ph);
             out.push_str(&adj);
             write_fill_stroke(out, fill.as_ref(), stroke.as_ref(), stroke_width, opacity);
-            out.push_str("</p:sp>");
+            out.push_str("</p:spPr></p:sp>");
         }
         SvgShape::Ellipse {
             cx, cy, rx, ry,
@@ -1803,7 +1803,7 @@ fn write_shape(
             write_sp_open(out, shape_id, sp_name, px, py, pw, ph);
             out.push_str("<a:prstGeom prst=\"ellipse\"><a:avLst/></a:prstGeom>");
             write_fill_stroke(out, fill.as_ref(), stroke.as_ref(), stroke_width, opacity);
-            out.push_str("</p:sp>");
+            out.push_str("</p:spPr></p:sp>");
         }
         SvgShape::Line {
             x1, y1, x2, y2,
@@ -1857,7 +1857,7 @@ fn write_shape(
             )
             .ok();
             write_fill_stroke(out, fill.as_ref(), stroke.as_ref(), stroke_width, opacity);
-            out.push_str("</p:sp>");
+            out.push_str("</p:spPr></p:sp>");
         }
         SvgShape::Text {
             x, y, ref runs, font_size, ref fill, opacity, ref text_anchor,
@@ -1944,7 +1944,14 @@ fn write_shape(
                     "<a:solidFill><a:srgbClr val=\"000000\"/></a:solidFill>".to_string()
                 });
             let _ = opacity; // alpha on text is encoded via <a:alpha> on the color
+            // OOXML schema: `<p:sp>` contains `<p:nvSpPr>`, then
+            // `<p:spPr>`, then `<p:txBody>` (which is a SIBLING of
+            // `<p:spPr>`, not a child). An earlier version of this
+            // writer pushed `<p:txBody>` inside `<p:spPr>` — PowerPoint
+            // and python-pptx both ignored the run text and the slide
+            // showed up empty in PPT.
             write_sp_open(out, shape_id, "TextBox", px, py, pw, ph);
+            out.push_str("</p:spPr>");
             out.push_str("<p:txBody>");
             out.push_str("<a:bodyPr wrap=\"square\" rtlCol=\"0\" anchor=\"t\"/>");
             out.push_str("<a:lstStyle/>");
@@ -2963,6 +2970,90 @@ mod tests {
                 "duplicate <p:cNvPr id=\"{id}\"> in slide1.xml:\n{xml}"
             );
         }
+    }
+
+    #[test]
+    fn all_ooxml_tags_balance_and_txbody_is_sibling_of_sppr() {
+        // Regression test for two related bugs that both manifested
+        // as "PowerPoint opens the file but the slide is empty":
+        //
+        //  1. `<p:spPr>` was never closed (we wrote
+        //     `<p:spPr>...</p:sp>` and skipped `</p:spPr>`). XML
+        //     parsers bail out at the first mismatch, so PowerPoint
+        //     silently dropped every shape after the broken one —
+        //     which happened to be the only one rendered (the
+        //     background).
+        //
+        //  2. `<p:txBody>` was being emitted *inside* `<p:spPr>`,
+        //     because the text-shape writer didn't close `<p:spPr>`
+        //     before pushing the text body. OOXML schema requires
+        //     `<p:txBody>` to be a sibling of `<p:spPr>`, not a
+        //     child — python-pptx saw the `<p:txBody>` but couldn't
+        //     navigate to the runs, so every text box came back
+        //     blank.
+        let svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720">
+  <rect width="1280" height="720" fill="#1A1A2E"/>
+  <circle cx="200" cy="200" r="80" fill="#FF0000"/>
+  <circle cx="400" cy="400" r="80" fill="#00FF00"/>
+  <text x="640" y="360" font-size="40" text-anchor="middle" fill="#FFF">Hello</text>
+</svg>"##;
+        let parsed = parse_svg(svg).expect("parse");
+        let slides = vec![SlideInput {
+            source_path: "t.svg".to_string(),
+            slide_index: 1,
+            content: parsed,
+        }];
+        let bytes = build_pptx(&slides, Some("t")).expect("build pptx");
+        let mut archive =
+            zip::ZipArchive::new(std::io::Cursor::new(bytes.as_slice())).unwrap();
+        let mut xml = String::new();
+        archive
+            .by_name("ppt/slides/slide1.xml")
+            .unwrap()
+            .read_to_string(&mut xml)
+            .unwrap();
+
+        // (1) Tag-balance check.
+        for tag in ["p:sp", "p:spPr", "p:nvSpPr", "p:txBody"] {
+            let open = xml.matches(&format!("<{tag}>")).count()
+                + xml.matches(&format!("<{tag} ")).count();
+            let close = xml.matches(&format!("</{tag}>")).count();
+            assert_eq!(
+                open, close,
+                "<{tag}> opens ({open}) must equal </{tag}> closes ({close}); xml:\n{xml}"
+            );
+        }
+
+        // (2) `<p:txBody>` must be a SIBLING of `<p:spPr>`, not a
+        // child. We check by extracting the first `<p:sp>` whose
+        // `<p:cNvPr name="TextBox"/>` and confirming the order is
+        // `<p:spPr>…</p:spPr><p:txBody>…</p:txBody>`.
+        let sp_re = regex::Regex::new(
+            r#"<p:sp><p:nvSpPr><p:cNvPr id="\d+" name="TextBox"/>"#,
+        )
+        .unwrap();
+        let sppr_close_re = regex::Regex::new(r"</p:spPr>").unwrap();
+        let txbody_open_re = regex::Regex::new(r"<p:txBody>").unwrap();
+        let start = sp_re.find(&xml).expect("expected at least one TextBox").start();
+        let text_box_block = &xml[start..];
+        let sppr_close_at = sppr_close_re.find(text_box_block).unwrap().start();
+        let txbody_open_at = txbody_open_re.find(text_box_block).unwrap().start();
+        assert!(
+            txbody_open_at > sppr_close_at,
+            "<p:txBody> must come AFTER </p:spPr>, not nested inside it. xml slice:\n{text_box_block}"
+        );
+
+        // (3) Sanity: the round-trip via python-pptx must surface
+        // the text inside the text frame — this is the strongest
+        // end-to-end check that the OOXML we emit is well-formed.
+        // We do the parse by hand instead of pulling in python-pptx
+        // as a cargo dependency: a successful `<a:t>` extraction
+        // plus the tag-balance check above is enough.
+        let hello_re = regex::Regex::new(r"<a:t>Hello</a:t>").unwrap();
+        assert!(
+            hello_re.is_match(&xml),
+            "expected <a:t>Hello</a:t> in slide1.xml:\n{xml}"
+        );
     }
 
     #[test]
