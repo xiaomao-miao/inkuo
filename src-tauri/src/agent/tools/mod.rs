@@ -172,6 +172,8 @@ pub struct ToolResult {
     pub file_path: Option<String>,
 }
 
+// ── ToolResult ─────────────────────────────────────────────────────────────────
+
 impl ToolResult {
     pub fn success(tool_call_id: &str, output: impl Into<String>) -> Self {
         Self {
@@ -230,6 +232,8 @@ mod media_tools; // read_image / read_pdf  (binary workspace files for multimoda
 pub mod asset_registry; // binary side-channel: stores asset://<id> entries so LLM context never sees base64
 pub mod ask_user_tools; // ask_user   (meta-tool; see agent_loop::try_handle_meta_tool)
 
+// ── Re-exports ─────────────────────────────────────────────────────────────────
+
 pub use file_tools::{ReadFileTool, WriteFileTool, EditFileTool, CreateDirTool, MoveFileTool};
 pub use search_tools::{ListDirTool, GlobTool, GrepTool};
 pub use office::{
@@ -281,6 +285,8 @@ pub enum ToolExecutor {
     CreatePlan(plan_tools::CreatePlanTool),
     AskUser(ask_user_tools::AskUserTool),
 }
+
+// ── ToolExecutor ────────────────────────────────────────────────────────────────
 
 impl ToolExecutor {
     pub fn name(&self) -> &'static str {
@@ -424,6 +430,8 @@ pub struct ToolRegistry {
     /// AppHandle needed by tools like database_search; set once at call site.
     app_handle: Option<tauri::AppHandle>,
 }
+
+// ── ToolRegistry ────────────────────────────────────────────────────────────────
 
 impl ToolRegistry {
     pub fn new() -> Self {

@@ -381,6 +381,8 @@ pub(crate) fn parse_styles(xml: &str) -> StylesInfo {
     }
 }
 
+// ── Public helpers ───────────────────────────────────────────────────────────────
+
 pub(crate) fn strip_xml_ns(key: &[u8]) -> &[u8] {
     match key.iter().position(|&b| b == b':') {
         Some(i) => &key[i + 1..],
@@ -462,6 +464,8 @@ pub(crate) struct StylesInfo {
     pub(crate) fonts: Vec<FontXf>,
     pub(crate) fills: Vec<FillXf>,
 }
+
+// ── StylesInfo methods ─────────────────────────────────────────────────────────
 
 impl StylesInfo {
     pub(crate) fn resolve_style(&self, xf_index: usize) -> Option<CellStyle> {
