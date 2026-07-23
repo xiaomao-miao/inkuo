@@ -537,6 +537,8 @@ impl AgentExecutor {
     /// `delegate_to`, sub-agent intermediate events are emitted under a
     /// prefixed sub-message-id so the UI can render them inside a
     /// collapsible "delegated to X" card.
+// ── Meta-tool dispatch ───────────────────────────────────────────────────
+
     fn try_handle_meta_tool<'a, F>(
         &'a self,
         tool_call: &'a ToolCall,
@@ -878,6 +880,8 @@ impl AgentExecutor {
     /// propagate), filters tool visibility via the profile, and routes the
     /// sub-agent's stream events under a sub-message-id prefixed with
     /// `"sub:"` so the UI can collapse them.
+// ── Sub-agent execution ────────────────────────────────────────────────
+
     fn run_subagent<'a, F>(
         &'a self,
         profile: &'a AgentProfile,
@@ -1389,6 +1393,8 @@ impl AgentExecutor {
 
     /// Parse SSE delta from OpenAI format (handles DeepSeek's reasoning_content)
     /// For Ollama, uses a different response format (message.tool_calls instead of delta.tool_calls)
+// ── SSE / response parsing ─────────────────────────────────────────────
+
     fn parse_sse_delta(&self, data: &str, is_ollama: bool) -> Result<Option<DeltaResponse>, String> {
         let json: Value = serde_json::from_str(data)
             .map_err(|e| format!("JSON parse error: {}", e))?;
