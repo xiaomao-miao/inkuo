@@ -26,6 +26,9 @@ use crate::office::docx::{
 /// for callers that already know they want an owned `String`. Pulled into the
 /// parser module because every call site lives inside `parse_document_xml`;
 /// the writer doesn't need it.
+
+// ── Attribute / run helpers ─────────────────────────────────────────────────────
+
 fn attr_value_str(e: &quick_xml::events::BytesStart<'_>, attr: &[u8]) -> Option<String> {
     for a in e.attributes().with_checks(false).flatten() {
         let key = a.key.as_ref();
@@ -238,6 +241,8 @@ fn parse_date_format(rest: &str) -> Option<String> {
     }
     None
 }
+
+// ── Main parser ──────────────────────────────────────────────────────────────────
 
 pub(crate) fn parse_document_xml(content: &str) -> Result<(Vec<WordParagraph>, Vec<WordParagraph>, Vec<WordSection>), OfficeError> {
     let mut paragraphs = Vec::new();

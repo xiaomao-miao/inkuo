@@ -99,6 +99,8 @@ struct NumberingInput {
     level: u32,
 }
 
+// ── Numbering conversion ────────────────────────────────────────────────────────
+
 impl From<NumberingInput> for crate::office::NumberingRef {
     fn from(n: NumberingInput) -> Self {
         crate::office::NumberingRef { num_id: n.num_id, level: n.level }
@@ -267,6 +269,8 @@ struct CreateWordDocParams {
 }
 
 pub struct CreateWordDocTool;
+
+// ── Tool implementation ─────────────────────────────────────────────────────────
 
 impl CreateWordDocTool {
     pub fn new() -> Self { Self }
@@ -678,6 +682,8 @@ impl CreateWordDocTool {
             return Err(ToolError::InvalidArguments("create_word_doc".to_string(), "Only .docx files are supported".into()));
         }
 
+        // ── Parse and classify operations ────────────────────────────────────────
+
         // Collect operations from elements[]
         let mut modifies = Vec::new();
         let mut new_elements = Vec::new();
@@ -963,6 +969,8 @@ impl CreateWordDocTool {
         for insert_elem in new_elements {
             elements_for_new.push(insert_elem.element);
         }
+
+        // ── Write document ─────────────────────────────────────────────────────────
 
         let mut doc = crate::office::WordDocument::from_elements(elements_for_new);
         if let Some(ref sections) = params.sections {
