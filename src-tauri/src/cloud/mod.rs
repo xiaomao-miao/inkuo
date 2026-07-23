@@ -219,6 +219,8 @@ impl CloudClient {
         }
     }
 
+// ── Account lifecycle ────────────────────────────────────────────────────────
+
     pub async fn set_account(&self, account: Option<CloudAccount>) {
         *self.inner.lock().await = account;
     }
@@ -270,6 +272,8 @@ impl CloudClient {
         *self.inner.lock().await = Some(account.clone());
         Ok(account)
     }
+
+// ── Token management ──────────────────────────────────────────────────────
 
     pub async fn login(
         &self,
@@ -341,6 +345,8 @@ impl CloudClient {
     ///   transient gateway hiccup doesn't force a re-login.
     /// * **Network error** → `CloudError::Network` and the account is
     ///   preserved (the existing single-test already pins this).
+// ── Data fetching ────────────────────────────────────────────────────────
+
     pub async fn ensure_fresh_token(&self) -> Result<String, CloudError> {
         let mut guard = self.inner.lock().await;
         let account = guard.as_mut().ok_or(CloudError::NotLoggedIn)?;
@@ -493,6 +499,8 @@ impl CloudClient {
     /// Returns `Ok(())` even when there is no account to persist
     /// (that's not an error — `cloud_mode_enabled=false` is a valid
     /// configuration).
+// ── Model registry ───────────────────────────────────────────────────────
+
     pub async fn persist_current_account(
         &self,
         account: &CloudAccount,
