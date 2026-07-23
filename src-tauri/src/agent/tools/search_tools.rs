@@ -64,6 +64,8 @@ impl Default for ListDirTool {
     fn default() -> Self { Self::new() }
 }
 
+// ── ListDirTool ─────────────────────────────────────────────────────────────────
+
 pub struct GlobTool;
 
 impl GlobTool {
@@ -163,6 +165,8 @@ impl Default for GlobTool {
     fn default() -> Self { Self::new() }
 }
 
+// ── GrepTool ───────────────────────────────────────────────────────────────────
+
 pub struct GrepTool;
 
 impl GrepTool {
@@ -258,6 +262,8 @@ impl GrepTool {
 impl Default for GrepTool {
     fn default() -> Self { Self::new() }
 }
+
+// ── Helpers ─────────────────────────────────────────────────────────────────────
 
 async fn grep_directory_traverse(
     dir: &str,

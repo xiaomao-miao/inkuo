@@ -77,6 +77,8 @@ impl MetadataStore {
         })
     }
 
+    // ── Lifecycle helpers ─────────────────────────────────────────────────────────
+
     /// Generate a unique ID for the workspace
     fn hash_workspace_path(path: &Path) -> String {
         use std::collections::hash_map::DefaultHasher;
@@ -165,6 +167,9 @@ impl MetadataStore {
     /// `chunk_count_by_doc` lets the caller supply the real per-document
     /// chunk counts; the previous hard-coded `chunk_count: 1` made the stored
     /// chunk_count useless for diagnostics.
+
+    // ── Update / membership ────────────────────────────────────────────────────────
+
     pub fn update(
         &mut self,
         documents: &[Document],

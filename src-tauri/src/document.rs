@@ -73,6 +73,8 @@ pub struct Range {
     pub end_col: usize,
 }
 
+// ── Markdown document ─────────────────────────────────────────────────────────────
+
 impl Document {
     pub fn from_markdown(content: &str, path: &str) -> Result<Self, DocumentError> {
         let mut blocks = Vec::new();
@@ -257,7 +259,9 @@ impl Document {
             hash,
         })
     }
-    
+
+    // ── Serialisation ───────────────────────────────────────────────────────────────
+
     pub fn to_markdown(&self) -> String {
         self.blocks.iter().map(|block| {
             match &block.kind {

@@ -151,6 +151,8 @@ impl StreamPayload {
 
     /// A streaming text delta. Caller is responsible for emitting the final
     /// `final_text` / `done` event when the stream completes.
+    // ── Constructors ─────────────────────────────────────────────────────────────
+
     pub fn text(session_id: &str, message_id: &str, content: &str) -> Self {
         Self::default()
             .with_ids(session_id, message_id)

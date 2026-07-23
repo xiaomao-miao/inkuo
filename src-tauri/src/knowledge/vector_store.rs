@@ -145,6 +145,8 @@ impl VectorStore {
         })
     }
 
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
     fn hash_workspace_path(path: &PathBuf) -> String {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};

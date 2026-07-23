@@ -136,6 +136,8 @@ impl Embedder {
         })
     }
 
+// ── Model loading ───────────────────────────────────────────────────────────────
+
     fn load_user_defined_model(model_path: &Path, model_name: &str) -> Result<TextEmbedding, EmbedError> {
         let onnx_file = model_path.join("model.onnx");
         let tokenizer_json = model_path.join("tokenizer.json");
@@ -190,6 +192,9 @@ impl Embedder {
     }
 
     /// Generate embeddings for multiple texts
+
+    // ── Encoding API ─────────────────────────────────────────────────────────────
+
     pub fn encode(&self, texts: Vec<&str>) -> Result<Vec<Vec<f32>>, EmbedError> {
         tracing::debug!("[EMBEDDER] encode() called with {} texts", texts.len());
         let mut model = self.model.lock().map_err(|e| EmbedError::Generation(e.to_string()))?;
