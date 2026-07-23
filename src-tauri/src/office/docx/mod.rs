@@ -1,30 +1,24 @@
 //! Word (.docx) document parsing and writing.
 //!
-//! ## Module layout (after second-phase refactor)
+//! ## Module layout
 //!
 //! Public types live in `mod.rs` so callers can keep using
 //! `crate::office::docx::WordDocument` etc. without learning a new path.
 //! Streaming-XML helpers have been split out so future format changes
-//! don't force a 4 800-line scroll:
+//! don't force a 1 700-line scroll:
 //!
 //! | File | Responsibility |
 //! |------|----------------|
-//! | `mod.rs` (~3 400 lines) | Public types (`WordDocument`, `WordParagraph`, …), top-level zip reader entry point (`read_word_document`), the unified `write_word_document` writer, image / header-footer splicing, section / margin / page-size helpers, and the inner `build_*_xml` constructors used by the writer. |
+//! | `mod.rs` (~1 500 lines) | Public types (`WordDocument`, `WordParagraph`, …), the unified `write_word_document` writer orchestrator, image / header-footer splicing calls into `zip_writer`, and section / margin / page-size helpers. The reader entry point lives in `zip_reader.rs`. |
 //! | `types.rs` | Re-export surface so future sub-modules can `use crate::office::docx::types::WordDocument`. |
-//! | `xml_parser.rs` (~1 070 lines) | `parse_document_xml` + the `RunFormat` parsing helpers + `attr_value_str` used inside the streaming reader. Holds *no* zip / writer state. |
-//! | `table_parser.rs` (~270 lines) | Streaming `<w:tbl>` parser with the `RawCell` / `RawTable` / `VMergeKind` intermediates and `vMerge` resolution. |
+//! | `xml_parser.rs` (~1 080 lines) | `parse_document_xml` + the `RunFormat` parsing helpers + `attr_value_str` used inside the streaming reader. Holds *no* zip / writer state. |
+//! | `table_parser.rs` (~280 lines) | Streaming `<w:tbl>` parser with the `RawCell` / `RawTable` / `VMergeKind` intermediates and `vMerge` resolution. |
 //! | `reader.rs` (~100 lines) | Plain-text / markdown rendering (`word_document_to_text`). Pure string assembly over the public type tree — no XML or zip traffic. |
-//!
-//! ## Future splits to consider
-//!
-//! - `zip_writer.rs` — the `ImageWritePlan` / `HeaderFooterWritePlan` /
-//!   `PreservedImageRef` machinery plus the `scan_preserved_*` state
-//!   helpers account for ~600 lines and have no business state coupling;
-//!   splitting them out leaves `mod.rs` focused on the public schema.
-//! - `xml_writer.rs` — `escape_xml` + `build_run_xml` + `build_run_rpr_xml`
-//!   + `build_field_run_xml` + `field_instr_text` + `build_document_xml`
-//!   are all pure string constructors used only inside the writer; they
-//!   would form a focused ~700-line file.
+//! | `writer.rs` (~680 lines) | OOXML document-tree builders (`build_run_xml`, `build_run_rpr_xml`, `build_field_run_xml`, `field_instr_text`, `build_document_xml`, `build_*_sectpr_xml`, `build_image_drawing_xml`, `escape_xml`, `stable_id_to_docpr_id`, `emit_text_direction`). Pure string constructors used only inside the writer. |
+//! | `zip_writer.rs` (~620 lines) | The `ImageWritePlan` / `HeaderFooterWritePlan` / `PreservedImageRef` machinery plus the `scan_preserved_*` state helpers, `build_header_footer_xml`, and the four `append_*` / `substitute_*` helpers. Re-exported via `mod.rs` so the orchestrator in `mod.rs` calls them without learning the sub-module path. |
+//! | `zip_reader.rs` (~210 lines) | `read_word_document` + the `parse_header_footer_parts` and `resolve_section_refs` helpers. Pure zip-to-schema pipeline — does not share any state with the writer. Re-exported via `mod.rs` so `crate::office::docx::read_word_document` keeps resolving. |
+//! | `document_helpers.rs` (~260 lines) | Section / margin / page-size conversion helpers (`section_page_size_to_emu`, `margins_to_emu`, `header_footer_ref_to_xml`, `word_doc_props_to_core_xml`, etc.) used by the reader and writer. |
+//! | `ooxml_boilerplate.rs` (~360 lines) | Verbatim XML constants (default styles, content-types, settings, font-table, theme, app/core properties, comment ext list) used as building blocks by the writer. |
 
 pub mod types;
 pub(crate) mod table_parser;
@@ -32,6 +26,7 @@ pub(crate) mod xml_parser;
 pub(crate) mod reader;
 pub(crate) mod writer;
 pub(crate) mod zip_writer;
+pub(crate) mod zip_reader;
 pub(crate) mod document_helpers;
 pub(crate) mod ooxml_boilerplate;
 
@@ -60,6 +55,11 @@ pub(crate) use zip_writer::{
 
 // Re-export the document-tree helpers from `document_helpers.rs`.
 pub(crate) use document_helpers::{attr_value_str, doc_has_numbering, parse_image_xml};
+
+// Re-export the zip-package reader entry point so external callers can
+// keep using `crate::office::docx::read_word_document` (which `office/mod.rs`
+// in turn re-exports as `crate::office::read_word_document`).
+pub use zip_reader::read_word_document;
 
 // Re-export the OOXML boilerplate constants. Tests and a few external
 // callers (notably the in-app template picker) pull these directly so
@@ -1052,195 +1052,6 @@ pub struct WordImage {
     pub internal_path: Option<String>,
 }
 
-pub fn read_word_document(bytes: &[u8]) -> Result<WordDocument, OfficeError> {
-    let doc_content = read_zip_entry(bytes, "word/document.xml")?;
-    let rels_content = read_zip_entry(bytes, "word/_rels/document.xml.rels")
-        .unwrap_or_default();
-    let (mut paragraphs, image_markers, mut sections) = parse_document_xml(&doc_content)?;
-    let images = parse_image_xml(&doc_content, &rels_content, &image_markers);
-    // `image_markers` are synthetic paragraphs each carrying the image's
-    // stable id as their `<inkuo:id>` so the writer can pair them with
-    // `WordImage` entries during `<w:drawing>` emission.
-    paragraphs.extend(image_markers);
-    let tables = parse_table_xml(&doc_content)?;
-    // Load header / footer parts from the zip. We scan every
-    // `word/headerN.xml` / `word/footerN.xml` entry and parse each one
-    // back into a `HeaderPart` / `FooterPart` so the writer can
-    // re-emit them on save. References from sections (which carry
-    // `rIdN` strings as `header_id`) are resolved to those parts below.
-    let (headers, footers) = parse_header_footer_parts(bytes)?;
-    // Resolve section -> header/footer rels: rels file maps rIdN to
-    // the zip-internal path (`header2.xml`, `footer1.xml`, etc.).
-    // We translate every section's ref into a `HeaderPart.id` /
-    // `FooterPart.id` so the writer can look them up directly.
-    resolve_section_refs(&mut sections, &rels_content, &headers, &footers);
-    Ok(WordDocument {
-        paragraphs,
-        tables,
-        images,
-        sections,
-        headers,
-        footers,
-    })
-}
-
-/// Walk every `word/headerN.xml` / `word/footerN.xml` zip entry and
-/// parse each one into a `HeaderPart` / `FooterPart`. The returned
-/// `HeaderPart.id` / `FooterPart.id` is the file's basename
-/// (`header2`, `footer1`) so it's easy to correlate with the rId map
-/// built from the rels file.
-///
-/// We also extract the part's EMU-stable rels id by reading
-/// `word/_rels/document.xml.rels` so the writer can reuse existing
-/// rIds when round-tripping — the rels id is stored in the part's
-/// `internal_path` field (re-purposed: for header/footer parts we
-/// stuff the rels id there as a "stable id" so the writer knows which
-/// `rIdN` to reuse when constructing the new rels file).
-fn parse_header_footer_parts(bytes: &[u8]) -> Result<(Vec<HeaderPart>, Vec<FooterPart>), OfficeError> {
-    let mut headers = Vec::new();
-    let mut footers = Vec::new();
-    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes))?;
-    for i in 0..archive.len() {
-        let mut file = archive.by_index(i)?;
-        let name = file.name().to_string();
-        if !name.starts_with("word/header") && !name.starts_with("word/footer") {
-            continue;
-        }
-        if !name.ends_with(".xml") {
-            continue;
-        }
-        let mut content = String::new();
-        let _ = std::io::Read::read_to_string(&mut file.by_ref().take(8 * 1024 * 1024), &mut content);
-        let (paras, image_markers, _sects) = parse_document_xml(&content)
-            .map_err(|e| OfficeError::Xml(format!("Failed to parse {}: {}", name, e)))?;
-        let id = std::path::Path::new(&name)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("?")
-            .to_string();
-        // Materialise a `WordDocument`-shaped struct for the part so the
-        // writer can iterate paragraphs uniformly. Inline images inside
-        // header/footer parts are a follow-up — the model round-trips
-        // them as plain text for now, which is correct for the
-        // overwhelmingly common case (page numbers, titles, dates).
-        let mut all_paras = paras;
-        all_paras.extend(image_markers);
-        if name.starts_with("word/header") {
-            headers.push(HeaderPart {
-                id,
-                paragraphs: all_paras,
-                tables: Vec::new(),
-                images: Vec::new(),
-            });
-        } else {
-            footers.push(FooterPart {
-                id,
-                paragraphs: all_paras,
-                tables: Vec::new(),
-                images: Vec::new(),
-            });
-        }
-    }
-    Ok((headers, footers))
-}
-
-/// Walk the rels file once to build a `rId -> target_path` map, then
-/// re-write each section's `header_refs` / `footer_refs` so the
-/// `header_id` / `footer_id` is the *file basename* (e.g. `header2`)
-/// of the matching part. The writer will resolve that to a
-/// `HeaderPart` by id and re-use the original rId when minting fresh
-/// rels.
-fn resolve_section_refs(
-    sections: &mut [WordSection],
-    rels_content: &str,
-    headers: &[HeaderPart],
-    footers: &[FooterPart],
-) {
-    if rels_content.is_empty() {
-        return;
-    }
-    // Build rId -> target map. The rels file format is
-    // `<Relationship Id="rId6" Type="...header" Target="header2.xml"/>`.
-    let mut rid_to_target: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    let mut reader = quick_xml::Reader::from_str(rels_content);
-    reader.config_mut().trim_text(false);
-    let mut buf = Vec::new();
-    loop {
-        let event = reader.read_event_into(&mut buf);
-        match event {
-            Ok(quick_xml::events::Event::Start(ref e)) | Ok(quick_xml::events::Event::Empty(ref e)) => {
-                let name = e.local_name();
-                if name.as_ref() == b"Relationship" {
-                    let mut rid: Option<String> = None;
-                    let mut target: Option<String> = None;
-                    let mut is_header_or_footer = false;
-                    for attr in e.attributes().with_checks(false).flatten() {
-                        let key = attr.key.as_ref().to_vec();
-                        let local = key
-                            .iter()
-                            .position(|&b| b == b':')
-                            .map(|i| &key[i + 1..])
-                            .unwrap_or(&key[..]);
-                        let val = attr.value.as_ref();
-                        if local == b"Id" {
-                            if let Ok(s) = std::str::from_utf8(val) {
-                                rid = Some(s.to_string());
-                            }
-                        } else if local == b"Type" {
-                            if let Ok(s) = std::str::from_utf8(val) {
-                                is_header_or_footer = s.contains("header") || s.contains("footer");
-                            }
-                        } else if local == b"Target" {
-                            if let Ok(s) = std::str::from_utf8(val) {
-                                target = Some(s.to_string());
-                            }
-                        }
-                    }
-                    if is_header_or_footer {
-                        if let (Some(r), Some(t)) = (rid, target) {
-                            rid_to_target.insert(r, t);
-                        }
-                    }
-                }
-            }
-            Ok(quick_xml::events::Event::Eof) => break,
-            Err(_) => break,
-            _ => {}
-        }
-        buf.clear();
-    }
-    // Convert rId refs in sections to file basenames.
-    for sect in sections.iter_mut() {
-        for hr in sect.header_refs.iter_mut() {
-            if let Some(target) = rid_to_target.get(&hr.header_id) {
-                if let Some(stem) = std::path::Path::new(target)
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                {
-                    hr.header_id = stem.to_string();
-                }
-            }
-        }
-        for fr in sect.footer_refs.iter_mut() {
-            if let Some(target) = rid_to_target.get(&fr.footer_id) {
-                if let Some(stem) = std::path::Path::new(target)
-                    .file_stem()
-                    .and_then(|s| s.to_str())
-                {
-                    fr.footer_id = stem.to_string();
-                }
-            }
-        }
-    }
-    // Defensive: if a section has a `header_id` / `footer_id` that
-    // doesn't match any loaded part (e.g. the rels entry was missing),
-    // drop the ref. The writer can re-allocate later if the user
-    // provides a fresh header/footer.
-    for sect in sections.iter_mut() {
-        sect.header_refs.retain(|hr| headers.iter().any(|h| h.id == hr.header_id));
-        sect.footer_refs.retain(|fr| footers.iter().any(|f| f.id == fr.footer_id));
-    }
-}
 
 // ─── Write Functions ──────────────────────────────────────────────────────────
 
