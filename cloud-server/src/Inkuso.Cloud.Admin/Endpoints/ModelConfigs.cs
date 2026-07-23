@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
 using Inkuso.Cloud.Core.Data;
 using Inkuso.Cloud.Core.Entities;
+using Inkuso.Cloud.Core.Security;
 
 namespace Inkuso.Cloud.Admin.Endpoints;
 
@@ -63,7 +64,7 @@ public static class AdminModelConfigsEndpoints
             return Results.Ok(items);
         });
 
-        group.MapPost("/", async (ModelConfigRequest req, AppDbContext db) =>
+        group.MapPost("/", async (ModelConfigRequest req, AppDbContext db, ISecretProtector protector) =>
         {
             if (string.IsNullOrWhiteSpace(req.DisplayName) || string.IsNullOrWhiteSpace(req.ModelName))
                 return Results.BadRequest(new { error = "DisplayName and ModelName are required" });
@@ -74,7 +75,7 @@ public static class AdminModelConfigsEndpoints
             {
                 UpstreamProvider = req.UpstreamProvider,
                 UpstreamBaseUrl = req.UpstreamBaseUrl.TrimEnd('/'),
-                UpstreamApiKey = req.UpstreamApiKey,
+                UpstreamApiKey = protector.Protect(req.UpstreamApiKey) ?? string.Empty,
                 ModelName = req.ModelName,
                 DisplayName = req.DisplayName,
                 Description = req.Description,
@@ -90,7 +91,7 @@ public static class AdminModelConfigsEndpoints
             return Results.Ok(new { id = m.Id });
         });
 
-        group.MapPut("/{id:guid}", async (Guid id, ModelConfigUpdateRequest req, AppDbContext db) =>
+        group.MapPut("/{id:guid}", async (Guid id, ModelConfigUpdateRequest req, AppDbContext db, ISecretProtector protector) =>
         {
             var m = await db.ModelConfigs.FindAsync(id);
             if (m == null) return Results.NotFound();
@@ -98,7 +99,7 @@ public static class AdminModelConfigsEndpoints
             m.UpstreamProvider = req.UpstreamProvider;
             m.UpstreamBaseUrl = req.UpstreamBaseUrl.TrimEnd('/');
             if (!string.IsNullOrWhiteSpace(req.UpstreamApiKey))
-                m.UpstreamApiKey = req.UpstreamApiKey; // leave existing if blank
+                m.UpstreamApiKey = protector.Protect(req.UpstreamApiKey) ?? string.Empty; // leave existing if blank
             m.ModelName = req.ModelName;
             m.DisplayName = req.DisplayName;
             m.Description = req.Description;

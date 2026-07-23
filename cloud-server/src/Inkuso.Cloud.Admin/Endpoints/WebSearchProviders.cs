@@ -12,6 +12,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
 using Inkuso.Cloud.Core.Data;
 using Inkuso.Cloud.Core.Entities;
+using Inkuso.Cloud.Core.Security;
 
 namespace Inkuso.Cloud.Admin.Endpoints;
 
@@ -63,7 +64,7 @@ public static class AdminWebSearchProvidersEndpoints
             return Results.Ok(items);
         });
 
-        group.MapPost("/", async (WebSearchProviderRequest req, AppDbContext db) =>
+        group.MapPost("/", async (WebSearchProviderRequest req, AppDbContext db, ISecretProtector protector) =>
         {
             if (string.IsNullOrWhiteSpace(req.ProviderId))
                 return Results.BadRequest(new { error = "ProviderId is required" });
@@ -83,7 +84,7 @@ public static class AdminWebSearchProvidersEndpoints
                     : req.UpstreamBaseUrl.Trim(),
                 UpstreamApiKey = string.IsNullOrWhiteSpace(req.UpstreamApiKey)
                     ? null
-                    : req.UpstreamApiKey.Trim(),
+                    : protector.Protect(req.UpstreamApiKey.Trim()),
                 Enabled = req.Enabled,
                 CreatedAt = DateTime.UtcNow,
             };
@@ -92,7 +93,7 @@ public static class AdminWebSearchProvidersEndpoints
             return Results.Ok(new { id = row.Id });
         });
 
-        group.MapPut("/{id:guid}", async (Guid id, WebSearchProviderUpdateRequest req, AppDbContext db, ILoggerFactory loggerFactory) =>
+        group.MapPut("/{id:guid}", async (Guid id, WebSearchProviderUpdateRequest req, AppDbContext db, ISecretProtector protector, ILoggerFactory loggerFactory) =>
         {
             var logger = loggerFactory.CreateLogger("Admin.WebSearchProviders");
             var row = await db.WebSearchProviders.FindAsync(id);
@@ -118,7 +119,7 @@ public static class AdminWebSearchProvidersEndpoints
             // Blank key on update = "keep existing"; we don't want a
             // naked save-without-typing to wipe the operator's key.
             if (!string.IsNullOrWhiteSpace(req.UpstreamApiKey))
-                row.UpstreamApiKey = req.UpstreamApiKey.Trim();
+                row.UpstreamApiKey = protector.Protect(req.UpstreamApiKey.Trim());
             row.Enabled = req.Enabled;
 
             logger.LogInformation(

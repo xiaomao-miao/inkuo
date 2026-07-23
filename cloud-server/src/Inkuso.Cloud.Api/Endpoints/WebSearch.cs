@@ -36,6 +36,7 @@ public static class WebSearch
             WebSearchRequest req,
             AppDbContext db,
             WebSearchForwarder forwarder,
+            ILoggerFactory loggerFactory,
             CancellationToken ct) =>
         {
             var userIdRaw = ctx.User.FindFirst(ClaimTypes.NameIdentifier)?.Value
@@ -71,10 +72,16 @@ public static class WebSearch
             }
 
             // Fire-and-forget audit log so a search that takes 200ms
-            // upstream doesn't pay the write penalty. Errors are
-            // logged by `RecordUsageAsync` itself so we don't need to
-            // wait for the result.
-            _ = Task.Run(() => forwarder.RecordUsageAsync(userId, req.Provider, req.Query, CancellationToken.None));
+            // upstream doesn't pay the write penalty. RecordUsageAsync
+            // already catches its own exceptions, but we attach a
+            // continuation that surfaces unobserved exceptions to the
+            // ASP.NET unhandled-exception logger (the previous code
+            // silently dropped them on shutdown).
+            var auditTask = forwarder.RecordUsageAsync(userId, req.Provider, req.Query, CancellationToken.None);
+            _ = auditTask.ContinueWith(
+                t => loggerFactory.CreateLogger("Inkuso.Cloud.WebSearch").LogWarning(
+                    t.Exception, "Unobserved exception in web_search audit log"),
+                TaskContinuationOptions.OnlyOnFaulted);
 
             return Results.Ok(new
             {
