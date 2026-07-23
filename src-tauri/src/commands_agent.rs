@@ -189,6 +189,8 @@ fn convert_message(msg: &FrontendMessage) -> Result<Option<Message>, AgentComman
 /// main agent dispatches to a sub-agent via `delegate_to`, the value (if
 /// any) overrides the compile-time default in the profile. Missing keys
 /// fall back to the profile's default. Values are clamped to `[1, 200]`.
+// ── Agent commands ───────────────────────────────────────────────────────────────
+
 /// Both shapes are exposed from the frontend's settings panel under
 /// "AI → Agent 执行". See `AgentSession::with_expert_max_iterations`.
 #[tauri::command]

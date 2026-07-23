@@ -86,6 +86,8 @@ impl fmt::Display for AIProviderKind {
     }
 }
 
+// ── Provider / config builders ─────────────────────────────────────────────────
+
 pub fn build_provider(
     provider: AIProviderKind,
     api_key: Option<&str>,
@@ -205,6 +207,8 @@ pub fn build_settings_ai_config(settings: &Settings) -> Result<ai::AIConfig, AIC
     })
 }
 
+// ── Cloud config resolver ────────────────────────────────────────────────────────
+
 pub fn build_input_ai_config(config_input: AIConfigInput) -> Result<ai::AIConfig, AIConfigError> {
     Ok(ai::AIConfig {
         provider: build_provider(
@@ -283,6 +287,9 @@ pub async fn build_input_ai_config_async(
 ///
 /// Holding an `Arc<CloudClient>` (not a raw reference) means the
 /// resolver can be cloned cheaply and shared across threads.
+
+// ── AIConfigResolver ───────────────────────────────────────────────────────────
+
 pub struct AIConfigResolver {
     cloud: Arc<CloudClient>,
 }

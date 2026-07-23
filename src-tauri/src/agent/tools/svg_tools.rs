@@ -290,6 +290,8 @@ impl CreateSvgTool {
     }
 }
 
+// ── SVG helpers ────────────────────────────────────────────────────────────────
+
 impl Default for CreateSvgTool {
     fn default() -> Self {
         Self::new()

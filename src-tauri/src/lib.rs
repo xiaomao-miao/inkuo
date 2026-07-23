@@ -206,6 +206,8 @@ fn preflight_os_check() -> Result<(), String> {
     }
 }
 
+// ── Logging ────────────────────────────────────────────────────────────────────
+
 fn setup_logging() {
     // Write tracing output both to stdout (useful in `cargo run` /
     // `pnpm tauri dev`) and to a rolling file under
@@ -281,6 +283,9 @@ fn setup_logging() {
 /// `Err` only when reading the settings cache fails — in which case the
 /// caller is expected to log and continue, because the frontend can still
 /// push a freshly-logged-in account via `cloud_login` / `cloud_register`.
+
+// ── Cloud client hydration ──────────────────────────────────────────────────────
+
 fn hydrate_cloud_client_from_settings(
     app_handle: &tauri::AppHandle,
 ) -> Result<(), String> {
