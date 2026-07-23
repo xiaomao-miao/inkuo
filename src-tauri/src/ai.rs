@@ -267,6 +267,8 @@ impl AIProviderAdapter {
         Ok(full)
     }
 
+// ── Streaming ───────────────────────────────────────────────────────────────
+
     pub async fn chat_stream<F>(
         &self,
         mode: String,
@@ -360,6 +362,8 @@ Context (optional references):
             }
         }
     }
+
+// ── Sync helpers ──────────────────────────────────────────────────────────
 
     pub async fn chat(&self, mode: String, instruction: String, original_text: String) -> Result<String, AIError> {
         let system_prompt = match mode.as_str() {
