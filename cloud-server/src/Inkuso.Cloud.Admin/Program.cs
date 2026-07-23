@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
@@ -6,6 +7,7 @@ using Inkuso.Cloud.Admin.Auth;
 using Inkuso.Cloud.Admin.Endpoints;
 using Inkuso.Cloud.Admin.Middleware;
 using Inkuso.Cloud.Core.Data;
+using Inkuso.Cloud.Core.Security;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -19,17 +21,41 @@ builder.Services.AddDbContext<AppDbContext>(opt =>
            Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning)));
 
 // JWT (separate audience from customer API)
+// Require an explicit JWT secret; refuse to start with a placeholder or a key
+// shorter than 32 bytes (HS256 minimum) so we don't ship a JWT stack that an
+// attacker can brute-force offline.
 var jwtSecret = builder.Configuration["Jwt:Secret"]
     ?? throw new InvalidOperationException("Jwt:Secret is required");
+if (jwtSecret.Length < 32 || jwtSecret.StartsWith("change-me", StringComparison.OrdinalIgnoreCase))
+    throw new InvalidOperationException(
+        "Jwt:Secret must be at least 32 characters of random data and not a placeholder. "
+      + "Generate one with `openssl rand -base64 48`.");
 var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? "inkuo-cloud";
 var adminAudience = builder.Configuration["Jwt:AdminAudience"] ?? "inkuo-admin";
 
 builder.Services.AddSingleton<AdminJwtService>();
 
+// At-rest protection for operator-supplied upstream API keys. Persisting
+// the DataProtection key ring to a known location (override via
+// DataProtection__KeyDir) lets the Admin and Api services share keys when
+// they live on the same host — required because the Admin writes the
+// protected ciphertext and the Api reads it.
+var dpKeysDir = builder.Configuration["DataProtection:KeyDir"];
+if (!string.IsNullOrWhiteSpace(dpKeysDir))
+    builder.Services.AddDataProtection()
+        .PersistKeysToFileSystem(new DirectoryInfo(dpKeysDir))
+        .SetApplicationName("inkuo-cloud");
+else
+    builder.Services.AddDataProtection().SetApplicationName("inkuo-cloud");
+
+builder.Services.AddSingleton<ISecretProtector, DataProtectionSecretProtector>();
+
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(opt =>
     {
-        opt.RequireHttpsMetadata = false; // dev convenience
+        // Only disable HTTPS metadata in Development; production must validate
+        // the IdP signing keys over TLS to avoid MITM token-stripping attacks.
+        opt.RequireHttpsMetadata = !builder.Environment.IsDevelopment();
         opt.TokenValidationParameters = new TokenValidationParameters
         {
             ValidateIssuer = true,
@@ -56,9 +82,21 @@ builder.Services.ConfigureHttpJsonOptions(opt =>
     opt.SerializerOptions.DictionaryKeyPolicy = System.Text.Json.JsonNamingPolicy.SnakeCaseLower;
 });
 
-// CORS for the React admin frontend (separate port 5174 in dev)
+// CORS for the React admin frontend.
+// In production we should restrict this to the actual admin SPA origin;
+// allow-listing via config lets us keep `AllowAnyOrigin` only in Development.
+var allowedOrigins = builder.Configuration.GetSection("Admin:Cors:AllowedOrigins").Get<string[]>() ?? Array.Empty<string>();
 builder.Services.AddCors(opt => opt.AddDefaultPolicy(p =>
-    p.AllowAnyHeader().AllowAnyMethod().AllowAnyOrigin()));
+{
+    if (allowedOrigins.Length > 0)
+        p.WithOrigins(allowedOrigins).AllowAnyHeader().AllowAnyMethod().AllowCredentials();
+    else if (builder.Environment.IsDevelopment())
+        p.AllowAnyHeader().AllowAnyMethod().AllowAnyOrigin();
+    else
+        // Lock down by default in non-Development environments when no allow-list
+        // is configured so we don't ship a wildcard-CORS service to production.
+        p.WithOrigins("https://localhost").AllowAnyHeader().AllowAnyMethod();
+}));
 
 // Swagger for development
 builder.Services.AddEndpointsApiExplorer();
@@ -98,11 +136,19 @@ using (var scope = app.Services.CreateScope())
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     db.Database.Migrate();
 
-    // Seed default admin if none exists
+    // Seed default admin if none exists.
+    // We require Admin:SeedUsername/SeedPassword to be set explicitly so the
+    // service refuses to start with a known default credential in production.
     if (!db.AdminUsers.Any())
     {
-        var seedUsername = app.Configuration["Admin:SeedUsername"] ?? "admin";
-        var seedPassword = app.Configuration["Admin:SeedPassword"] ?? "admin123";
+        var seedUsername = app.Configuration["Admin:SeedUsername"]
+            ?? throw new InvalidOperationException("Admin:SeedUsername is required when no admin user exists");
+        var seedPassword = app.Configuration["Admin:SeedPassword"]
+            ?? throw new InvalidOperationException("Admin:SeedPassword is required when no admin user exists");
+        if (seedPassword.Length < 12)
+            throw new InvalidOperationException(
+                "Admin:SeedPassword must be at least 12 characters. "
+              + "Generate one with `openssl rand -base64 24`.");
         db.AdminUsers.Add(new Inkuso.Cloud.Core.Entities.AdminUser
         {
             Username = seedUsername,
