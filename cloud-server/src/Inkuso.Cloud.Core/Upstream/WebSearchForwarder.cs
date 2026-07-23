@@ -18,6 +18,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.EntityFrameworkCore;
 using Inkuso.Cloud.Core.Data;
 using Inkuso.Cloud.Core.Entities;
+using Inkuso.Cloud.Core.Security;
 
 namespace Inkuso.Cloud.Core.Upstream;
 
@@ -26,6 +27,7 @@ public class WebSearchForwarder
     private readonly IHttpClientFactory _httpFactory;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<WebSearchForwarder> _logger;
+    private readonly ISecretProtector _secrets;
 
     /// <summary>
     /// Hard ceiling on the inbound `max_results` arg. Defends against
@@ -48,11 +50,13 @@ public class WebSearchForwarder
     public WebSearchForwarder(
         IHttpClientFactory httpFactory,
         IServiceScopeFactory scopeFactory,
-        ILogger<WebSearchForwarder> logger)
+        ILogger<WebSearchForwarder> logger,
+        ISecretProtector secrets)
     {
         _httpFactory = httpFactory;
         _scopeFactory = scopeFactory;
         _logger = logger;
+        _secrets = secrets;
     }
 
     /// <summary>
@@ -113,7 +117,7 @@ public class WebSearchForwarder
                 $"web_search provider '{providerId}' is currently disabled on this cloud server.");
         }
 
-        var apiKey = (provider.UpstreamApiKey ?? string.Empty).Trim();
+        var apiKey = (_secrets.Unprotect(provider.UpstreamApiKey) ?? string.Empty).Trim();
         if (apiKey.Length == 0)
         {
             return ForwardResult.Err(
@@ -170,10 +174,14 @@ public class WebSearchForwarder
         var url = $"{baseUrl}?search_type=lemmaTitle&search_key={Uri.EscapeDataString(query)}";
 
         var client = _httpFactory.CreateClient("upstream-search");
-        client.Timeout = UpstreamTimeout;
+        // Note: we intentionally do NOT set client.Timeout — that would mutate
+        // the pooled instance and affect all concurrent callers. Use a linked CTS
+        // instead to apply UpstreamTimeout per-call.
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(UpstreamTimeout);
 
         using var req = new HttpRequestMessage(HttpMethod.Get, url);
-        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", provider.UpstreamApiKey!.Trim());
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _secrets.Unprotect(provider.UpstreamApiKey)?.Trim() ?? string.Empty);
         req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
         req.Headers.UserAgent.ParseAdd(
             "inkuo-cloud/1.0 (+https://github.com/inkuo) web_search forwarder");
@@ -181,7 +189,7 @@ public class WebSearchForwarder
         HttpResponseMessage response;
         try
         {
-            response = await client.SendAsync(req, ct);
+            response = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, timeoutCts.Token);
         }
         catch (TaskCanceledException) when (!ct.IsCancellationRequested)
         {

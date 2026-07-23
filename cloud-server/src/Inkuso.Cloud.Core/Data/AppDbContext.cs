@@ -95,7 +95,11 @@ public class AppDbContext : DbContext
         // Plan
         modelBuilder.Entity<Plan>(e =>
         {
-            e.Property(p => p.MonthlyQuotaCents).HasPrecision(12, 4);
+            // MonthlyQuotaCents is an int (whole cents) on the entity, so
+            // HasPrecision would be silently ignored by Npgsql. We keep the
+            // schema type as `integer`; if a future schema bump ever wants
+            // fractional cents, change the entity to decimal first.
+            e.Property(p => p.MonthlyQuotaCents);
             e.Property(p => p.OverageInputPricePer1k).HasPrecision(12, 6);
             e.Property(p => p.OverageOutputPricePer1k).HasPrecision(12, 6);
         });
@@ -165,7 +169,18 @@ public class AppDbContext : DbContext
             }
         );
 
-        // Seed default admin user (created programmatically at startup; see AdminService.EnsureSeedAdminAsync)
-        // No HasData here because BCrypt is non-deterministic.
+        // Seed default admin user (NOT via HasData — see §2 below).
+        //
+        // §1 Why not HasData?
+        //    BCrypt hashes are non-deterministic (each call uses a random salt),
+        //    so every `dotnet ef migrations add` run would generate a different
+        //    migration snapshot, polluting git history with unrelated changes.
+        //    Instead the admin is provisioned at first startup by AdminService
+        //    (wired in Inkuso.Cloud.Admin/Program.cs via EnsureSeedAdminAsync).
+        //
+        // §2 If you need a deterministic seed admin for local dev / test
+        //    environments, set Admin__SeedUsername + Admin__SeedPassword in
+        //    appsettings.Development.json. The password is hashed once on startup,
+        //    not baked into the migration.
     }
 }
