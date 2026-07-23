@@ -1,8 +1,11 @@
 using System.Security.Claims;
+using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Inkuso.Cloud.Core.Data;
 using Inkuso.Cloud.Core.Entities;
 using Inkuso.Cloud.Core.Upstream;
@@ -11,6 +14,15 @@ namespace Inkuso.Cloud.Api.Endpoints;
 
 public static class Chat
 {
+    /// <summary>
+    /// SSE line pattern: a complete `data: ...` block sitting on its own
+    /// line. We use this to slice out the JSON payload even when a chunk
+    /// straddles the 8 KiB read buffer.
+    /// </summary>
+    private static readonly Regex DataLineRegex = new(
+        @"^data:\s*(?<payload>.*?)\s*$",
+        RegexOptions.Compiled | RegexOptions.Multiline);
+
     public static void MapChatEndpoints(this WebApplication app)
     {
         var group = app.MapGroup("/v1").WithTags("chat").RequireAuthorization();
@@ -19,12 +31,15 @@ public static class Chat
             HttpContext ctx,
             AppDbContext db,
             LlmForwarder forwarder,
+            ILoggerFactory loggerFactory,
             CancellationToken ct) =>
         {
+            var logger = loggerFactory.CreateLogger("Inkuso.Cloud.Chat");
             var userId = Guid.Parse(ctx.User.FindFirst(ClaimTypes.NameIdentifier)!.Value);
 
             ctx.Request.EnableBuffering();
-            var rawBody = await new StreamReader(ctx.Request.Body).ReadToEndAsync(ct);
+            using var bodyReader = new StreamReader(ctx.Request.Body, Encoding.UTF8, leaveOpen: true);
+            var rawBody = await bodyReader.ReadToEndAsync(ct);
             if (string.IsNullOrWhiteSpace(rawBody))
                 return Results.BadRequest(new { error = "Empty body" });
 
@@ -58,81 +73,190 @@ public static class Chat
             if (!hasSub && user.BalanceCents <= 0)
                 return Results.Json(new { error = "No active subscription or balance" }, statusCode: 402);
 
-            // Rewrite body: force upstream model name + force stream=true
-            using var outDoc = JsonDocument.Parse(rawBody);
-            var outDict = new Dictionary<string, object?>();
-            foreach (var prop in outDoc.RootElement.EnumerateObject())
-            {
-                if (prop.Name == "model")
-                    outDict["model"] = config.ModelName;
-                else
-                    outDict[prop.Name] = JsonSerializer.Deserialize<object>(prop.Value.GetRawText());
-            }
-            outDict["stream"] = true;
-            var newBody = JsonSerializer.Serialize(outDict);
+            // Rewrite body: force upstream model name + force stream=true.
+            // We mutate the original JsonElement tree (instead of round-tripping
+            // through object→string→object which would change number precision
+            // and string escaping), then serialize once.
+            var newBody = RewriteRequestBody(root, config.ModelName);
 
             // Call upstream
             var forwardResult = await forwarder.ForwardStreamAsync(userId, config.Id, newBody, ct);
             var upstreamStream = forwardResult.UpstreamStream;
 
-            // Stream upstream SSE → client, and parse usage block
             ctx.Response.ContentType = "text/event-stream";
             ctx.Response.Headers.CacheControl = "no-cache";
             ctx.Response.Headers.Connection = "keep-alive";
 
-            using var reader = new StreamReader(upstreamStream);
+            using var reader = new StreamReader(upstreamStream, Encoding.UTF8, detectEncodingFromByteOrderMarks: false);
+            // Reassemble SSE lines across chunk boundaries. The previous
+            // implementation called `chunk.Split('\n')` directly which dropped
+            // every `data:` line that straddled the 8 KiB network read buffer;
+            // that silently lost the usage block and meant real customer usage
+            // was never billed. The accumulator holds the partial line that
+            // didn't end in '\n' yet.
+            var carry = new StringBuilder();
             long totalPrompt = 0, totalCompletion = 0, totalCached = 0;
             var buffer = new char[8192];
             int read;
+            int linesProcessed = 0;
 
             while ((read = await reader.ReadAsync(buffer.AsMemory(), ct)) > 0)
             {
-                var chunk = new string(buffer, 0, read);
-                await ctx.Response.WriteAsync(chunk, ct);
-                await ctx.Response.Body.FlushAsync(ct);
-
-                foreach (var line in chunk.Split('\n'))
+                var chunk = carry + new string(buffer, 0, read);
+                int newlineIdx;
+                int startIdx = 0;
+                while ((newlineIdx = chunk.IndexOf('\n', startIdx)) >= 0)
                 {
-                    if (line.StartsWith("data:") && !line.Contains("[DONE]"))
-                    {
-                        var jsonPart = line.Substring(5).Trim();
-                        try
-                        {
-                            using var chunkDoc = JsonDocument.Parse(jsonPart);
-                            if (chunkDoc.RootElement.TryGetProperty("usage", out var usage))
-                            {
-                                if (usage.TryGetProperty("prompt_tokens", out var pt))
-                                    totalPrompt = pt.GetInt64();
-                                if (usage.TryGetProperty("completion_tokens", out var ct2))
-                                    totalCompletion = ct2.GetInt64();
-                                // OpenAI-style: usage.prompt_tokens_details.cached_tokens
-                                // Anthropic-style: usage.cache_read_input_tokens (counts toward prompt_tokens)
-                                if (usage.TryGetProperty("prompt_tokens_details", out var ptd) &&
-                                    ptd.ValueKind == JsonValueKind.Object &&
-                                    ptd.TryGetProperty("cached_tokens", out var cached))
-                                    totalCached = cached.GetInt64();
-                                else if (usage.TryGetProperty("cache_read_input_tokens", out var cr))
-                                    totalCached = cr.GetInt64();
-                            }
-                        }
-                        catch { /* ignore malformed SSE line */ }
-                    }
+                    var line = chunk.Substring(startIdx, newlineIdx - startIdx);
+                    startIdx = newlineIdx + 1;
+                    linesProcessed++;
+                    await ctx.Response.WriteAsync(line + "\n", ct);
+                    await ctx.Response.Body.FlushAsync(ct);
+
+                    AccumulateUsage(line, ref totalPrompt, ref totalCompletion, ref totalCached);
                 }
+                // Anything past the last newline is a partial line; stash it
+                // for the next iteration's prefix.
+                carry.Clear();
+                if (startIdx < chunk.Length) carry.Append(chunk, startIdx, chunk.Length - startIdx);
+            }
+            // Flush any final carry (a stream that didn't end with a newline).
+            if (carry.Length > 0)
+            {
+                await ctx.Response.WriteAsync(carry.ToString(), ct);
+                AccumulateUsage(carry.ToString(), ref totalPrompt, ref totalCompletion, ref totalCached);
+                await ctx.Response.Body.FlushAsync(ct);
             }
 
             if (totalPrompt > 0 || totalCompletion > 0)
             {
                 try
                 {
-                    await forwarder.RecordUsageAsync(userId, config.Id, totalPrompt, totalCompletion, totalCached, ct);
+                    await forwarder.RecordUsageAsync(
+                        userId,
+                        config.Id,
+                        totalPrompt,
+                        totalCompletion,
+                        totalCached,
+                        ct);
+                }
+                catch (InsufficientBalanceException ex)
+                {
+                    // Log loud so the operator can chase abusive sessions. The
+                    // upstream tokens were already delivered (we cannot un-send
+                    // them); the audit row is rolled back, and the next request
+                    // from this user will be rejected at the quota gate until
+                    // they top up. Doing this before the early-out is what
+                    // stops the user from getting free usage when their
+                    // balance dipped between the quota check and now.
+                    logger.LogWarning(
+                        "Billing failed after stream: user={UserId} model={ModelId} cost_cents={Cost} reason={Reason}",
+                        userId,
+                        config.Id,
+                        ex.Message,
+                        "insufficient_balance_post_stream");
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[Billing] Failed to record usage: {ex.Message}");
+                    logger.LogError(ex,
+                        "Failed to record usage after stream: user={UserId} model={ModelId}",
+                        userId,
+                        config.Id);
                 }
             }
 
             return Results.Empty;
         });
+    }
+
+    /// <summary>
+    /// Rewrite the inbound chat-completions body: pin <c>model</c> to the
+    /// upstream name resolved from the matching ModelConfig and force
+    /// <c>stream=true</c>. We copy every property verbatim from the original
+    /// JsonElement to avoid lossy round-tripping through CLR types — that
+    /// would change number precision and string escaping for messages that
+    /// contain tool_call ids, base64 images, or unicode-heavy content.
+    /// </summary>
+    private static string RewriteRequestBody(JsonElement root, string upstreamModelName)
+    {
+        using var ms = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(ms))
+        {
+            writer.WriteStartObject();
+            foreach (var prop in root.EnumerateObject())
+            {
+                if (prop.NameEquals("model"))
+                {
+                    writer.WriteString("model", upstreamModelName);
+                }
+                else if (prop.NameEquals("stream"))
+                {
+                    writer.WriteBoolean("stream", true);
+                }
+                else
+                {
+                    prop.WriteTo(writer);
+                }
+            }
+            // Defensive defaults — if the client omitted these we still want
+            // a sane request shape, but never overwrite an explicit client value.
+            if (!root.TryGetProperty("stream", out _))
+                writer.WriteBoolean("stream", true);
+            writer.WriteEndObject();
+        }
+        return Encoding.UTF8.GetString(ms.ToArray());
+    }
+
+    /// <summary>
+    /// Parse a single SSE line and, if it is a <c>data:</c> payload (other
+    /// than <c>[DONE]</c>), extract any usage block and aggregate it into the
+    /// caller's running totals.
+    /// </summary>
+    private static void AccumulateUsage(
+        string line,
+        ref long totalPrompt,
+        ref long totalCompletion,
+        ref long totalCached)
+    {
+        var trimmed = line.AsSpan().TrimStart();
+        if (!trimmed.StartsWith("data:"))
+            return;
+
+        // Skip everything after the first colon, then strip optional leading
+        // whitespace — SSE spec leaves a single space after the colon for
+        // compatibility, but clients should also accept none.
+        var payloadStart = line.IndexOf(':') + 1;
+        if (payloadStart <= 0 || payloadStart >= line.Length) return;
+        var payload = line.AsSpan(payloadStart).Trim();
+        if (payload.Length == 0) return;
+        if (payload.SequenceEqual("[DONE]")) return;
+
+        try
+        {
+            using var chunkDoc = JsonDocument.Parse(payload.ToString());
+            if (!chunkDoc.RootElement.TryGetProperty("usage", out var usage))
+                return;
+            if (usage.TryGetProperty("prompt_tokens", out var pt))
+                totalPrompt = pt.GetInt64();
+            if (usage.TryGetProperty("completion_tokens", out var ct2))
+                totalCompletion = ct2.GetInt64();
+            // OpenAI-style: usage.prompt_tokens_details.cached_tokens
+            // Anthropic-style: usage.cache_read_input_tokens (counts toward prompt_tokens)
+            if (usage.TryGetProperty("prompt_tokens_details", out var ptd) &&
+                ptd.ValueKind == JsonValueKind.Object &&
+                ptd.TryGetProperty("cached_tokens", out var cached))
+            {
+                totalCached = cached.GetInt64();
+            }
+            else if (usage.TryGetProperty("cache_read_input_tokens", out var cr))
+            {
+                totalCached = cr.GetInt64();
+            }
+        }
+        catch
+        {
+            // Malformed SSE line — ignore; upstream might emit heartbeats or
+            // mid-stream annotations that we don't care about.
+        }
     }
 }
