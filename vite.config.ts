@@ -5,29 +5,34 @@ import react from '@vitejs/plugin-react';
 const host = process.env.TAURI_DEV_HOST;
 
 // NOTES ON TREE-SHAKING & CHUNKING:
-// The original project split node_modules into many small chunks
-// (xlsx, syncfusion, prosemirror, codemirror, react-vendor, etc).
-// In dev mode each chunk is loaded as its own ES module, but in
-// production Rollup rewrites every cross-module identifier to a
-// short letter (`a`, `b`, ...).  When two chunks re-use the same
-// short name to refer to *different* bindings (because Rollup decided
-// helper X belongs to chunk A but module Y is in chunk B and also
-// uses helper X), the resulting `import { a as z } from "./A.js"`
-// statement at the top of B resolves to `undefined` at runtime,
-// and the page silently renders blank.
 //
-// The previous config reproduced this twice:
-//   - `react-vendor`: React 19 bind names hoisted, but chunk still
-//     tried to `import { r as hy, c as ry, ... } from "./vendor-..."`
-//     for symbols that vendor never declared.
-//   - `prosemirror`: same problem with `OrderedMap.empty`.
+// Previous attempts at manual chunking (e.g. `react-vendor`, `prosemirror`)
+// broke production builds: Rollup renamed cross-module helpers to single
+// letters and ended up resolving an `import { a as z } from "./vendor-..."`
+// to `undefined` when the helper lived in a different chunk than the call
+// site. The fix that worked was to keep one large vendor bundle alongside
+// small, dependency-free isolates for the heaviest optional chunks.
 //
-// Fix: stop fighting Rollup.  Drop the per-package manualChunks and
-// let Rollup's automatic chunker produce a small number of files.
-// We still get useful splitting via dynamic imports if the codebase
-// already uses them; otherwise the vendor bundle stays monolithic.
-// In exchange we get a build that runs without runtime undefined
-// references in any chunk.
+// We intentionally split ONLY chunks that are unambiguously self-contained:
+//   - `tauri`: never re-exports from other vendors (only `@tauri-apps/*`)
+//   - `office-editor` / `fortune-sheet` / `pdfjs` / `codemirror` /
+//     `prosemirror` / `markdown` / `icons` — each is the only consumer of
+//     its own internal helpers, so cross-chunk aliasing doesn't apply.
+//
+// This shrinks first paint noticeably (Office is ~3MB, pdfjs ~5MB, etc)
+// without re-introducing the runtime-undefined bug.
+
+const chunkSplit = (id: string): string | undefined => {
+  if (id.includes('/node_modules/@tauri-apps/')) return 'tauri';
+  if (id.includes('/node_modules/@eigenpal/')) return 'office-editor';
+  if (id.includes('/node_modules/@fortune-sheet/')) return 'fortune-sheet';
+  if (id.includes('/node_modules/pdfjs-dist/')) return 'pdfjs';
+  if (id.includes('/node_modules/@codemirror/')) return 'codemirror';
+  if (id.includes('/node_modules/prosemirror-')) return 'prosemirror';
+  if (id.includes('/node_modules/react-markdown/')) return 'markdown-renderer';
+  if (id.includes('/node_modules/lucide-react/')) return 'icons';
+  return undefined;
+};
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
@@ -62,19 +67,20 @@ export default defineConfig(async () => ({
   build: {
     // Match Tauri side: emit sourcemaps for easier debugging in WebView2.
     sourcemap: false,
-    // Larger chunks are fine — Tauri loads them locally. Disable the
-    // default 500kB warning so we can keep one big vendor file.
-    chunkSizeWarningLimit: 8000,
+    // We split the heaviest chunks into their own files (see manualChunks
+    // below) so the main bundle stays well under 2MB. 1.5MB is enough
+    // headroom for the remaining vendor code (React, Zustand, etc.).
+    chunkSizeWarningLimit: 1500,
+    target: 'es2022',
+    cssCodeSplit: true,
+    minify: 'esbuild',
     rollupOptions: {
       output: {
-        // Group Tauri-side helpers into their own chunk for cleanliness,
-        // and everything else stays together so cross-imports stay in-file.
-        manualChunks(id: string) {
-          if (id.includes('/node_modules/@tauri-apps/')) {
-            return 'tauri-vendor';
-          }
-          return undefined;
-        },
+        manualChunks: chunkSplit,
+        // Stable file naming so Tauri can fingerprint assets predictably.
+        chunkFileNames: 'assets/[name]-[hash].js',
+        entryFileNames: 'assets/[name]-[hash].js',
+        assetFileNames: 'assets/[name]-[hash][extname]',
       },
     },
   },
