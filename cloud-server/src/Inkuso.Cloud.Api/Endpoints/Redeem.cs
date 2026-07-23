@@ -19,22 +19,34 @@ public static class Redeem
         {
             var userId = Guid.Parse(ctx.User.FindFirst(ClaimTypes.NameIdentifier)!.Value);
 
-            var code = await db.RedemptionCodes
-                .Include(r => r.Plan)
-                .FirstOrDefaultAsync(r => r.Code == req.Code && r.Enabled
+            // Atomically reserve a use of the redemption code. The conditional
+            // UPDATE guards against two concurrent callers both passing the
+            // UsedCount < MaxUses check that the previous implementation did
+            // in C# — the original bug let two users redeem a single-use code
+            // if they raced within the same millisecond.
+            var reservation = await db.RedemptionCodes
+                .Where(r => r.Code == req.Code && r.Enabled
                     && (r.ExpiresAt == null || r.ExpiresAt > DateTime.UtcNow)
-                    && r.UsedCount < r.MaxUses);
+                    && r.UsedCount < r.MaxUses)
+                .ExecuteUpdateAsync(s => s.SetProperty(r => r.UsedCount, r => r.UsedCount + 1));
 
-            if (code == null)
+            if (reservation == 0)
                 return Results.BadRequest(new { error = "Invalid or exhausted redemption code" });
 
-            code.UsedCount++;
+            var code = await db.RedemptionCodes
+                .Include(r => r.Plan)
+                .FirstOrDefaultAsync(r => r.Code == req.Code);
+
+            // We just bumped UsedCount, so even if the reservation above
+            // succeeded the row might still be missing if a parallel admin
+            // hard-deleted it. Treat that as "no longer valid".
+            if (code is null)
+                return Results.BadRequest(new { error = "Invalid or exhausted redemption code" });
 
             string? newPlan = null;
 
             if (code.PlanId != null && code.Plan != null)
             {
-                // Activate subscription
                 var existingSub = await db.Subscriptions
                     .Where(s => s.UserId == userId && s.Status == "active" && s.ExpiresAt > DateTime.UtcNow)
                     .OrderByDescending(s => s.ExpiresAt)
@@ -56,7 +68,6 @@ public static class Redeem
                 newPlan = code.Plan.Name;
             }
 
-            // Add credit if any
             var user = await db.Users.FindAsync(userId);
             if (user != null && code.CreditCents > 0)
             {
