@@ -1,9 +1,11 @@
 import type {
+  ChatSession,
   CurrentDiff,
   SearchResult,
 } from '../../types';
 import { updateMessages } from '../../store/aiPanelReducers';
 import type { AIPanelState } from '../../store/aiPanelStore.types';
+import { mapSessionIfRelevant } from './streamReducerHelpers';
 
 /**
  * Walk the message's outputItems and flip any reasoning items that are
@@ -29,23 +31,32 @@ function finalizeUncompletedReasoning<T extends { outputItems: { type: string; c
   return changed ? { outputItems: next as T['outputItems'] } : null;
 }
 
+function withSessionByMessageId(
+  state: AIPanelState,
+  sessionId: string,
+  messageId: string,
+  mutate: (session: ChatSession) => ChatSession,
+): AIPanelState {
+  return mapSessionIfRelevant(state, (s) => s.id === sessionId, (session) => {
+    if (!session.messages.some((message) => message.id === messageId)) {
+      return session;
+    }
+    return mutate(session);
+  });
+}
+
 export function applyMessageSearchResults(
   state: AIPanelState,
   sessionId: string,
   messageId: string,
   results: SearchResult[],
 ): AIPanelState {
-  return {
-    ...state,
-    sessions: state.sessions.map((session) =>
-      session.id === sessionId
-        ? updateMessages(session, messageId, (message) => ({
-            ...message,
-            searchResults: results,
-          }))
-        : session
-    ),
-  };
+  return withSessionByMessageId(state, sessionId, messageId, (session) =>
+    updateMessages(session, messageId, (message) => ({
+      ...message,
+      searchResults: results,
+    }))
+  );
 }
 
 export function finalizeStreamingMessage(
@@ -54,24 +65,17 @@ export function finalizeStreamingMessage(
   messageId: string,
   finalContent: string,
 ): AIPanelState {
-  return {
-    ...state,
-    sessions: state.sessions.map((session) =>
-      session.id === sessionId
-        ? {
-            ...updateMessages(session, messageId, (message) => {
-              const reasoningFix = finalizeUncompletedReasoning(message);
-              return {
-                ...message,
-                content: finalContent,
-                ...(reasoningFix ?? {}),
-              };
-            }),
-            isStreaming: false,
-          }
-        : session
-    ),
-  };
+  return withSessionByMessageId(state, sessionId, messageId, (session) => {
+    const updated = updateMessages(session, messageId, (message) => {
+      const reasoningFix = finalizeUncompletedReasoning(message);
+      return {
+        ...message,
+        content: finalContent,
+        ...(reasoningFix ?? {}),
+      };
+    });
+    return { ...updated, isStreaming: false };
+  });
 }
 
 export function applyStreamingError(
@@ -80,24 +84,17 @@ export function applyStreamingError(
   messageId: string,
   error: string,
 ): AIPanelState {
-  return {
-    ...state,
-    sessions: state.sessions.map((session) =>
-      session.id === sessionId
-        ? {
-            ...updateMessages(session, messageId, (message) => {
-              const reasoningFix = finalizeUncompletedReasoning(message);
-              return {
-                ...message,
-                content: error,
-                ...(reasoningFix ?? {}),
-              };
-            }),
-            isStreaming: false,
-          }
-        : session
-    ),
-  };
+  return withSessionByMessageId(state, sessionId, messageId, (session) => {
+    const updated = updateMessages(session, messageId, (message) => {
+      const reasoningFix = finalizeUncompletedReasoning(message);
+      return {
+        ...message,
+        content: error,
+        ...(reasoningFix ?? {}),
+      };
+    });
+    return { ...updated, isStreaming: false };
+  });
 }
 
 export function applyMessageDiff(
@@ -106,15 +103,10 @@ export function applyMessageDiff(
   messageId: string,
   diff: CurrentDiff | null,
 ): AIPanelState {
-  return {
-    ...state,
-    sessions: state.sessions.map((session) =>
-      session.id === sessionId
-        ? updateMessages(session, messageId, (message) => ({
-            ...message,
-            diff: diff ?? undefined,
-          }))
-        : session
-    ),
-  };
+  return withSessionByMessageId(state, sessionId, messageId, (session) =>
+    updateMessages(session, messageId, (message) => ({
+      ...message,
+      diff: diff ?? undefined,
+    }))
+  );
 }

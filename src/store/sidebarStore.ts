@@ -8,29 +8,16 @@ import type {
   BuildProgress,
   NewEntryPayload,
 } from '../types';
-import { getBaseName, getRelativePath, joinPath, normalizeDirPath } from '../utils/path';
+import { getBaseName, getParentDirPath, getRelativePath, joinPath, normalizeDirPath } from '../utils/path';
 
 /**
- * Extract parent directory path from a file path.
- *
- * Both inputs are normalized to `/` separators first so the math works
- * on Windows where file paths are stored with `\`. The returned parent is
- * also normalized, ready to be used as a cache key or sent back to the
- * backend.
+ * Compute the parent directory of `filePath` inside `workspacePath`,
+ * normalised to the cache-key form. Delegates to `getParentDirPath`
+ * so the math lives in exactly one place.
  */
 function getParentPath(filePath: string, workspacePath: string | null): string | null {
-  const normalizedRoot = workspacePath ? normalizeDirPath(workspacePath) : null;
-  if (!normalizedRoot) return null;
-
-  const relativePath = getRelativePath(normalizedRoot, filePath);
-  if (!relativePath) return normalizedRoot;
-
-  const segments = relativePath.split('/').filter(Boolean);
-  if (segments.length <= 1) {
-    return normalizedRoot;
-  }
-
-  return joinPath(normalizedRoot, ...segments.slice(0, -1));
+  if (!workspacePath) return null;
+  return getParentDirPath(filePath, workspacePath);
 }
 
 export interface OpenTab {

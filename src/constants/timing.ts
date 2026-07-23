@@ -78,6 +78,55 @@ export const TIMING = {
    * how many EXTRA older ones get added back to the live DOM per click.
    */
   SESSION_VIRTUALIZE_EXPAND_BATCH: 50,
+
+  /**
+   * Pixel distance from the top of the chat scroll container at which
+   * the collapsed-history placeholder auto-expands the next batch.
+   * Smaller = user has to be closer to the very top before the
+   * auto-load fires. Tuned so a casual scroll past the placeholder
+   * triggers it without being too eager on touchpads.
+   */
+  HISTORY_AUTOLOAD_SCROLL_PX: 64,
+
+  /**
+   * Debounce window (ms) between the user scrolling near the top and
+   * the auto-expansion actually firing. Larger = fewer wasted
+   * expansions during a fast scroll past the placeholder, smaller =
+   * snappier feel. 120ms is one frame at 8fps — cheap.
+   */
+  HISTORY_AUTOLOAD_DEBOUNCE_MS: 120,
+
+  /**
+   * Delay between restoring `justFinished` state to `null` on a
+   * tool-call card after the tool completes. The "just finished" pill
+   * gives the user visual confirmation that the call landed; we keep
+   * it on screen for one beat so it reads, then drop it.
+   */
+  TOOL_CALL_JUST_FINISHED_HOLD_MS: 1000,
+
+  /**
+   * Pixel distance from the bottom of the tool-call card scroll
+   * container at which we keep the viewport pinned to the bottom on a
+   * new streaming delta. Past this threshold we assume the user has
+   * scrolled up on purpose and stop auto-scrolling.
+   */
+  TOOL_CALL_AUTOSCROLL_THRESHOLD_PX: 80,
+
+  /**
+   * Snippet length used when rendering a truncated preview of an
+   * sub-agent's `summary` field. The summary can be several KB of
+   * natural-language prose; collapsing it to this length keeps the
+   * delegate_to card compact.
+   */
+  SUBAGENT_SUMMARY_PREVIEW_CHARS: 300,
+
+  /**
+   * Tick interval used by the ReasoningBlock's "elapsed seconds"
+   * indicator. Higher = less React re-renders, lower = smoother
+   * counter. 250ms (= 4 fps) is plenty for a "00:01" / "00:02" style
+   * display.
+   */
+  REASONING_ELAPSED_TICK_MS: 250,
 } as const;
 
 // ============================================================================

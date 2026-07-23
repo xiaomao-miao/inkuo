@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useAIPanelStore } from '../../store';
 import type { StreamPayload } from './streamTypes';
 import type { PendingToolArgEntry } from './toolCallStreamActions';
@@ -146,6 +146,29 @@ export function useToolCallStreaming() {
   const flushToolArgs = useCallback((sessionId: string) => {
     flushSession(sessionId);
   }, [flushSession]);
+
+  /** Clear all pending state across every session (unmount cleanup). */
+  const resetAllSessions = useCallback(() => {
+    for (const [sessionId, pending] of Object.entries(sessionPendingRef.current)) {
+      if (pending.flushTimer !== null) {
+        clearTimeout(pending.flushTimer);
+        pending.flushTimer = null;
+      }
+      pending.byId = {};
+      pending.order = [];
+      // `delete` rather than leaving an empty shell so a future mount
+      // sees a clean map.
+      delete sessionPendingRef.current[sessionId];
+    }
+  }, []);
+
+  // Cancel any pending flush timers on unmount so an in-flight tool-arg
+  // flush can't land in the store after the panel has torn down.
+  useEffect(() => {
+    return () => {
+      resetAllSessions();
+    };
+  }, [resetAllSessions]);
 
   return {
     flushToolArgs,

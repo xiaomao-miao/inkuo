@@ -12,7 +12,7 @@ const QuickActionButton: React.FC<{
   label: string;
   hint: string;
   onSetInput: (value: string) => void;
-}> = ({ label, hint, onSetInput }) => {
+}> = React.memo(({ label, hint, onSetInput }) => {
   return (
     <button
       className={styles.quickAction}
@@ -21,9 +21,10 @@ const QuickActionButton: React.FC<{
       {label}
     </button>
   );
-};
+});
+QuickActionButton.displayName = 'QuickActionButton';
 
-export const ChatEmptyState: React.FC<ChatEmptyStateProps> = ({ mode, onSetInput }) => {
+export const ChatEmptyState: React.FC<ChatEmptyStateProps> = React.memo(({ mode, onSetInput }) => {
   return (
     <div className={styles.emptyState}>
       <div className={styles.emptyIcon}><Sparkles size={32} /></div>
@@ -46,4 +47,5 @@ export const ChatEmptyState: React.FC<ChatEmptyStateProps> = ({ mode, onSetInput
       </div>
     </div>
   );
-};
+});
+ChatEmptyState.displayName = 'ChatEmptyState';

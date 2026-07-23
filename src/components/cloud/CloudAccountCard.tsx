@@ -27,10 +27,10 @@ interface CloudAccountCardProps {
  */
 export const CloudAccountCard = ({ onModelsLoaded }: CloudAccountCardProps) => {
   const account = useSettingsStore((s) => s.settings.cloud.account);
-  const setCloudAccountAndPersist = useSettingsStore((s) => s.setCloudAccountAndPersist);
-  const setCloudModelsAndPersist = useSettingsStore((s) => s.setCloudModelsAndPersist);
-  const setActiveCloudModelIdAndPersist = useSettingsStore(
-    (s) => s.setActiveCloudModelIdAndPersist
+  const setCloudAccount = useSettingsStore((s) => s.setCloudAccount);
+  const setCloudModels = useSettingsStore((s) => s.setCloudModels);
+  const setActiveCloudModelId = useSettingsStore(
+    (s) => s.setActiveCloudModelId
   );
   const cachedModels = useSettingsStore((s) => s.settings.cloud.cached_models);
   const activeCloudModelId = useSettingsStore((s) => s.settings.cloud.active_cloud_model_id);
@@ -49,19 +49,19 @@ export const CloudAccountCard = ({ onModelsLoaded }: CloudAccountCardProps) => {
         cloudApi.fetchModels(),
       ]);
       setInfo(accountInfo);
-      await setCloudModelsAndPersist(models);
+      await setCloudModels(models);
       // Refresh account record (server may have updated plan_name etc.)
       const updatedAccount: typeof account = {
         ...account,
         balance_cents: accountInfo.balance_cents,
         plan_name: accountInfo.plan_name,
       };
-      await setCloudAccountAndPersist(updatedAccount);
+      await setCloudAccount(updatedAccount);
       onModelsLoaded?.(models);
 
       // Auto-select first model if nothing picked yet
       if (!activeCloudModelId && models.length > 0) {
-        await setActiveCloudModelIdAndPersist(models[0].id);
+        await setActiveCloudModelId(models[0].id);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -171,7 +171,7 @@ export const CloudAccountCard = ({ onModelsLoaded }: CloudAccountCardProps) => {
           <select
             className={styles.select}
             value={activeCloudModelId ?? ''}
-            onChange={(e) => setActiveCloudModelIdAndPersist(e.target.value || null)}
+            onChange={(e) => setActiveCloudModelId(e.target.value || null)}
           >
             {cachedModels.map((m) => (
               <option key={m.id} value={m.id}>
@@ -197,7 +197,7 @@ export const CloudAccountCard = ({ onModelsLoaded }: CloudAccountCardProps) => {
         className={styles.logoutBtn}
         onClick={async () => {
           await cloudApi.logout();
-          await setCloudAccountAndPersist(null);
+          await setCloudAccount(null);
         }}
       >
         <LogOut size={12} /> 退出登录

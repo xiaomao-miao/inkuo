@@ -1,4 +1,5 @@
 import type { AIPanelState } from '../../store/aiPanelStore.types';
+import { filterSessionsWithMessages } from './streamReducerHelpers';
 
 type ReasoningItem = {
   type: 'reasoning';
@@ -33,14 +34,13 @@ export function applyStreamingReasoningDeltas(
   deltaMap: Map<string, string>,
   postProcess?: (item: ReasoningItem) => ReasoningItem,
 ): AIPanelState {
+  const relevantSessions = filterSessionsWithMessages(state.sessions, deltaMap);
+  if (relevantSessions.length === 0) return state;
+
   return {
     ...state,
     sessions: state.sessions.map((session) => {
-      const sessionMessageIds = [...deltaMap.keys()].filter((id) =>
-        session.messages.some((message) => message.id === id)
-      );
-      if (sessionMessageIds.length === 0) return session;
-
+      if (!relevantSessions.includes(session)) return session;
       return {
         ...session,
         messages: session.messages.map((message) => {

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { ChevronDown, ChevronRight, Check, Loader2, X, Users, Bot, FileText, BrainCircuit, Wrench } from 'lucide-react';
+import { TIMING } from '../../constants/timing';
 import { getExpertDisplayName, getToolDisplayName } from './toolUtils';
 import type { SubagentActivity as SubagentActivityType, OutputItem } from '../../types';
 import styles from './ToolCallCard.module.css';
@@ -211,7 +212,7 @@ const SubagentActivityItem: React.FC<SubagentActivityItemProps> = React.memo(fun
           {isCompleted && activity.summary && (
             <div className={styles.subagentSummary}>
               <pre style={{ whiteSpace: 'pre-wrap', fontSize: '11px', margin: 0 }}>
-                {activity.summary.length > 300 ? activity.summary.slice(0, 300) + '...' : activity.summary}
+                {activity.summary.length > TIMING.SUBAGENT_SUMMARY_PREVIEW_CHARS ? activity.summary.slice(0, TIMING.SUBAGENT_SUMMARY_PREVIEW_CHARS) + '...' : activity.summary}
               </pre>
             </div>
           )}

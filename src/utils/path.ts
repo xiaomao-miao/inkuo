@@ -89,6 +89,34 @@ export function getDirName(path: string): string {
 }
 
 /**
+ * Return the directory that contains `filePath`, rooted at `workspaceRoot`.
+ * Both inputs are normalised first so the math is separator-agnostic.
+ *
+ * Used by the file watcher: a `Created` / `Deleted` / `Modified` event
+ * arrives with the changed file's absolute path; we need to know which
+ * directory cache entry to invalidate.
+ *
+ *   getParentDirPath('/root', '/root/a.md')           === '/root'
+ *   getParentDirPath('/root', '/root/sub/b.md')      === '/root/sub'
+ *   getParentDirPath('/root', '/root/sub/nested/c')  === '/root/sub/nested'
+ *   getParentDirPath('/root', '/root')               === null
+ */
+export function getParentDirPath(filePath: string, workspaceRoot: string): string | null {
+  const normalizedRoot = normalizeDirPath(workspaceRoot);
+  if (!normalizedRoot) return null;
+
+  const relativePath = getRelativePath(normalizedRoot, filePath);
+  if (!relativePath) return normalizedRoot;
+
+  const segments = relativePath.split('/').filter(Boolean);
+  if (segments.length <= 1) return normalizedRoot;
+
+  return segments
+    .slice(0, -1)
+    .reduce((acc, segment) => `${acc}/${segment}`, normalizedRoot);
+}
+
+/**
  * Join a parent directory with one or more segments using `/` separators.
  * The result is normalized so callers can use it as a cache key directly.
  *

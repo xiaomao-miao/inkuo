@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useAIPanelStore } from '../../store';
 import { applyStreamingTextDeltas } from './textStreamActions';
 import { TIMING } from '../../constants/timing';
@@ -216,6 +216,25 @@ export function useTextStreaming() {
     sessionPendingRef.current = {};
     streamingContentRef.current = {};
   }, []);
+
+  /**
+   * Component-unmount cleanup.
+   *
+   * `useTextStreaming` is owned by `AIPanel` via `useAgentStream`, so the
+   * cleanup matters only if `AIPanel` itself unmounts mid-stream (e.g.
+   * user closes the panel while a stream is in flight). Without the
+   * effect, the queued `flushTextDeltas` would fire against a stale
+   * `streamingContentRef` after the panel has torn down, potentially
+   * pushing content into a session the user no longer sees.
+   *
+   * The hook itself only schedules timers / mutates refs that the
+   * panel can no longer read, so the cleanup is best-effort.
+   */
+  useEffect(() => {
+    return () => {
+      resetTextStreaming();
+    };
+  }, [resetTextStreaming]);
 
   return {
     streamingContentRef,

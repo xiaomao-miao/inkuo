@@ -76,7 +76,7 @@ const MODEL_TIERS: ModelTier[] = [
 
 export const KnowledgeSettings = () => {
   const settings = useSettingsStore((state) => state.settings);
-  const updateSettingAndPersist = useSettingsStore((state) => state.updateSettingAndPersist);
+  const updateSetting = useSettingsStore((state) => state.updateSetting);
   const pushNotification = useNotificationStore((state) => state.pushNotification);
   const [availableModels, setAvailableModels] = useState<AvailableModel[]>([]);
   const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
@@ -155,7 +155,7 @@ export const KnowledgeSettings = () => {
   }, [pushNotification]);
 
   const handleModelChange = async (modelId: string) => {
-    await updateSettingAndPersist('embedding_model', modelId as EmbeddingModelType);
+    await updateSetting('embedding_model', modelId as EmbeddingModelType);
   };
 
   const downloadModel = async (modelName: string) => {
@@ -324,7 +324,7 @@ export const KnowledgeSettings = () => {
               step="50"
               value={settings.chunk_size}
               onChange={(e) => {
-                void updateSettingAndPersist('chunk_size', parseInt(e.target.value));
+                void updateSetting('chunk_size', parseInt(e.target.value));
               }}
               className={styles.range}
             />
@@ -345,7 +345,7 @@ export const KnowledgeSettings = () => {
               step="10"
               value={settings.chunk_overlap}
               onChange={(e) => {
-                void updateSettingAndPersist('chunk_overlap', parseInt(e.target.value));
+                void updateSetting('chunk_overlap', parseInt(e.target.value));
               }}
               className={styles.range}
             />

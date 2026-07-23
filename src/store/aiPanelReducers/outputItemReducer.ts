@@ -1,183 +1,29 @@
+// Output-item reducer helpers — the heart of the AI panel's message
+// rendering. This module owns:
+//
+//   - Patch / append / find logic against `message.outputItems`.
+//   - Streaming-plan conversion (text item → plan item) and delta
+//     ingestion for the plan stream.
+//   - Lazy-load window management: collapsing the visible content
+//     into `truncatedPrefix` and splicing it back when the user
+//     expands a message.
+//   - Session-history collapse / expand for the placeholder card in
+//     `ChatView.tsx`.
+//
+// Split out from the original monolithic `aiPanelReducers.ts` so that
+// the streaming, plan-handling, and history-collapse logic are easy to
+// reason about and unit-test independently.
+
 import type {
-  ActiveToolCall,
   ChatMessage,
   ChatSession,
   CurrentDiff,
   OutputItem,
-} from '../types';
-
-import { parseStreamingPlan } from '../utils/planStream';
+} from '../../types';
+import { parseStreamingPlan } from '../../utils/planStream';
+import { updateMessages } from './sessionReducer';
 
 export type OutputItemMatchKey = { toolCallId: string } | { contentContains: string };
-
-export function createSessionTitle(index: number) {
-  return `对话 ${index}`;
-}
-
-export function createNewSession(index: number): ChatSession {
-  const now = Date.now();
-  return {
-    id: crypto.randomUUID(),
-    title: createSessionTitle(index),
-    createdAt: now,
-    lastActivityAt: now,
-    mode: 'ask',
-    featureToggles: {},
-    messages: [],
-    isStreaming: false,
-    currentDiff: null,
-    activeToolCalls: [],
-    pendingDiff: null,
-  };
-}
-
-/**
- * Returns the session with `lastActivityAt` set to `now`. Used by the
- * store to bubble a session to the top of the history sidebar's
- * sort-by-recency ordering whenever the conversation meaningfully
- * progresses (new message, stream finished, reopened from history).
- */
-export function touchSession(session: ChatSession): ChatSession {
-  return { ...session, lastActivityAt: Date.now() };
-}
-
-export function updateSessions(
-  sessions: ChatSession[],
-  sessionId: string,
-  updater: (session: ChatSession) => ChatSession,
-): ChatSession[] {
-  return sessions.map((session) =>
-    session.id === sessionId ? updater(session) : session
-  );
-}
-
-export function updateSessionState(
-  sessions: ChatSession[],
-  sessionId: string,
-  patch: Partial<ChatSession>,
-): ChatSession[] {
-  return updateSessions(sessions, sessionId, (session) => ({
-    ...session,
-    ...patch,
-  }));
-}
-
-export function appendSessionMessage(
-  sessions: ChatSession[],
-  sessionId: string,
-  message: ChatMessage,
-): ChatSession[] {
-  return updateSessions(sessions, sessionId, (session) => ({
-    ...session,
-    messages: [...session.messages, message],
-  }));
-}
-
-export function appendSessionToolCall(
-  sessions: ChatSession[],
-  sessionId: string,
-  toolCall: ActiveToolCall,
-): ChatSession[] {
-  return updateSessions(sessions, sessionId, (session) => ({
-    ...session,
-    activeToolCalls: [...session.activeToolCalls, toolCall],
-  }));
-}
-
-export function removeSessionToolCall(
-  sessions: ChatSession[],
-  sessionId: string,
-  toolCallId: string,
-): ChatSession[] {
-  return updateSessions(sessions, sessionId, (session) => ({
-    ...session,
-    activeToolCalls: session.activeToolCalls.filter((toolCall) => toolCall.id !== toolCallId),
-  }));
-}
-
-export function clearSessionToolCalls(
-  sessions: ChatSession[],
-  sessionId: string,
-): ChatSession[] {
-  return updateSessionState(sessions, sessionId, { activeToolCalls: [] });
-}
-
-export function updateSessionMessage(
-  sessions: ChatSession[],
-  sessionId: string,
-  messageId: string,
-  updater: (message: ChatMessage) => ChatMessage,
-): ChatSession[] {
-  return updateSessions(sessions, sessionId, (session) => updateMessages(session, messageId, updater));
-}
-
-export function finishSessionMessageStreaming(
-  sessions: ChatSession[],
-  sessionId: string,
-  messageId: string,
-  content: string,
-): ChatSession[] {
-  return updateSessions(sessions, sessionId, (session) => ({
-    ...updateMessages(session, messageId, (message) => ({
-      ...message,
-      content,
-    })),
-    isStreaming: false,
-  }));
-}
-
-export function updatePendingDiffState(
-  sessions: ChatSession[],
-  sessionId: string,
-  pendingDiff: CurrentDiff | null,
-): ChatSession[] {
-  return updateSessionState(sessions, sessionId, { pendingDiff });
-}
-
-export function updateMessages(
-  session: ChatSession,
-  messageId: string,
-  updater: (message: ChatMessage) => ChatMessage,
-): ChatSession {
-  return {
-    ...session,
-    messages: session.messages.map((message) =>
-      message.id === messageId ? updater(message) : message
-    ),
-  };
-}
-
-export function updateToolCalls(
-  session: ChatSession,
-  toolCallId: string,
-  updater: (toolCall: ActiveToolCall) => ActiveToolCall,
-): ChatSession {
-  return {
-    ...session,
-    activeToolCalls: session.activeToolCalls.map((toolCall) =>
-      toolCall.id === toolCallId ? updater(toolCall) : toolCall
-    ),
-  };
-}
-
-export function clearSessionConversation(session: ChatSession): ChatSession {
-  return {
-    ...session,
-    messages: [],
-    currentDiff: null,
-    pendingDiff: null,
-    activeToolCalls: [],
-  };
-}
-
-export function trimSessionMessagesAfter(session: ChatSession, messageId: string): ChatSession {
-  const index = session.messages.findIndex((message) => message.id === messageId);
-  if (index === -1) return session;
-  return {
-    ...session,
-    messages: session.messages.slice(0, index + 1),
-  };
-}
 
 export function patchMessageOutputItems(
   message: ChatMessage,
@@ -425,10 +271,10 @@ export function collapseMessageHead(
  * swap them for a single placeholder card. Returns the session unchanged
  * when no collapse is needed.
  *
- * Strategy: keep the last `keepTail` (default = SESSION_VIRTUALIZE_THRESHOLD)
- * messages fully rendered; everything earlier is flagged with
- * `collapsed: true`. The full data (content, outputItems, toolCalls) is
- * NOT mutated, so restoring later is just an object-shape flag flip.
+ * Strategy: keep the last `keepTail` messages fully rendered; everything
+ * earlier is flagged with `collapsed: true`. The full data (content,
+ * outputItems, toolCalls) is NOT mutated, so restoring later is just an
+ * object-shape flag flip.
  */
 export function collapseOldSessionMessages(
   session: ChatSession,
@@ -452,9 +298,8 @@ export function collapseOldSessionMessages(
  * Un-collapse the oldest `revealCount` previously-collapsed messages so
  * they render again. Used by the placeholder's "load earlier" affordance.
  *
- * `revealCount` defaults to `SESSION_VIRTUALIZE_EXPAND_BATCH`. We never
- * cross into the always-live tail — collapsed messages are always older
- * than the live window.
+ * We never cross into the always-live tail — collapsed messages are
+ * always older than the live window.
  */
 export function expandCollapsedSessionMessages(
   session: ChatSession,

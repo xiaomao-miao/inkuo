@@ -11,8 +11,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { ChevronDown, ChevronRight, FileText, File as FileIcon, RotateCcw, X } from 'lucide-react';
-import { useNotificationStore } from '../../store/notificationStore';
-import { useSidebarStore } from '../../store/sidebarStore';
+import { useNotificationStore } from '../../store';
+import { useSidebarStore } from '../../store';
 import {
   previewRestore,
   restoreSnapshot,

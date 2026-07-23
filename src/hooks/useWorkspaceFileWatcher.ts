@@ -4,7 +4,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { reportError } from '../utils/errors';
 import { isTauriRuntime } from '../utils/tauri';
 
-interface FileChangePayload {
+export interface FileChangePayload {
   type: string;
   data: { path: string };
 }

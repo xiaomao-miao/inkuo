@@ -14,47 +14,51 @@ interface SettingsState {
   settings: Settings;
   isSettingsOpen: boolean;
 
+  /**
+   * Replace the entire `settings` blob. Callers that want durable
+   * persistence must follow up with `persistSettings()` themselves;
+   * mutation actions below persist automatically (fire-and-forget).
+   */
   setSettings: (settings: Settings) => void;
+
+  /**
+   * Persist a settings snapshot to disk. Omitting the argument
+   * persists the current state.
+   */
   persistSettings: (settings?: Settings) => Promise<void>;
-  updateSetting: <K extends keyof Settings>(key: K, value: Settings[K]) => Settings;
-  updateSettingAndPersist: <K extends keyof Settings>(key: K, value: Settings[K]) => Promise<Settings>;
+
+  /** Generic single-key updater with auto-persist. */
+  updateSetting: <K extends keyof Settings>(key: K, value: Settings[K]) => Promise<Settings>;
+
   setIsSettingsOpen: (open: boolean) => void;
 
-  addApiConfig: (config?: Partial<APIConfig>) => Settings;
-  addApiConfigAndPersist: (config?: Partial<APIConfig>) => Promise<Settings>;
-  updateApiConfig: (id: string, updates: Partial<APIConfig>) => Settings;
-  updateApiConfigAndPersist: (id: string, updates: Partial<APIConfig>) => Promise<Settings>;
-  removeApiConfig: (id: string) => Settings;
-  removeApiConfigAndPersist: (id: string) => Promise<Settings>;
-  setActiveApiConfig: (id: string) => Settings;
-  setActiveApiConfigAndPersist: (id: string) => Promise<Settings>;
+  /** API config CRUD — every entry auto-persists. */
+  addApiConfig: (config?: Partial<APIConfig>) => Promise<Settings>;
+  updateApiConfig: (id: string, updates: Partial<APIConfig>) => Promise<Settings>;
+  removeApiConfig: (id: string) => Promise<Settings>;
+  setActiveApiConfig: (id: string) => Promise<Settings>;
+  /** Read-only helper (no side effect). */
   getActiveApiConfig: () => APIConfig | null;
-  setDefaultApiConfig: (id: string) => Settings;
-  setDefaultApiConfigAndPersist: (id: string) => Promise<Settings>;
+  setDefaultApiConfig: (id: string) => Promise<Settings>;
 
-  /** Replace the entire `web_search` config. Mostly useful from the
-   * settings panel's "Reset" affordance. */
-  updateWebSearch: (next: Settings['web_search']) => Settings;
-  updateWebSearchAndPersist: (next: Settings['web_search']) => Promise<Settings>;
-  /** Patch a single provider (matched by `id`). When the provider id
-   * doesn't exist yet, it's added; when `null`, no-op. */
+  /**
+   * Replace the entire `web_search` config. Mostly useful from the
+   * settings panel's "Reset" affordance.
+   */
+  updateWebSearch: (next: Settings['web_search']) => Promise<Settings>;
+  /**
+   * Patch a single provider (matched by `id`). When the provider id
+   * doesn't exist yet, it's added; when `null`, no-op.
+   */
   updateWebSearchProvider: (
-    providerId: string,
-    updates: Partial<Settings['web_search']['providers'][number]>
-  ) => Settings;
-  updateWebSearchProviderAndPersist: (
     providerId: string,
     updates: Partial<Settings['web_search']['providers'][number]>
   ) => Promise<Settings>;
 
-  setCloudModeEnabled: (enabled: boolean) => Settings;
-  setCloudModeEnabledAndPersist: (enabled: boolean) => Promise<Settings>;
-  setCloudAccount: (account: CloudAccount | null) => Settings;
-  setCloudAccountAndPersist: (account: CloudAccount | null) => Promise<Settings>;
-  setCloudModels: (models: CloudModelEntry[]) => Settings;
-  setCloudModelsAndPersist: (models: CloudModelEntry[]) => Promise<Settings>;
-  setActiveCloudModelId: (id: string | null) => Settings;
-  setActiveCloudModelIdAndPersist: (id: string | null) => Promise<Settings>;
+  setCloudModeEnabled: (enabled: boolean) => Promise<Settings>;
+  setCloudAccount: (account: CloudAccount | null) => Promise<Settings>;
+  setCloudModels: (models: CloudModelEntry[]) => Promise<Settings>;
+  setActiveCloudModelId: (id: string | null) => Promise<Settings>;
 }
 
 function createDefaultAPIConfig(): APIConfig {
@@ -103,6 +107,41 @@ function createDefaultCloudConfig(): CloudSettings {
 
 async function persistSettingsSnapshot(settings: Settings): Promise<void> {
   await saveSettings(settings);
+}
+
+/**
+ * Wrap a synchronous `Settings → Settings` updater with auto-persist.
+ *
+ * Each settings slice used to expose two methods — a synchronous `X`
+ * and an async `XAndPersist` that called `X` then awaited
+ * `saveSettings`. That doubled the store's surface area (~280 lines
+ * of duplicated bodies), and every caller had to pick one form
+ * (some `await`ed, some used `void`, some just called the sync version
+ * and forgot to persist). This helper collapses each pair into one
+ * action: it computes the next settings, sets them on the store, and
+ * fire-and-forgets a persist.
+ *
+ * Errors during the persist are logged but never bubble back to the
+ * caller — a failed disk write must not block the UI, and the
+ * in-memory state is still consistent. The next persisted call (or a
+ * window-close save) will retry.
+ *
+ * The updater's first argument is the *current* settings object; the
+ * wrapper strips it before forwarding the remaining args to the
+ * caller-facing action signature.
+ */
+function defineAutoPersist<U extends (current: Settings, ...args: any[]) => Settings>(
+  updater: U,
+): (...args: Parameters<U> extends [Settings, ...infer Rest] ? Rest : never) => Promise<Settings> {
+  return async (...args) => {
+    const current = useSettingsStore.getState().settings;
+    const next = updater(current, ...(args as Parameters<U> extends [Settings, ...infer Rest] ? Rest : never));
+    useSettingsStore.setState({ settings: next });
+    void persistSettingsSnapshot(next).catch((err) => {
+      console.warn('[settingsStore] auto-persist failed:', err);
+    });
+    return next;
+  };
 }
 
 function ensureValidApiConfigs(apiConfigs: APIConfig[]): APIConfig[] {
@@ -376,22 +415,13 @@ export const useSettingsStore = create<SettingsState>()(
       persistSettings: async (settings) => {
         await persistSettingsSnapshot(settings ?? get().settings);
       },
-      updateSetting: (key, value) => {
-        const nextSettings = {
-          ...get().settings,
-          [key]: value,
-        };
-        set({ settings: nextSettings });
-        return nextSettings;
-      },
-      updateSettingAndPersist: async (key, value) => {
-        const nextSettings = get().updateSetting(key, value);
-        await persistSettingsSnapshot(nextSettings);
-        return nextSettings;
-      },
+      updateSetting: defineAutoPersist((current, key, value) => ({
+        ...current,
+        [key]: value,
+      })),
       setIsSettingsOpen: (open) => set({ isSettingsOpen: open }),
 
-      addApiConfig: (config) => {
+      addApiConfig: defineAutoPersist((current, config?: Partial<APIConfig>) => {
         const newConfig: APIConfig = {
           id: crypto.randomUUID(),
           name: config?.name || 'New API',
@@ -408,78 +438,34 @@ export const useSettingsStore = create<SettingsState>()(
           temperature: config?.temperature ?? 0.7,
           maxTokens: config?.maxTokens ?? 4096,
         };
-
-        const currentSettings = get().settings;
-        const nextSettings = {
-          ...currentSettings,
-          apiConfigs: ensureValidApiConfigs([...currentSettings.apiConfigs, newConfig]),
+        return {
+          ...current,
+          apiConfigs: ensureValidApiConfigs([...current.apiConfigs, newConfig]),
         };
+      }),
 
-        set({ settings: nextSettings });
-        return nextSettings;
-      },
-      addApiConfigAndPersist: async (config) => {
-        const nextSettings = get().addApiConfig(config);
-        await persistSettingsSnapshot(nextSettings);
-        return nextSettings;
-      },
+      updateApiConfig: defineAutoPersist((current, id: string, updates: Partial<APIConfig>) => ({
+        ...current,
+        apiConfigs: current.apiConfigs.map((configItem) =>
+          configItem.id === id ? { ...configItem, ...updates } : configItem
+        ),
+      })),
 
-      updateApiConfig: (id, updates) => {
-        const currentSettings = get().settings;
-        const nextSettings = {
-          ...currentSettings,
-          apiConfigs: currentSettings.apiConfigs.map((configItem) =>
-            configItem.id === id ? { ...configItem, ...updates } : configItem
-          ),
-        };
-        set({ settings: nextSettings });
-        return nextSettings;
-      },
-      updateApiConfigAndPersist: async (id, updates) => {
-        const nextSettings = get().updateApiConfig(id, updates);
-        await persistSettingsSnapshot(nextSettings);
-        return nextSettings;
-      },
-
-      removeApiConfig: (id) => {
-        const currentSettings = get().settings;
-        const remaining = currentSettings.apiConfigs.filter((config) => config.id !== id);
+      removeApiConfig: defineAutoPersist((current, id: string) => {
+        const remaining = current.apiConfigs.filter((config) => config.id !== id);
         const apiConfigs = ensureValidApiConfigs(remaining);
-        const activeApiConfigId = apiConfigs.some((config) => config.id === currentSettings.activeApiConfigId)
-          ? currentSettings.activeApiConfigId
+        const activeApiConfigId = apiConfigs.some((config) => config.id === current.activeApiConfigId)
+          ? current.activeApiConfigId
           : apiConfigs[0].id;
+        return { ...current, apiConfigs, activeApiConfigId };
+      }),
 
-        const nextSettings = {
-          ...currentSettings,
-          apiConfigs,
-          activeApiConfigId,
-        };
-
-        set({ settings: nextSettings });
-        return nextSettings;
-      },
-      removeApiConfigAndPersist: async (id) => {
-        const nextSettings = get().removeApiConfig(id);
-        await persistSettingsSnapshot(nextSettings);
-        return nextSettings;
-      },
-
-      setActiveApiConfig: (id) => {
-        const currentSettings = get().settings;
-        const nextSettings = {
-          ...currentSettings,
-          activeApiConfigId: currentSettings.apiConfigs.some((config) => config.id === id)
-            ? id
-            : currentSettings.activeApiConfigId,
-        };
-        set({ settings: nextSettings });
-        return nextSettings;
-      },
-      setActiveApiConfigAndPersist: async (id) => {
-        const nextSettings = get().setActiveApiConfig(id);
-        await persistSettingsSnapshot(nextSettings);
-        return nextSettings;
-      },
+      setActiveApiConfig: defineAutoPersist((current, id: string) => ({
+        ...current,
+        activeApiConfigId: current.apiConfigs.some((config) => config.id === id)
+          ? id
+          : current.activeApiConfigId,
+      })),
 
       getActiveApiConfig: () => {
         const state = get();
@@ -487,25 +473,15 @@ export const useSettingsStore = create<SettingsState>()(
         return state.settings.apiConfigs.find((config) => config.id === activeId) || null;
       },
 
-      setDefaultApiConfig: (id) => {
-        const currentSettings = get().settings;
-        const nextSettings = {
-          ...currentSettings,
-          apiConfigs: currentSettings.apiConfigs.map((config) => ({
-            ...config,
-            isDefault: config.id === id,
-          })),
-        };
-        set({ settings: nextSettings });
-        return nextSettings;
-      },
-      setDefaultApiConfigAndPersist: async (id) => {
-        const nextSettings = get().setDefaultApiConfig(id);
-        await persistSettingsSnapshot(nextSettings);
-        return nextSettings;
-      },
+      setDefaultApiConfig: defineAutoPersist((current, id: string) => ({
+        ...current,
+        apiConfigs: current.apiConfigs.map((config) => ({
+          ...config,
+          isDefault: config.id === id,
+        })),
+      })),
 
-      updateWebSearch: (next) => {
+      updateWebSearch: defineAutoPersist((current, next: Settings['web_search']) => {
         // Defensive clone so a caller can't mutate the stored array
         // by reference after we set it.
         const cloned: Settings['web_search'] = {
@@ -517,111 +493,68 @@ export const useSettingsStore = create<SettingsState>()(
           // separate control). If the caller omitted it, keep whatever
           // was previously stored so we don't accidentally reset the
           // user's preference.
-          routing: next.routing ?? get().settings.web_search.routing,
+          routing: next.routing ?? current.web_search.routing,
         };
-        const nextSettings: Settings = {
-          ...get().settings,
-          web_search: cloned,
-        };
-        set({ settings: nextSettings });
-        return nextSettings;
-      },
-      updateWebSearchAndPersist: async (next) => {
-        const nextSettings = get().updateWebSearch(next);
-        await persistSettingsSnapshot(nextSettings);
-        return nextSettings;
-      },
+        return { ...current, web_search: cloned };
+      }),
 
-      updateWebSearchProvider: (providerId, updates) => {
-        const current = get().settings.web_search;
-        const existingIndex = current.providers.findIndex((p) => p.id === providerId);
-        const newProviders = current.providers.map((p) => ({ ...p }));
-        if (existingIndex >= 0) {
-          newProviders[existingIndex] = {
-            ...newProviders[existingIndex],
-            ...updates,
-            // Preserve the id even if the caller accidentally clears it
-            // — losing it would orphan the provider entry.
-            id: newProviders[existingIndex].id,
+      updateWebSearchProvider: defineAutoPersist(
+        (current, providerId: string, updates: Partial<Settings['web_search']['providers'][number]>) => {
+          const currentWebSearch = current.web_search;
+          const existingIndex = currentWebSearch.providers.findIndex((p) => p.id === providerId);
+          const newProviders = currentWebSearch.providers.map((p) => ({ ...p }));
+          if (existingIndex >= 0) {
+            newProviders[existingIndex] = {
+              ...newProviders[existingIndex],
+              ...updates,
+              // Preserve the id even if the caller accidentally clears it
+              // — losing it would orphan the provider entry.
+              id: newProviders[existingIndex].id,
+            };
+          } else {
+            // Build the new provider entry from defaults, then layer the
+            // caller's updates on top, then re-assert the id. Using
+            // spread-and-restructure (instead of a literal with two `id`
+            // keys) sidesteps TS1117, which forbids duplicate property
+            // names in object literals even when the later value would
+            // win at runtime.
+            const base: WebSearchProviderConfig = {
+              id: providerId,
+              apiKey: null,
+              baseUrl: null,
+              enabled: true,
+            };
+            newProviders.push({ ...base, ...updates, id: providerId });
+          }
+          return {
+            ...current,
+            web_search: {
+              ...currentWebSearch,
+              providers: newProviders,
+            },
           };
-        } else {
-          // Build the new provider entry from defaults, then layer the
-          // caller's updates on top, then re-assert the id. Using
-          // spread-and-restructure (instead of a literal with two `id`
-          // keys) sidesteps TS1117, which forbids duplicate property
-          // names in object literals even when the later value would
-          // win at runtime.
-          const base: WebSearchProviderConfig = {
-            id: providerId,
-            apiKey: null,
-            baseUrl: null,
-            enabled: true,
-          };
-          newProviders.push({ ...base, ...updates, id: providerId });
         }
-        return get().updateWebSearch({
-          ...current,
-          providers: newProviders,
-        });
-      },
-      updateWebSearchProviderAndPersist: async (providerId, updates) => {
-        const nextSettings = get().updateWebSearchProvider(providerId, updates);
-        await persistSettingsSnapshot(nextSettings);
-        return nextSettings;
-      },
+      ),
 
-      setCloudModeEnabled: (enabled) => {
-        const nextSettings: Settings = {
-          ...get().settings,
-          cloud: { ...get().settings.cloud, cloud_mode_enabled: enabled },
-        };
-        set({ settings: nextSettings });
-        return nextSettings;
-      },
-      setCloudModeEnabledAndPersist: async (enabled) => {
-        const nextSettings = get().setCloudModeEnabled(enabled);
-        await persistSettingsSnapshot(nextSettings);
-        return nextSettings;
-      },
-      setCloudAccount: (account) => {
-        const nextSettings: Settings = {
-          ...get().settings,
-          cloud: { ...get().settings.cloud, account },
-        };
-        set({ settings: nextSettings });
-        return nextSettings;
-      },
-      setCloudAccountAndPersist: async (account) => {
-        const nextSettings = get().setCloudAccount(account);
-        await persistSettingsSnapshot(nextSettings);
-        return nextSettings;
-      },
-      setCloudModels: (models) => {
-        const nextSettings: Settings = {
-          ...get().settings,
-          cloud: { ...get().settings.cloud, cached_models: models },
-        };
-        set({ settings: nextSettings });
-        return nextSettings;
-      },
-      setCloudModelsAndPersist: async (models) => {
-        const nextSettings = get().setCloudModels(models);
-        await persistSettingsSnapshot(nextSettings);
-        return nextSettings;
-      },
-      setActiveCloudModelId: (id) => {
-        const nextSettings: Settings = {
-          ...get().settings,
-          cloud: { ...get().settings.cloud, active_cloud_model_id: id },
-        };
-        set({ settings: nextSettings });
-        return nextSettings;
-      },
-      setActiveCloudModelIdAndPersist: async (id) => {
-        const nextSettings = get().setActiveCloudModelId(id);
-        await persistSettingsSnapshot(nextSettings);
-        return nextSettings;
-      },
+      setCloudModeEnabled: defineAutoPersist((current, enabled: boolean) => ({
+        ...current,
+        cloud: { ...current.cloud, cloud_mode_enabled: enabled },
+      })),
+
+      setCloudAccount: defineAutoPersist((current, account: CloudAccount | null) => ({
+        ...current,
+        cloud: { ...current.cloud, account },
+      })),
+
+      setCloudModels: defineAutoPersist((current, models: CloudModelEntry[]) => ({
+        ...current,
+        cloud: { ...current.cloud, cached_models: models },
+      })),
+
+      setActiveCloudModelId: defineAutoPersist((current, id: string | null) => ({
+        ...current,
+        cloud: { ...current.cloud, active_cloud_model_id: id },
+      })),
     }),
     {
       name: 'inkuo-settings',

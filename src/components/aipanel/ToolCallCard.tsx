@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import { Check, Loader2, FileEdit, Terminal, X, ChevronDown, ChevronRight } from 'lucide-react';
 import type { StreamDiffSummary } from '../../store';
+import { TIMING } from '../../constants/timing';
 import {
   getToolDisplayName,
   isFileModificationTool,
@@ -142,7 +143,7 @@ const ToolCardPreview: React.FC<{
     const el = previewRef.current;
     if (!el) return;
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    if (distanceFromBottom < 80) {
+    if (distanceFromBottom < TIMING.TOOL_CALL_AUTOSCROLL_THRESHOLD_PX) {
       el.scrollTop = el.scrollHeight;
     }
   }, [preview?.text, isStreamingArguments]);
@@ -300,7 +301,7 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = React.memo(function Too
     if (prevExecutingRef.current && !isExecuting) {
       const next: 'success' | 'error' = error ? 'error' : 'success';
       setJustFinished(next);
-      const t = window.setTimeout(() => setJustFinished(null), 1000);
+      const t = window.setTimeout(() => setJustFinished(null), TIMING.TOOL_CALL_JUST_FINISHED_HOLD_MS);
       prevExecutingRef.current = false;
       return () => window.clearTimeout(t);
     }
@@ -312,13 +313,16 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = React.memo(function Too
     [name, args, rawArguments, streamingContent]
   );
 
-  const dataAttrs: Record<string, string | undefined> = {
-    'data-tool-call-id': id,
-    'data-status': finalStatus,
-  };
-  if (justFinished) {
-    dataAttrs['data-just-finished'] = justFinished;
-  }
+  const dataAttrs = useMemo<Record<string, string | undefined>>(() => {
+    const attrs: Record<string, string | undefined> = {
+      'data-tool-call-id': id,
+      'data-status': finalStatus,
+    };
+    if (justFinished) {
+      attrs['data-just-finished'] = justFinished;
+    }
+    return attrs;
+  }, [id, finalStatus, justFinished]);
 
   return (
     <div className={`${styles.card} ${styles[finalStatus]}`} {...dataAttrs}>

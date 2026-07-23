@@ -8,7 +8,7 @@ import {
   History,
   PanelLeft
 } from 'lucide-react';
-import { useSidebarStore } from '../../store/sidebarStore';
+import { useSidebarStore } from '../../store';
 import styles from './ActivityBar.module.css';
 
 export type ViewType = 'files' | 'search' | 'git' | 'extensions' | 'knowledge' | 'snapshots';

@@ -18,7 +18,7 @@ type AuthMode = 'login' | 'register';
  * is removed for the GA build.
  */
 export const CloudAuthPanel = ({ onAuthSuccess }: CloudAuthPanelProps) => {
-  const setCloudAccountAndPersist = useSettingsStore((s) => s.setCloudAccountAndPersist);
+  const setCloudAccount = useSettingsStore((s) => s.setCloudAccount);
   const settings = useSettingsStore((s) => s.settings);
   const cloudBaseUrl = getCloudBaseUrl();
 
@@ -51,7 +51,7 @@ export const CloudAuthPanel = ({ onAuthSuccess }: CloudAuthPanelProps) => {
           ? await cloudApi.register(cloudBaseUrl, inviteCode.trim(), email.trim(), password)
           : await cloudApi.login(cloudBaseUrl, email.trim(), password);
 
-      await setCloudAccountAndPersist(account);
+      await setCloudAccount(account);
       await cloudApi.persistAccount({
         ...settings,
         cloud: { ...settings.cloud, account },

@@ -38,11 +38,11 @@ const DEFAULT_MAX_RESULTS = 5;
 
 export const WebSearchSettings = () => {
   const settings = useSettingsStore((state) => state.settings);
-  const updateWebSearchAndPersist = useSettingsStore(
-    (state) => state.updateWebSearchAndPersist
+  const updateWebSearch = useSettingsStore(
+    (state) => state.updateWebSearch
   );
-  const updateWebSearchProviderAndPersist = useSettingsStore(
-    (state) => state.updateWebSearchProviderAndPersist
+  const updateWebSearchProvider = useSettingsStore(
+    (state) => state.updateWebSearchProvider
   );
 
   const [showKey, setShowKey] = useState<Record<string, boolean>>({});
@@ -63,27 +63,27 @@ export const WebSearchSettings = () => {
   const currentRouting: WebSearchRouting = settings.web_search.routing;
 
   const handleToggleMaster = (next: boolean) => {
-    void updateWebSearchAndPersist({
+    void updateWebSearch({
       ...settings.web_search,
       enabled: next,
     });
   };
 
   const handleToggleProvider = (next: boolean) => {
-    void updateWebSearchProviderAndPersist(BAIKE_PROVIDER_ID, { enabled: next });
+    void updateWebSearchProvider(BAIKE_PROVIDER_ID, { enabled: next });
   };
 
   const handleApiKeyChange = (raw: string) => {
     // Preserve the empty string the user typed so they can intentionally
     // clear the key (the backend falls back to the default when the
     // key is empty, which is the desired UX).
-    void updateWebSearchProviderAndPersist(BAIKE_PROVIDER_ID, {
+    void updateWebSearchProvider(BAIKE_PROVIDER_ID, {
       apiKey: raw.trim() === '' ? null : raw,
     });
   };
 
   const handleBaseUrlChange = (raw: string) => {
-    void updateWebSearchProviderAndPersist(BAIKE_PROVIDER_ID, {
+    void updateWebSearchProvider(BAIKE_PROVIDER_ID, {
       baseUrl: raw.trim() === '' ? null : raw,
     });
   };
@@ -94,7 +94,7 @@ export const WebSearchSettings = () => {
       Number.isFinite(parsed) && parsed > 0
         ? Math.min(MAX_MAX_RESULTS, Math.max(MIN_MAX_RESULTS, parsed))
         : DEFAULT_MAX_RESULTS;
-    void updateWebSearchAndPersist({
+    void updateWebSearch({
       ...settings.web_search,
       maxResults: clamped,
     });
@@ -107,7 +107,7 @@ export const WebSearchSettings = () => {
     if (next === 'cloud' && !cloudRoutingAvailable) {
       return;
     }
-    void updateWebSearchAndPersist({
+    void updateWebSearch({
       ...settings.web_search,
       routing: next,
     });

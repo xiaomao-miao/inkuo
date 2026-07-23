@@ -110,8 +110,8 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onWorkspaceSelected })
   const [isLoading, setIsLoading] = useState(false);
   const pushNotification = useNotificationStore((state) => state.pushNotification);
   const settings = useSettingsStore((s) => s.settings);
-  const updateSettingAndPersist = useSettingsStore((s) => s.updateSettingAndPersist);
-  const setCloudAccountAndPersist = useSettingsStore((s) => s.setCloudAccountAndPersist);
+  const updateSetting = useSettingsStore((s) => s.updateSetting);
+  const setCloudAccount = useSettingsStore((s) => s.setCloudAccount);
 
   // 当前主题兼容历史别名:inkuo-dark 等价 graphite
   const currentTheme = (settings.theme === 'inkuo-dark' ? 'graphite' : settings.theme) as
@@ -216,7 +216,7 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onWorkspaceSelected })
 
   // ── 主题切换 ────────────────────────────────────────────────────
   const handleThemeChange = (id: 'graphite' | 'verdant' | 'iris' | 'inkuo-light') => {
-    void updateSettingAndPersist('theme', id);
+    void updateSetting('theme', id);
   };
 
   // ── Cloud submit ────────────────────────────────────────────────
@@ -237,7 +237,7 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onWorkspaceSelected })
         authMode === 'register'
           ? await cloudApi.register(cloudBaseUrl, inviteCode.trim(), email.trim(), password)
           : await cloudApi.login(cloudBaseUrl, email.trim(), password);
-      await setCloudAccountAndPersist(account);
+      await setCloudAccount(account);
       await cloudApi.persistAccount({
         ...settings,
         cloud: { ...settings.cloud, account },
@@ -265,7 +265,7 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onWorkspaceSelected })
   const handleCloudLogout = async () => {
     try {
       await cloudApi.logout();
-      await setCloudAccountAndPersist(null);
+      await setCloudAccount(null);
     } catch (err) {
       reportError('welcome-cloud-logout', err);
     }

@@ -14,7 +14,7 @@ import {
   FileSpreadsheet,
   FileType2,
 } from 'lucide-react';
-import { useSidebarStore } from '../../store/sidebarStore';
+import { useSidebarStore } from '../../store';
 import { useNotificationStore } from '../../store';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';

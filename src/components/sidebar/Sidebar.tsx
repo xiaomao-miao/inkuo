@@ -21,7 +21,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useWorkspaceSearch } from '../../hooks/useWorkspaceSearch';
 import { useWorkspaceTree } from '../../hooks/useWorkspaceTree';
-import { useSidebarStore } from '../../store/sidebarStore';
+import { useSidebarStore } from '../../store';
 import { FileTree } from './FileTree';
 import { ContextMenu } from './ContextMenu';
 import type { FileEntry } from '../../types';

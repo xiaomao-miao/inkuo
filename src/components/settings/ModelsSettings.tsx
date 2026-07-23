@@ -31,11 +31,11 @@ interface ModelsSettingsProps {
 
 export const ModelsSettings = ({ onClose }: ModelsSettingsProps) => {
   const settings = useSettingsStore((state) => state.settings);
-  const addApiConfigAndPersist = useSettingsStore((state) => state.addApiConfigAndPersist);
-  const updateApiConfigAndPersist = useSettingsStore((state) => state.updateApiConfigAndPersist);
-  const removeApiConfigAndPersist = useSettingsStore((state) => state.removeApiConfigAndPersist);
-  const setActiveApiConfigAndPersist = useSettingsStore((state) => state.setActiveApiConfigAndPersist);
-  const setDefaultApiConfigAndPersist = useSettingsStore((state) => state.setDefaultApiConfigAndPersist);
+  const addApiConfig = useSettingsStore((state) => state.addApiConfig);
+  const updateApiConfig = useSettingsStore((state) => state.updateApiConfig);
+  const removeApiConfig = useSettingsStore((state) => state.removeApiConfig);
+  const setActiveApiConfig = useSettingsStore((state) => state.setActiveApiConfig);
+  const setDefaultApiConfig = useSettingsStore((state) => state.setDefaultApiConfig);
   const pushNotification = useNotificationStore((state) => state.pushNotification);
 
   const [testingId, setTestingId] = useState<string | null>(null);
@@ -85,7 +85,7 @@ export const ModelsSettings = ({ onClose }: ModelsSettingsProps) => {
   };
 
   const handleAddConfig = async () => {
-    const nextSettings = await addApiConfigAndPersist({
+    const nextSettings = await addApiConfig({
       name: `API ${settings.apiConfigs.length + 1}`,
       provider: 'openai',
       baseUrl: 'https://api.openai.com/v1',
@@ -98,22 +98,22 @@ export const ModelsSettings = ({ onClose }: ModelsSettingsProps) => {
   };
 
   const handleRemoveConfig = async (id: string) => {
-    await removeApiConfigAndPersist(id);
+    await removeApiConfig(id);
     if (expandedId === id) {
       setExpandedId(null);
     }
   };
 
   const handleSelectConfig = async (id: string) => {
-    await setActiveApiConfigAndPersist(id);
+    await setActiveApiConfig(id);
   };
 
   const handleSetDefault = async (id: string) => {
-    await setDefaultApiConfigAndPersist(id);
+    await setDefaultApiConfig(id);
   };
 
   const handleUpdateConfig = async (id: string, updates: Partial<APIConfig>) => {
-    await updateApiConfigAndPersist(id, updates);
+    await updateApiConfig(id, updates);
   };
 
   const toggleShowApiKey = (id: string) => {

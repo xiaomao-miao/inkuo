@@ -89,7 +89,7 @@ const MOTION_SPECS: MotionSpec[] = [
 
 export const AppearanceSettings: React.FC = () => {
   const settings = useSettingsStore((s) => s.settings);
-  const updateSettingAndPersist = useSettingsStore((s) => s.updateSettingAndPersist);
+  const updateSetting = useSettingsStore((s) => s.updateSetting);
 
   // 动效档位存在 localStorage,不进 settings store
   const [motion, setMotion] = useState<MotionLevel>(() => {
@@ -120,7 +120,7 @@ export const AppearanceSettings: React.FC = () => {
   }, [motion, reduceMotion]);
 
   const handleThemeChange = (id: ThemeSpec['id']) => {
-    void updateSettingAndPersist('theme', id);
+    void updateSetting('theme', id);
   };
 
   return (

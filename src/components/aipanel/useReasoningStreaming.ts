@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useAIPanelStore } from '../../store';
 import { applyStreamingReasoningDeltas } from './reasoningStreamActions';
 import { TIMING } from '../../constants/timing';
@@ -107,6 +107,15 @@ export function useReasoningStreaming() {
     }
     sessionPendingRef.current = { deltas: {}, flushTimer: null };
   }, []);
+
+  // Mirror the unmount cleanup added to useTextStreaming. Without
+  // this, a queued reasoning flush could land in the store after the
+  // panel has torn down (see useTextStreaming for the full rationale).
+  useEffect(() => {
+    return () => {
+      resetReasoningStreaming();
+    };
+  }, [resetReasoningStreaming]);
 
   return {
     flushReasoningDeltas,

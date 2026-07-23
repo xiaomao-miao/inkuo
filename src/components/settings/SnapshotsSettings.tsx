@@ -5,8 +5,8 @@ import styles from './SettingsPanel.module.css';
 
 export const SnapshotsSettings = () => {
   const settings = useSettingsStore((state) => state.settings);
-  const updateSettingAndPersist = useSettingsStore(
-    (state) => state.updateSettingAndPersist
+  const updateSetting = useSettingsStore(
+    (state) => state.updateSetting
   );
   const [maxCountInput, setMaxCountInput] = useState(
     String(settings.snapshot.maxCount)
@@ -17,14 +17,14 @@ export const SnapshotsSettings = () => {
     const parsed = parseInt(value, 10);
     if (!Number.isFinite(parsed) || parsed < 1) return;
     const clamped = Math.min(Math.max(parsed, 1), 9999);
-    void updateSettingAndPersist('snapshot', {
+    void updateSetting('snapshot', {
       ...settings.snapshot,
       maxCount: clamped,
     });
   };
 
   const handleAutoBaselineChange = (checked: boolean) => {
-    void updateSettingAndPersist('snapshot', {
+    void updateSetting('snapshot', {
       ...settings.snapshot,
       autoBaseline: checked,
     });

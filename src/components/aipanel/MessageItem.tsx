@@ -43,7 +43,7 @@ interface MessageItemProps {
   entryDelayMs?: number;
 }
 
-export const MessageItem: React.FC<MessageItemProps> = ({
+const MessageItemImpl: React.FC<MessageItemProps> = ({
   message,
   isStreaming,
   activeToolCalls,
@@ -124,3 +124,17 @@ export const MessageItem: React.FC<MessageItemProps> = ({
 
   return null;
 };
+
+/**
+ * Memoised wrapper. The default shallow comparator is enough: every
+ * prop the parent passes is either a stable function ref (callbacks
+ * defined once in `AIPanel.tsx`), a primitive, or a store-derived
+ * value whose identity changes only when the underlying slice changes
+ * (`message`, `activeSession`, `activeToolCalls`).
+ *
+ * Without the memo, the trailing live message's stream updates would
+ * re-render every older `MessageItem` because `ChatView` re-renders
+ * on every streaming token. The memo keeps the older rows' React
+ * trees stable — only the streaming row's tree mutates.
+ */
+export const MessageItem = React.memo(MessageItemImpl);

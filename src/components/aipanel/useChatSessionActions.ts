@@ -11,6 +11,7 @@ import {
   type ChatSession,
   type PlanOutput,
 } from '../../store';
+import { nextChatMode } from '../../constants/chatModes';
 import { buildConversationHistory } from './messageTransform';
 import { extractErrorMessage } from '../../utils/errors';
 import {
@@ -23,7 +24,7 @@ import {
   generatePlanId,
   savePlanToFile,
 } from '../../services/planFiles';
-import { useNotificationStore } from '../../store/notificationStore';
+import { useNotificationStore } from '../../store';
 import type { AIProviderType } from '../../types';
 
 interface UseChatSessionActionsArgs {
@@ -397,9 +398,7 @@ export function useChatSessionActions({
 
   const cycleMode = useCallback(() => {
     if (!activeSession) return;
-    const order: ChatMode[] = ['ask', 'plan', 'agent'];
-    const idx = order.indexOf(mode);
-    useAIPanelStore.getState().setSessionMode(activeSession.id, order[(idx + 1) % order.length]);
+    useAIPanelStore.getState().setSessionMode(activeSession.id, nextChatMode(mode));
   }, [activeSession, mode]);
 
   /**

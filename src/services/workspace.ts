@@ -15,7 +15,7 @@ import type {
   RenamePathResult,
   TodoSnapshot,
 } from '../types';
-import type { ChatSession, WorkspaceSnapshot } from '../store/sidebarStore';
+import type { ChatSession, WorkspaceSnapshot } from '../store';
 
 // Single-flight queue for workspace switches. Without this, two calls to
 // `switchWorkspace` that fire in rapid succession (e.g. user picks "A",

@@ -34,8 +34,8 @@ type SettingsTab =
 
 export const SettingsPanel = () => {
   const settings = useSettingsStore((state) => state.settings);
-  const updateSettingAndPersist = useSettingsStore((state) => state.updateSettingAndPersist);
-  const setActiveApiConfigAndPersist = useSettingsStore((state) => state.setActiveApiConfigAndPersist);
+  const updateSetting = useSettingsStore((state) => state.updateSetting);
+  const setActiveApiConfig = useSettingsStore((state) => state.setActiveApiConfig);
   const enabled = useInlineCompleteStore((state) => state.enabled);
   const debounceMs = useInlineCompleteStore((state) => state.debounceMs);
   const setEnabled = useInlineCompleteStore((state) => state.setEnabled);
@@ -76,7 +76,7 @@ export const SettingsPanel = () => {
                     max="24"
                     value={settings.editor_font_size}
                     onChange={(e) => {
-                      void updateSettingAndPersist('editor_font_size', parseInt(e.target.value));
+                      void updateSetting('editor_font_size', parseInt(e.target.value));
                     }}
                     className={styles.range}
                   />
@@ -96,7 +96,7 @@ export const SettingsPanel = () => {
                     { value: 'Monaco, monospace', label: 'Monaco' },
                   ]}
                     onChange={(value) => {
-                      void updateSettingAndPersist('editor_font_family', value);
+                      void updateSetting('editor_font_family', value);
                     }}
                   className={styles.select}
                 />
@@ -117,7 +117,7 @@ export const SettingsPanel = () => {
                       type="checkbox"
                       checked={settings.editor_word_wrap}
                       onChange={(e) => {
-                        void updateSettingAndPersist('editor_word_wrap', e.target.checked);
+                        void updateSetting('editor_word_wrap', e.target.checked);
                       }}
                     />
                     <span className={styles.toggleSlider}></span>
@@ -134,7 +134,7 @@ export const SettingsPanel = () => {
                       type="checkbox"
                       checked={settings.editor_line_numbers}
                       onChange={(e) => {
-                        void updateSettingAndPersist('editor_line_numbers', e.target.checked);
+                        void updateSetting('editor_line_numbers', e.target.checked);
                       }}
                     />
                     <span className={styles.toggleSlider}></span>
@@ -178,7 +178,7 @@ export const SettingsPanel = () => {
                     value={settings.activeApiConfigId || ''}
                     options={modelOptions}
                     onChange={(value) => {
-                      void setActiveApiConfigAndPersist(value);
+                      void setActiveApiConfig(value);
                     }}
                     className={styles.select}
                   />
@@ -282,7 +282,7 @@ export const SettingsPanel = () => {
                     step={1}
                     value={settings.agent_max_iterations}
                     onChange={(e) => {
-                      void updateSettingAndPersist(
+                      void updateSetting(
                         'agent_max_iterations',
                         parseInt(e.target.value, 10)
                       );
@@ -457,8 +457,8 @@ const ExpertIterationsSettings = () => {
   const expertMaxIterations = useSettingsStore(
     (state) => state.settings.expert_max_iterations
   );
-  const updateSettingAndPersist = useSettingsStore(
-    (state) => state.updateSettingAndPersist
+  const updateSetting = useSettingsStore(
+    (state) => state.updateSetting
   );
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
@@ -476,11 +476,11 @@ const ExpertIterationsSettings = () => {
     for (const key of EXPERT_ORDER) {
       next[key] = value;
     }
-    void updateSettingAndPersist('expert_max_iterations', next);
+    void updateSetting('expert_max_iterations', next);
   };
 
   const setExpert = (key: ExpertProfileName, value: number) => {
-    void updateSettingAndPersist('expert_max_iterations', {
+    void updateSetting('expert_max_iterations', {
       ...expertMaxIterations,
       [key]: value,
     });

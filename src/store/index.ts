@@ -7,13 +7,14 @@ export {
   type KnowledgeBase as SidebarKnowledgeBase,
   type BuildProgress as SidebarBuildProgress,
   type InlineEditState,
+  type WorkspaceSnapshot,
 } from './sidebarStore';
 export { useAIPanelStore } from './aiPanelStore';
 export { useLayoutStore } from './layoutStore';
 export { useSettingsStore } from './settingsStore';
 export { useCmdKStore } from './cmdKStore';
 export { useInlineCompleteStore } from './inlineCompleteStore';
-export { useNotificationStore } from './notificationStore';
+export { useNotificationStore, type NotificationItem } from './notificationStore';
 export { useBaselineStore } from './baselineStore';
 export { useClipboardStore, type ClipboardMode, type ClipboardState } from './clipboardStore';
 export {

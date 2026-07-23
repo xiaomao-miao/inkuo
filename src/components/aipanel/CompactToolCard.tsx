@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Check, Loader2, X, FolderOpen, FileText, Search, FolderPlus, Move, Terminal } from 'lucide-react';
+import { TIMING } from '../../constants/timing';
 import { getToolDisplayName, extractFileNameFromPath } from './toolUtils';
 import styles from './ToolCallCard.module.css';
 
@@ -57,20 +58,23 @@ export const CompactToolCard: React.FC<CompactToolCardProps> = React.memo(functi
     if (prevExecutingRef.current && !isExecuting) {
       const next: 'success' | 'error' = error ? 'error' : 'success';
       setJustFinished(next);
-      const t = window.setTimeout(() => setJustFinished(null), 1000);
+      const t = window.setTimeout(() => setJustFinished(null), TIMING.TOOL_CALL_JUST_FINISHED_HOLD_MS);
       prevExecutingRef.current = false;
       return () => window.clearTimeout(t);
     }
     prevExecutingRef.current = isExecuting;
   }, [isExecuting, error]);
 
-  const dataAttrs: Record<string, string | undefined> = {
-    'data-tool-call-id': id,
-    'data-status': status,
-  };
-  if (justFinished) {
-    dataAttrs['data-just-finished'] = justFinished;
-  }
+  const dataAttrs = React.useMemo<Record<string, string | undefined>>(() => {
+    const attrs: Record<string, string | undefined> = {
+      'data-tool-call-id': id,
+      'data-status': status,
+    };
+    if (justFinished) {
+      attrs['data-just-finished'] = justFinished;
+    }
+    return attrs;
+  }, [id, status, justFinished]);
 
   return (
     <div className={`${styles.compactCard} ${styles[status]}`} {...dataAttrs}>

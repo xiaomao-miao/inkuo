@@ -48,13 +48,6 @@ interface ChatViewProps {
  * up to (or past) this line before the expansion fires — passive
  * arrival at the placeholder's position is enough.
  */
-const HISTORY_AUTOLOAD_SCROLL_PX = 64;
-/**
- * Cooldown between consecutive history unfold batches (ms). Prevents
- * rapid scroll-up from firing 5 expansions in one frame, which would
- * blow through the threshold all at once and re-introduce the perf
- * regression the placeholder is meant to fix.
- */
 const HISTORY_AUTOLOAD_COOLDOWN_MS = 160;
 
 export const ChatView: React.FC<ChatViewProps> = ({
@@ -138,7 +131,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     autoExpandRef.current = setTimeout(() => {
       useAIPanelStore.getState().autoExpandTruncatedPrefixes(activeSession.id);
       autoExpandRef.current = null;
-    }, 120);
+    }, TIMING.HISTORY_AUTOLOAD_DEBOUNCE_MS);
   };
 
   useEffect(() => {
@@ -161,6 +154,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
    * from the store, so any subsequent `expandCollapsedHistory` /
    * `hardCollapseHistory` call is reflected on the next render
    * without us needing to copy state here.
+   *
+   * Note on deps: streaming token deltas mutate the trailing message's
+   * `outputItems`/`content` in place. The store's `setState` always
+   * produces a fresh `messages` reference, so depending on the array
+   * is unavoidable — but the partition work itself is cheap (single
+   * linear scan to the first non-collapsed message, typically the
+   * head). The previous version was fine on the hot path; the
+   * optimizations that actually matter for this render are below
+   * (memo on `MessageItem`, Map lookups in `OutputItemView`).
    */
   const partition = useMemo(() => {
     let firstLiveIndex = 0;
@@ -200,7 +202,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const now = Date.now();
     if (now - lastExpandAtRef.current < HISTORY_AUTOLOAD_COOLDOWN_MS) return;
     const el = contentRef.current;
-    if (el.scrollTop > HISTORY_AUTOLOAD_SCROLL_PX) return;
+    if (el.scrollTop > TIMING.HISTORY_AUTOLOAD_SCROLL_PX) return;
     // Are there still collapsed messages to release?
     const stillCollapsed = messages.some((m) => m.collapsed);
     if (!stillCollapsed) return;

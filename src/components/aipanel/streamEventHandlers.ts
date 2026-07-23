@@ -3,7 +3,8 @@ import { invoke } from '@tauri-apps/api/core';
 import { useAIPanelStore, useEditorStore, useSidebarStore } from '../../store';
 import type { ChatMode, CurrentDiff } from '../../store';
 import { normalizeSearchResults } from './messageTransform';
-import { TOOL_CALL_CLEAR_DELAY_MS, type StreamPayload } from './streamTypes';
+import { TIMING } from '../../constants/timing';
+import type { StreamPayload } from './streamTypes';
 import {
   applyMessageSearchResults,
   applyStreamingError,
@@ -43,7 +44,7 @@ export async function handleStreamDone({
 
   delete streamingContentRef.current[message_id];
 
-  setTimeout(() => clearToolCalls(session_id), TOOL_CALL_CLEAR_DELAY_MS);
+  setTimeout(() => clearToolCalls(session_id), TIMING.TOOL_CALL_CLEAR_DELAY_MS);
 
   if (normalizedSearchResults) {
     useAIPanelStore.setState((state) =>

@@ -8,9 +8,9 @@
  */
 
 import { useCallback } from 'react';
-import { useNotificationStore } from '../../store/notificationStore';
-import { useConfirmDialogStore } from '../../store/confirmDialogStore';
-import { useSidebarStore } from '../../store/sidebarStore';
+import { useNotificationStore } from '../../store';
+import { useConfirmDialogStore } from '../../store';
+import { useSidebarStore } from '../../store';
 import {
   collectWorkspaceFiles,
   collectWorkspaceEmptyDirs,

@@ -57,6 +57,24 @@ export const AssistantMessageBody: React.FC<AssistantMessageBodyProps> = ({
   const openWorkspaceFile = useSidebarStore((s) => s.openWorkspaceFile);
   const toggleSubagentActivityExpanded = useAIPanelStore((s) => s.toggleSubagentActivityExpanded);
 
+  /**
+   * Precompute a toolCallId → toolCall map for O(1) lookups in
+   * `OutputItemView`. Without this, every tool-result render triggers
+   * an O(n) `find()` over `message.toolCalls`, and `AssistantMessageBody`
+   * re-renders on every streaming token — so the total work was O(n×m)
+   * per token for n output items × m tool calls. With the map the
+   * per-token cost collapses to O(1) per lookup.
+   *
+   * The map is recomputed only when the underlying `toolCalls` array
+   * identity changes, which is exactly when it could differ.
+   */
+  const toolCallMap = React.useMemo(() => {
+    if (!message.toolCalls || message.toolCalls.length === 0) {
+      return null;
+    }
+    return new Map(message.toolCalls.map((tc) => [tc.id, tc]));
+  }, [message.toolCalls]);
+
   const handleFileClick = React.useCallback((filePath: string) => {
     openWorkspaceFile(filePath, { forceNew: true });
   }, [openWorkspaceFile]);
@@ -81,6 +99,7 @@ export const AssistantMessageBody: React.FC<AssistantMessageBodyProps> = ({
           onApplyPlan={onApplyPlan}
           onAdjustPlan={onAdjustPlan}
           onSavePlan={onSavePlan}
+          toolCallMap={toolCallMap}
         />
       ))}
       {/* Legacy content path */}
@@ -111,6 +130,13 @@ interface OutputItemViewProps {
   onApplyPlan?: (messageId: string, plan: PlanOutput) => void;
   onAdjustPlan?: (messageId: string, plan: PlanOutput) => void;
   onSavePlan?: (messageId: string) => Promise<void>;
+  /**
+   * Precomputed toolCallId → toolCall map. Passing it down (instead of
+   * doing a per-item `find`) keeps tool-result rendering O(1) instead
+   * of O(n) per item, which matters because `OutputItemView` re-renders
+   * on every streaming token.
+   */
+  toolCallMap?: Map<string, NonNullable<ChatMessage['toolCalls']>[number]> | null;
 }
 
 const OutputItemView: React.FC<OutputItemViewProps> = ({
@@ -125,6 +151,7 @@ const OutputItemView: React.FC<OutputItemViewProps> = ({
   onApplyPlan,
   onAdjustPlan,
   onSavePlan,
+  toolCallMap,
 }) => {
   if (item.type === 'text') {
     return (
@@ -246,7 +273,10 @@ const OutputItemView: React.FC<OutputItemViewProps> = ({
   }
 
   if (item.type === 'tool_result') {
-    const toolCall = message.toolCalls?.find((tc) => tc.id === item.toolCallId);
+    // O(1) lookup via the map computed once per message in
+    // AssistantMessageBody. Falls back to undefined (same semantics as
+    // the old `find()` returning undefined) when no map was passed.
+    const toolCall = toolCallMap?.get(item.toolCallId);
     const toolName = toolCall?.name || 'unknown';
 
     if (toolName === 'delegate_to') {
@@ -446,6 +476,17 @@ const LegacyMessageContent: React.FC<LegacyMessageContentProps> = ({
   workspacePath,
   onSubagentToggle,
 }) => {
+  /**
+   * Map for O(1) tool-call lookups. Built once per render so the
+   * `.map(result => ...)` body below stays O(n) instead of O(n×m).
+   */
+  const toolCallMap = React.useMemo(() => {
+    if (!message.toolCalls || message.toolCalls.length === 0) {
+      return null;
+    }
+    return new Map(message.toolCalls.map((tc) => [tc.id, tc]));
+  }, [message.toolCalls]);
+
   return (
     <>
       {isThisStreaming && activeToolCalls.map((tc) => (
@@ -474,7 +515,7 @@ const LegacyMessageContent: React.FC<LegacyMessageContentProps> = ({
         <div className={styles.toolOnlyPlaceholder}>工具执行完成</div>
       ) : null}
       {message.toolResults?.map((result) => {
-        const toolCall = message.toolCalls?.find((tc) => tc.id === result.toolCallId);
+        const toolCall = toolCallMap?.get(result.toolCallId);
         const toolName = toolCall?.name || 'unknown';
         if (toolName === 'delegate_to') {
           const args = toolCall?.arguments || {};

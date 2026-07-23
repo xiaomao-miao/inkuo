@@ -1,16 +1,14 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useSidebarStore } from '../store';
 import type { FileEntry } from '../types';
-import { useWorkspaceFileWatcher } from './useWorkspaceFileWatcher';
+import {
+  useWorkspaceFileWatcher,
+  type FileChangePayload,
+} from './useWorkspaceFileWatcher';
 import { useDebouncedCallback } from './useDebouncedCallback';
 import { loadDirectoryChildren } from '../services/workspace';
 import { reportError } from '../utils/errors';
-import { getRelativePath, isPathInside, normalizeDirPath } from '../utils/path';
-
-interface FileChangeEvent {
-  type: string;
-  data: { path: string };
-}
+import { getParentDirPath, isPathInside, normalizeDirPath } from '../utils/path';
 
 interface UseWorkspaceTreeResult {
   workspacePath: string | null;
@@ -160,7 +158,7 @@ export function useWorkspaceTree(): UseWorkspaceTreeResult {
    * need to invalidate. We debounce to coalesce bursts.
    */
   const handleFileChange = useCallback(
-    (event: FileChangeEvent) => {
+    (event: FileChangePayload) => {
       if (!normalizedWorkspacePath) return;
 
       const changedPath = event.data?.path;
@@ -217,27 +215,4 @@ export function useWorkspaceTree(): UseWorkspaceTreeResult {
     onDirectoryClick,
     refreshDirectory,
   };
-}
-
-/**
- * Return the directory that contains `filePath`, rooted at `workspaceRoot`.
- * Both inputs are normalised first so the math is separator-agnostic.
- *
- *   getParentDirPath('/root', '/root/a.md')           === '/root'
- *   getParentDirPath('/root', '/root/sub/b.md')      === '/root/sub'
- *   getParentDirPath('/root', '/root/sub/nested/c')  === '/root/sub/nested'
- */
-function getParentDirPath(filePath: string, workspaceRoot: string): string | null {
-  const normalizedRoot = normalizeDirPath(workspaceRoot);
-  if (!normalizedRoot) return null;
-
-  const relativePath = getRelativePath(normalizedRoot, filePath);
-  if (!relativePath) return normalizedRoot;
-
-  const segments = relativePath.split('/').filter(Boolean);
-  if (segments.length <= 1) return normalizedRoot;
-
-  return segments
-    .slice(0, -1)
-    .reduce((acc, segment) => `${acc}/${segment}`, normalizedRoot);
 }

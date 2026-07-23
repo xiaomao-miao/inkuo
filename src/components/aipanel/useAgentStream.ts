@@ -5,7 +5,7 @@ import {
   type ChatMode,
 } from '../../store';
 import type { StreamPayload } from './streamTypes';
-import { dispatchStreamEvent } from './streamEventDispatcher';
+import { dispatchStreamEvent, resetStreamDispatcherState } from './streamEventDispatcher';
 import { useTextStreaming } from './useTextStreaming';
 import { useReasoningStreaming } from './useReasoningStreaming';
 import { useToolCallStreaming } from './useToolCallStreaming';
@@ -105,5 +105,19 @@ export function useAgentStream({ mode }: UseAgentStreamArgs) {
     };
     // Register once. Inner callbacks read from refs to stay up-to-date.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /**
+   * Drop module-level dispatch state when the panel tears down so the
+   * next mount doesn't inherit stale category/buffer maps. Without
+   * this, an aborted stream's lastCategory entry could persist across
+   * mounts and skip the flush-on-category-change branch on the next
+   * stream's first event, causing the first chunk to land out of
+   * order relative to any preceding sub-agent activity.
+   */
+  useEffect(() => {
+    return () => {
+      resetStreamDispatcherState();
+    };
   }, []);
 }

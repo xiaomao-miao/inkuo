@@ -9,6 +9,23 @@ interface ImageViewerProps {
 }
 
 /**
+ * Module-scoped worker URL promise. `import('.../pdf.worker.min.mjs?url')`
+ * is a Vite-managed asset reference that returns a string pointing at
+ * the worker's hashed file in `dist/assets/`. Vite resolves this once
+ * per build and caches it; we cache the resulting string so we don't
+ * pay the import cost on every page render.
+ */
+let workerUrlPromise: Promise<string> | null = null;
+function getWorkerUrl(): Promise<string> {
+  if (!workerUrlPromise) {
+    workerUrlPromise = import(
+      'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
+    ).then((m) => m.default);
+  }
+  return workerUrlPromise;
+}
+
+/**
  * In-app PDF viewer powered by `pdfjs-dist` v4.
  *
  * Implementation notes:
@@ -18,7 +35,8 @@ interface ImageViewerProps {
  *   - The worker is loaded via the same legacy build using
  *     `GlobalWorkerOptions.workerSrc`. The legacy worker is shipped as
  *     `pdfjs-dist/legacy/build/pdf.worker.min.mjs`. Vite resolves it
- *     as a static asset.
+ *     as a static asset, and we cache the resulting URL at module
+ *     scope so it's only fetched once per session.
  *   - We decimate large pages into an off-screen canvas at a chosen
  *     scale so that 50–200 page PDFs stay interactive.
  *   - Rendering is intentionally **read-only** (no annotations, no
@@ -68,12 +86,10 @@ export const PdfViewer: React.FC<ImageViewerProps> = ({ filePath }) => {
     (async () => {
       try {
         const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-        // Use the same legacy build as the worker — both bundles are
-        // shipped by the `pdfjs-dist` package and Vite will resolve
-        // them as static assets from `node_modules`.
-        const workerSrc = (await import(
-          'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
-        )).default;
+        // Worker URL is cached at module scope — see `getWorkerUrl`.
+        // First call resolves the Vite asset URL; subsequent renders
+        // (page change, zoom, file swap) hit the in-memory promise.
+        const workerSrc = await getWorkerUrl();
         if (cancelled) return;
 
         pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;

@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { useAIPanelStore, type ChatMode } from '../../store';
 import { buildKnowledgeToolbarModel } from './knowledgeToolbarModel';
 import { useKnowledgeBase } from './useKnowledgeBase';
+import { DEFAULT_CHAT_MODE } from '../../constants/chatModes';
 
 export function useAIPanelController() {
   const sessions = useAIPanelStore((state) => state.sessions);
@@ -30,7 +31,7 @@ export function useAIPanelController() {
   const messages = activeSession?.messages ?? [];
   const isStreaming = activeSession?.isStreaming ?? false;
   const pendingDiff = activeSession?.pendingDiff ?? null;
-  const mode: ChatMode = activeSession?.mode ?? 'ask';
+  const mode: ChatMode = activeSession?.mode ?? DEFAULT_CHAT_MODE;
   const activeToolCalls = activeSession?.activeToolCalls ?? [];
 
   const {

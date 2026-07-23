@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { History, Plus, RotateCcw, Trash2, X, Search, Bot, Camera, FolderOpen, SearchX } from 'lucide-react';
 import { listSnapshots, type SnapshotIndexEntry } from '../../services/snapshots';
-import { useSidebarStore } from '../../store/sidebarStore';
+import { useSidebarStore } from '../../store';
 import { useSnapshotActions } from './useSnapshotActions';
 import { Skeleton, SkeletonGroup } from '../common/Skeleton';
 import { SnapshotRestoreDialog } from './SnapshotRestoreDialog';

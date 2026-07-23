@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { CheckCircle2, Info, XCircle, X } from 'lucide-react';
 import { useNotificationStore } from '../../store';
-import type { NotificationItem } from '../../store/notificationStore';
+import type { NotificationItem } from '../../store';
 import styles from './NotificationStack.module.css';
 
 /**

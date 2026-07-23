@@ -1,9 +1,9 @@
 import { useEffect, useRef } from 'react';
-import { useSidebarStore } from '../store/sidebarStore';
+import { useSidebarStore } from '../store';
 import { useAIPanelStore } from '../store';
 import { createNewSession } from '../store/aiPanelReducers';
 import { loadSnapshot } from '../services/workspace';
-import type { WorkspaceSnapshot } from '../store/sidebarStore';
+import type { WorkspaceSnapshot } from '../store';
 import type { TodoSnapshot } from '../types';
 
 /**

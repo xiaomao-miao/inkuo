@@ -512,3 +512,26 @@ export async function dispatchStreamEvent({
  * state isolation between concurrent streams on different messages.
  */
 const lastCategoryByMessage = new Map<string, BufferCategory>();
+
+/**
+ * Drop all module-level dispatch state.
+ *
+ * Call this when the AI panel unmounts (or on HMR / hot reload) so the
+ * next mount starts from a clean slate. Without this, leftover entries
+ * from a previous mount can misroute the first events of a fresh stream
+ * — most visibly, a stale `lastCategory` from an aborted prior stream
+ * can cause the dispatcher's first event to skip its flush-on-category-
+ * change branch.
+ *
+ * Safe to call multiple times; idempotent.
+ */
+export function resetStreamDispatcherState(): void {
+  subagentActivityMap.clear();
+  subagentBuffers.clear();
+  lastCategoryByMessage.clear();
+  pendingFlushCallbacks.clear();
+  if (subagentFlushTimer !== null) {
+    clearTimeout(subagentFlushTimer);
+    subagentFlushTimer = null;
+  }
+}

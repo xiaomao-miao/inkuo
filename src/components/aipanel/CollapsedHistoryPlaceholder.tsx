@@ -47,7 +47,7 @@ interface CollapsedHistoryPlaceholderProps {
  * messages on every streaming token. Per-message truncation caps a
  * single message body; this card caps the message list itself.
  */
-export const CollapsedHistoryPlaceholder: React.FC<CollapsedHistoryPlaceholderProps> = ({
+export const CollapsedHistoryPlaceholder: React.FC<CollapsedHistoryPlaceholderProps> = React.memo(({
   hiddenCount,
   busy,
   onLoadEarlier,
@@ -86,4 +86,5 @@ export const CollapsedHistoryPlaceholder: React.FC<CollapsedHistoryPlaceholderPr
       </div>
     </div>
   );
-};
+});
+CollapsedHistoryPlaceholder.displayName = 'CollapsedHistoryPlaceholder';

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Brain, ChevronRight } from 'lucide-react';
+import { TIMING } from '../../constants/timing';
 import styles from './AIPanelMessage.module.css';
 
 interface ReasoningBlockProps {
@@ -57,7 +58,7 @@ export const ReasoningBlock: React.FC<ReasoningBlockProps> = ({
   useEffect(() => {
     if (completed) return;
     if (startRef.current === null) startRef.current = Date.now();
-    const id = setInterval(() => force((n) => n + 1), 250);
+    const id = setInterval(() => force((n) => n + 1), TIMING.REASONING_ELAPSED_TICK_MS);
     return () => clearInterval(id);
   }, [completed]);
 
