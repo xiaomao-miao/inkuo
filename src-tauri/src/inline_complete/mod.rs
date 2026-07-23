@@ -146,6 +146,8 @@ type CancelRegistry = parking_lot::Mutex<HashMap<String, Arc<Notify>>>;
 static INLINE_CANCEL_REGISTRY: std::sync::OnceLock<CancelRegistry> =
     std::sync::OnceLock::new();
 
+// ── Cancel registry ─────────────────────────────────────────────────────────────
+
 fn inline_cancel_registry() -> &'static CancelRegistry {
     INLINE_CANCEL_REGISTRY.get_or_init(|| parking_lot::Mutex::new(HashMap::new()))
 }
@@ -255,6 +257,8 @@ fn extract_context(document: &str, cursor_pos: usize, context_lines: usize) -> (
 
     (context, cursor_in_context)
 }
+
+// ── Prompt construction ─────────────────────────────────────────────────────────
 
 /// Build prompt for inline completion
 fn build_completion_prompt(

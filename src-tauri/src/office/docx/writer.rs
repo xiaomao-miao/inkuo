@@ -132,6 +132,9 @@ pub(crate) fn build_field_run_xml(run: &FontRun, field: &FieldRef) -> String {
 /// is the inverse of `parse_field_instr` and must stay in sync with
 /// it. The leading space and trailing space match Word's own emit
 /// style (` PAGE `) so the field is recognised on round-trip.
+
+// ── Field instructions ─────────────────────────────────────────────────────────
+
 pub fn field_instr_text(field: &FieldRef) -> String {
     match field {
         FieldRef::Page => " PAGE ".to_string(),
@@ -149,6 +152,8 @@ pub fn field_instr_text(field: &FieldRef) -> String {
         FieldRef::Custom { instr } => format!(" {} ", instr),
     }
 }
+
+// ── Document builder ─────────────────────────────────────────────────────────────
 
 pub fn build_document_xml(doc: &WordDocument) -> String {
     let mut xml = String::from(
@@ -501,6 +506,8 @@ pub(crate) fn emit_text_direction(v: &str) -> &str {
         other => other,
     }
 }
+
+// ── Section-break helpers ────────────────────────────────────────────────────────
 
 /// Find section-break marker paragraphs in the body. A marker is any
 /// paragraph whose `id` looks like `__sect_break_<idx>__`. Returns
