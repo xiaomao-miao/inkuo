@@ -1,0 +1,29 @@
+# Cloud-server (.NET) ignores — keep build artifacts and secrets local.
+bin/
+obj/
+out/
+*.user
+*.suo
+.vs/
+*.dll
+*.pdb
+*.exe
+
+# .NET test results / coverage
+TestResults/
+coverage/
+*.coverage
+*.coveragexml
+
+# Local-only DataProtection keys (the docker-compose.yml mounts a named
+# volume for these in production; locally we keep them out of git).
+dp-keys/
+keys.xml
+
+# Per-user / per-environment .env (only .env.example is tracked)
+.env
+!.env.example
+
+# Rider / VSCode leftovers
+.idea/
+.vscode/
