@@ -387,6 +387,8 @@ fn resolve_routing(routing: &str) -> ResolvedRouting {
     }
 }
 
+// ── Local search ────────────────────────────────────────────────────────────────
+
 impl WebSearchTool {
     /// Forward the search to the cloud server. The server is responsible
     /// for picking the operator-configured API key + base URL, billing,

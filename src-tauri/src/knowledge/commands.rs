@@ -135,6 +135,8 @@ pub(crate) fn emit_model_download_progress(
     emit_event(app, "model-download-progress", payload);
 }
 
+// ── Vector store registry ───────────────────────────────────────────────────────
+
 /// Initialize the shared cache. Called once during app startup.
 pub fn register_shared_stores() {
     let _ = shared_stores();
@@ -383,6 +385,8 @@ async fn search_knowledge_base_inner(
         .map_err(|e| KnowledgeCommandError::Search(e.to_string()))
 }
 
+// ── Knowledge commands (Tauri handlers) ─────────────────────────────────────────
+
 #[tauri::command]
 pub async fn knowledge_search(
     app: AppHandle,
@@ -570,6 +574,8 @@ pub async fn knowledge_update(
         updated: new_chunks.len(),
     })
 }
+
+// ── Model management ────────────────────────────────────────────────────────────
 
 #[tauri::command]
 pub async fn knowledge_clear(workspace_path: String) -> Result<(), KnowledgeCommandError> {
@@ -846,6 +852,8 @@ pub async fn knowledge_remove_members(
     })
 }
 
+// ── Members / listing ───────────────────────────────────────────────────────────
+
 /// Get the list of member file paths in the knowledge base
 #[tauri::command]
 pub fn knowledge_get_members(
@@ -902,6 +910,8 @@ pub(crate) fn resolve_model_dir(app: &AppHandle, model_name: &str) -> Option<Pat
 
     first_existing_path(candidates)
 }
+
+// ── Model commands ───────────────────────────────────────────────────────────────
 
 // Thin `#[tauri::command]` wrappers around the canonical
 // implementations in `embedding_models.rs`. They live here (rather than
