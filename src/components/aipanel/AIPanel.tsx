@@ -37,6 +37,7 @@ export const AIPanel: React.FC = () => {
     editingContent,
     setEditingContent,
     handleSend,
+    sendWithPrompt,
     handleStop,
     cycleMode,
     handleStartEdit,
@@ -126,6 +127,8 @@ export const AIPanel: React.FC = () => {
               onApplyPlan={handleApplyPlan}
               onAdjustPlan={handleAdjustPlan}
               onSavePlan={handleSavePlan}
+              onRunPrompt={sendWithPrompt}
+              selectionToolbarDisabled={isStreaming}
             />
           </div>
         </div>

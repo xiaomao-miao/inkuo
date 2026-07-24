@@ -28,6 +28,7 @@ export function useChatComposer({
 
   const {
     handleSend,
+    sendWithPrompt,
     handleStop,
     cycleMode,
     handleSaveEdit,
@@ -54,6 +55,7 @@ export function useChatComposer({
     editingContent,
     setEditingContent,
     handleSend,
+    sendWithPrompt,
     handleStop,
     cycleMode,
     handleStartEdit: startEdit,

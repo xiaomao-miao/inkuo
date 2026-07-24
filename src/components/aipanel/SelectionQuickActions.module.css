@@ -1,0 +1,116 @@
+/*
+ * Floating toolbar that appears above/below the user's text selection
+ * inside the AI panel. `position: fixed` because the selection's
+ * bounding rect is in viewport coords and we don't want to fight any
+ * ancestor `transform` / `overflow` setups.
+ */
+.toolbar {
+  position: fixed;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  background-color: var(--bg-elevated, var(--bg-secondary));
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  box-shadow:
+    0 6px 16px rgba(0, 0, 0, 0.18),
+    0 2px 4px rgba(0, 0, 0, 0.08);
+  backdrop-filter: blur(8px);
+  font-size: 12px;
+  color: var(--fg-primary);
+  user-select: none;
+  cursor: default;
+  animation: toolbarFadeIn 120ms ease-out;
+  /* The toolbar must never propagate focus or trigger the host's
+   * "outside click" handler. We rely on stopPropagation in the
+   * pointerdown handlers, but adding outline:none here keeps the
+   * focus ring from drawing twice when the toolbar is keyboard
+   * focused. */
+  outline: none;
+}
+
+@keyframes toolbarFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Per-action button. The data-focused attribute is set via the
+ * keyboard arrow / hover handlers so the focused preset is always
+ * visually highlighted. */
+.action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: none;
+  background: transparent;
+  color: var(--fg-secondary);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition:
+    color var(--motion-fast, 120ms) var(--motion-out, ease-out),
+    background-color var(--motion-fast, 120ms) var(--motion-out, ease-out);
+}
+
+.action:hover,
+.action[data-focused] {
+  color: var(--accent-primary);
+  background-color: var(--accent-subtle, rgba(99, 102, 241, 0.12));
+}
+
+.action:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 1px;
+}
+
+.icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: inherit;
+}
+
+.label {
+  line-height: 1;
+}
+
+.divider {
+  width: 1px;
+  height: 18px;
+  background-color: var(--border-color);
+  margin: 0 4px;
+  opacity: 0.6;
+}
+
+.dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
+  border-radius: 6px;
+  cursor: pointer;
+  transition:
+    color var(--motion-fast, 120ms) var(--motion-out, ease-out),
+    background-color var(--motion-fast, 120ms) var(--motion-out, ease-out);
+}
+
+.dismiss:hover {
+  color: var(--fg-primary);
+  background-color: var(--bg-tertiary);
+}

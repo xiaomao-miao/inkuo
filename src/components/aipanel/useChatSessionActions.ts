@@ -383,6 +383,28 @@ export function useChatSessionActions({
     await sendMessage();
   }, [sendMessage]);
 
+  /**
+   * Send a fully-formed prompt without going through the composer
+   * input. Used by the floating selection toolbar: we don't want to
+   * yank the user's in-progress input away just because they selected
+   * a sentence to ask about. Same guards as `sendMessage` (no
+   * streaming). Unlike `sendMessage`, this route also refuses to
+   * reinterpret the request as an "edit + resend" — a toolbar click
+   * while the user is editing an earlier message is a fresh ask, not
+   * a regenerate of the previous turn.
+   */
+  const sendWithPrompt = useCallback(async (prompt: string) => {
+    if (!activeSession) return;
+    const instruction = prompt.trim();
+    if (!instruction || isStreaming) return;
+    if (editingMessageId !== null) {
+      // Drop the in-progress edit first so the existing sendMessage
+      // path doesn't rewrite the message-id-in-progress.
+      clearEditingState();
+    }
+    await sendMessage(instruction);
+  }, [activeSession, isStreaming, editingMessageId, clearEditingState, sendMessage]);
+
   const handleStop = useCallback(async () => {
     if (!activeSession) return;
     try {
@@ -503,6 +525,7 @@ export function useChatSessionActions({
 
   return {
     handleSend,
+    sendWithPrompt,
     handleStop,
     cycleMode,
     handleSaveEdit,

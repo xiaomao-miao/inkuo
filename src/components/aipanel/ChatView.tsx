@@ -3,6 +3,7 @@ import { InlineDiffPreview } from './InlineDiffPreview';
 import { ChatEmptyState } from './ChatEmptyState';
 import { CollapsedHistoryPlaceholder } from './CollapsedHistoryPlaceholder';
 import { MessageItem } from './MessageItem';
+import { SelectionQuickActions } from './SelectionQuickActions';
 import { useAIPanelStore } from '../../store';
 import { TIMING } from '../../constants/timing';
 import type {
@@ -40,6 +41,14 @@ interface ChatViewProps {
    */
   onSavePlan?: (messageId: string) => Promise<void>;
   footer?: React.ReactNode;
+  /**
+   * Dispatch a fully-formed prompt for the floating selection toolbar.
+   * `null` while the panel is still wiring up — the toolbar stays
+   * hidden in that case so we never try to send with no handler.
+   */
+  onRunPrompt?: (prompt: string) => Promise<void> | void;
+  /** Disable the selection toolbar (e.g. while the AI is streaming). */
+  selectionToolbarDisabled?: boolean;
 }
 
 /**
@@ -68,6 +77,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onAdjustPlan,
   onSavePlan,
   footer,
+  onRunPrompt,
+  selectionToolbarDisabled = false,
 }) => {
   const contentRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef(true);
@@ -306,7 +317,16 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
   if (messages.length === 0) {
     return (
-      <div className={styles.content} ref={contentRef}>
+      <div
+        className={styles.content}
+        ref={contentRef}
+        data-aipanel-chat-content
+        onScroll={() => {
+          checkIfAtBottom();
+          handleScrollForAutoExpand();
+          tryExpandHistory();
+        }}
+      >
         <ChatEmptyState mode={mode} onSetInput={onSetInput} />
       </div>
     );
@@ -316,6 +336,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     <div
       className={styles.content}
       ref={contentRef}
+      data-aipanel-chat-content
       onScroll={() => {
         checkIfAtBottom();
         handleScrollForAutoExpand();
@@ -371,6 +392,17 @@ export const ChatView: React.FC<ChatViewProps> = ({
         {footer}
         <div ref={messagesEndRef} />
       </div>
+      {/* Floating toolbar: lives inside the scroll container so the
+       *  "is the selection inside the chat?" check below is a single
+       *  contains() call, but positions itself with `position: fixed`
+       *  so it doesn't disturb the message flow. */}
+      {onRunPrompt && (
+        <SelectionQuickActions
+          scrollContainer={contentRef.current}
+          onSend={onRunPrompt}
+          disabled={selectionToolbarDisabled}
+        />
+      )}
     </div>
   );
 };
