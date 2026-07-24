@@ -19,6 +19,7 @@ import { openSettingsTab } from '../../utils/openSettingsTab';
 import { openCloudTab } from '../../utils/openCloudTab';
 
 import { isTauriRuntime } from '../../utils/tauri';
+import { AppIcon } from '../brand/AppIcon';
 import styles from './TitleBar.module.css';
 
 interface MenuItem {
@@ -300,7 +301,6 @@ export const TitleBar: React.FC = () => {
     {
       label: '帮助',
       items: [
-        { label: '关于 inkuo', disabled: true },
         { label: '快捷键参考', shortcut: 'Ctrl+K Ctrl+R', disabled: true },
       ],
     },
@@ -308,6 +308,9 @@ export const TitleBar: React.FC = () => {
 
   return (
     <div className={styles.titleBar} ref={menuRef} data-tauri-drag-region>
+      <div className={styles.brand}>
+        <AppIcon size={16} className={styles.brandIcon} />
+      </div>
       <div className={styles.menuArea}>
         {menus.map(menu => (
           <div key={menu.label} className={styles.menuContainer}>

@@ -16,6 +16,21 @@
   -webkit-app-region: no-drag;
 }
 
+/* App brand mark — sits to the left of the menu, mirrors the favicon */
+.brand {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 8px 0 10px;
+  -webkit-app-region: no-drag;
+}
+
+.brandIcon {
+  display: block;
+  border-radius: 4px;
+  filter: drop-shadow(0 0 0.5px rgba(0, 0, 0, 0.4));
+}
+
 .menuContainer {
   position: relative;
   height: 100%;
