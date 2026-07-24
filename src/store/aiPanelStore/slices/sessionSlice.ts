@@ -12,8 +12,9 @@ import {
   updateSessions,
   updateSessionState,
 } from '../../aiPanelReducers';
+import { useBaselineStore } from '../../baselineStore';
 
-export const createSessionSlice: AIPanelStateCreator<Pick<AIPanelState, 'sessions' | 'activeSessionId' | 'todoSnapshotBySession' | 'createSession' | 'deleteSession' | 'closeSession' | 'reopenSession' | 'setActiveSession' | 'setSessionMode' | 'setSessionFeatureToggle' | 'getSession' | 'updateSession' | 'setSessionTodoSnapshot' | 'clearSessionTodoSnapshot'>> = (set, get) => {
+export const createSessionSlice: AIPanelStateCreator<Pick<AIPanelState, 'sessions' | 'activeSessionId' | 'todoSnapshotBySession' | 'createSession' | 'deleteSession' | 'closeSession' | 'reopenSession' | 'setActiveSession' | 'setSessionMode' | 'setSessionFeatureToggle' | 'getSession' | 'updateSession' | 'setSessionTodoSnapshot' | 'clearSessionTodoSnapshot' | 'resetSessionDerivedState'>> = (set, get) => {
   const initialSession = createNewSession(1);
 
   return {
@@ -35,6 +36,13 @@ export const createSessionSlice: AIPanelStateCreator<Pick<AIPanelState, 'session
      * confirmation first; a mis-click should not destroy history.
      */
     deleteSession: (sessionId) => {
+      // Capture the message ids BEFORE the `set` call so we can release
+      // their baselines. `get()` reflects the current (pre-delete) state
+      // synchronously, and adding the baseline cleanup inside the `set`
+      // updater would couple two stores in a single transaction.
+      const target = get().sessions.find((session) => session.id === sessionId);
+      const targetMessageIds = target ? target.messages.map((message) => message.id) : [];
+
       set((state) => {
         const remaining = state.sessions.filter((session) => session.id !== sessionId);
         const safeRemaining = remaining.length > 0 ? remaining : [createNewSession(1)];
@@ -54,6 +62,12 @@ export const createSessionSlice: AIPanelStateCreator<Pick<AIPanelState, 'session
           todoSnapshotBySession: rest,
         };
       });
+
+      // Now drop the baselines that belonged to the deleted session so
+      // the workspace LRU can eventually reclaim them.
+      if (targetMessageIds.length > 0) {
+        useBaselineStore.getState().clearBaselinesForSession(targetMessageIds);
+      }
     },
     /**
      * Soft-close. Marks the session as archived so it falls out of the
@@ -144,6 +158,28 @@ export const createSessionSlice: AIPanelStateCreator<Pick<AIPanelState, 'session
         if (!(sessionId in state.todoSnapshotBySession)) return state;
         const { [sessionId]: _drop, ...rest } = state.todoSnapshotBySession;
         return { todoSnapshotBySession: rest };
+      }),
+    /**
+     * Reset transient session-level state (active tool calls, pending /
+     * current diff, isStreaming, todo snapshot) without touching the
+     * message list. Used by the re-send / "edit and resend" flow so the
+     * UI doesn't keep showing stale post-instruction side effects after
+     * the conversation has been rolled back to the previous user turn.
+     */
+    resetSessionDerivedState: (sessionId) =>
+      set((state) => {
+        const nextSessions = updateSessionState(state.sessions, sessionId, {
+          activeToolCalls: [],
+          currentDiff: null,
+          pendingDiff: null,
+          isStreaming: false,
+        });
+        if (nextSessions === state.sessions) return state;
+        if (!(sessionId in state.todoSnapshotBySession)) {
+          return { sessions: nextSessions };
+        }
+        const { [sessionId]: _drop, ...rest } = state.todoSnapshotBySession;
+        return { sessions: nextSessions, todoSnapshotBySession: rest };
       }),
   };
 };

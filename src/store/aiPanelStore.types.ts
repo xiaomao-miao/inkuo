@@ -96,6 +96,14 @@ export interface AIPanelSessionSlice {
   ) => void;
   /** Drop the todo snapshot for a hard-deleted session. */
   clearSessionTodoSnapshot: (sessionId: string) => void;
+  /**
+   * Reset transient session-level state (active tool calls, pending /
+   * current diff, isStreaming, todo snapshot) without touching the
+   * message list. Used by the re-send / "edit and resend" flow so the
+   * UI doesn't keep showing stale post-instruction side effects after
+   * the conversation has been rolled back to the previous user turn.
+   */
+  resetSessionDerivedState: (sessionId: string) => void;
 }
 
 export interface AIPanelMessageSlice {

@@ -12,11 +12,15 @@ import {
   type PlanOutput,
 } from '../../store';
 import { nextChatMode } from '../../constants/chatModes';
-import { buildConversationHistory } from './messageTransform';
+import {
+  buildConversationHistory,
+  buildConversationHistoryBefore,
+} from './messageTransform';
 import { extractErrorMessage } from '../../utils/errors';
 import {
   collectWorkspaceFiles,
   createSnapshot,
+  listSnapshots,
   restoreSnapshot,
 } from '../../services/snapshots';
 import {
@@ -51,7 +55,13 @@ interface AgentStreamEvent {
 export function useChatSessionActions({
   activeSession,
   mode,
-  messages,
+  // `messages` is intentionally destructured-but-unused: the old
+  // closure-bound use of this array was the source of the "re-send a
+  // previous question" bug (it carried the previous assistant reply
+  // into the new history). Both `sendMessage` and `resendUserMessage`
+  // now read the freshest state via `useAIPanelStore.getState()`. The
+  // parameter is kept in the signature so callers don't have to change.
+  messages: _messages,
   isStreaming,
   input,
   setInput,
@@ -68,11 +78,11 @@ export function useChatSessionActions({
   const collapseOldMessages = useAIPanelStore((state) => state.collapseOldMessages);
   const setPlanItemFile = useAIPanelStore((state) => state.setPlanItemFile);
   const clearPlanItemFile = useAIPanelStore((state) => state.clearPlanItemFile);
+  const resetSessionDerivedState = useAIPanelStore((state) => state.resetSessionDerivedState);
   const pushNotification = useNotificationStore((s) => s.pushNotification);
 
   // Keep references so event listeners can read the latest values.
   const recordBaseline = useRef(useBaselineStore.getState().recordBaseline);
-  const consumeBaseline = useRef(useBaselineStore.getState().consumeBaseline);
 
   /**
    * Locate the trailing plan OutputItem (if any) on `messageId`. Used by
@@ -180,6 +190,52 @@ export function useChatSessionActions({
     [destroyPlanFileSilently, clearPlanItemFile],
   );
 
+  /**
+   * Build the `AIConfigInput` payload the Rust command expects, reading
+   * the current settings from the store on demand. Callers must use
+   * this at the moment of dispatch so the most recent cloud / API
+   * config is used (the previous code captured values through stale
+   * React closure captures whenever the resend branch passed through
+   * `sendMessage`).
+   */
+  const resolveConfigInput = useCallback((): {
+    provider: AIProviderType;
+    apiKey: string | null;
+    baseUrl: string;
+    model: string;
+    temperature: number;
+    maxTokens: number | null;
+  } => {
+    const { apiConfigs, activeApiConfigId, cloud } = useSettingsStore.getState().settings;
+    if (cloud.cloud_mode_enabled && cloud.account && cloud.active_cloud_model_id) {
+      const entry = cloud.cached_models.find((m) => m.id === cloud.active_cloud_model_id);
+      if (!entry) {
+        throw new Error('所选云端模型已失效，请在设置中重新选择');
+      }
+      return {
+        provider: 'cloud',
+        apiKey: cloud.account.access_token,
+        baseUrl: `${cloud.account.base_url.replace(/\/+$/, '')}/v1`,
+        model: entry.id,
+        temperature: 0.7,
+        maxTokens: null,
+      };
+    }
+    const activeConfig =
+      apiConfigs.find((config) => config.id === activeApiConfigId) ?? apiConfigs[0];
+    if (!activeConfig) {
+      throw new Error('没有可用的本地 API 配置');
+    }
+    return {
+      provider: activeConfig.provider,
+      apiKey: activeConfig.apiKey,
+      baseUrl: activeConfig.baseUrl,
+      model: activeConfig.model,
+      temperature: activeConfig.temperature,
+      maxTokens: activeConfig.maxTokens,
+    };
+  }, []);
+
   const sendMessage = useCallback(async (instructionOverride?: string) => {
     const instruction = (instructionOverride ?? input).trim();
     if (!activeSession || !instruction || isStreaming) return;
@@ -218,24 +274,30 @@ export function useChatSessionActions({
     collapseOldMessages(sessionId);
     addMessage(sessionId, assistantPlaceholder);
 
-    clearEditingState();
+    if (isEditing) {
+      clearEditingState();
+    }
     setInput('');
     setIsStreaming(sessionId, true);
     clearToolCalls(sessionId);
 
     const workspacePath = useSidebarStore.getState().workspacePath || undefined;
     const {
-      apiConfigs,
-      activeApiConfigId,
       snapshot,
       agent_max_iterations,
       expert_max_iterations,
-      cloud,
     } = useSettingsStore.getState().settings;
 
-    // Cloud-mode branch: pick the active cloud model from the cached
-    // list and send the JWT-bearing `base_url` + cloud `model_id` so
-    // the Rust side can route through the cloud server.
+    // Re-read the message list from the store at dispatch time. The
+    // render-time `messages` array captured by `useCallback` is stale
+    // for the editing branch (it still carries the previous assistant
+    // response that we're about to regenerate), so we always pull the
+    // freshest state. For a brand-new user message the new entries we
+    // just added above are visible here.
+    const liveMessages = useAIPanelStore
+      .getState()
+      .sessions.find((s) => s.id === sessionId)?.messages ?? [];
+
     let configInput: {
       provider: AIProviderType;
       api_key: string | null;
@@ -244,36 +306,29 @@ export function useChatSessionActions({
       temperature: number;
       max_tokens: number | null;
     };
-
-    if (cloud.cloud_mode_enabled && cloud.account && cloud.active_cloud_model_id) {
-      const entry = cloud.cached_models.find((m) => m.id === cloud.active_cloud_model_id);
-      if (!entry) {
-        throw new Error('所选云端模型已失效，请在设置中重新选择');
-      }
+    try {
+      const resolved = resolveConfigInput();
       configInput = {
-        provider: 'cloud',
-        api_key: cloud.account.access_token,
-        base_url: `${cloud.account.base_url.replace(/\/+$/, '')}/v1`,
-        model: entry.id,
-        temperature: 0.7,
-        max_tokens: null,
+        provider: resolved.provider,
+        api_key: resolved.apiKey,
+        base_url: resolved.baseUrl,
+        model: resolved.model,
+        temperature: resolved.temperature,
+        max_tokens: resolved.maxTokens,
       };
-    } else {
-      const activeConfig =
-        apiConfigs.find((config) => config.id === activeApiConfigId) ?? apiConfigs[0];
-      if (!activeConfig) {
-        throw new Error('没有可用的本地 API 配置');
-      }
-      configInput = {
-        provider: activeConfig.provider,
-        api_key: activeConfig.apiKey,
-        base_url: activeConfig.baseUrl,
-        model: activeConfig.model,
-        temperature: activeConfig.temperature,
-        max_tokens: activeConfig.maxTokens,
-      };
+    } catch (err) {
+      updateMessage(sessionId, assistantMessageId, `抱歉，发生了错误：${extractErrorMessage(err)}`);
+      setIsStreaming(sessionId, false);
+      return;
     }
-    const conversationHistory = buildConversationHistory(messages);
+
+    // For the editing branch we deliberately EXCLUDE the edited user
+    // message from the history payload: the same text is sent as the
+    // `instruction` field on this turn, so duplicating it would teach
+    // the model to treat the question as a follow-up to itself.
+    const conversationHistory = isEditing
+      ? buildConversationHistoryBefore(liveMessages, userMessageId) ?? []
+      : buildConversationHistory(liveMessages);
 
     // Auto-baseline: when sending a brand-new (not re-edited) agent-mode
     // instruction, capture a snapshot so re-editing the user message can
@@ -306,9 +361,12 @@ export function useChatSessionActions({
       }
     }
 
-    // Subscribe to the agent stream's terminal events so we can consume
-    // the baseline when the run completes successfully.  We keep the
-    // listener open until the matching message id is seen finished.
+    // Subscribe to the agent stream's terminal events. The baseline is
+    // intentionally NOT consumed on success — leaving it in place lets
+    // the user re-edit the same question later and see the model
+    // re-approach it from the original pre-instruction state. It is
+    // dropped only when the message/session is deleted or the snapshot
+    // is evicted by the LRU pass.
     let unlistenAgent: UnlistenFn | null = null;
     if (mode === 'agent' || mode === 'plan' || mode === 'ask') {
       listen<AgentStreamEvent>('ai://stream', (event) => {
@@ -317,14 +375,11 @@ export function useChatSessionActions({
         if (payload.session_id !== sessionId) return;
         if (payload.message_id !== assistantMessageId) return;
         if (payload.event_type === 'done') {
-          // Successful completion — drop the baseline.
-          consumeBaseline.current(userMessageId);
           if (unlistenAgent) {
             unlistenAgent();
             unlistenAgent = null;
           }
         } else if (payload.event_type === 'error') {
-          // Keep the baseline so the user can re-edit and retry.
           if (unlistenAgent) {
             unlistenAgent();
             unlistenAgent = null;
@@ -377,7 +432,7 @@ export function useChatSessionActions({
       updateMessage(sessionId, assistantMessageId, `抱歉，发生了错误：${extractErrorMessage(err)}`);
       setIsStreaming(sessionId, false);
     }
-  }, [activeSession, input, isStreaming, editingMessageId, updateMessage, addMessage, clearEditingState, setInput, setIsStreaming, clearToolCalls, hardCollapseHistory, collapseOldMessages, messages, mode]);
+  }, [activeSession, input, isStreaming, editingMessageId, updateMessage, addMessage, clearEditingState, setInput, setIsStreaming, clearToolCalls, hardCollapseHistory, collapseOldMessages, mode, resolveConfigInput]);
 
   const handleSend = useCallback(async () => {
     await sendMessage();
@@ -492,36 +547,236 @@ export function useChatSessionActions({
     setInput(prompt);
   }, [activeSession, setInput]);
 
-  const handleSaveEdit = useCallback(async () => {
-    if (!activeSession || !editingMessageId || !editingContent.trim() || isStreaming) return;
+  /**
+   * Worker that performs the "re-send an earlier user message" transition
+   * without depending on render-time `messages`, `editingMessageId`, or
+   * `editingContent`. Every read is done through `useAIPanelStore.getState()`
+   * so a stale React closure cannot smuggle the old assistant reply back
+   * into the model context.
+   *
+   * Order is significant:
+   *   1. Verify the target message and (for agent mode) the baseline
+   *      snapshot still exist on disk. Bail out cleanly otherwise.
+   *   2. Restore the workspace to that baseline so file contents and
+   *      model context agree.
+   *   3. Truncate the conversation to the target message and clear
+   *      session-level derived state (active tool calls, diffs, todo).
+   *   4. Rewrite the target user message in place with the new content.
+   *   5. Append a fresh assistant placeholder.
+   *   6. Build history from the post-truncation store snapshot, but
+   *      EXCLUDE the target itself — the new content is sent as
+   *      `instruction` so the model never sees the question twice.
+   *   7. Resolve the AI config and dispatch the stream.
+   *
+   * Returns the new assistant message id when everything succeeds, so
+   * callers can correlate stream events back to the dispatched turn.
+   */
+  const resendUserMessage = useCallback(
+    async (params: {
+      targetSessionId: string;
+      targetUserMessageId: string;
+      newContent: string;
+    }): Promise<string | null> => {
+      const { targetSessionId, targetUserMessageId, newContent } = params;
+      const instruction = newContent.trim();
+      if (!instruction) return null;
 
-    const newContent = editingContent.trim();
-    const workspacePath = useSidebarStore.getState().workspacePath;
+      const sessionsNow = useAIPanelStore.getState().sessions;
+      const session = sessionsNow.find((s) => s.id === targetSessionId);
+      if (!session) return null;
+      if (session.isStreaming) return null;
 
-    // Roll the workspace back to the baseline that was captured at the
-    // start of the original agent run, if any.  Failure is non-fatal —
-    // the user will still get the truncated conversation and re-sent
-    // instruction, but with files at their current state.
-    if (workspacePath) {
-      const baselineId = useBaselineStore.getState().peekBaseline(editingMessageId);
-      if (baselineId) {
+      const targetMessage = session.messages.find((m) => m.id === targetUserMessageId);
+      if (!targetMessage || targetMessage.role !== 'user') return null;
+
+      const sessionMode = session.mode;
+      const workspacePath = useSidebarStore.getState().workspacePath || undefined;
+
+      // Locate the baseline that was captured the first time the user
+      // sent this question. We only require a baseline for agent mode;
+      // ask/plan runs don't modify the workspace, so we can safely fall
+      // back to the current file state.
+      const baselineId = useBaselineStore.getState().peekBaseline(targetUserMessageId);
+      if (sessionMode === 'agent' && baselineId && workspacePath) {
         try {
-          await restoreSnapshot(workspacePath, baselineId);
+          // Verify the snapshot is still on disk before issuing the
+          // restore. listSnapshots is cheap relative to the Tauri
+          // round-trip and protects against an LRU-evicted baseline
+          // that is still in the localStorage map.
+          const existing = await listSnapshots(workspacePath);
+          const snapshotExists = existing.some((entry) => entry.id === baselineId);
+          if (snapshotExists) {
+            await restoreSnapshot(workspacePath, baselineId);
+          } else {
+            useBaselineStore.getState().clearBaseline(targetUserMessageId);
+            pushNotification({
+              kind: 'error',
+              title: '基线快照已失效',
+              message: '快照已被回收，无法安全回滚工作区，已中止重发。',
+            });
+            return null;
+          }
         } catch (err) {
           pushNotification({
             kind: 'error',
             title: '回滚基线失败',
             message: extractErrorMessage(err),
           });
+          return null;
         }
       }
-    }
 
-    truncateMessagesAfter(activeSession.id, editingMessageId);
-    clearEditingState();
-    setInput(newContent);
-    await sendMessage(newContent);
-  }, [activeSession, editingMessageId, editingContent, isStreaming, truncateMessagesAfter, clearEditingState, setInput, sendMessage, pushNotification]);
+      // Now commit the chat-side rollback. Order matters: truncate first
+      // so the target message is the new tail, then clear any session-
+      // level panels that reflected the previous run's tool calls /
+      // diffs, then rewrite the user message in place, and finally
+      // append the assistant placeholder.
+      truncateMessagesAfter(targetSessionId, targetUserMessageId);
+      resetSessionDerivedState(targetSessionId);
+      updateMessage(targetSessionId, targetUserMessageId, instruction);
+      hardCollapseHistory(targetSessionId);
+      collapseOldMessages(targetSessionId);
+
+      const assistantMessageId = crypto.randomUUID();
+      const assistantPlaceholder: ChatMessage = {
+        id: assistantMessageId,
+        role: 'assistant',
+        timestamp: Date.now(),
+        outputItems: [],
+      };
+      addMessage(targetSessionId, assistantPlaceholder);
+      clearEditingState();
+      setInput('');
+      setIsStreaming(targetSessionId, true);
+      clearToolCalls(targetSessionId);
+
+      // Read the now-truncated chat from the store. We MUST NOT use the
+      // render-time `messages` array captured by `useCallback` — for
+      // resends it still contains the previous assistant reply that
+      // we just truncated.
+      const liveMessages =
+        useAIPanelStore.getState().sessions.find((s) => s.id === targetSessionId)?.messages ?? [];
+
+      const conversationHistory =
+        buildConversationHistoryBefore(liveMessages, targetUserMessageId);
+      if (conversationHistory === undefined) {
+        // The target message vanished between the read above and the
+        // store update — extremely unlikely, but fail loud instead of
+        // producing a confusing "stuck streaming" UI.
+        pushNotification({
+          kind: 'error',
+          title: '重发失败',
+          message: '目标消息已被并发操作移除。',
+        });
+        setIsStreaming(targetSessionId, false);
+        return null;
+      }
+
+      let configInput: {
+        provider: AIProviderType;
+        api_key: string | null;
+        base_url: string;
+        model: string;
+        temperature: number;
+        max_tokens: number | null;
+      };
+      try {
+        const resolved = resolveConfigInput();
+        configInput = {
+          provider: resolved.provider,
+          api_key: resolved.apiKey,
+          base_url: resolved.baseUrl,
+          model: resolved.model,
+          temperature: resolved.temperature,
+          max_tokens: resolved.maxTokens,
+        };
+      } catch (err) {
+        updateMessage(targetSessionId, assistantMessageId, `抱歉，发生了错误：${extractErrorMessage(err)}`);
+        setIsStreaming(targetSessionId, false);
+        return null;
+      }
+
+      const { agent_max_iterations, expert_max_iterations } = useSettingsStore.getState().settings;
+      const featureToggles = session.featureToggles ?? {};
+      const enabledToggles = Object.entries(featureToggles)
+        .filter(([, on]) => Boolean(on))
+        .map(([id]) => id);
+
+      // Same listener as `sendMessage` — we do NOT consume the baseline
+      // on success so a future re-edit still rolls back to the original
+      // pre-instruction state.
+      let unlistenAgent: UnlistenFn | null = null;
+      if (sessionMode === 'agent' || sessionMode === 'plan' || sessionMode === 'ask') {
+        listen<AgentStreamEvent>('ai://stream', (event) => {
+          const payload = event.payload;
+          if (!payload) return;
+          if (payload.session_id !== targetSessionId) return;
+          if (payload.message_id !== assistantMessageId) return;
+          if (payload.event_type === 'done' || payload.event_type === 'error') {
+            if (unlistenAgent) {
+              unlistenAgent();
+              unlistenAgent = null;
+            }
+          }
+        }).then((fn) => {
+          unlistenAgent = fn;
+        });
+      }
+
+      try {
+        await invoke('ai_agent_stream', {
+          sessionId: targetSessionId,
+          messageId: assistantMessageId,
+          instruction,
+          workspacePath,
+          mode: sessionMode,
+          maxIterations: agent_max_iterations,
+          expertMaxIterations: expert_max_iterations,
+          history: conversationHistory,
+          enabledToggles,
+          configInput,
+        });
+      } catch (err) {
+        updateMessage(targetSessionId, assistantMessageId, `抱歉，发生了错误：${extractErrorMessage(err)}`);
+        setIsStreaming(targetSessionId, false);
+        return null;
+      }
+
+      return assistantMessageId;
+    },
+    [
+      truncateMessagesAfter,
+      resetSessionDerivedState,
+      updateMessage,
+      hardCollapseHistory,
+      collapseOldMessages,
+      addMessage,
+      clearEditingState,
+      setInput,
+      setIsStreaming,
+      clearToolCalls,
+      resolveConfigInput,
+      pushNotification,
+    ],
+  );
+
+  const handleSaveEdit = useCallback(async () => {
+    if (!activeSession || !editingMessageId || !editingContent.trim() || isStreaming) return;
+
+    const targetSessionId = activeSession.id;
+    const targetUserMessageId = editingMessageId;
+    const newContent = editingContent.trim();
+
+    // Delegate the entire rollback + re-send transaction to the worker
+    // so we never fall back to the closure-bound `sendMessage`, which
+    // would otherwise read the stale `messages` array and smuggle the
+    // previous assistant reply back into the model context.
+    await resendUserMessage({
+      targetSessionId,
+      targetUserMessageId,
+      newContent,
+    });
+  }, [activeSession, editingMessageId, editingContent, isStreaming, resendUserMessage]);
 
   return {
     handleSend,

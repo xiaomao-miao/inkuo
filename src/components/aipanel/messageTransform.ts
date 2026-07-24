@@ -148,3 +148,33 @@ export function toAgentPayload(message: ChatMessage): AgentMessagePayload {
 export function buildConversationHistory(messages: ChatMessage[]): AgentMessagePayload[] {
   return sanitizeConversationHistory(messages).map(toAgentPayload);
 }
+
+/**
+ * Build the conversation history that should be sent when re-asking a
+ * previously-sent user message. The returned array is the messages that
+ * strictly precede `targetMessageId` (the target itself is excluded so
+ * the LLM never sees its own previous answer to the same question, and
+ * the new instruction is sent as the current user message rather than
+ * duplicated inside the history).
+ *
+ * The same `sanitizeConversationHistory` masking is applied so any
+ * orphaned tool messages from earlier turns are dropped instead of
+ * poisoning the reconstructed context.
+ *
+ * Returns `undefined` when `targetMessageId` is not found in
+ * `messages`, so the caller can abort the resend instead of silently
+ * resending with a stale or empty history.
+ */
+export function buildConversationHistoryBefore(
+  messages: ChatMessage[],
+  targetMessageId: string,
+): AgentMessagePayload[] | undefined {
+  const index = messages.findIndex((message) => message.id === targetMessageId);
+  if (index <= 0) {
+    // Either the target doesn't exist (caller should abort) or it is
+    // the very first message — there is no prior history to include.
+    return index === -1 ? undefined : [];
+  }
+  const prior = messages.slice(0, index);
+  return sanitizeConversationHistory(prior).map(toAgentPayload);
+}

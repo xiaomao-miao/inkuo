@@ -7,9 +7,18 @@
  * state.
  *
  * The map is keyed by the user-message id that initiated the agent run.
- * Once that run completes successfully the entry is removed (via
- * `consumeBaseline`). If the run fails or is stopped, the entry is left
- * in place so the user can re-edit and retry.
+ * Critically, the baseline is **not** cleared on successful completion:
+ * the user should always be able to re-edit the same question later and
+ * see the model re-approach it from the original pre-instruction state.
+ * Entries are dropped only when the underlying snapshot is no longer
+ * present (caller invokes `clearBaseline`), the owning session is
+ * permanently deleted (caller invokes `clearBaselinesForSession`), or
+ * the user switches workspaces (`reset`).
+ *
+ * The previous behaviour of consuming the baseline on a successful run
+ * kept the model from seeing prior answers via `buildConversationHistory`,
+ * but it also broke the "re-send a previous question" workflow: by the
+ * time the user clicked "edit and resend", the baseline was gone.
  */
 
 import { create } from 'zustand';
@@ -25,6 +34,10 @@ interface BaselineState {
   /**
    * Look up the baseline for `userMessageId` and remove it from the store.
    * Returns `undefined` if no baseline exists.
+   *
+   * Reserved for callers that intentionally want to invalidate a
+   * baseline (e.g. the corresponding snapshot was deleted on disk by
+   * the LRU eviction pass). The agent success path MUST NOT call this.
    */
   consumeBaseline: (userMessageId: string) => string | undefined;
 
@@ -33,6 +46,10 @@ interface BaselineState {
 
   /** Remove a baseline entry without consuming it. */
   clearBaseline: (userMessageId: string) => void;
+
+  /** Drop every baseline whose id is in `messageIds`. Convenience for
+   * permanent session deletion. */
+  clearBaselinesForSession: (messageIds: string[]) => void;
 
   /** Wipe everything (used when switching workspaces). */
   reset: () => void;
@@ -68,6 +85,22 @@ export const useBaselineStore = create<BaselineState>()(
           if (!(userMessageId in state.baselines)) return state;
           const { [userMessageId]: _drop, ...rest } = state.baselines;
           return { baselines: rest };
+        }),
+
+      clearBaselinesForSession: (messageIds) =>
+        set((state) => {
+          if (messageIds.length === 0) return state;
+          const drop = new Set(messageIds);
+          let changed = false;
+          const next: Record<string, string> = {};
+          for (const [id, snapshotId] of Object.entries(state.baselines)) {
+            if (drop.has(id)) {
+              changed = true;
+            } else {
+              next[id] = snapshotId;
+            }
+          }
+          return changed ? { baselines: next } : state;
         }),
 
       reset: () => set({ baselines: {} }),
