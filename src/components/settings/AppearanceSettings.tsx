@@ -1,12 +1,22 @@
 import { useEffect, useState } from 'react';
-import { Palette, Sparkles, Moon, Sun, ZapOff, Wind, SunMedium } from 'lucide-react';
+import {
+  Palette,
+  Sparkles,
+  Moon,
+  Sun,
+  ZapOff,
+  Wind,
+  SunMedium,
+  BookOpen,
+} from 'lucide-react';
 import { useSettingsStore } from '../../store';
 import { MOTION_LEVELS, type MotionLevel } from '../../hooks/useMotionLevel';
+import type { ThemeType } from '../../types/settings';
 import styles from './SettingsPanel.module.css';
 import appearanceStyles from './AppearanceSettings.module.css';
 
 interface ThemeSpec {
-  id: 'graphite' | 'verdant' | 'iris' | 'inkuo-light';
+  id: ThemeType;
   label: string;
   blurb: string;
   icon: React.ReactNode;
@@ -20,6 +30,32 @@ interface ThemeSpec {
 }
 
 const THEMES: ThemeSpec[] = [
+  {
+    id: 'paper-white',
+    label: '纸白',
+    blurb: '默认 · 干净白底 + 墨蓝',
+    icon: <BookOpen size={14} />,
+    preview: {
+      bg: '#fafaf9',
+      surface: '#f5f5f4',
+      elevated: '#ffffff',
+      accent: '#3957c5',
+      fg: '#1c1c1f',
+    },
+  },
+  {
+    id: 'paper-cream',
+    label: '米黄',
+    blurb: '暖纸 · Bear / Notion 气质',
+    icon: <SunMedium size={14} />,
+    preview: {
+      bg: '#f6f1e7',
+      surface: '#efe7d6',
+      elevated: '#fbf6e9',
+      accent: '#2f55b8',
+      fg: '#2b2620',
+    },
+  },
   {
     id: 'graphite',
     label: '石墨',
@@ -57,19 +93,6 @@ const THEMES: ThemeSpec[] = [
       elevated: '#272634',
       accent: '#9b8afd',
       fg: '#ecebf2',
-    },
-  },
-  {
-    id: 'inkuo-light',
-    label: '纸质',
-    blurb: '浅色 · 让内容当主角',
-    icon: <SunMedium size={14} />,
-    preview: {
-      bg: '#fbfbfa',
-      surface: '#f4f4f1',
-      elevated: '#ebebe7',
-      accent: '#7c5cff',
-      fg: '#2a2a2c',
     },
   },
 ];
@@ -137,8 +160,12 @@ export const AppearanceSettings: React.FC = () => {
 
         <div className={appearanceStyles.themeGrid}>
           {THEMES.map((theme) => {
-            const active = settings.theme === theme.id ||
-              (theme.id === 'graphite' && settings.theme === 'inkuo-dark');
+            const active =
+              settings.theme === theme.id ||
+              (theme.id === 'graphite' && settings.theme === 'inkuo-dark') ||
+              (theme.id === 'paper-white' &&
+                (settings.theme === 'inkuo-light' ||
+                  settings.theme === 'high-contrast-light'));
             return (
               <button
                 key={theme.id}

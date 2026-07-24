@@ -1,10 +1,12 @@
 /* ============================================================================
  * inkuo Design Tokens
  * ----------------------------------------------------------------------------
- * 三套主题,使用 `data-theme` 切换:
- *   - graphite (默认):  深色低饱和,蓝灰强调,Arc/Raycast 气质
- *   - verdant:          深色墨绿,Linear 气质
- *   - iris:             深色紫调,Cursor 气质
+ * 五套主题,使用 `data-theme` 切换:
+ *   - paper-white (默认): 纯白 + 墨蓝,干净百搭,适合长时间写作
+ *   - paper-cream:        米色 / 暖纸 + 墨蓝,温暖低刺激,Notion / Bear 气质
+ *   - graphite:           深色低饱和,蓝灰强调,Arc/Raycast 气质
+ *   - verdant:            深色墨绿,Linear 气质
+ *   - iris:               深色紫调,Cursor 气质
  *
  * 颜色尽量用 OKLCH 表达,保证跨主题感知一致;subtle / hover 变体由
  * `color-mix(in oklch, var(--accent), transparent X%)` 派生,避免散落
@@ -13,70 +15,69 @@
  * 任何组件 CSS 都应只引用本文件定义的 token,不要直接写颜色字面量。
  * ============================================================================ */
 
+/* ────────────────────────────────────────────────────────────────────────
+ *  Theme: Paper White (默认) —— 干净白底 + 墨蓝强调
+ * ──────────────────────────────────────────────────────────────────────── */
 :root,
-[data-theme='graphite'] {
-  /* ── 背景四档 ─────────────────────────────────────────────────── */
-  /* bg-canvas:  编辑器底色(最深)
-     bg-surface: 面板/侧边栏(中)
-     bg-elevated:弹窗/下拉(较浅)
-     bg-input:   输入框/按钮内部 */
-  --bg-canvas: #161617;
-  --bg-surface: #1d1d1f;
-  --bg-elevated: #26262a;
-  --bg-input: #2c2c31;
+[data-theme='paper-white'] {
+  /* ── 背景四档(略带极淡的暖意,避免纯白刺眼) ───────────────── */
+  --bg-canvas: #fafaf9;       /* 主画布:微微偏暖的近白 */
+  --bg-surface: #f5f5f4;      /* 面板 / 侧边栏 */
+  --bg-elevated: #ffffff;     /* 弹窗 / 下拉 */
+  --bg-input: #ffffff;        /* 输入框 / 按钮内部 */
 
   /* ── 文字四档 ─────────────────────────────────────────────────── */
-  --fg-primary: #e8e8ea;
-  --fg-secondary: #a9a9b0;
-  --fg-muted: #75757c;
-  --fg-disabled: #4d4d52;
+  --fg-primary: #1c1c1f;      /* 接近墨黑,不是纯黑,更柔和 */
+  --fg-secondary: #55555a;
+  --fg-muted: #8a8a90;
+  --fg-disabled: #b8b8bd;
 
   /* ── 边框 ─────────────────────────────────────────────────────── */
-  --border-subtle: #2a2a2f;
-  --border-strong: #3a3a40;
+  --border-subtle: #ececeb;   /* 极淡灰,默认分隔靠它,不要靠阴影 */
+  --border-strong: #d6d6d3;
 
-  /* ── 强调色:蓝灰(中性,几乎像鼠标 hover) ─────────────────────── */
-  --accent: oklch(72% 0.04 240);
-  --accent-hover: oklch(78% 0.05 240);
-  --accent-subtle: oklch(72% 0.04 240 / 14%);
-  --accent-contrast: oklch(18% 0.01 240);
+  /* ── 强调色:墨蓝(深色文字上可读,白底上不刺眼) ───────────────── */
+  --accent: oklch(48% 0.13 250);          /* 略偏靛青的蓝 */
+  --accent-hover: oklch(42% 0.14 250);
+  --accent-subtle: oklch(48% 0.13 250 / 10%);
+  --accent-contrast: #ffffff;             /* 强调按钮上的文字 */
 
   /* ── 语义 ─────────────────────────────────────────────────────── */
-  --success: oklch(72% 0.13 155);
-  --success-subtle: oklch(72% 0.13 155 / 14%);
-  --warning: oklch(80% 0.14 80);
-  --warning-subtle: oklch(80% 0.14 80 / 14%);
-  --error: oklch(65% 0.18 25);
-  --error-subtle: oklch(65% 0.18 25 / 14%);
-  --info: oklch(70% 0.10 230);
-  --info-subtle: oklch(70% 0.10 230 / 14%);
+  --success: oklch(58% 0.13 155);
+  --success-subtle: oklch(58% 0.13 155 / 12%);
+  --warning: oklch(70% 0.14 75);
+  --warning-subtle: oklch(70% 0.14 75 / 14%);
+  --error: oklch(58% 0.18 25);
+  --error-subtle: oklch(58% 0.18 25 / 12%);
+  --info: oklch(58% 0.12 230);
+  --info-subtle: oklch(58% 0.12 230 / 12%);
 
   /* ── Diff ─────────────────────────────────────────────────────── */
-  --diff-added-bg: oklch(72% 0.13 155 / 16%);
-  --diff-added-fg: oklch(80% 0.14 155);
-  --diff-added-border: oklch(72% 0.13 155);
-  --diff-removed-bg: oklch(65% 0.18 25 / 16%);
-  --diff-removed-fg: oklch(75% 0.17 25);
-  --diff-removed-border: oklch(65% 0.18 25);
-  --diff-highlight: oklch(80% 0.14 80 / 22%);
+  --diff-added-bg: oklch(58% 0.13 155 / 12%);
+  --diff-added-fg: oklch(40% 0.13 155);
+  --diff-added-border: oklch(58% 0.13 155);
+  --diff-removed-bg: oklch(58% 0.18 25 / 10%);
+  --diff-removed-fg: oklch(45% 0.17 25);
+  --diff-removed-border: oklch(58% 0.18 25);
+  --diff-highlight: oklch(70% 0.14 75 / 22%);
 
-  /* ── 文件树语义色(继承自 Arc / Linear) ──────────────────────── */
-  --file-folder: oklch(75% 0.10 80);
-  --file-markdown: oklch(68% 0.12 230);
+  /* ── 文件树语义色 ────────────────────────────────────────────── */
+  --file-folder: oklch(62% 0.10 80);
+  --file-markdown: oklch(52% 0.13 250);
   --file-default: var(--fg-secondary);
 
   /* ── Inline code completion(紫,代表 AI 建议) ─────────────────── */
-  --inline-completion-color: oklch(58% 0.18 290);
-  --inline-completion-bg: oklch(58% 0.18 290 / 8%);
-  --inline-completion-active-color: oklch(65% 0.18 250);
+  --inline-completion-color: oklch(50% 0.18 290);
+  --inline-completion-bg: oklch(50% 0.18 290 / 8%);
+  --inline-completion-active-color: oklch(55% 0.18 260);
 
   /* ── 选区 / 焦点 ──────────────────────────────────────────────── */
-  --selection-bg: oklch(72% 0.04 240 / 30%);
-  --focus-ring: oklch(72% 0.04 240 / 60%);
+  --selection-bg: oklch(48% 0.13 250 / 22%);
+  --focus-ring: oklch(48% 0.13 250 / 45%);
 
   /* ── 遮罩 / 弹层背景 ─────────────────────────────────────────── */
-  --overlay: oklch(8% 0.01 240 / 60%);
-  --overlay-strong: oklch(8% 0.01 240 / 75%);
+  --overlay: oklch(20% 0.01 250 / 40%);
+  --overlay-strong: oklch(20% 0.01 250 / 55%);
 
   /* ── 语义专属:窗口关闭按钮(保持 macOS / Windows 传统红) ──────── */
   --close-button-hover: oklch(58% 0.22 25);
@@ -99,16 +100,16 @@
   --space-lg: 16px;
   --space-xl: 24px;
 
-  /* ── 圆角 (从 6/8/10/12/14 收敛到 3 档) ──────────────────────── */
+  /* ── 圆角 ─────────────────────────────────────────────────────── */
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 14px;
   --radius-pill: 999px;
 
-  /* ── 阴影 ─────────────────────────────────────────────────────── */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
-  --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.5);
+  /* ── 阴影(浅色下阴影要淡,否则像贴上去的纸片) ───────────────── */
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.08);
+  --shadow-lg: 0 10px 30px rgba(15, 23, 42, 0.12);
 
   /* ── 字体 ─────────────────────────────────────────────────────── */
   --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto,
@@ -144,12 +145,12 @@
   --z-popover: 500;
   --z-tooltip: 600;
 
-  /* ── 旧 token 兼容层(将逐步迁移,期间不要新增使用) ─────────────── */
+  /* ── 兼容层 ───────────────────────────────────────────────────── */
   --bg-primary: var(--bg-canvas);
   --bg-secondary: var(--bg-surface);
   --bg-tertiary: var(--bg-elevated);
-  --bg-hover: color-mix(in oklch, var(--fg-primary) 6%, var(--bg-surface));
-  --bg-active: color-mix(in oklch, var(--fg-primary) 10%, var(--bg-surface));
+  --bg-hover: color-mix(in oklch, var(--fg-primary) 4%, var(--bg-surface));
+  --bg-active: color-mix(in oklch, var(--fg-primary) 8%, var(--bg-surface));
 
   --border-color: var(--border-subtle);
   --divider: var(--border-strong);
@@ -164,33 +165,151 @@
 
   --radius-md-legacy: var(--radius-md);
 
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 /* ────────────────────────────────────────────────────────────────────────
- *  Theme: Verdant  (墨绿,Linear 气质)
+ *  Theme: Paper Cream —— 暖纸 / 米色,Bear / Notion 气质
  * ──────────────────────────────────────────────────────────────────────── */
-[data-theme='verdant'] {
-  --bg-canvas: #14181a;
-  --bg-surface: #1b2023;
-  --bg-elevated: #23292c;
-  --bg-input: #2a3034;
+[data-theme='paper-cream'] {
+  /* 背景四档:往暖里走,但保持低饱和避免脏感 */
+  --bg-canvas: #f6f1e7;       /* 主画布:温润米色 */
+  --bg-surface: #efe7d6;      /* 面板:略深一档 */
+  --bg-elevated: #fbf6e9;     /* 弹窗:浅一档,有点奶油感 */
+  --bg-input: #fdfaf2;        /* 输入框:近白,让输入区域更聚焦 */
 
-  --fg-primary: #e6ecea;
-  --fg-secondary: #a4b1ad;
-  --fg-muted: #6f7b78;
-  --fg-disabled: #4a524f;
+  /* 文字四档:暖灰,避免蓝黑显得冷 */
+  --fg-primary: #2b2620;
+  --fg-secondary: #6a6357;
+  --fg-muted: #94897a;
+  --fg-disabled: #b8ae9c;
 
-  --border-subtle: #28302f;
-  --border-strong: #3a4441;
+  /* 边框:同色系偏暖 */
+  --border-subtle: #e6dcc4;
+  --border-strong: #d4c5a3;
 
-  --accent: oklch(68% 0.13 155);
-  --accent-hover: oklch(74% 0.14 155);
-  --accent-subtle: oklch(68% 0.13 155 / 14%);
-  --accent-contrast: oklch(18% 0.02 155);
+  /* 强调色:墨蓝 / 靛青,白米底上仍是同一个色调,保持统一 */
+  --accent: oklch(46% 0.13 248);
+  --accent-hover: oklch(40% 0.14 248);
+  --accent-subtle: oklch(46% 0.13 248 / 12%);
+  --accent-contrast: #fbf6e9;
+
+  --success: oklch(56% 0.13 155);
+  --success-subtle: oklch(56% 0.13 155 / 14%);
+  --warning: oklch(70% 0.14 75);
+  --warning-subtle: oklch(70% 0.14 75 / 14%);
+  --error: oklch(58% 0.18 25);
+  --error-subtle: oklch(58% 0.18 25 / 12%);
+  --info: oklch(56% 0.12 230);
+  --info-subtle: oklch(56% 0.12 230 / 12%);
+
+  --diff-added-bg: oklch(56% 0.13 155 / 14%);
+  --diff-added-fg: oklch(38% 0.13 155);
+  --diff-added-border: oklch(56% 0.13 155);
+  --diff-removed-bg: oklch(58% 0.18 25 / 12%);
+  --diff-removed-fg: oklch(42% 0.17 25);
+  --diff-removed-border: oklch(58% 0.18 25);
+  --diff-highlight: oklch(70% 0.14 75 / 22%);
+
+  --file-folder: oklch(60% 0.10 80);
+  --file-markdown: oklch(50% 0.13 248);
+  --file-default: var(--fg-secondary);
+
+  --inline-completion-color: oklch(48% 0.18 290);
+  --inline-completion-bg: oklch(48% 0.18 290 / 10%);
+  --inline-completion-active-color: oklch(52% 0.18 260);
+
+  --selection-bg: oklch(46% 0.13 248 / 24%);
+  --focus-ring: oklch(46% 0.13 248 / 45%);
+
+  --overlay: oklch(28% 0.02 60 / 42%);
+  --overlay-strong: oklch(28% 0.02 60 / 58%);
+
+  --close-button-hover: oklch(58% 0.22 25);
+  --close-button-hover-fg: oklch(98% 0.01 25);
+
+  /* 阴影在暖底色上更容易显得脏,再淡一档 */
+  --shadow-sm: 0 1px 2px rgba(60, 45, 20, 0.05);
+  --shadow-md: 0 4px 12px rgba(60, 45, 20, 0.08);
+  --shadow-lg: 0 10px 30px rgba(60, 45, 20, 0.12);
+
+  --bg-primary: var(--bg-canvas);
+  --bg-secondary: var(--bg-surface);
+  --bg-tertiary: var(--bg-elevated);
+  --bg-hover: color-mix(in oklch, var(--fg-primary) 5%, var(--bg-surface));
+  --bg-active: color-mix(in oklch, var(--fg-primary) 9%, var(--bg-surface));
+  --border-color: var(--border-subtle);
+  --divider: var(--border-strong);
+  --accent-primary: var(--accent);
+  --accent-active: var(--accent-hover);
+  --border-active: var(--accent);
+  --focus-ring: var(--accent-subtle);
+
+  --overlay: oklch(28% 0.02 60 / 42%);
+  --overlay-strong: oklch(28% 0.02 60 / 58%);
+  color-scheme: light;
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+ *  Theme: Graphite (深色低饱和,Arc/Raycast 气质)
+ * ──────────────────────────────────────────────────────────────────────── */
+[data-theme='graphite'] {
+  --bg-canvas: #161617;
+  --bg-surface: #1d1d1f;
+  --bg-elevated: #26262a;
+  --bg-input: #2c2c31;
+
+  --fg-primary: #e8e8ea;
+  --fg-secondary: #a9a9b0;
+  --fg-muted: #75757c;
+  --fg-disabled: #4d4d52;
+
+  --border-subtle: #2a2a2f;
+  --border-strong: #3a3a40;
+
+  --accent: oklch(72% 0.04 240);
+  --accent-hover: oklch(78% 0.05 240);
+  --accent-subtle: oklch(72% 0.04 240 / 14%);
+  --accent-contrast: oklch(18% 0.01 240);
 
   --success: oklch(72% 0.13 155);
   --success-subtle: oklch(72% 0.13 155 / 14%);
+  --warning: oklch(80% 0.14 80);
+  --warning-subtle: oklch(80% 0.14 80 / 14%);
+  --error: oklch(65% 0.18 25);
+  --error-subtle: oklch(65% 0.18 25 / 14%);
+  --info: oklch(70% 0.10 230);
+  --info-subtle: oklch(70% 0.10 230 / 14%);
+
+  --diff-added-bg: oklch(72% 0.13 155 / 16%);
+  --diff-added-fg: oklch(80% 0.14 155);
+  --diff-added-border: oklch(72% 0.13 155);
+  --diff-removed-bg: oklch(65% 0.18 25 / 16%);
+  --diff-removed-fg: oklch(75% 0.17 25);
+  --diff-removed-border: oklch(65% 0.18 25);
+  --diff-highlight: oklch(80% 0.14 80 / 22%);
+
+  --file-folder: oklch(75% 0.10 80);
+  --file-markdown: oklch(68% 0.12 230);
+  --file-default: var(--fg-secondary);
+
+  --inline-completion-color: oklch(58% 0.18 290);
+  --inline-completion-bg: oklch(58% 0.18 290 / 8%);
+  --inline-completion-active-color: oklch(65% 0.18 250);
+
+  --selection-bg: oklch(72% 0.04 240 / 30%);
+  --focus-ring: oklch(72% 0.04 240 / 60%);
+
+  --overlay: oklch(8% 0.01 240 / 60%);
+  --overlay-strong: oklch(8% 0.01 240 / 75%);
+
+  --close-button-hover: oklch(58% 0.22 25);
+  --close-button-hover-fg: oklch(98% 0.01 25);
+
+  /* 尺寸 / 间距 / 圆角沿用 paper-white 那一档,本块不重写 */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.5);
 
   --bg-primary: var(--bg-canvas);
   --bg-secondary: var(--bg-surface);
@@ -203,8 +322,8 @@
   --accent-active: var(--accent-hover);
   --border-active: var(--accent);
 
-    --overlay: oklch(8% 0.01 155 / 60%);
-  --overlay-strong: oklch(8% 0.01 155 / 75%);
+  --overlay: oklch(8% 0.01 240 / 60%);
+  --overlay-strong: oklch(8% 0.01 240 / 75%);
   color-scheme: dark;
 }
 
@@ -252,25 +371,69 @@
 }
 
 /* ────────────────────────────────────────────────────────────────────────
- *  旧 light / high-contrast 主题(保留兼容,新代码不要再写)
+ *  Theme: Verdant (深色墨绿,Linear 气质)
+ * ──────────────────────────────────────────────────────────────────────── */
+[data-theme='verdant'] {
+  --bg-canvas: #14181a;
+  --bg-surface: #1b2023;
+  --bg-elevated: #23292c;
+  --bg-input: #2a3034;
+
+  --fg-primary: #e6ecea;
+  --fg-secondary: #a4b1ad;
+  --fg-muted: #6f7b78;
+  --fg-disabled: #4a524f;
+
+  --border-subtle: #28302f;
+  --border-strong: #3a4441;
+
+  --accent: oklch(68% 0.13 155);
+  --accent-hover: oklch(74% 0.14 155);
+  --accent-subtle: oklch(68% 0.13 155 / 14%);
+  --accent-contrast: oklch(18% 0.02 155);
+
+  --success: oklch(72% 0.13 155);
+  --success-subtle: oklch(72% 0.13 155 / 14%);
+
+  --bg-primary: var(--bg-canvas);
+  --bg-secondary: var(--bg-surface);
+  --bg-tertiary: var(--bg-elevated);
+  --bg-hover: color-mix(in oklch, var(--fg-primary) 6%, var(--bg-surface));
+  --bg-active: color-mix(in oklch, var(--fg-primary) 10%, var(--bg-surface));
+  --border-color: var(--border-subtle);
+  --divider: var(--border-strong);
+  --accent-primary: var(--accent);
+  --accent-active: var(--accent-hover);
+  --border-active: var(--accent);
+
+  --overlay: oklch(8% 0.01 155 / 60%);
+  --overlay-strong: oklch(8% 0.01 155 / 75%);
+  color-scheme: dark;
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+ *  旧主题别名 —— 只为兼容老用户的 settings 文件,
+ *  实际渲染委托给 paper-white / paper-cream / graphite.
+ *  新代码不要再硬编码这些 id.
  * ──────────────────────────────────────────────────────────────────────── */
 [data-theme='inkuo-light'] {
-  --bg-canvas: #fbfbfa;
-  --bg-surface: #f4f4f1;
-  --bg-elevated: #ebebe7;
+  /* 与 paper-white 同色;以后移除 */
+  --bg-canvas: #fafaf9;
+  --bg-surface: #f5f5f4;
+  --bg-elevated: #ffffff;
   --bg-input: #ffffff;
 
-  --fg-primary: #2a2a2c;
-  --fg-secondary: #5d5d62;
-  --fg-muted: #8e8e93;
+  --fg-primary: #1c1c1f;
+  --fg-secondary: #55555a;
+  --fg-muted: #8a8a90;
   --fg-disabled: #b8b8bd;
 
-  --border-subtle: #e5e5e0;
-  --border-strong: #d2d2cc;
+  --border-subtle: #ececeb;
+  --border-strong: #d6d6d3;
 
-  --accent: oklch(55% 0.18 285);
-  --accent-hover: oklch(50% 0.19 285);
-  --accent-subtle: oklch(55% 0.18 285 / 12%);
+  --accent: oklch(48% 0.13 250);
+  --accent-hover: oklch(42% 0.14 250);
+  --accent-subtle: oklch(48% 0.13 250 / 10%);
   --accent-contrast: #ffffff;
 
   --bg-primary: var(--bg-canvas);
@@ -284,12 +447,12 @@
   --accent-active: var(--accent-hover);
   --border-active: var(--accent);
 
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.08);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.10);
-  --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.14);
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.08);
+  --shadow-lg: 0 10px 30px rgba(15, 23, 42, 0.12);
 
-    --overlay: oklch(15% 0.01 285 / 45%);
-  --overlay-strong: oklch(15% 0.01 285 / 60%);
+  --overlay: oklch(20% 0.01 250 / 40%);
+  --overlay-strong: oklch(20% 0.01 250 / 55%);
   color-scheme: light;
 }
 
@@ -305,18 +468,35 @@
   --accent-primary: var(--accent);
   --overlay: oklch(0% 0 0 / 75%);
   --overlay-strong: oklch(0% 0 0 / 88%);
+  color-scheme: dark;
 }
 
 [data-theme='high-contrast-light'] {
   --bg-canvas: #ffffff;
   --bg-surface: #fafafa;
+  --bg-elevated: #ffffff;
+  --bg-input: #ffffff;
   --fg-primary: #000000;
+  --fg-secondary: #1a1a1a;
+  --fg-muted: #55555a;
+  --fg-disabled: #8a8a90;
   --accent: #6d28d9;
+  --accent-hover: #5b21b6;
+  --accent-subtle: #6d28d91f;
+  --accent-contrast: #ffffff;
+  --border-subtle: #e5e5e5;
+  --border-strong: #cfcfcf;
   --bg-primary: var(--bg-canvas);
   --bg-secondary: var(--bg-surface);
+  --bg-tertiary: var(--bg-elevated);
   --accent-primary: var(--accent);
+  --accent-active: var(--accent-hover);
+  --border-active: var(--accent);
+  --border-color: var(--border-subtle);
+  --divider: var(--border-strong);
   --overlay: oklch(15% 0.01 285 / 60%);
   --overlay-strong: oklch(15% 0.01 285 / 75%);
+  color-scheme: light;
 }
 
 /* ────────────────────────────────────────────────────────────────────────

@@ -165,7 +165,7 @@ function ensureValidApiConfigs(apiConfigs: APIConfig[]): APIConfig[] {
 const defaultAPIConfig = createDefaultAPIConfig();
 
 const defaultSettings: Settings = {
-  theme: 'inkuo-dark',
+  theme: 'paper-white',
   accent_color: '#7C5CFF',
   editor_font_size: 14,
   editor_font_family: 'JetBrains Mono, monospace',

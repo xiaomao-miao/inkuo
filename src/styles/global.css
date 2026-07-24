@@ -52,13 +52,14 @@ body {
 }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: color-mix(in oklch, var(--fg-primary) 10%, transparent);
+  /* 浅色主题下滚动条要更浅,否则像贴上去的 */
+  background: color-mix(in oklch, var(--fg-primary) 8%, transparent);
   border-radius: var(--radius-pill);
   border: 2px solid transparent;
   background-clip: padding-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: color-mix(in oklch, var(--fg-primary) 18%, transparent);
+  background: color-mix(in oklch, var(--fg-primary) 16%, transparent);
   background-clip: padding-box;
   border: 2px solid transparent;
 }
@@ -67,7 +68,7 @@ body {
 /* Firefox:仅作用于根 html,内部 scroll 容器各自再加 */
 html {
   scrollbar-width: thin;
-  scrollbar-color: color-mix(in oklch, var(--fg-primary) 18%, transparent) transparent;
+  scrollbar-color: color-mix(in oklch, var(--fg-primary) 14%, transparent) transparent;
 }
 
 ::selection {
@@ -105,12 +106,15 @@ input, textarea, select {
   font-size: inherit;
   color: var(--fg-primary);
   background: var(--bg-input);
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-sm);
   padding: var(--space-sm) var(--space-md);
   transition: border-color var(--motion-fast) var(--motion-out),
               background-color var(--motion-fast) var(--motion-out),
               box-shadow var(--motion-fast) var(--motion-out);
+}
+input:hover, textarea:hover, select:hover {
+  border-color: color-mix(in oklch, var(--fg-primary) 18%, var(--border-strong));
 }
 input:focus, textarea:focus, select:focus {
   border-color: var(--accent);

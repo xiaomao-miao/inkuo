@@ -1,19 +1,28 @@
 import { useEffect } from 'react';
 import { useSettingsStore } from '../store';
+import type { ThemeType } from '../types/settings';
 
 /** 主题 ID 列表 —— 与 design-tokens.css 中的 `[data-theme="..."]` 选择器一一对应。 */
-export const THEME_IDS = ['graphite', 'verdant', 'iris', 'inkuo-light'] as const;
+export const THEME_IDS = [
+  'paper-white',
+  'paper-cream',
+  'graphite',
+  'verdant',
+  'iris',
+] as const;
 export type ThemeId = (typeof THEME_IDS)[number];
 
 /** 旧主题 ID 的别名映射(向后兼容旧的 settings 文件)。 */
-const LEGACY_THEME_MAP: Record<string, ThemeId> = {
+const LEGACY_THEME_MAP: Record<string, ThemeType> = {
   'inkuo-dark': 'graphite',
+  'inkuo-light': 'paper-white',
+  'high-contrast-light': 'paper-white',
 };
 
-function resolveTheme(raw: string | undefined | null): ThemeId {
-  if (!raw) return 'graphite';
+function resolveTheme(raw: string | undefined | null): ThemeType {
+  if (!raw) return 'paper-white';
   const lower = raw.toLowerCase();
-  return (LEGACY_THEME_MAP[lower] ?? lower) as ThemeId;
+  return (LEGACY_THEME_MAP[lower] ?? lower) as ThemeType;
 }
 
 /**

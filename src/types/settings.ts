@@ -124,11 +124,14 @@ export interface EmbeddingModelInfo {
 }
 
 export type ThemeType =
+  | 'paper-white'
+  | 'paper-cream'
   | 'graphite'
   | 'verdant'
   | 'iris'
+  /** 保留兼容,解析时映射到 paper-white */
   | 'inkuo-light'
   | 'high-contrast-dark'
   | 'high-contrast-light'
-  /** 旧值,使用中保持向后兼容(解析时映射到 graphite)。 */
+  /** 旧值,解析时映射到 graphite。 */
   | 'inkuo-dark';
