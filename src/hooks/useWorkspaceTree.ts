@@ -3,12 +3,12 @@ import { useSidebarStore } from '../store';
 import type { FileEntry } from '../types';
 import {
   useWorkspaceFileWatcher,
-  type FileChangePayload,
+  type DirsChangedPayload,
 } from './useWorkspaceFileWatcher';
-import { useDebouncedCallback } from './useDebouncedCallback';
+import { useKeyedDebouncedCallback } from './useDebouncedCallback';
 import { loadDirectoryChildren } from '../services/workspace';
 import { reportError } from '../utils/errors';
-import { getParentDirPath, isPathInside, normalizeDirPath } from '../utils/path';
+import { isPathInside, normalizeDirPath } from '../utils/path';
 
 interface UseWorkspaceTreeResult {
   workspacePath: string | null;
@@ -44,6 +44,8 @@ interface UseWorkspaceTreeResult {
    */
   refreshDirectory: (dirPath: string) => Promise<void>;
 }
+
+const DEBOUNCE_MS = 250;
 
 export function useWorkspaceTree(): UseWorkspaceTreeResult {
   const workspacePath = useSidebarStore((state) => state.workspacePath);
@@ -99,31 +101,61 @@ export function useWorkspaceTree(): UseWorkspaceTreeResult {
   );
 
   /**
-   * Debounce file-watcher events so a burst of changes (e.g. an editor
-   * saving a batch of files) triggers a single refetch per directory
-   * instead of one per event.
+   * Per-directory refresh + follow-up queue. Models VS Code's
+   * `RunOnceWorker.doRun` semantic: at most one trailing work item per
+   * quiet window, none lost.
+   *
+   *   - `inflightRef` tracks directories whose `list_directory` IPC is
+   *     currently in flight. Concurrent calls for the same directory
+   *     while one is in flight do NOT drop the call — they mark the
+   *     directory dirty in `pendingFollowUpRef` and the just-completed
+   *     fetch schedules a single trailing re-read.
+   *   - `pendingFollowUpRef` collapses multiple "another event arrived
+   *     while we were fetching" notifications for the same directory
+   *     into a single follow-up. Once the in-flight fetch finishes, we
+   *     kick off exactly one more re-read.
    */
-  const debouncedFetch = useDebouncedCallback(fetchAndCache, 250);
-
-  // Per-directory lock to coalesce overlapping refresh requests. If a
-  // refresh for `parentPath` is already in flight (or just resolved), we
-  // skip until the lock is released. Without this, a quick `Created` →
-  // `Modified` pair for the same file could cancel each other out and
-  // leave a partially-applied cache entry.
   const inflightRef = useRef<Set<string>>(new Set());
+  const pendingFollowUpRef = useRef<Set<string>>(new Set());
 
   const refreshDirectory = useCallback(
-    async (parentPath: string) => {
+    async (parentPath: string): Promise<void> => {
       const dirPath = normalizeDirPath(parentPath);
-      if (!dirPath || inflightRef.current.has(dirPath)) return;
+      if (!dirPath) return;
+      if (inflightRef.current.has(dirPath)) {
+        // Don't drop the call — coalesce it into a single trailing
+        // re-read. This is the fix for "save-while-fetching" events
+        // that the previous inflight-skip silently lost.
+        pendingFollowUpRef.current.add(dirPath);
+        return;
+      }
       inflightRef.current.add(dirPath);
       try {
         await fetchAndCache(dirPath);
       } finally {
         inflightRef.current.delete(dirPath);
+        if (pendingFollowUpRef.current.delete(dirPath)) {
+          // Schedule the trailing re-read synchronously so the next
+          // event that arrives during the follow-up's fetch queues
+          // another follow-up, not a direct call.
+          void refreshDirectory(dirPath);
+        }
       }
     },
     [fetchAndCache],
+  );
+
+  /**
+   * Keyed debouncer: each directory gets its own 250 ms trailing timer.
+   * This is the fix for the second failure mode — a flat debouncer would
+   * only keep the last call's args, so a multi-directory burst would
+   * leave one parent without a refresh. The keyed debouncer fires one
+   * trailing call per directory.
+   */
+  const keyedRefresh = useKeyedDebouncedCallback<string, typeof refreshDirectory>(
+    refreshDirectory,
+    (args) => normalizeDirPath(args[0]),
+    DEBOUNCE_MS,
   );
 
   const ensureLoaded = useCallback(
@@ -153,32 +185,27 @@ export function useWorkspaceTree(): UseWorkspaceTreeResult {
   }, [normalizedWorkspacePath, hasCachedChildren, refreshDirectory]);
 
   /**
-   * Watcher → refresh. Every `file-change` event resolves to the parent
-   * directory of the changed path, which is exactly the cache entry we
-   * need to invalidate. We debounce to coalesce bursts.
+   * Watcher → refresh. The Rust side already coalesced OS events into a
+   * single `dirs-changed` payload, but the payload may list multiple
+   * directories that need independent refresh — and a single directory
+   * may also be reported multiple times across close-together events.
+   * The keyed debouncer handles the former; the per-directory follow-up
+   * queue in `refreshDirectory` handles the latter.
    */
-  const handleFileChange = useCallback(
-    (event: FileChangePayload) => {
+  const handleDirsChanged = useCallback(
+    (event: DirsChangedPayload) => {
       if (!normalizedWorkspacePath) return;
-
-      const changedPath = event.data?.path;
-      if (!changedPath || !isPathInside(normalizedWorkspacePath, changedPath)) return;
-
-      if (
-        event.type === 'Created' ||
-        event.type === 'Deleted' ||
-        event.type === 'Modified'
-      ) {
-        const parentPath = getParentDirPath(changedPath, normalizedWorkspacePath);
-        if (parentPath) {
-          void debouncedFetch(parentPath);
-        }
+      for (const rawDir of event.dirs) {
+        const dir = normalizeDirPath(rawDir);
+        if (!dir) continue;
+        if (!isPathInside(normalizedWorkspacePath, dir)) continue;
+        keyedRefresh(dir);
       }
     },
-    [normalizedWorkspacePath, debouncedFetch],
+    [normalizedWorkspacePath, keyedRefresh],
   );
 
-  useWorkspaceFileWatcher(normalizedWorkspacePath, handleFileChange);
+  useWorkspaceFileWatcher(normalizedWorkspacePath, handleDirsChanged);
 
   /**
    * Click handler for a directory row in the tree. Toggles the expanded

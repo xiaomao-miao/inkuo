@@ -4,17 +4,27 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { reportError } from '../utils/errors';
 import { isTauriRuntime } from '../utils/tauri';
 
-export interface FileChangePayload {
-  type: string;
-  data: { path: string };
+/**
+ * Payload emitted by the Rust file watcher.
+ *
+ * The backend coalesces a burst of OS events into one quiet window
+ * (`notify-debouncer-full`, 200 ms), then drains a per-directory `HashSet`
+ * so this payload lists every parent directory whose listing may have
+ * changed exactly once. Re-listing the same directory twice is harmless
+ * (the second fetch just overwrites the cache with the same content), so
+ * the frontend only needs to debounce per-directory and run a follow-up
+ * when concurrent fetches overlap.
+ */
+export interface DirsChangedPayload {
+  dirs: string[];
 }
 
 export function useWorkspaceFileWatcher(
   workspacePath: string | null,
-  onFileChange: (event: FileChangePayload) => void,
+  onDirsChanged: (event: DirsChangedPayload) => void,
 ) {
-  const onFileChangeRef = useRef(onFileChange);
-  onFileChangeRef.current = onFileChange;
+  const onDirsChangedRef = useRef(onDirsChanged);
+  onDirsChangedRef.current = onDirsChanged;
 
   useEffect(() => {
     if (!isTauriRuntime()) {
@@ -39,8 +49,8 @@ export function useWorkspaceFileWatcher(
 
         watchingPath = workspacePath;
 
-        const unlistenFn = await listen<FileChangePayload>('file-change', (event) => {
-          onFileChangeRef.current(event.payload);
+        const unlistenFn = await listen<DirsChangedPayload>('dirs-changed', (event) => {
+          onDirsChangedRef.current(event.payload);
         });
 
         if (disposed) {
