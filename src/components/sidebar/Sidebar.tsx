@@ -21,7 +21,7 @@ import {
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useWorkspaceSearch } from '../../hooks/useWorkspaceSearch';
 import { useWorkspaceTree } from '../../hooks/useWorkspaceTree';
-import { useSidebarStore } from '../../store';
+import { useContextMenuStore, useSidebarStore } from '../../store';
 import { FileTree } from './FileTree';
 import { ContextMenu } from './ContextMenu';
 import type { FileEntry } from '../../types';
@@ -281,7 +281,24 @@ export const Sidebar = () => {
             )}
           </div>
 
-          <div className={styles.fileTree}>
+          <div
+            className={styles.fileTree}
+            onContextMenu={(e) => {
+              if (!workspacePath) return;
+              // TreeRow calls stopPropagation on its own onContextMenu, so
+              // this handler only fires for "empty area" clicks — the
+              // .fileTree padding, the gap between rows, or inside an
+              // EmptyFolder/Skeleton placeholder. Showing the workspace
+              // menu here matches what users expect from IDE file trees.
+              e.preventDefault();
+              useContextMenuStore.getState().open({
+                kind: 'workspace',
+                path: workspacePath,
+                x: e.clientX,
+                y: e.clientY,
+              });
+            }}
+          >
             {isLoading ? (
               <SkeletonGroup className={styles.skeletonContainer}>
                 <SkeletonListItem />

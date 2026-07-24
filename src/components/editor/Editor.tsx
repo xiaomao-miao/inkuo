@@ -4,8 +4,9 @@ import { type Extension } from '@codemirror/state';
 import { type ReactCodeMirrorRef } from '@uiw/react-codemirror';
 import CodeMirror from '@uiw/react-codemirror';
 import { Compartment } from '@codemirror/state';
+import { EditorView } from '@codemirror/view';
 import { Sparkles } from 'lucide-react';
-import { useEditorStore, useSidebarStore, useSettingsStore, SETTINGS_TAB_ID, CLOUD_TAB_ID, type OpenTab } from '../../store';
+import { useEditorStore, useSidebarStore, useSettingsStore, useContextMenuStore, SETTINGS_TAB_ID, CLOUD_TAB_ID, type OpenTab, type EditorCommands } from '../../store';
 import { detectFileKind, type FileKind } from '../../types';
 import { DiffOverlay } from './DiffOverlay';
 import { InlineCompleteProvider } from '../inline-complete';
@@ -57,6 +58,9 @@ const EditorContent: React.FC<{
   const settings = useSettingsStore((state) => state.settings);
   const setOpenTabDirty = useSidebarStore((state) => state.setOpenTabDirty);
   const [refreshToken, setRefreshToken] = useState(0);
+  // Container ref for the editor. The context-menu listener attaches
+  // here in capture phase so we always see the event before CM does.
+  const editorContainerRef = useRef<HTMLDivElement | null>(null);
 
   // Each editor instance needs its own `Compartment` for the dynamic diff
   // decoration extensions. Sharing one at module scope was incorrect — it
@@ -129,6 +133,150 @@ const EditorContent: React.FC<{
     }
   }, [selectedFile, isDirty, setOpenTabDirty]);
 
+  // Suppress the webview's native context menu inside the markdown /
+  // code / text editor and route right-clicks to the app's
+  // `ContextMenu`. We attach listeners in *two* places for
+  // robustness:
+  //   1. `editorContainerRef` (capture phase) — primary path. Any
+  //      contextmenu landing inside the editor container is captured
+  //      before any descendant handler can swallow it.
+  //   2. `document` (capture phase) — defensive fallback. Some
+  //      WebKitGTK/WebView2 builds route the event to the document
+  //      before the container ever sees it; the document listener
+  //      filters by `node.contains(target)` so it only handles
+  //      matches inside the editor.
+  //
+  // Two routes:
+  //   - non-empty browser selection → `kind: 'selection'`, the
+  //     existing AI / search / copy menu.
+  //   - empty / collapsed selection → `kind: 'editor'`, a small
+  //     editor menu (cut / copy / paste / find / replace / select-all
+  //     + an "用 AI 处理当前文件" submenu that reads the *live* CM
+  //     buffer so unsaved edits are reflected).
+  useEffect(() => {
+    if (!selectedFile) return undefined;
+    const handle = (e: MouseEvent) => {
+      const node = editorContainerRef.current;
+      if (!node) return;
+      const target = e.target as Node | null;
+      if (!target || !node.contains(target)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const text = globalThis.window.getSelection()?.toString() ?? '';
+      const trimmed = text.trim();
+      const x = e.clientX;
+      const y = e.clientY;
+      // Debug breadcrumb so the user can confirm in DevTools that
+      // the listener is firing. The `[editor]` prefix is grep-able.
+      // eslint-disable-next-line no-console
+      console.log('[editor] contextmenu captured', { x, y, hasSelection: trimmed.length > 0, path: selectedFile });
+      if (trimmed.length > 0) {
+        useContextMenuStore.getState().open({
+          kind: 'selection',
+          path: selectedFile,
+          x,
+          y,
+          selectionText: text,
+        });
+        return;
+      }
+      const view = editorRef.current?.view ?? null;
+      const guardView = (): EditorView | null => {
+        if (!view || (view as { isDestroyed?: boolean }).isDestroyed) return null;
+        return view;
+      };
+      const commands: EditorCommands = {
+        cut: () => {
+          const v = guardView();
+          if (!v) return;
+          v.focus();
+          // CM's default cut keymap action is exposed as a
+          // `Command` `defaultKeymap` lookup. Calling it
+          // through the editor's own command palette keeps
+          // the behavior aligned with the keymap binding.
+          // (The simpler `document.execCommand('cut')` is
+          // deprecated but still works for clipboard handoff
+          // to the system clipboard.)
+          document.execCommand('cut');
+        },
+        copy: () => {
+          const v = guardView();
+          if (!v) return;
+          v.focus();
+          document.execCommand('copy');
+        },
+        paste: () => {
+          const v = guardView();
+          if (!v) return;
+          v.focus();
+          document.execCommand('paste');
+        },
+        selectAll: () => {
+          const v = guardView();
+          if (!v) return;
+          v.focus();
+          v.dispatch({ selection: { anchor: 0, head: v.state.doc.length } });
+        },
+        find: () => {
+          const v = guardView();
+          if (!v) return;
+          v.focus();
+          // Synthesize Ctrl+F — CM's `search` keymap is registered
+          // on the CodeMirror container; firing a keydown on the
+          // active element routes the binding to the right view.
+          const ev = new KeyboardEvent('keydown', {
+            key: 'f',
+            code: 'KeyF',
+            ctrlKey: true,
+            bubbles: true,
+            cancelable: true,
+          });
+          (v.contentDOM ?? v.dom).dispatchEvent(ev);
+        },
+        replace: () => {
+          const v = guardView();
+          if (!v) return;
+          v.focus();
+          const ev = new KeyboardEvent('keydown', {
+            key: 'h',
+            code: 'KeyH',
+            ctrlKey: true,
+            bubbles: true,
+            cancelable: true,
+          });
+          (v.contentDOM ?? v.dom).dispatchEvent(ev);
+        },
+        readContent: () => {
+          const v = guardView();
+          if (!v) return '';
+          return v.state.doc.toString();
+        },
+      };
+      useContextMenuStore.getState().open({
+        kind: 'editor',
+        path: selectedFile,
+        x,
+        y,
+        editorCommands: commands,
+      });
+    };
+    // Primary: container-level capture. CM's own event listeners
+    // run in bubble phase, so this fires first.
+    const node = editorContainerRef.current;
+    if (node) {
+      node.addEventListener('contextmenu', handle, { capture: true });
+    }
+    // Defensive: document-level capture. Some WebKit builds re-deliver
+    // the event through `document` before the container sees it.
+    document.addEventListener('contextmenu', handle, { capture: true });
+    return () => {
+      if (node) {
+        node.removeEventListener('contextmenu', handle, { capture: true } as EventListenerOptions);
+      }
+      document.removeEventListener('contextmenu', handle, { capture: true } as EventListenerOptions);
+    };
+  }, [selectedFile, editorRef]);
+
   const handleChange = useCallback((value: string) => {
     if (selectedFile) {
       setContent(selectedFile, value);
@@ -148,7 +296,7 @@ const EditorContent: React.FC<{
   }, [diffDecorationsField, inlineCompletionKeyHandler, inlineAutoTrigger, autoTriggerStateRef, language]);
 
   return (
-    <div className={`${styles.editorContainer} editorContainer`} data-inline-complete-styles={inlineCompleteStyles}>
+    <div ref={editorContainerRef} className={`${styles.editorContainer} editorContainer`} data-inline-complete-styles={inlineCompleteStyles}>
       <EditorBody
         inPreviewMode={inPreviewMode}
         currentContent={currentContent}

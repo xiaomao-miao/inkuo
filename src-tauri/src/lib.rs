@@ -434,6 +434,8 @@ pub fn run() {
             commands::ai_edit,
             commands_stream::ai_edit_stream,
             commands_stream::ai_stream_cancel,
+            commands_stream::ai_ask_stream,
+            commands_stream::ai_ask_cancel,
             commands_agent::ai_agent_stream,
             commands_agent::ai_agent_cancel,
             commands_agent::get_available_tools,

@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" width="1280" height="720">
+  <rect width="1280" height="720" fill="#ffffff"/>
+  <rect width="1280" height="80" fill="#0f1a2e"/>
+  <text x="50" y="50" font-family="Arial, sans-serif" font-size="32" font-weight="bold" fill="#ffffff">核心亮点总览</text>
+  <rect x="60" y="120" width="260" height="260" rx="12" fill="#e3f2fd" stroke="#1565c0" stroke-width="2"/>
+  <text x="190" y="200" text-anchor="middle" font-family="Arial, sans-serif" font-size="48" fill="#1565c0">📄</text>
+  <text x="190" y="250" text-anchor="middle" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="#0d47a1">AI 原生文档</text>
+  <text x="80" y="280" font-family="Arial, sans-serif" font-size="14" fill="#444" text-anchor="middle">
+    <tspan x="190" dy="0">直接读写 .docx / .xlsx</tspan>
+    <tspan x="190" dy="22">/.pptx，格式、样式、</tspan>
+    <tspan x="190" dy="22">公式完整保留</tspan>
+  </text>
+  <rect x="350" y="120" width="260" height="260" rx="12" fill="#e8f5e9" stroke="#2e7d32" stroke-width="2"/>
+  <text x="480" y="200" text-anchor="middle" font-family="Arial, sans-serif" font-size="48" fill="#2e7d32">🤖</text>
+  <text x="480" y="250" text-anchor="middle" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="#1b5e20">Agent 生态</text>
+  <text x="360" y="280" font-family="Arial, sans-serif" font-size="14" fill="#444">
+    <tspan x="480" dy="0" text-anchor="middle">22+ 内置工具</tspan>
+    <tspan x="480" dy="22" text-anchor="middle">9 个专家子代理</tspan>
+    <tspan x="480" dy="22" text-anchor="middle">50 轮自主工具调用</tspan>
+  </text>
+  <rect x="640" y="120" width="260" height="260" rx="12" fill="#fff3e0" stroke="#e65100" stroke-width="2"/>
+  <text x="770" y="200" text-anchor="middle" font-family="Arial, sans-serif" font-size="48" fill="#e65100">🧠</text>
+  <text x="770" y="250" text-anchor="middle" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="#bf360c">本地 RAG</text>
+  <text x="660" y="280" font-family="Arial, sans-serif" font-size="14" fill="#444">
+    <tspan x="770" dy="0" text-anchor="middle">本地向量化+存储</tspan>
+    <tspan x="770" dy="22" text-anchor="middle">语义搜索工作区</tspan>
+    <tspan x="770" dy="22" text-anchor="middle">数据 100% 留在本机</tspan>
+  </text>
+  <rect x="930" y="120" width="260" height="260" rx="12" fill="#f3e5f5" stroke="#6a1b9a" stroke-width="2"/>
+  <text x="1060" y="200" text-anchor="middle" font-family="Arial, sans-serif" font-size="48" fill="#6a1b9a">⚡</text>
+  <text x="1060" y="250" text-anchor="middle" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="#4a148c">自研 OOXML</text>
+  <text x="950" y="280" font-family="Arial, sans-serif" font-size="14" fill="#444">
+    <tspan x="1060" dy="0" text-anchor="middle">纯 Rust 实现</tspan>
+    <tspan x="1060" dy="22" text-anchor="middle">不依赖第三方库</tspan>
+    <tspan x="1060" dy="22" text-anchor="middle">逐字节精确控制</tspan>
+  </text>
+  <rect x="60" y="420" width="1130" height="260" rx="12" fill="#f5f5f5" stroke="#bdbdbd" stroke-width="1"/>
+  <text x="80" y="460" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="#0f1a2e">更多亮点</text>
+  <text x="80" y="500" font-family="Arial, sans-serif" font-size="18" fill="#444">● 三种 AI 模式：Ask 问答 / Plan 规划 / Agent 执行，一键切换</text>
+  <text x="80" y="535" font-family="Arial, sans-serif" font-size="18" fill="#444">● 工作区视图：文件树 + 搜索 + Git + 知识库 + 快照 + 扩展</text>
+  <text x="80" y="570" font-family="Arial, sans-serif" font-size="18" fill="#444">● Mermaid 流程图渲染，支持 PNG/SVG/PDF 输出</text>
+  <text x="80" y="605" font-family="Arial, sans-serif" font-size="18" fill="#444">● 可选云端服务：账户管理 + 统一 LLM 代理 + Token 计费</text>
+  <text x="80" y="640" font-family="Arial, sans-serif" font-size="18" fill="#444">● 本地模式完全免费，数据全在本机</text>
+</svg>

@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" width="1280" height="720">
+  <rect width="1280" height="720" fill="#ffffff"/>
+  <rect width="1280" height="80" fill="#0f1a2e"/>
+  <text x="50" y="50" font-family="Arial, sans-serif" font-size="32" font-weight="bold" fill="#ffffff">AI 驱动的文档编辑</text>
+  <rect x="60" y="120" width="220" height="180" rx="10" fill="#e3f2fd" stroke="#1565c0" stroke-width="2"/>
+  <text x="60" y="120" width="220" height="40" rx="10" fill="#1565c0"/>
+  <text x="170" y="170" text-anchor="middle" font-family="Arial, sans-serif" font-size="40" fill="#1565c0">📝</text>
+  <text x="170" y="210" text-anchor="middle" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="#0d47a1">Word</text>
+  <text x="170" y="240" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" fill="#444">创建 / 修改 / 追加</text>
+  <text x="170" y="265" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" fill="#444">样式 / 字体 / 颜色</text>
+  <text x="170" y="290" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" fill="#444">图片插入 / 文档比较</text>
+  <rect x="310" y="120" width="220" height="180" rx="10" fill="#e8f5e9" stroke="#2e7d32" stroke-width="2"/>
+  <text x="420" y="170" text-anchor="middle" font-family="Arial, sans-serif" font-size="40" fill="#2e7d32">📊</text>
+  <text x="420" y="210" text-anchor="middle" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="#1b5e20">Excel</text>
+  <text x="420" y="240" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" fill="#444">新建 / 读写单元格</text>
+  <text x="420" y="265" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" fill="#444">公式 / 合并 / 样式</text>
+  <text x="420" y="290" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" fill="#444">工作表管理</text>
+  <rect x="560" y="120" width="220" height="180" rx="10" fill="#fff3e0" stroke="#e65100" stroke-width="2"/>
+  <text x="670" y="170" text-anchor="middle" font-family="Arial, sans-serif" font-size="40" fill="#e65100">📽️</text>
+  <text x="670" y="210" text-anchor="middle" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="#bf360c">PPT</text>
+  <text x="670" y="240" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" fill="#444">SVG → PPTX 打包</text>
+  <text x="670" y="265" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" fill="#444">原生 OOXML 形状</text>
+  <text x="670" y="290" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" fill="#444">动画 / 过渡效果</text>
+  <rect x="810" y="120" width="220" height="180" rx="10" fill="#f3e5f5" stroke="#6a1b9a" stroke-width="2"/>
+  <text x="920" y="170" text-anchor="middle" font-family="Arial, sans-serif" font-size="40" fill="#6a1b9a">📄</text>
+  <text x="920" y="210" text-anchor="middle" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="#4a148c">Markdown</text>
+  <text x="920" y="240" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" fill="#444">长文撰写 / 技术文档</text>
+  <text x="920" y="265" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" fill="#444">流程图 / 代码块</text>
+  <text x="920" y="290" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" fill="#444">设计文档 / README</text>
+  <rect x="60" y="330" width="1130" height="350" rx="10" fill="#fafafa" stroke="#e0e0e0" stroke-width="1"/>
+  <text x="80" y="370" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="#0f1a2e">典型 AI 操作示例</text>
+  <rect x="80" y="390" width="540" height="55" rx="6" fill="#e3f2fd"/>
+  <text x="100" y="415" font-family="Arial, sans-serif" font-size="16" font-weight="bold" fill="#1565c0">Word</text>
+  <text x="160" y="415" font-family="Arial, sans-serif" font-size="16" fill="#333">"把 report.docx 第三段改成蓝色粗体，字号 14pt"</text>
+  <text x="160" y="435" font-family="Arial, sans-serif" font-size="14" fill="#666">→ AI 直接定位段落，修改 run 属性，无需手动打开</text>
+  <rect x="80" y="455" width="540" height="55" rx="6" fill="#e8f5e9"/>
+  <text x="100" y="480" font-family="Arial, sans-serif" font-size="16" font-weight="bold" fill="#2e7d32">Excel</text>
+  <text x="160" y="480" font-family="Arial, sans-serif" font-size="16" fill="#333">"在 data.xlsx 的 Sheet1 末行加上 SUM 求和"</text>
+  <text x="160" y="500" font-family="Arial, sans-serif" font-size="14" fill="#666">→ AI 自动定位末行，写入公式，保留已有样式</text>
+  <rect x="80" y="520" width="540" height="55" rx="6" fill="#fff3e0"/>
+  <text x="100" y="545" font-family="Arial, sans-serif" font-size="16" font-weight="bold" fill="#e65100">PPT</text>
+  <text x="160" y="545" font-family="Arial, sans-serif" font-size="16" fill="#333">"把 4 张架构图做成带入场动画的 PPT"</text>
+  <text x="160" y="565" font-family="Arial, sans-serif" font-size="14" fill="#666">→ AI 生成 SVG → 打包 PPTX → 添加动画效果</text>
+  <rect x="80" y="585" width="540" height="55" rx="6" fill="#f3e5f5"/>
+  <text x="100" y="610" font-family="Arial, sans-serif" font-size="16" font-weight="bold" fill="#6a1b9a">MD</text>
+  <text x="160" y="610" font-family="Arial, sans-serif" font-size="16" fill="#333">"把设计文档翻译成英文，保留代码块和流程图"</text>
+  <text x="160" y="630" font-family="Arial, sans-serif" font-size="14" fill="#666">→ AI 逐段翻译，保留所有结构和格式</text>
+  <rect x="660" y="390" width="510" height="250" rx="12" fill="#0f1a2e"/>
+  <text x="915" y="430" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#ffffff">核心差异</text>
+  <text x="915" y="470" text-anchor="middle" font-family="Arial, sans-serif" font-size="16" fill="#88b4d9">传统方案：</text>
+  <text x="915" y="495" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" fill="#a0c4e8">AI 生成文本 → 复制粘贴 →</text>
+  <text x="915" y="517" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" fill="#a0c4e8">格式丢失 → 手动重排版</text>
+  <text x="915" y="560" text-anchor="middle" font-family="Arial, sans-serif" font-size="16" fill="#ffffff">InkUO：</text>
+  <text x="915" y="585" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" fill="#ffffff">一句话需求 → AI 直接读写</text>
+  <text x="915" y="607" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" fill="#ffffff">文件，格式/样式完整保留</text>
+</svg>

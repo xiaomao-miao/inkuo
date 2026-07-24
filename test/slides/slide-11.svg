@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" width="1280" height="720">
+  <rect width="1280" height="720" fill="#ffffff"/>
+  <rect width="1280" height="80" fill="#0f1a2e"/>
+  <text x="50" y="50" font-family="Arial, sans-serif" font-size="32" font-weight="bold" fill="#ffffff">工作区视图 —— 全方位管理你的文件</text>
+  <rect x="60" y="120" width="360" height="160" rx="10" fill="#e3f2fd" stroke="#1565c0" stroke-width="1"/>
+  <text x="80" y="160" font-family="Arial, sans-serif" font-size="24" fill="#0d47a1">📂</text>
+  <text x="115" y="160" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="#0d47a1">文件树</text>
+  <text x="80" y="195" font-family="Arial, sans-serif" font-size="15" fill="#444">像 IDE 一样浏览、新建、重命名、</text>
+  <text x="80" y="220" font-family="Arial, sans-serif" font-size="15" fill="#444">删除工作区文件</text>
+  <text x="80" y="250" font-family="Arial, sans-serif" font-size="14" fill="#888">所有 AI 工具操作的默认工作目录</text>
+  <rect x="450" y="120" width="360" height="160" rx="10" fill="#fff3e0" stroke="#e65100" stroke-width="1"/>
+  <text x="470" y="160" font-family="Arial, sans-serif" font-size="24" fill="#bf360c">🔍</text>
+  <text x="505" y="160" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="#bf360c">搜索</text>
+  <text x="470" y="195" font-family="Arial, sans-serif" font-size="15" fill="#444">全文搜索，快速定位文件内容</text>
+  <text x="470" y="220" font-family="Arial, sans-serif" font-size="15" fill="#444">支持正则表达式 / 通配符</text>
+  <text x="470" y="250" font-family="Arial, sans-serif" font-size="14" fill="#888">秒级检索整个工作区</text>
+  <rect x="840" y="120" width="360" height="160" rx="10" fill="#e8f5e9" stroke="#2e7d32" stroke-width="1"/>
+  <text x="860" y="160" font-family="Arial, sans-serif" font-size="24" fill="#1b5e20">🔗</text>
+  <text x="895" y="160" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="#1b5e20">Git 集成</text>
+  <text x="860" y="195" font-family="Arial, sans-serif" font-size="15" fill="#444">图形化 git status / diff / commit</text>
+  <text x="860" y="220" font-family="Arial, sans-serif" font-size="15" fill="#444">版本管理与变更追踪</text>
+  <text x="860" y="250" font-family="Arial, sans-serif" font-size="14" fill="#888">团队协作的基础</text>
+  <rect x="60" y="310" width="350" height="160" rx="10" fill="#f3e5f5" stroke="#6a1b9a" stroke-width="1"/>
+  <text x="80" y="350" font-family="Arial, sans-serif" font-size="24" fill="#4a148c">🧩</text>
+  <text x="115" y="350" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="#4a148c">扩展系统</text>
+  <text x="80" y="385" font-family="Arial, sans-serif" font-size="15" fill="#444">可安装插件扩展能力</text>
+  <text x="80" y="410" font-family="Arial, sans-serif" font-size="15" fill="#444">自定义工作流和工具链</text>
+  <text x="80" y="440" font-family="Arial, sans-serif" font-size="14" fill="#888">开放式生态</text>
+  <rect x="440" y="310" width="350" height="160" rx="10" fill="#e0f2f1" stroke="#00897b" stroke-width="1"/>
+  <text x="460" y="350" font-family="Arial, sans-serif" font-size="24" fill="#00695c">🧠</text>
+  <text x="495" y="350" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="#00695c">知识库</text>
+  <text x="460" y="385" font-family="Arial, sans-serif" font-size="15" fill="#444">查看和管理本地 RAG 索引</text>
+  <text x="460" y="410" font-family="Arial, sans-serif" font-size="15" fill="#444">扫描 / 重建 / 监控索引状态</text>
+  <text x="460" y="440" font-family="Arial, sans-serif" font-size="14" fill="#888">一键构建知识库</text>
+  <rect x="820" y="310" width="380" height="160" rx="10" fill="#efebe9" stroke="#8d6e63" stroke-width="1"/>
+  <text x="840" y="350" font-family="Arial, sans-serif" font-size="24" fill="#5d4037">📸</text>
+  <text x="875" y="350" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="#5d4037">快照管理</text>
+  <text x="840" y="385" font-family="Arial, sans-serif" font-size="15" fill="#444">保存 / 恢复工作区状态</text>
+  <text x="840" y="410" font-family="Arial, sans-serif" font-size="15" fill="#444">实验分支的安全网</text>
+  <text x="840" y="440" font-family="Arial, sans-serif" font-size="14" fill="#888">随时回到任意历史状态</text>
+  <rect x="60" y="500" width="1130" height="180" rx="10" fill="#0f1a2e"/>
+  <text x="80" y="540" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#ffffff">工作区根目录结构</text>
+  <text x="80" y="575" font-family: "Consolas", "Courier New", monospace font-size="16" fill="#88b4d9">/workspace</text>
+  <text x="100" y="600" font-family: "Consolas", "Courier New", monospace font-size="14" fill="#a0c4e8">├── 📂 文件树    ← 层级浏览 / 新建 / 重命名 / 删除</text>
+  <text x="100" y="622" font-family: "Consolas", "Courier New", monospace font-size="14" fill="#a0c4e8">├── 🔍 搜索      ← 全文搜索，支持正则 / 通配符</text>
+  <text x="100" y="644" font-family: "Consolas", "Courier New", monospace font-size="14" fill="#a0c4e8">├── 🔗 Git       ← git status / diff / commit 图形化</text>
+  <text x="100" y="666" font-family: "Consolas", "Courier New", monospace font-size="14" fill="#a0c4e8">├── 🧩 扩展 · 🧠 知识库 · 📸 快照</text>
+</svg>

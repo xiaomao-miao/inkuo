@@ -7,7 +7,8 @@ import type { Sheet as FortuneSheetCoreSheet } from '@fortune-sheet/core';
 import { Save, Table2 } from 'lucide-react';
 import { WordToolbar } from './word-toolbar';
 import { useKeyboardSave } from './useKeyboardSave';
-import { useSidebarStore, useEditorStore, useInlineCompleteStore, useNotificationStore } from '../../store';
+import { useContextMenuStore, useSidebarStore, useEditorStore, useInlineCompleteStore, useNotificationStore } from '../../store';
+import type { DocxCommands } from '../../store';
 import {
   rustWorkbookToFortuneSheets,
 } from './fortuneSheetConverter';
@@ -20,6 +21,8 @@ import {
 } from '../inline-complete/useWordInlineCompleteTrigger';
 import { createWordInlineCompletePlugin } from '../inline-complete/wordInlineCompletePlugin';
 import type { EditorView } from 'prosemirror-view';
+import { TextSelection } from 'prosemirror-state';
+import { undoDepth, redoDepth } from 'prosemirror-history';
 import styles from './OfficeViewer.module.css';
 import '@eigenpal/docx-editor-react/styles.css';
 import '@fortune-sheet/react/dist/index.css';
@@ -266,6 +269,217 @@ export const WordEditor: React.FC<WordEditorProps> = ({
   const officeBufferVersion = useEditorStore(s => s.documentContents[filePath]?.office.bufferVersion ?? 0);
   const setDocxBuffer = useEditorStore((state) => state.setDocxBuffer);
   const pushNotification = useNotificationStore((state) => state.pushNotification);
+
+  // Suppress the webview's native context menu (and any third-party
+  // menu wired up by the docx editor) and route every right-click
+  // inside the editor container to our own `ContextMenu`. The host is
+  // `DocxEditor` / ProseMirror, which owns its own event loop and may
+  // call `stopPropagation` internally — we therefore attach a native
+  // `contextmenu` listener in the capture phase so we always get the
+  // event before the editor sees it.
+  //
+  // Two branches:
+  //   - non-empty selection → `kind: 'selection'`, the existing AI /
+  //     search / copy menu.
+  //   - empty / collapsed selection → `kind: 'docx'`, a small doc-
+  //     text action menu (Undo / Redo / Cut / Copy / Paste / Select
+  //     All). We previously let the webview handle empty selections,
+  //     but Chromium's stock menu is positioned independently of our
+  //     code and tends to render somewhere far from the cursor (e.g.
+  //     the bottom-right of the viewport for spell-check items).
+  //     Routing through our app menu keeps the position consistent.
+  useEffect(() => {
+    const node = containerRef.current;
+    if (!node) return undefined;
+    const onContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const selection = window.getSelection();
+      const text = selection?.toString() ?? '';
+      const trimmed = text.trim();
+      const x = e.clientX;
+      const y = e.clientY;
+
+      if (trimmed.length > 0) {
+        useContextMenuStore.getState().open({
+          kind: 'selection',
+          path: filePath,
+          x,
+          y,
+          selectionText: text,
+        });
+        return;
+      }
+
+      // Empty-selection branch: build a snapshot of the imperative
+      // PM commands the menu can dispatch. We snapshot closures that
+      // resolve the live editor view at click time, so the menu
+      // actions still work even if the editor unmounts before the
+      // user picks a row.
+      const editor = editorRef.current?.getEditorRef() ?? null;
+      const guardView = (): EditorView | null => {
+        // `pmViewRef.current` is the topology PM view set by the
+        // editor's `onEditorViewReady` callback. `editor?.getView()`
+        // is the same view but reached via the docx editor's public
+        // ref. Both are kept in sync by the editor component; we
+        // fall back to the editor ref to be safe.
+        const v = pmViewRef.current ?? editor?.getView() ?? null;
+        if (!v || v.isDestroyed) return null;
+        return v;
+      };
+
+      const commands: DocxCommands = {
+        undo: () => {
+          const v = guardView();
+          if (!v) return;
+          editor?.focus();
+          // `editorRef.undo()` returns true if a step was undone,
+          // false if there was no history (e.g. fresh document). We
+          // don't need the return value — the menu disables the
+          // Undo row when `canUndo` is false at click time.
+          editor?.undo();
+          v.focus();
+        },
+        redo: () => {
+          const v = guardView();
+          if (!v) return;
+          editor?.focus();
+          editor?.redo();
+          v.focus();
+        },
+        cut: () => {
+          const v = guardView();
+          if (!v) return;
+          v.focus();
+          // `execCommand` is deprecated but still works in Tauri
+          // WebView (Chromium). The editor's PM view is focused, so
+          // the browser routes the command to the right element.
+          try {
+            document.execCommand('cut');
+          } catch {
+            // Fallback: copy + delete the selection range.
+            document.execCommand('copy');
+            const tr = v.state.tr.deleteSelection();
+            v.dispatch(tr);
+          }
+        },
+        copy: () => {
+          const v = guardView();
+          if (!v) return;
+          v.focus();
+          try {
+            document.execCommand('copy');
+          } catch {
+            // No-op: copying requires a live browser selection.
+          }
+        },
+        paste: () => {
+          const v = guardView();
+          if (!v) return;
+          v.focus();
+          try {
+            document.execCommand('paste');
+          } catch (err) {
+            // Browsers may block programmatic paste (e.g. without
+            // a transient user-activation token). We just surface
+            // the failure silently — the user can retry with ⌘V.
+            console.warn('[docx-context-menu] paste failed', err);
+          }
+        },
+        selectAll: () => {
+          const v = guardView();
+          if (!v) return;
+          const docSize = v.state.doc.content.size;
+          const tr = v.state.tr.setSelection(
+            TextSelection.create(v.state.doc, 0, docSize),
+          );
+          v.dispatch(tr);
+          v.focus();
+        },
+        // Find / Replace: focus the editor and dispatch a synthetic
+        // keydown matching Ctrl+F / Ctrl+H. The editor's own keymap
+        // (mounted in capture phase on the contenteditable surface)
+        // intercepts these and opens its built-in dialog. This is
+        // the same trick `WordToolbar.handleFind` /
+        // `WordToolbar.handleReplace` use, just callable from the
+        // context menu.
+        find: () => {
+          const v = guardView();
+          v?.focus();
+          const root = document.querySelector<HTMLElement>(
+            '[data-office-editor-root="word"]',
+          );
+          const target = root ?? document.body;
+          const evt = new KeyboardEvent('keydown', {
+            key: 'f',
+            code: 'KeyF',
+            keyCode: 70,
+            which: 70,
+            ctrlKey: true,
+            metaKey: true,
+            bubbles: true,
+            cancelable: true,
+          });
+          target.dispatchEvent(evt);
+        },
+        replace: () => {
+          const v = guardView();
+          v?.focus();
+          const root = document.querySelector<HTMLElement>(
+            '[data-office-editor-root="word"]',
+          );
+          const target = root ?? document.body;
+          const evt = new KeyboardEvent('keydown', {
+            key: 'h',
+            code: 'KeyH',
+            keyCode: 72,
+            which: 72,
+            ctrlKey: true,
+            metaKey: true,
+            bubbles: true,
+            cancelable: true,
+          });
+          target.dispatchEvent(evt);
+        },
+        // Capability flags. ProseMirror's history plugin stores
+        // event counts in plugin state; `undoDepth` /
+        // `redoDepth` expose them. We read them lazily so the
+        // snapshot is taken at the exact click moment.
+        canUndo: (() => {
+          const v = guardView();
+          if (!v) return false;
+          return (undoDepth(v.state) as number) > 0;
+        })(),
+        canRedo: (() => {
+          const v = guardView();
+          if (!v) return false;
+          return (redoDepth(v.state) as number) > 0;
+        })(),
+        hasSelection: trimmed.length > 0,
+        // We can't synchronously know whether the user has
+        // something on the OS clipboard without querying the
+        // Clipboard API (which is async). Instead, the user
+        // will see a brief no-op if they click Paste with an
+        // empty clipboard — the menu still closes via the
+        // `wrap` helper in `buildDocxMenu`, so the UX is
+        // indistinguishable from a successful paste attempt.
+        hasClipboard: true,
+      };
+
+      useContextMenuStore.getState().open({
+        kind: 'docx',
+        path: filePath,
+        x,
+        y,
+        docxCommands: commands,
+      });
+    };
+    node.addEventListener('contextmenu', onContextMenu, { capture: true });
+    return () => {
+      node.removeEventListener('contextmenu', onContextMenu, { capture: true } as EventListenerOptions);
+    };
+  }, [filePath]);
 
   useEffect(() => {
     const doLoad = async () => {

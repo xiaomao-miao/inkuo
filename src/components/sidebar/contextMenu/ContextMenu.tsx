@@ -26,7 +26,7 @@ import { loadDirectoryChildren } from '../../../services/workspace';
 import { reportError } from '../../../utils/errors';
 
 import { clampToViewport } from './geometry';
-import { buildEntryMenu, buildWorkspaceMenu } from './menuBuilders';
+import { buildDocxMenu, buildEditorMenu, buildEntryMenu, buildSelectionMenu, buildTabMenu, buildWorkspaceMenu } from './menuBuilders';
 import { MenuRow } from './MenuRow';
 import type { MenuBuilderContext, MenuItem, Position } from './types';
 import styles from './ContextMenu.module.css';
@@ -129,6 +129,18 @@ export const ContextMenu = () => {
     if (target.kind === 'workspace') {
       return buildWorkspaceMenu(ctx);
     }
+    if (target.kind === 'tab' && target.tab) {
+      return buildTabMenu(target.tab, ctx);
+    }
+    if (target.kind === 'docx' && target.docxCommands) {
+      return buildDocxMenu(target.docxCommands, ctx);
+    }
+    if (target.kind === 'editor' && target.editorCommands) {
+      return buildEditorMenu(target.editorCommands, ctx);
+    }
+    if (target.kind === 'selection' && target.selectionText) {
+      return buildSelectionMenu(target.selectionText, ctx);
+    }
     if (target.entry) {
       return buildEntryMenu(target.entry, ctx);
     }
@@ -144,8 +156,19 @@ export const ContextMenu = () => {
       style={{ left: pos.left, top: pos.top }}
       role="menu"
     >
-      {items.map((item) => (
-        <MenuRow key={item.id} item={item} />
+      {/*
+        Keys: dividers all carry `id === DIVIDER_ID`, so the array
+        index is the only thing that disambiguates them. Falling
+        back to `${item.id}-${i}` keeps the key unique without
+        forcing every builder to mint distinct divider ids.
+        React's `key` warning in dev is harmless on its own, but
+        the duplicated-key DOM is unstable across renders — a
+        re-render (e.g. on `target` change) can shuffle divider
+        DOM nodes and break parent-child relationships. Using
+        index-baked keys keeps the row order stable.
+      */}
+      {items.map((item, i) => (
+        <MenuRow key={`${item.id}-${i}`} item={item} />
       ))}
     </div>,
     document.body,

@@ -1,0 +1,237 @@
+/* Floating AI popovers.
+ *
+ * One .window per ask. The whole popover is `position: fixed` and
+ * lives in its own stacking context (driven by `zIndex` in the JS).
+ * The header is the drag handle; buttons inside the header stop
+ * propagation so they don't initiate a drag.
+ */
+
+.window {
+  position: fixed;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--bg-elevated, var(--bg-secondary));
+  border: 1px solid var(--border-color, var(--border-subtle));
+  border-radius: 12px;
+  box-shadow:
+    0 10px 32px rgba(0, 0, 0, 0.22),
+    0 2px 8px rgba(0, 0, 0, 0.08);
+  backdrop-filter: blur(8px);
+  font-family: var(--font-family-base, inherit);
+  color: var(--fg-primary);
+  animation: fai-fade-in 120ms ease-out;
+  user-select: none;
+  /* Prevent the popover from intercepting global pointer/keyboard
+   * shortcuts — only its own button events should react. */
+  overscroll-behavior: contain;
+}
+
+@keyframes fai-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.header {
+  /* Drag handle. The whole header is grabbable; we don't add
+   * separate "drag" iconography to keep the surface minimal. */
+  cursor: grab;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border-color, var(--border-subtle));
+  user-select: none;
+  /* The cursor flips to "grabbing" via JS pointerdown feedback
+   * (we can't easily do this in pure CSS without a class swap). */
+}
+
+.header:active {
+  cursor: grabbing;
+}
+
+.titleIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  color: var(--accent-primary);
+  border-radius: 6px;
+  background-color: var(--accent-subtle, rgba(99, 102, 241, 0.12));
+}
+
+.titleBlock {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 0;
+}
+
+.title {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.subtitle {
+  font-size: 11px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.3;
+}
+
+.headerButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast, 120ms) var(--motion-out, ease-out),
+    color var(--motion-fast, 120ms) var(--motion-out, ease-out);
+}
+
+.headerButton:hover {
+  background-color: var(--bg-tertiary);
+  color: var(--fg-primary);
+}
+
+.body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 13px;
+  /* Re-enable text selection in the body — the header's
+   * user-select: none is for drag affordance, not the body. */
+  user-select: text;
+}
+
+.quote {
+  margin: 0;
+  padding: 8px 10px;
+  border-left: 3px solid var(--accent-primary);
+  background-color: var(--accent-subtle, rgba(99, 102, 241, 0.06));
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--fg-secondary);
+  max-height: 80px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.markdownWrap {
+  flex: 1;
+  min-height: 60px;
+  /* The markdown renderer has its own .markdown class. We don't
+   * override its typography — the window inherits via the parent
+   * tokens. */
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 36px;
+  padding: 0 12px;
+  border-top: 1px solid var(--border-color, var(--border-subtle));
+  background-color: transparent;
+  font-size: 12px;
+  color: var(--fg-muted);
+  user-select: none;
+}
+
+.status {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.footerActions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.footerButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--border-color, var(--border-subtle));
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast, 120ms) var(--motion-out, ease-out),
+    color var(--motion-fast, 120ms) var(--motion-out, ease-out);
+}
+
+.footerButton:hover:not(:disabled) {
+  background-color: var(--bg-tertiary);
+  color: var(--fg-primary);
+}
+
+.footerButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.resizeHandle {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  /* Subtle diagonal indicator — the classic lower-right "grip" that
+   * users associate with resize. We don't add an explicit icon; the
+   * cursor + hover-tinted corner is enough signal. */
+  background:
+    linear-gradient(
+      135deg,
+      transparent 0%,
+      transparent 50%,
+      var(--fg-muted, rgba(0, 0, 0, 0.35)) 50%,
+      var(--fg-muted, rgba(0, 0, 0, 0.35)) 60%,
+      transparent 60%,
+      transparent 75%,
+      var(--fg-muted, rgba(0, 0, 0, 0.35)) 75%,
+      var(--fg-muted, rgba(0, 0, 0, 0.35)) 85%,
+      transparent 85%
+    );
+  opacity: 0.55;
+  border-bottom-right-radius: 12px;
+  transition: opacity var(--motion-fast, 120ms) var(--motion-out, ease-out);
+}
+
+.resizeHandle:hover {
+  opacity: 1;
+}

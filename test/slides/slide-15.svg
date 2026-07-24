@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" width="1280" height="720">
+  <rect width="1280" height="720" fill="#ffffff"/>
+  <rect width="1280" height="80" fill="#0f1a2e"/>
+  <text x="50" y="50" font-family="Arial, sans-serif" font-size="32" font-weight="bold" fill="#ffffff">商业模式 —— 本地免费 + 云端付费</text>
+  <rect x="80" y="130" width="520" height="280" rx="15" fill="#e8f5e9" stroke="#2e7d32" stroke-width="3"/>
+  <rect x="80" y="130" width="520" height="55" rx="15" fill="#2e7d32"/>
+  <text x="340" y="167" text-anchor="middle" font-family="Arial, sans-serif" font-size="24" font-weight="bold" fill="#ffffff">本地模式 (Free)</text>
+  <text x="340" y="255" text-anchor="middle" font-family="Arial, sans-serif" font-size="48" fill="#2e7d32">🆓</text>
+  <text x="100" y="300" font-family="Arial, sans-serif" font-size="16" fill="#1b5e20">✓ 完全离线运行</text>
+  <text x="100" y="330" font-family="Arial, sans-serif" font-size="16" fill="#1b5e20">✓ 所有模型 / 知识库 / 文件都在本地</text>
+  <text x="100" y="360" font-family="Arial, sans-serif" font-size="16" fill="#1b5e20">✓ 无使用限制</text>
+  <text x="100" y="390" font-family="Arial, sans-serif" font-size="16" fill="#1b5e20">✓ 无需用户账户</text>
+  <rect x="660" y="130" width="540" height="280" rx="15" fill="#fff3e0" stroke="#e65100" stroke-width="3"/>
+  <rect x="660" y="130" width="540" height="55" rx="15" fill="#e65100"/>
+  <text x="930" y="167" text-anchor="middle" font-family="Arial, sans-serif" font-size="24" font-weight="bold" fill="#ffffff">Cloud 模式 (Paid)</text>
+  <text x="930" y="255" text-anchor="middle" font-family="Arial, sans-serif" font-size="48" fill="#e65100">☁️</text>
+  <text x="680" y="300" font-family="Arial, sans-serif" font-size="16" fill="#bf360c">✓ 登录 InkUO Cloud 账户</text>
+  <text x="680" y="330" font-family="Arial, sans-serif" font-size="16" fill="#bf360c">✓ 通过兑换码充值</text>
+  <text x="680" y="360" font-family="Arial, sans-serif" font-size="16" fill="#bf360c">✓ 走官方统一上游 LLM</text>
+  <text x="680" y="390" font-family="Arial, sans-serif" font-size="16" fill="#bf360c">✓ 按 token 用量计费</text>
+  <rect x="80" y="450" width="1120" height="120" rx="12" fill="#f5f5f5" stroke="#bdbdbd" stroke-width="1"/>
+  <text x="100" y="488" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#0f1a2e">兑换码系统</text>
+  <text x="100" y="518" font-family="Arial, sans-serif" font-size="15" fill="#444">用户 → 购买兑换码 → 在 App 中输入 → 余额增加 → 使用中按 token 扣费</text>
+  <text x="100" y="545" font-family="Arial, sans-serif" font-size="14" fill="#888">管理后台可监控用户、订单、用量统计</text>
+  <rect x="80" y="590" width="1120" height="90" rx="12" fill="#e3f2fd" stroke="#1565c0" stroke-width="1"/>
+  <text x="100" y="628" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#0d47a1">核心理念</text>
+  <text x="100" y="658" font-family="Arial, sans-serif" font-size="16" fill="#333">本地模式让用户零门槛体验全部核心功能；Cloud 模式为用户提供"开箱即用"的 LLM 服务，按需付费、无合约绑定。</text>
+</svg>

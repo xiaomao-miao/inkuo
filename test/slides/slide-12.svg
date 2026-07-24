@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" width="1280" height="720">
+  <rect width="1280" height="720" fill="#ffffff"/>
+  <rect width="1280" height="80" fill="#0f1a2e"/>
+  <text x="50" y="50" font-family="Arial, sans-serif" font-size="32" font-weight="bold" fill="#ffffff">技术架构总览</text>
+  <rect x="80" y="110" width="1120" height="60" rx="8" fill="#0f1a2e"/>
+  <text x="160" y="147" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="#ffffff">InkUO Desktop</text>
+  <text x="500" y="147" font-family="Arial, sans-serif" font-size="15" fill="#88b4d9">Tauri 2 (Rust) · 桌面壳：原生窗口 / 文件系统 / 进程管理</text>
+  <rect x="80" y="190" width="350" height="180" rx="8" fill="#e3f2fd" stroke="#1565c0" stroke-width="1"/>
+  <text x="100" y="225" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#0d47a1">前端 Frontend</text>
+  <text x="100" y="258" font-family="Arial, sans-serif" font-size="15" fill="#444">React 19</text>
+  <text x="100" y="283" font-family="Arial, sans-serif" font-size="15" fill="#444">CodeMirror 6（代码编辑器）</text>
+  <text x="100" y="308" font-family="Arial, sans-serif" font-size="15" fill="#444">ProseMirror（富文本编辑）</text>
+  <text x="100" y="333" font-family="Arial, sans-serif" font-size="15" fill="#444">Zustand（状态管理）</text>
+  <rect x="460" y="190" width="350" height="180" rx="8" fill="#e8f5e9" stroke="#2e7d32" stroke-width="1"/>
+  <text x="480" y="225" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#1b5e20">AI 引擎</text>
+  <text x="480" y="258" font-family="Arial, sans-serif" font-size="15" fill="#444">自研 agent_loop</text>
+  <text x="480" y="283" font-family="Arial, sans-serif" font-size="15" fill="#444">50 轮工具调用 / 9 个专家</text>
+  <text x="480" y="308" font-family="Arial, sans-serif" font-size="15" fill="#444">Ask / Plan / Agent 三种模式</text>
+  <text x="480" y="333" font-family="Arial, sans-serif" font-size="15" fill="#444">LLM 管理（本地 / 云端）</text>
+  <rect x="840" y="190" width="360" height="180" rx="8" fill="#fff3e0" stroke="#e65100" stroke-width="1"/>
+  <text x="860" y="225" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#bf360c">文档引擎</text>
+  <text x="860" y="258" font-family="Arial, sans-serif" font-size="15" fill="#444">自研 OOXML 引擎</text>
+  <text x="860" y="283" font-family="Arial, sans-serif" font-size="15" fill="#444">.docx / .xlsx 流式读写</text>
+  <text x="860" y="308" font-family="Arial, sans-serif" font-size="15" fill="#444">SVG → PPTX 转换</text>
+  <text x="860" y="333" font-family="Arial, sans-serif" font-size="15" fill="#444">Mermaid 图表渲染</text>
+  <rect x="80" y="400" width="540" height="130" rx="8" fill="#f3e5f5" stroke="#6a1b9a" stroke-width="1"/>
+  <text x="100" y="435" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#4a148c">本地 RAG</text>
+  <text x="100" y="468" font-family="Arial, sans-serif" font-size="15" fill="#444">fastembed（ONNX 本地向量化）</text>
+  <text x="100" y="495" font-family="Arial, sans-serif" font-size="15" fill="#444">Qdrant Edge（嵌入式向量数据库）</text>
+  <rect x="650" y="400" width="550" height="130" rx="8" fill="#e0f2f1" stroke="#00897b" stroke-width="1"/>
+  <text x="670" y="435" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#00695c">云端服务（可选）</text>
+  <text x="670" y="468" font-family="Arial, sans-serif" font-size="15" fill="#444">.NET 8 Minimal API + EF Core + PostgreSQL</text>
+  <text x="670" y="495" font-family="Arial, sans-serif" font-size="15" fill="#444">JWT 认证 + 兑换码计费 + React 管理后台</text>
+  <rect x="80" y="560" width="1120" height="45" rx="8" fill="#0f1a2e"/>
+  <text x="640" y="589" text-anchor="middle" font-family="Arial, sans-serif" font-size="16" fill="#ffffff">所有层在本地模式完全离线运行，云端服务按需启用</text>
+  <rect x="80" y="615" width="1120" height="65" rx="8" fill="#f5f5f5" stroke="#bdbdbd" stroke-width="1"/>
+  <text x="100" y="642" font-family="Arial, sans-serif" font-size="14" fill="#666">环境：</text>
+  <text x="160" y="642" font-family="Arial, sans-serif" font-size="14" fill="#333">Windows 10+ (WebView2) · macOS 11+ · Linux（待定）</text>
+  <text x="100" y="666" font-family="Arial, sans-serif" font-size="14" fill="#666">运行时：</text>
+  <text x="160" y="666" font-family="Arial, sans-serif" font-size="14" fill="#333">纯 Rust (Tauri 2 后端) + WebView2/WKWebView (前端渲染) + ONNX (RAG 向量化)</text>
+</svg>

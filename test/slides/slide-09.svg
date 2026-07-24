@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" width="1280" height="720">
+  <rect width="1280" height="720" fill="#ffffff"/>
+  <rect width="1280" height="80" fill="#0f1a2e"/>
+  <text x="50" y="50" font-family="Arial, sans-serif" font-size="32" font-weight="bold" fill="#ffffff">Agent 工作流 —— 边想边做</text>
+  <text x="50" y="130" font-family="Arial, sans-serif" font-size="18" font-style="italic" fill="#666">用户一句话 → Agent 自动拆解 → 委派专家 → 执行 → 返回结果</text>
+  <rect x="60" y="160" width="200" height="60" rx="30" fill="#1a3a5c"/>
+  <text x="160" y="197" text-anchor="middle" font-family="Arial, sans-serif" font-size="16" fill="#ffffff">用户需求</text>
+  <line x1="260" y1="190" x2="320" y2="190" stroke="#999" stroke-width="2"/>
+  <polygon points="320,185 335,190 320,195" fill="#999"/>
+  <rect x="340" y="160" width="260" height="60" rx="10" fill="#1565c0"/>
+  <text x="470" y="190" text-anchor="middle" font-family="Arial, sans-serif" font-size="15" fill="#ffffff">Agent Loop 主引擎</text>
+  <text x="470" y="208" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" fill="#bbdefb">分析 → 拆解 → 决策 → 委派</text>
+  <line x1="600" y1="190" x2="660" y2="190" stroke="#999" stroke-width="2"/>
+  <polygon points="660,185 675,190 660,195" fill="#999"/>
+  <rect x="680" y="160" width="200" height="60" rx="10" fill="#2e7d32"/>
+  <text x="780" y="197" text-anchor="middle" font-family="Arial, sans-serif" font-size="15" fill="#ffffff">返回结果</text>
+  <rect x="60" y="260" width="1130" height="200" rx="10" fill="#f5f5f5" stroke="#e0e0e0" stroke-width="1"/>
+  <text x="80" y="298" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#0f1a2e">任务委派示例</text>
+  <text x="80" y="325" font-family="Arial, sans-serif" font-size="15" fill="#555">用户："帮我把 report.docx 第三段改成蓝色字体，同时把 data.xlsx 的 Sheet1 求和"</text>
+  <rect x="80" y="345" width="190" height="48" rx="8" fill="#e8f5e9" stroke="#66bb6a" stroke-width="1"/>
+  <text x="175" y="374" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" fill="#2e7d32">📝 Word Expert</text>
+  <rect x="290" y="345" width="190" height="48" rx="8" fill="#e8f5e9" stroke="#66bb6a" stroke-width="1"/>
+  <text x="385" y="374" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" fill="#2e7d32">📊 Excel Expert</text>
+  <rect x="500" y="345" width="190" height="48" rx="8" fill="#e3f2fd" stroke="#1565c0" stroke-width="1"/>
+  <text x="595" y="374" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" fill="#1565c0">🔍 Researcher</text>
+  <rect x="710" y="345" width="190" height="48" rx="8" fill="#fff3e0" stroke="#e65100" stroke-width="1"/>
+  <text x="805" y="374" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" fill="#e65100">📋 batch_editor</text>
+  <line x1="175" y1="393" x2="175" y2="420" stroke="#999" stroke-width="1"/>
+  <line x1="385" y1="393" x2="385" y2="420" stroke="#999" stroke-width="1"/>
+  <line x1="595" y1="393" x2="595" y2="420" stroke="#999" stroke-width="1"/>
+  <line x1="805" y1="393" x2="805" y2="420" stroke="#999" stroke-width="1"/>
+  <rect x="80" y="420" width="190" height="32" rx="4" fill="#c8e6c9"/>
+  <text x="175" y="441" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" fill="#1b5e20">修改段落样式</text>
+  <rect x="290" y="420" width="190" height="32" rx="4" fill="#c8e6c9"/>
+  <text x="385" y="441" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" fill="#1b5e20">写入 SUM 公式</text>
+  <rect x="500" y="420" width="190" height="32" rx="4" fill="#bbdefb"/>
+  <text x="595" y="441" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" fill="#0d47a1">确认文件路径</text>
+  <rect x="710" y="420" width="190" height="32" rx="4" fill="#ffe0b2"/>
+  <text x="805" y="441" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" fill="#bf360c">(本例未使用)</text>
+  <rect x="60" y="500" width="1130" height="180" rx="10" fill="#0f1a2e"/>
+  <text x="80" y="540" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#ffffff">工作流特点</text>
+  <text x="80" y="575" font-family="Arial, sans-serif" font-size="15" fill="#88b4d9">● 并行委派：独立任务同时交给不同专家，互不阻塞</text>
+  <text x="80" y="605" font-family="Arial, sans-serif" font-size="15" fill="#88b4d9">● 依赖感知：A 专家的输出可作为 B 专家的输入（串行管道）</text>
+  <text x="80" y="635" font-family="Arial, sans-serif" font-size="15" fill="#88b4d9">● 中断恢复：遇歧义时可暂停 Ask User，获澄清后继续执行</text>
+  <text x="80" y="665" font-family="Arial, sans-serif" font-size="15" fill="#88b4d9">● 透明日志：所有工具调用和专家响应在界面中可追溯查看</text>
+</svg>

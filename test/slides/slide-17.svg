@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" width="1280" height="720">
+  <rect width="1280" height="720" fill="#ffffff"/>
+  <rect width="1280" height="80" fill="#0f1a2e"/>
+  <text x="50" y="50" font-family="Arial, sans-serif" font-size="32" font-weight="bold" fill="#ffffff">路线图</text>
+  <rect x="60" y="120" width="360" height="280" rx="12" fill="#e8f5e9" stroke="#66bb6a" stroke-width="2"/>
+  <rect x="60" y="120" width="360" height="50" rx="12" fill="#2e7d32"/>
+  <text x="240" y="154" text-anchor="middle" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="#ffffff">✅ 已完成</text>
+  <text x="80" y="195" font-family="Arial, sans-serif" font-size="14" fill="#1b5e20">✓ Tauri 2 桌面壳 + React 19 前端</text>
+  <text x="80" y="222" font-family="Arial, sans-serif" font-size="14" fill="#1b5e20">✓ 自研 OOXML 引擎（docx/xlsx 读写）</text>
+  <text x="80" y="249" font-family="Arial, sans-serif" font-size="14" fill="#1b5e20">✓ SVG → PPTX 转换引擎</text>
+  <text x="80" y="276" font-family="Arial, sans-serif" font-size="14" fill="#1b5e20">✓ Agent 循环引擎（50 轮工具调用）</text>
+  <text x="80" y="303" font-family="Arial, sans-serif" font-size="14" fill="#1b5e20">✓ 22+ 工具 + 9 个专家子代理</text>
+  <text x="80" y="330" font-family="Arial, sans-serif" font-size="14" fill="#1b5e20">✓ Mermaid 流程图渲染</text>
+  <text x="80" y="357" font-family="Arial, sans-serif" font-size="14" fill="#1b5e20">✓ 本地 RAG（fastembed + Qdrant Edge）</text>
+  <text x="80" y="384" font-family="Arial, sans-serif" font-size="14" fill="#1b5e20">✓ 三种 AI 模式（Ask / Plan / Agent）</text>
+  <rect x="450" y="120" width="360" height="280" rx="12" fill="#fff3e0" stroke="#ffb74d" stroke-width="2"/>
+  <rect x="450" y="120" width="360" height="50" rx="12" fill="#e65100"/>
+  <text x="630" y="154" text-anchor="middle" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="#ffffff">🚧 开发中</text>
+  <text x="470" y="200" font-family="Arial, sans-serif" font-size="16" fill="#bf360c">● 更多云端 LLM 模型支持</text>
+  <text x="470" y="235" font-family="Arial, sans-serif" font-size="16" fill="#bf360c">● Excel 图表支持</text>
+  <text x="470" y="270" font-family="Arial, sans-serif" font-size="16" fill="#bf360c">● 协作编辑（多人实时协作）</text>
+  <text x="470" y="305" font-family="Arial, sans-serif" font-size="16" fill="#bf360c">● PDF 导出增强</text>
+  <rect x="840" y="120" width="360" height="280" rx="12" fill="#e3f2fd" stroke="#64b5f6" stroke-width="2"/>
+  <rect x="840" y="120" width="360" height="50" rx="12" fill="#1565c0"/>
+  <text x="1020" y="154" text-anchor="middle" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="#ffffff">🔮 规划中</text>
+  <text x="860" y="200" font-family="Arial, sans-serif" font-size="16" fill="#0d47a1">● 插件市场（第三方扩展）</text>
+  <text x="860" y="235" font-family="Arial, sans-serif" font-size="16" fill="#0d47a1">● 移动端适配</text>
+  <text x="860" y="270" font-family="Arial, sans-serif" font-size="16" fill="#0d47a1">● 团队工作区共享</text>
+  <text x="860" y="305" font-family="Arial, sans-serif" font-size="16" fill="#0d47a1">● 自定义 Agent 工具链</text>
+  <rect x="60" y="430" width="1140" height="260" rx="12" fill="#f5f5f5" stroke="#bdbdbd" stroke-width="1"/>
+  <text x="80" y="470" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#0f1a2e">版本演进策略</text>
+  <text x="80" y="510" font-family="Arial, sans-serif" font-size="16" fill="#444">v1.0（当前）—— 核心引擎 + Agent 系统 + 本地 RAG</text>
+  <text x="80" y="545" font-family="Arial, sans-serif" font-size="16" fill="#444">v1.5 —— 云端服务 + Excel 图表 + 协作编辑</text>
+  <text x="80" y="580" font-family="Arial, sans-serif" font-size="16" fill="#444">v2.0 —— 插件生态 + 移动端 + 团队工作区</text>
+  <text x="80" y="615" font-family="Arial, sans-serif" font-size="16" fill="#444">v2.x+ —— 持续迭代，社区驱动</text>
+  <text x="80" y="660" font-family="Arial, sans-serif" font-size="14" fill="#888">我们始终遵循"本地优先、隐私优先"的核心理念</text>
+</svg>

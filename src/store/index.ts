@@ -21,7 +21,14 @@ export {
   useContextMenuStore,
   type ContextMenuTarget,
   type ContextMenuKind,
+  type DocxCommands,
+  type EditorCommands,
 } from './contextMenuStore';
+export {
+  useFloatingAiStore,
+  type FloatingAiWindow,
+  type FloatingAiStatus,
+} from './floatingAiStore';
 export { useConfirmDialogStore, type ConfirmRequest } from './confirmDialogStore';
 
 export type {

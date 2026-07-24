@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" width="1280" height="720">
+  <rect width="1280" height="720" fill="#ffffff"/>
+  <rect width="1280" height="80" fill="#0f1a2e"/>
+  <text x="50" y="50" font-family="Arial, sans-serif" font-size="32" font-weight="bold" fill="#ffffff">目标用户 —— InkUO 为谁而生</text>
+  <rect x="60" y="120" width="260" height="200" rx="10" fill="#e3f2fd" stroke="#1565c0" stroke-width="2"/>
+  <text x="190" y="175" text-anchor="middle" font-family="Arial, sans-serif" font-size="32" fill="#1565c0">📋</text>
+  <text x="190" y="210" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#0d47a1">产品经理</text>
+  <text x="80" y="245" font-family="Arial, sans-serif" font-size="14" fill="#444">
+    <tspan x="190" dy="0" text-anchor="middle">AI 帮忙写 PRD</tspan>
+    <tspan x="190" dy="22" text-anchor="middle">整理需求文档</tspan>
+    <tspan x="190" dy="22" text-anchor="middle">生成周报 / 修改产品说明</tspan>
+  </text>
+  <rect x="350" y="120" width="260" height="200" rx="10" fill="#e8f5e9" stroke="#2e7d32" stroke-width="2"/>
+  <text x="480" y="175" text-anchor="middle" font-family="Arial, sans-serif" font-size="32" fill="#2e7d32">🔬</text>
+  <text x="480" y="210" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#1b5e20">研究员 / 学者</text>
+  <text x="370" y="245" font-family="Arial, sans-serif" font-size="14" fill="#444">
+    <tspan x="480" dy="0" text-anchor="middle">文献综述</tspan>
+    <tspan x="480" dy="22" text-anchor="middle">论文草稿 / 数据整理</tspan>
+    <tspan x="480" dy="22" text-anchor="middle">图表生成</tspan>
+  </text>
+  <rect x="640" y="120" width="260" height="200" rx="10" fill="#fff3e0" stroke="#e65100" stroke-width="2"/>
+  <text x="770" y="175" text-anchor="middle" font-family="Arial, sans-serif" font-size="32" fill="#e65100">✍️</text>
+  <text x="770" y="210" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#bf360c">写作者</text>
+  <text x="660" y="245" font-family="Arial, sans-serif" font-size="14" fill="#444">
+    <tspan x="770" dy="0" text-anchor="middle">长文创作</tspan>
+    <tspan x="770" dy="22" text-anchor="middle">多版本迭代</tspan>
+    <tspan x="770" dy="22" text-anchor="middle">格式转换（MD ↔ Word）</tspan>
+  </text>
+  <rect x="930" y="120" width="260" height="200" rx="10" fill="#f3e5f5" stroke="#6a1b9a" stroke-width="2"/>
+  <text x="1060" y="175" text-anchor="middle" font-family="Arial, sans-serif" font-size="32" fill="#6a1b9a">💼</text>
+  <text x="1060" y="210" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#4a148c">咨询顾问</text>
+  <text x="950" y="245" font-family="Arial, sans-serif" font-size="14" fill="#444">
+    <tspan x="1060" dy="0" text-anchor="middle">制作报告</tspan>
+    <tspan x="1060" dy="22" text-anchor="middle">数据分析</tspan>
+    <tspan x="1060" dy="22" text-anchor="middle">PPT 演示文档</tspan>
+  </text>
+  <rect x="60" y="350" width="540" height="160" rx="10" fill="#e0f2f1" stroke="#00897b" stroke-width="2"/>
+  <text x="330" y="395" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#00695c">👨‍💻 开发者</text>
+  <text x="80" y="430" font-family="Arial, sans-serif" font-size="15" fill="#444">● 撰写技术文档 / README / API 文档</text>
+  <text x="80" y="458" font-family="Arial, sans-serif" font-size="15" fill="#444">● 架构设计文档 / 变更日志</text>
+  <text x="80" y="486" font-family="Arial, sans-serif" font-size="15" fill="#444">● 代码审查记录 / 开发者指南</text>
+  <rect x="630" y="350" width="560" height="160" rx="10" fill="#efebe9" stroke="#8d6e63" stroke-width="2"/>
+  <text x="910" y="395" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#5d4037">👥 小团队</text>
+  <text x="650" y="430" font-family="Arial, sans-serif" font-size="15" fill="#444">● 共享工作区 / 知识库积累</text>
+  <text x="650" y="458" font-family="Arial, sans-serif" font-size="15" fill="#444">● 文档自动化 / 标准化流程</text>
+  <text x="650" y="486" font-family="Arial, sans-serif" font-size="15" fill="#444">● 团队知识管理 / 协作协作</text>
+  <rect x="60" y="540" width="1130" height="140" rx="12" fill="#0f1a2e"/>
+  <text x="80" y="578" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="#ffffff">核心价值主张</text>
+  <text x="80" y="615" font-family="Arial, sans-serif" font-size="18" fill="#88b4d9">"任何觉得 'ChatGPT 帮我写了一段话，但还得我自己复制粘贴排版' 很烦的人，都是 InkUO 的目标用户。"</text>
+  <text x="80" y="655" font-family="Arial, sans-serif" font-size="15" fill="#6a8aa8">—— 把 AI 的输出直接变成你工作区里的文件，不再需要在聊天框和编辑器之间来回搬运</text>
+</svg>

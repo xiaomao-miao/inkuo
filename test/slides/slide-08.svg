@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" width="1280" height="720">
+  <rect width="1280" height="720" fill="#ffffff"/>
+  <rect width="1280" height="80" fill="#0f1a2e"/>
+  <text x="50" y="50" font-family="Arial, sans-serif" font-size="32" font-weight="bold" fill="#ffffff">Agent 工具生态</text>
+  <rect x="60" y="110" width="1130" height="1" fill="#e0e0e0"/>
+  <text x="60" y="140" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#0f1a2e">22+ 内置工具</text>
+  <rect x="60" y="155" width="170" height="32" rx="4" fill="#e3f2fd"/>
+  <text x="145" y="176" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#1565c0">read_file</text>
+  <rect x="240" y="155" width="170" height="32" rx="4" fill="#e3f2fd"/>
+  <text x="325" y="176" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#1565c0">write_file</text>
+  <rect x="420" y="155" width="170" height="32" rx="4" fill="#e3f2fd"/>
+  <text x="505" y="176" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#1565c0">edit_file</text>
+  <rect x="600" y="155" width="170" height="32" rx="4" fill="#e3f2fd"/>
+  <text x="685" y="176" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#1565c0">list_dir / glob</text>
+  <rect x="780" y="155" width="170" height="32" rx="4" fill="#e3f2fd"/>
+  <text x="865" y="176" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#1565c0">grep</text>
+  <rect x="60" y="195" width="170" height="32" rx="4" fill="#e3f2fd"/>
+  <text x="145" y="216" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#1565c0">create_svg</text>
+  <rect x="240" y="195" width="170" height="32" rx="4" fill="#e3f2fd"/>
+  <text x="325" y="216" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#1565c0">render_mermaid</text>
+  <rect x="420" y="195" width="170" height="32" rx="4" fill="#e3f2fd"/>
+  <text x="505" y="216" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#1565c0">read_pdf</text>
+  <rect x="600" y="195" width="170" height="32" rx="4" fill="#e3f2fd"/>
+  <text x="685" y="216" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#1565c0">read_image</text>
+  <rect x="780" y="195" width="170" height="32" rx="4" fill="#e3f2fd"/>
+  <text x="865" y="216" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#1565c0">ask_user</text>
+  <rect x="60" y="235" width="170" height="32" rx="4" fill="#e3f2fd"/>
+  <text x="145" y="256" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#1565c0">database_search</text>
+  <rect x="240" y="235" width="170" height="32" rx="4" fill="#e3f2fd"/>
+  <text x="325" y="256" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#1565c0">read_office_file</text>
+  <rect x="420" y="235" width="170" height="32" rx="4" fill="#e3f2fd"/>
+  <text x="505" y="256" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#1565c0">inspect_office</text>
+  <rect x="600" y="235" width="170" height="32" rx="4" fill="#e3f2fd"/>
+  <text x="685" y="256" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#1565c0">create_word_doc</text>
+  <rect x="780" y="235" width="170" height="32" rx="4" fill="#e3f2fd"/>
+  <text x="865" y="256" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#1565c0">create_excel</text>
+  <rect x="60" y="275" width="170" height="32" rx="4" fill="#e3f2fd"/>
+  <text x="145" y="296" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#1565c0">modify_excel</text>
+  <rect x="240" y="275" width="170" height="32" rx="4" fill="#e3f2fd"/>
+  <text x="325" y="296" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#1565c0">create_pptx</text>
+  <rect x="420" y="275" width="170" height="32" rx="4" fill="#e3f2fd"/>
+  <text x="505" y="296" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#1565c0">add_pptx_animation</text>
+  <rect x="600" y="275" width="170" height="32" rx="4" fill="#e3f2fd"/>
+  <text x="685" y="296" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#1565c0">compare_word_docs</text>
+  <rect x="780" y="275" width="170" height="32" rx="4" fill="#e3f2fd"/>
+  <text x="865" y="296" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#1565c0">create_dir / move_file</text>
+  <text x="60" y="330" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#0f1a2e">9 个专家子代理</text>
+  <rect x="60" y="345" width="260" height="55" rx="6" fill="#e8f5e9" stroke="#66bb6a" stroke-width="1"/>
+  <text x="80" y="370" font-family="Arial, sans-serif" font-size="15" font-weight="bold" fill="#2e7d32">office_word_expert</text>
+  <text x="80" y="388" font-family="Arial, sans-serif" font-size="12" fill="#555">Word 文档创建/修改/样式/比较</text>
+  <rect x="335" y="345" width="260" height="55" rx="6" fill="#e8f5e9" stroke="#66bb6a" stroke-width="1"/>
+  <text x="355" y="370" font-family="Arial, sans-serif" font-size="15" font-weight="bold" fill="#2e7d32">office_excel_expert</text>
+  <text x="355" y="388" font-family="Arial, sans-serif" font-size="12" fill="#555">Excel 创建/公式/样式/管理</text>
+  <rect x="610" y="345" width="260" height="55" rx="6" fill="#e8f5e9" stroke="#66bb6a" stroke-width="1"/>
+  <text x="630" y="370" font-family="Arial, sans-serif" font-size="15" font-weight="bold" fill="#2e7d32">office_pptx_expert</text>
+  <text x="630" y="388" font-family="Arial, sans-serif" font-size="12" fill="#555">PPT SVG 打包/动画/过渡</text>
+  <rect x="885" y="345" width="305" height="55" rx="6" fill="#e8f5e9" stroke="#66bb6a" stroke-width="1"/>
+  <text x="905" y="370" font-family="Arial, sans-serif" font-size="15" font-weight="bold" fill="#2e7d32">md_writer</text>
+  <text x="905" y="388" font-family="Arial, sans-serif" font-size="12" fill="#555">长文 Markdown / 论文 / README</text>
+  <rect x="60" y="410" width="260" height="55" rx="6" fill="#e8f5e9" stroke="#66bb6a" stroke-width="1"/>
+  <text x="80" y="435" font-family="Arial, sans-serif" font-size="15" font-weight="bold" fill="#2e7d32">researcher</text>
+  <text x="80" y="453" font-family="Arial, sans-serif" font-size="12" fill="#555">只读搜索/定位/语义检索</text>
+  <rect x="335" y="410" width="260" height="55" rx="6" fill="#e8f5e9" stroke="#66bb6a" stroke-width="1"/>
+  <text x="355" y="435" font-family="Arial, sans-serif" font-size="15" font-weight="bold" fill="#2e7d32">batch_editor</text>
+  <text x="355" y="453" font-family="Arial, sans-serif" font-size="12" fill="#555">批量 5+ 文件相同修改</text>
+  <rect x="610" y="410" width="260" height="55" rx="6" fill="#e8f5e9" stroke="#66bb6a" stroke-width="1"/>
+  <text x="630" y="435" font-family="Arial, sans-serif" font-size="15" font-weight="bold" fill="#2e7d32">code_expert</text>
+  <text x="630" y="453" font-family="Arial, sans-serif" font-size="12" fill="#555">代码/调试/重构/跨文件变更</text>
+  <rect x="885" y="410" width="305" height="55" rx="6" fill="#e8f5e9" stroke="#66bb6a" stroke-width="1"/>
+  <text x="905" y="435" font-family="Arial, sans-serif" font-size="15" font-weight="bold" fill="#2e7d32">flowchart_expert</text>
+  <text x="905" y="453" font-family="Arial, sans-serif" font-size="12" fill="#555">Mermaid 流程图渲染输出</text>
+  <rect x="60" y="475" width="260" height="55" rx="6" fill="#e8f5e9" stroke="#66bb6a" stroke-width="1"/>
+  <text x="80" y="500" font-family="Arial, sans-serif" font-size="15" font-weight="bold" fill="#2e7d32">word_image_expert</text>
+  <text x="80" y="518" font-family="Arial, sans-serif" font-size="12" fill="#555">Word 文档图片插入</text>
+  <rect x="60" y="560" width="1130" height="130" rx="10" fill="#0f1a2e"/>
+  <text x="80" y="598" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#ffffff">Agent 循环引擎（agent_loop）</text>
+  <text x="80" y="628" font-family="Arial, sans-serif" font-size="15" fill="#88b4d9">● 最多 50 轮工具调用，支持"边想边做"的迭代式执行</text>
+  <text x="80" y="653" font-family="Arial, sans-serif" font-size="15" fill="#88b4d9">● 复杂任务自动委派给子代理，子代理可独立调用工具</text>
+  <text x="80" y="678" font-family="Arial, sans-serif" font-size="15" fill="#88b4d9">● 所有工具调用在同一对话上下文中，保持状态连贯</text>
+</svg>

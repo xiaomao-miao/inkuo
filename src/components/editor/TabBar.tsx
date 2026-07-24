@@ -3,7 +3,11 @@ import {
   FileText, File, X, Circle, Settings, Cloud,
   FileImage, FileType, FileCode, FileAudio, FileVideo, FileArchive,
 } from 'lucide-react';
-import { useSidebarStore, useConfirmDialogStore } from '../../store';
+import {
+  useSidebarStore,
+  useConfirmDialogStore,
+  useContextMenuStore,
+} from '../../store';
 import type { OpenTab } from '../../store';
 import { detectFileKind } from '../../types';
 import styles from './TabBar.module.css';
@@ -21,6 +25,18 @@ export const TabBar = () => {
 
   const handleTabClick = (tab: OpenTab) => {
     setActiveTab(tab.id);
+  };
+
+  const handleTabContextMenu = (e: React.MouseEvent, tab: OpenTab) => {
+    e.preventDefault();
+    e.stopPropagation();
+    useContextMenuStore.getState().open({
+      kind: 'tab',
+      path: tab.path,
+      x: e.clientX,
+      y: e.clientY,
+      tab,
+    });
   };
 
   const handleCloseTab = async (e: React.MouseEvent, tabId: string) => {
@@ -92,6 +108,7 @@ export const TabBar = () => {
                 key={tab.id}
                 className={`${styles.tab} ${isActive ? styles.active : ''}`}
                 onClick={() => handleTabClick(tab)}
+                onContextMenu={(e) => handleTabContextMenu(e, tab)}
               >
                 <span className={styles.tabIcon}>
                   {getFileIcon(tab)}
@@ -107,6 +124,15 @@ export const TabBar = () => {
                 <button
                   className={styles.closeButton}
                   onClick={(e) => handleCloseTab(e, tab.id)}
+                  onContextMenu={(e) => {
+                    // Suppress the tab context menu when right-clicking the
+                    // close button itself — the button is small enough that
+                    // users will sometimes hit it accidentally, and showing
+                    // a "Close" entry that does the same thing as a left
+                    // click is more confusing than helpful.
+                    e.stopPropagation();
+                    e.preventDefault();
+                  }}
                   title="关闭"
                 >
                   <X size={14} />

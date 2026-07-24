@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" width="1280" height="720">
+  <rect width="1280" height="720" fill="#ffffff"/>
+  <rect width="1280" height="80" fill="#0f1a2e"/>
+  <text x="50" y="50" font-family="Arial, sans-serif" font-size="32" font-weight="bold" fill="#ffffff">本地 RAG 知识库 —— AI 真正理解你的工作区</text>
+  <rect x="60" y="120" width="1130" height="140" rx="12" fill="#f3e5f5" stroke="#6a1b9a" stroke-width="2"/>
+  <text x="80" y="160" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="#4a148c">工作流程</text>
+  <rect x="80" y="175" width="130" height="40" rx="20" fill="#6a1b9a"/>
+  <text x="145" y="200" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#fff">扫描工作区</text>
+  <polygon points="222,195 237,195 230,202" fill="#999"/>
+  <rect x="245" y="175" width="130" height="40" rx="20" fill="#6a1b9a"/>
+  <text x="310" y="200" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#fff">按句切块</text>
+  <polygon points="387,195 402,195 395,202" fill="#999"/>
+  <rect x="410" y="175" width="130" height="40" rx="20" fill="#6a1b9a"/>
+  <text x="475" y="200" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#fff">ONNX 向量化</text>
+  <polygon points="552,195 567,195 560,202" fill="#999"/>
+  <rect x="575" y="175" width="140" height="40" rx="20" fill="#6a1b9a"/>
+  <text x="645" y="200" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#fff">Qdrant 存储</text>
+  <polygon points="727,195 742,195 735,202" fill="#999"/>
+  <rect x="750" y="175" width="130" height="40" rx="20" fill="#6a1b9a"/>
+  <text x="815" y="200" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#fff">语义检索</text>
+  <polygon points="892,195 907,195 900,202" fill="#999"/>
+  <rect x="915" y="175" width="130" height="40" rx="20" fill="#6a1b9a"/>
+  <text x="980" y="200" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#fff">增强回答</text>
+  <text x="80" y="248" font-family="Arial, sans-serif" font-size="13" fill="#888">全部在本地完成，数据 100% 留存在本机，不经过任何外部网络</text>
+  <rect x="60" y="290" width="360" height="180" rx="10" fill="#f5f5f5" stroke="#bdbdbd" stroke-width="1"/>
+  <text x="80" y="328" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#0f1a2e">技术细节</text>
+  <text x="80" y="360" font-family="Arial, sans-serif" font-size="14" fill="#444">● 分块策略：按句切块，保持语义完整</text>
+  <text x="80" y="388" font-family="Arial, sans-serif" font-size="14" fill="#444">● 向量化：fastembed（ONNX Runtime）</text>
+  <text x="80" y="416" font-family="Arial, sans-serif" font-size="14" fill="#444">● 向量存储：Qdrant Edge 嵌入式</text>
+  <text x="80" y="444" font-family="Arial, sans-serif" font-size="14" fill="#444">● 检索策略：语义相似度 top-k</text>
+  <rect x="460" y="290" width="360" height="180" rx="10" fill="#f5f5f5" stroke="#bdbdbd" stroke-width="1"/>
+  <text x="480" y="328" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#0f1a2e">使用方法</text>
+  <text x="480" y="360" font-family="Arial, sans-serif" font-size="14" fill="#444">1. 打开 Knowledge 标签页</text>
+  <text x="480" y="388" font-family="Arial, sans-serif" font-size="14" fill="#444">2. 扫描工作区目录</text>
+  <text x="480" y="416" font-family="Arial, sans-serif" font-size="14" fill="#444">3. 系统自动索引</text>
+  <text x="480" y="444" font-family="Arial, sans-serif" font-size="14" fill="#444">4. AI 自动检索相关知识块</text>
+  <rect x="860" y="290" width="330" height="180" rx="10" fill="#fff3e0" stroke="#ffb74d" stroke-width="1"/>
+  <text x="880" y="328" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#e65100">为什么重要</text>
+  <text x="880" y="360" font-family="Arial, sans-serif" font-size="14" fill="#bf360c">● AI 不再是"陌生人"</text>
+  <text x="880" y="388" font-family="Arial, sans-serif" font-size="14" fill="#bf360c">● 搜索结果秒级定位</text>
+  <text x="880" y="416" font-family="Arial, sans-serif" font-size="14" fill="#bf360c">● 含语义理解：不精确匹配也能找到</text>
+  <text x="880" y="444" font-family="Arial, sans-serif" font-size="14" fill="#bf360c">● 隐私无忧：纯本地，无需联网</text>
+  <rect x="60" y="500" width="1130" height="180" rx="12" fill="#e8f5e9" stroke="#66bb6a" stroke-width="2"/>
+  <text x="80" y="540" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#2e7d32">场景示例</text>
+  <text x="80" y="575" font-family="Arial, sans-serif" font-size="15" fill="#1b5e20">"我之前写过一个关于数据分析的文档，在哪里？"</text>
+  <text x="100" y="600" font-family="Arial, sans-serif" font-size="14" fill="#555">→ AI 搜索知识库 → 找到匹配的文档路径和章节 → 直接回答</text>
+  <text x="80" y="635" font-family="Arial, sans-serif" font-size="15" fill="#1b5e20">"这个项目的架构方案里提到的限流策略是什么？"</text>
+  <text x="100" y="660" font-family="Arial, sans-serif" font-size="14" fill="#555">→ AI 在索引中语义搜索 → 定位到相关段落 → 提取并总结</text>
+</svg>

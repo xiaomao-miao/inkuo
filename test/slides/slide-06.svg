@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" width="1280" height="720">
+  <rect width="1280" height="720" fill="#ffffff"/>
+  <rect width="1280" height="80" fill="#0f1a2e"/>
+  <text x="50" y="50" font-family="Arial, sans-serif" font-size="32" font-weight="bold" fill="#ffffff">自研 OOXML 引擎 —— 核心技术亮点</text>
+  <rect x="60" y="120" width="360" height="130" rx="10" fill="#e3f2fd" stroke="#1565c0" stroke-width="1"/>
+  <text x="80" y="158" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="#0d47a1">纯 Rust 实现</text>
+  <text x="80" y="188" font-family="Arial, sans-serif" font-size="15" fill="#444">不依赖 mammoth / openpyxl /</text>
+  <text x="80" y="210" font-family="Arial, sans-serif" font-size="15" fill="#444">python-docx 等第三方库</text>
+  <text x="80" y="232" font-family="Arial, sans-serif" font-size="15" fill="#444">体积小、速度快、无运行时依赖</text>
+  <rect x="450" y="120" width="360" height="130" rx="10" fill="#e8f5e9" stroke="#2e7d32" stroke-width="1"/>
+  <text x="470" y="158" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="#1b5e20">逐字节精确控制</text>
+  <text x="470" y="188" font-family="Arial, sans-serif" font-size="15" fill="#444">逐字节读写 ZIP 内部 XML</text>
+  <text x="470" y="210" font-family="Arial, sans-serif" font-size="15" fill="#444">保留所有格式 / 样式 / 图片 / 字段</text>
+  <text x="470" y="232" font-family="Arial, sans-serif" font-size="15" fill="#444">不丢失任何信息</text>
+  <rect x="840" y="120" width="360" height="130" rx="10" fill="#fff3e0" stroke="#e65100" stroke-width="1"/>
+  <text x="860" y="158" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="#bf360c">AI 原生 API</text>
+  <text x="860" y="188" font-family="Arial, sans-serif" font-size="15" fill="#444">API 粒度直接对齐 AI 工具调用</text>
+  <text x="860" y="210" font-family="Arial, sans-serif" font-size="15" fill="#444">"修改第三段字体颜色"</text>
+  <text x="860" y="232" font-family="Arial, sans-serif" font-size="15" fill="#444">"把 B2 改成 SUM 公式"</text>
+  <rect x="60" y="280" width="1130" height="200" rx="10" fill="#f5f5f5" stroke="#bdbdbd" stroke-width="1"/>
+  <text x="80" y="315" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#0f1a2e">Word (.docx) 引擎能力</text>
+  <text x="80" y="348" font-family="Arial, sans-serif" font-size="15" fill="#444">● 创建新文档，支持标题 / 段落 / 表格 / 图片 / 页眉页脚</text>
+  <text x="80" y="375" font-family="Arial, sans-serif" font-size="15" fill="#444">● 按 id 修改段落内容 / 样式（字体、颜色、加粗、字号、高亮）</text>
+  <text x="80" y="402" font-family="Arial, sans-serif" font-size="15" fill="#444">● 多节文档管理（封面横向 + 正文纵向，不同页眉页脚）</text>
+  <text x="80" y="429" font-family="Arial, sans-serif" font-size="15" fill="#444">● 文档比较（增 / 删 / 改的结构化 diff）</text>
+  <text x="80" y="456" font-family="Arial, sans-serif" font-size="15" fill="#444">● 字段代码支持（页码、作者、日期等）</text>
+  <rect x="60" y="500" width="550" height="180" rx="10" fill="#f5f5f5" stroke="#bdbdbd" stroke-width="1"/>
+  <text x="80" y="535" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#0f1a2e">Excel (.xlsx) 引擎能力</text>
+  <text x="80" y="568" font-family="Arial, sans-serif" font-size="15" fill="#444">● 创建 / 读写任意单元格的值或公式</text>
+  <text x="80" y="595" font-family="Arial, sans-serif" font-size="15" fill="#444">● 批量写入范围（write_range）</text>
+  <text x="80" y="622" font-family="Arial, sans-serif" font-size="15" fill="#444">● 合并 / 取消合并 / 行高列宽调整</text>
+  <text x="80" y="649" font-family="Arial, sans-serif" font-size="15" fill="#444">● 工作表管理（创建 / 重命名 / 删除 / 隐藏）</text>
+  <rect x="640" y="500" width="550" height="180" rx="10" fill="#f5f5f5" stroke="#bdbdbd" stroke-width="1"/>
+  <text x="660" y="535" font-family="Arial, sans-serif" font-size="18" font-weight="bold" fill="#0f1a2e">PPT (.pptx) 引擎能力</text>
+  <text x="660" y="568" font-family="Arial, sans-serif" font-size="15" fill="#444">● SVG → 原生 OOXML 形状转换</text>
+  <text x="660" y="595" font-family="Arial, sans-serif" font-size="15" fill="#444">● 可编辑：改色 / 缩放 / 改文字</text>
+  <text x="660" y="622" font-family="Arial, sans-serif" font-size="15" fill="#444">● 入口 / 强调 / 退出三类动画</text>
+  <text x="660" y="649" font-family="Arial, sans-serif" font-size="15" fill="#444">● 20+ 幻灯片过渡效果</text>
+</svg>

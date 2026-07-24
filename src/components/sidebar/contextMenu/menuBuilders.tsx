@@ -15,6 +15,7 @@ import { invoke } from '@tauri-apps/api/core';
 import {
   Clipboard,
   ClipboardCopy,
+  ClipboardPaste,
   Copy as CopyIcon,
   Edit3,
   ExternalLink,
@@ -25,19 +26,29 @@ import {
   FileType2,
   FolderOpen,
   FolderPlus,
+  Languages,
   ListChecks,
+  Redo2,
   RefreshCw,
+  Replace,
   Scissors,
   Search,
+  Search as SearchIcon,
+  Sparkles,
   Trash2,
+  Type,
+  Undo2,
   X,
 } from 'lucide-react';
 
 import {
   useClipboardStore,
   useConfirmDialogStore,
+  useContextMenuStore,
+  useFloatingAiStore,
   useSidebarStore,
 } from '../../../store';
+import type { DocxCommands, EditorCommands, OpenTab } from '../../../store';
 import type { FileEntry, NewFileTemplate } from '../../../types';
 import { NEW_FILE_TEMPLATES } from '../../../types';
 import {
@@ -603,87 +614,10 @@ function appendKnowledgeItems(
   });
 }
 
-/** Files only: close-this / close-others / close-right / close-all (when tabs are open). */
-function appendTabItems(
-  items: MenuItem[],
-  entry: FileEntry,
-  isDir: boolean,
-  ctx: MenuBuilderContext,
-): void {
-  if (isDir) return;
-  const { openTabs } = ctx;
-  const tabForPath = openTabs.find((t) => t.path === entry.path && !t.isSettings);
-  if (tabForPath || openTabs.length > 1) {
-    items.push({ id: 'tabs-divider', label: '' });
-  }
-  if (tabForPath) {
-    items.push({
-      id: 'close-tab',
-      label: '关闭此标签页',
-      icon: <X size={14} />,
-      action: async () => {
-        const ok = useSidebarStore.getState().requestCloseTab(entry.path);
-        if (!ok) {
-          const confirm = useConfirmDialogStore.getState().ask;
-          const discard = await confirm({
-            title: '未保存的更改',
-            message: `"${basename(entry.path)}" 有未保存的更改，关闭将丢弃。`,
-            confirmLabel: '丢弃并关闭',
-            danger: true,
-          });
-          if (discard) {
-            useSidebarStore.getState().setOpenTabDirty(entry.path, false);
-            useSidebarStore.getState().requestCloseTab(entry.path);
-          }
-        }
-      },
-    });
-  }
-  if (openTabs.length > 1) {
-    const tabIndex = tabForPath
-      ? openTabs.findIndex((t) => t.id === tabForPath.id)
-      : -1;
-    items.push({
-      id: 'close-others',
-      label: '关闭其他标签页',
-      icon: <X size={14} />,
-      action: () => {
-        const state = useSidebarStore.getState();
-        openTabs
-          .filter((t) => t.id !== tabForPath?.id)
-          .forEach((t) => {
-            if (!t.isDirty && !t.isSettings) state.closeTab(t.id);
-          });
-        // We deliberately leave dirty / settings tabs alone to avoid silent
-        // data loss. Caller can confirm via context-menu again.
-      },
-    });
-    if (tabIndex >= 0 && tabIndex < openTabs.length - 1) {
-      items.push({
-        id: 'close-right',
-        label: '关闭右侧标签页',
-        icon: <X size={14} />,
-        action: () => {
-          const state = useSidebarStore.getState();
-          openTabs.slice(tabIndex + 1).forEach((t) => {
-            if (!t.isDirty && !t.isSettings) state.closeTab(t.id);
-          });
-        },
-      });
-    }
-    items.push({
-      id: 'close-all',
-      label: '关闭全部标签页',
-      icon: <X size={14} />,
-      action: () => {
-        const state = useSidebarStore.getState();
-        openTabs
-          .filter((t) => !t.isDirty && !t.isSettings)
-          .forEach((t) => state.closeTab(t.id));
-      },
-    });
-  }
-}
+// Tab-closing actions used to live here as a per-entry section appended
+// to the file-tree right-click menu, but they fit much better on the
+// tab-bar's own context menu (the user can actually see which tab they're
+// acting on). The tab menu now owns these — see `buildTabMenu` below.
 
 /**
  * Right-click on a file tree entry. Composes the per-entry menu by
@@ -732,6 +666,21 @@ export function buildEntryMenu(
 
   appendPathCopyItems(items, entry, workspacePath, notify);
 
+  // "用 AI 处理此文件" — only available for text-readable file kinds
+  // (markdown, text, code, config, data). The submenu reads the file
+  // lazily on action, so right-clicking a 1 MB markdown and
+  // dismissing the menu doesn't pay any I/O cost.
+  const aiSubmenu = buildEntryAiSubmenu(entry, ctx);
+  if (aiSubmenu.length > 0) {
+    items.push({ id: 'divider-ai', label: '' });
+    items.push({
+      id: 'entry-ai',
+      label: '用 AI 处理此文件',
+      icon: <Sparkles size={14} />,
+      submenu: aiSubmenu,
+    });
+  }
+
   appendKnowledgeItems(
     items,
     entry,
@@ -743,8 +692,6 @@ export function buildEntryMenu(
     ctx,
   );
 
-  appendTabItems(items, entry, isDir, ctx);
-
   // Strip the trailing divider that some sections leave behind. The
   // menu should end on an action, not a hairline.
   while (items.length > 0 && isDivider(items[items.length - 1])) {
@@ -752,4 +699,945 @@ export function buildEntryMenu(
   }
 
   return items;
+}
+
+// ── Tab menu: right-click on an editor tab ────────────────────────────────────
+//
+// Sections (in order, separated by dividers):
+//   1. Close actions on this tab + neighbours
+//   2. Bulk close (saved-only / all)
+//   3. Per-tab file actions (refresh, copy path, reveal) — file tabs only
+//
+// Settings and Cloud tabs get a pared-down menu (no file actions), but
+// they still participate in "close others" / "close all" since the user
+// might want to dismiss them en masse.
+
+/** Close this single tab. Dirty files trigger a confirm dialog. */
+function appendCloseThisTab(
+  items: MenuItem[],
+  tab: OpenTab,
+): void {
+  items.push({
+    id: 'tab-close',
+    label: '关闭',
+    icon: <X size={14} />,
+    action: async () => {
+      const state = useSidebarStore.getState();
+      // Settings / Cloud tabs close without a prompt.
+      if (tab.isSettings || tab.isCloud) {
+        state.closeTab(tab.id);
+        return;
+      }
+      const ok = state.requestCloseTab(tab.path);
+      if (ok) return;
+      const confirm = useConfirmDialogStore.getState().ask;
+      const discard = await confirm({
+        title: '未保存的更改',
+        message: `"${tab.name}" 有未保存的更改，关闭将丢弃。`,
+        confirmLabel: '丢弃并关闭',
+        danger: true,
+      });
+      if (discard) {
+        state.setOpenTabDirty(tab.path, false);
+        state.requestCloseTab(tab.path);
+      }
+    },
+  });
+}
+
+/**
+ * Close every tab except the right-clicked one. Skips dirty file tabs
+ * and settings tabs by default — the user can confirm them one-by-one
+ * from the tab bar if they really want to drop changes.
+ */
+function appendCloseOtherTabs(
+  items: MenuItem[],
+  tab: OpenTab,
+  ctx: MenuBuilderContext,
+): void {
+  const otherTabs = ctx.openTabs.filter((t) => t.id !== tab.id);
+  if (otherTabs.length === 0) return;
+
+  items.push({
+    id: 'tab-close-others',
+    label: '关闭其他标签页',
+    icon: <X size={14} />,
+    action: () => {
+      const state = useSidebarStore.getState();
+      otherTabs.forEach((t) => {
+        if (t.isSettings || t.isCloud) {
+          state.closeTab(t.id);
+          return;
+        }
+        if (!t.isDirty) state.closeTab(t.id);
+      });
+    },
+  });
+}
+
+/** Close every tab to the right of the right-clicked one (same dirty rules). */
+function appendCloseRightTabs(
+  items: MenuItem[],
+  tab: OpenTab,
+  ctx: MenuBuilderContext,
+): void {
+  const { openTabs } = ctx;
+  const tabIndex = openTabs.findIndex((t) => t.id === tab.id);
+  if (tabIndex < 0 || tabIndex >= openTabs.length - 1) return;
+
+  items.push({
+    id: 'tab-close-right',
+    label: '关闭右侧标签页',
+    icon: <X size={14} />,
+    action: () => {
+      const state = useSidebarStore.getState();
+      openTabs.slice(tabIndex + 1).forEach((t) => {
+        if (t.isSettings || t.isCloud) {
+          state.closeTab(t.id);
+          return;
+        }
+        if (!t.isDirty) state.closeTab(t.id);
+      });
+    },
+  });
+}
+
+/**
+ * "关闭已保存的文件" — silently close every file tab that has no
+ * unsaved changes. Settings / Cloud tabs are left alone (they're not
+ * "files" and the user can still see them in the tab bar as anchors).
+ * If nothing matches, the row is disabled so the menu doesn't lie.
+ */
+function appendCloseSavedTabs(
+  items: MenuItem[],
+  tab: OpenTab,
+  ctx: MenuBuilderContext,
+): void {
+  const savedFileTabs = ctx.openTabs.filter(
+    (t) => t.id !== tab.id && !t.isSettings && !t.isCloud && !t.isDirty,
+  );
+
+  items.push({
+    id: 'tab-close-saved',
+    label: '关闭已保存的文件',
+    icon: <X size={14} />,
+    disabled: savedFileTabs.length === 0,
+    action: () => {
+      const state = useSidebarStore.getState();
+      savedFileTabs.forEach((t) => state.closeTab(t.id));
+    },
+  });
+}
+
+/**
+ * "全部关闭" — close every file tab. Already-saved tabs close silently;
+ * dirty ones get a single confirmation dialog listing them so the user
+ * can decide once instead of N times.
+ */
+function appendCloseAllTabs(
+  items: MenuItem[],
+  tab: OpenTab,
+  ctx: MenuBuilderContext,
+): void {
+  const { openTabs } = ctx;
+  const otherTabs = openTabs.filter((t) => t.id !== tab.id);
+  if (otherTabs.length === 0) {
+    items.push({
+      id: 'tab-close-all',
+      label: '全部关闭',
+      icon: <X size={14} />,
+      disabled: true,
+      action: () => {},
+    });
+    return;
+  }
+
+  items.push({
+    id: 'tab-close-all',
+    label: '全部关闭',
+    icon: <X size={14} />,
+    action: async () => {
+      const state = useSidebarStore.getState();
+      // First, drop every saved / settings / cloud tab. The right-clicked
+      // tab goes last so the user can keep their context anchor.
+      const toForceClose: OpenTab[] = [];
+      openTabs.forEach((t) => {
+        if (t.id === tab.id) return;
+        if (t.isSettings || t.isCloud) {
+          state.closeTab(t.id);
+          return;
+        }
+        if (!t.isDirty) {
+          state.closeTab(t.id);
+          return;
+        }
+        toForceClose.push(t);
+      });
+      // If anything dirty remains, ask once with a list of file names.
+      if (toForceClose.length === 0) return;
+      const names = toForceClose.map((t) => t.name).join('\n');
+      const confirm = useConfirmDialogStore.getState().ask;
+      const discard = await confirm({
+        title: '未保存的更改',
+        message: `以下 ${toForceClose.length} 个文件有未保存的更改，关闭将丢弃：\n\n${names}`,
+        confirmLabel: '全部丢弃并关闭',
+        danger: true,
+      });
+      if (!discard) return;
+      toForceClose.forEach((t) => {
+        state.setOpenTabDirty(t.path, false);
+        state.requestCloseTab(t.path);
+      });
+      // And finally the right-clicked tab itself if it was dirty.
+      if (tab.isDirty && !tab.isSettings && !tab.isCloud) {
+        const ok = state.requestCloseTab(tab.path);
+        if (!ok) {
+          state.setOpenTabDirty(tab.path, false);
+          state.requestCloseTab(tab.path);
+        }
+      }
+    },
+  });
+}
+
+/**
+ * File-only actions: refresh the workspace, copy the absolute /
+ * relative path to the clipboard, reveal in the OS file manager. The
+ * Editor already handles "reload the current file from disk" on save,
+ * so a top-level "refresh file" is intentionally not exposed here.
+ */
+function appendTabFileActions(
+  items: MenuItem[],
+  tab: OpenTab,
+  ctx: MenuBuilderContext,
+): void {
+  if (tab.isSettings || tab.isCloud) return;
+  const { workspacePath, notify } = ctx;
+
+  items.push({ id: 'tab-file-divider', label: '' });
+
+  items.push({
+    id: 'tab-refresh',
+    label: '刷新工作区',
+    icon: <RefreshCw size={14} />,
+    disabled: !workspacePath,
+    action: async () => {
+      if (!workspacePath) return;
+      await reloadCurrentWorkspace();
+    },
+  });
+
+  items.push({
+    id: 'tab-copy-path',
+    label: '复制绝对路径',
+    icon: <CopyIcon size={14} />,
+    action: async () => {
+      try {
+        await navigator.clipboard.writeText(tab.path);
+        notify('success', '已复制路径', tab.path);
+      } catch (err) {
+        notify('error', '复制路径失败', reportError('contextmenu-tab-copy-path', err));
+      }
+    },
+  });
+
+  if (workspacePath) {
+    items.push({
+      id: 'tab-copy-rel-path',
+      label: '复制相对路径',
+      icon: <CopyIcon size={14} />,
+      action: async () => {
+        const rel = tab.path.startsWith(workspacePath + '/')
+          ? tab.path.slice(workspacePath.length + 1)
+          : tab.path;
+        try {
+          await navigator.clipboard.writeText(rel);
+          notify('success', '已复制相对路径', rel);
+        } catch (err) {
+          notify('error', '复制相对路径失败', reportError('contextmenu-tab-copy-rel', err));
+        }
+      },
+    });
+  }
+
+  items.push({
+    id: 'tab-reveal',
+    label: '在文件管理器中显示',
+    icon: <FolderOpen size={14} />,
+    action: async () => {
+      try {
+        await revealInFileManager(tab.path);
+      } catch (err) {
+        notify('error', '无法打开文件管理器', reportError('contextmenu-tab-reveal', err));
+      }
+    },
+  });
+}
+
+/**
+ * Right-click on an editor tab. Sections in order:
+ *   1. Close this / close others / close right
+ *   2. Close saved files / close all
+ *   3. Refresh workspace / copy path / reveal (file tabs only)
+ */
+export function buildTabMenu(tab: OpenTab, ctx: MenuBuilderContext): MenuItem[] {
+  const items: MenuItem[] = [];
+
+  // ── Section 1: single-tab + neighbour closes ────────────────────────────
+  appendCloseThisTab(items, tab);
+  appendCloseOtherTabs(items, tab, ctx);
+  appendCloseRightTabs(items, tab, ctx);
+
+  // ── Section 2: bulk close ───────────────────────────────────────────────
+  const bulkStart = items.length;
+  appendCloseSavedTabs(items, tab, ctx);
+  appendCloseAllTabs(items, tab, ctx);
+  // If neither bulk row was actually usable, drop the section (e.g. only
+  // one tab is open and the saved-files row was disabled). Keeps the menu
+  // honest rather than showing a hairline divider.
+  const bulkUsable = items
+    .slice(bulkStart)
+    .some((i) => !isDivider(i) && !i.disabled);
+  if (!bulkUsable) {
+    items.length = bulkStart;
+  } else {
+    items.splice(bulkStart, 0, { id: 'tab-divider-bulk', label: '' });
+  }
+
+  // ── Section 3: file actions (file tabs only) ────────────────────────────
+  appendTabFileActions(items, tab, ctx);
+
+  while (items.length > 0 && isDivider(items[items.length - 1])) {
+    items.pop();
+  }
+
+  return items;
+}
+
+// ── Selection menu: right-click on a text selection inside the editor ──────────
+//
+// Fired by `OfficeViewer` when the user right-clicks on a non-collapsed
+// selection in the docx editor. Every AI action here spawns a
+// standalone floating popover (see `useFloatingAiStore` +
+// `FloatingAiWindow`), so the action closes the menu and lets the
+// user continue interacting with the document while the AI streams
+// its answer in the corner. Non-AI actions stay local to the
+// document (copy / search).
+//
+// Spawn a floating AI popover near the right-click position.
+//
+// Both `buildSelectionMenu` and `buildEntryMenu` call into this so the
+// popover spawning logic stays in one place — including the viewport
+// clamping that prevents the popover from being born off-screen when
+// the user right-clicks near the bottom edge of the workspace.
+//
+// `quote` is the text shown in the popover header (the user's original
+// passage or the file's first lines); `instruction` is what actually
+// goes to the model. They can be identical, but for the entry-level
+// menu the instruction wraps the file contents with a template like
+// "请帮我解释以下文件的内容：\n\n\"\"\"\n<file>\n\"\"\"".
+function openAiPopoverFor(input: {
+  title: string;
+  subtitle: string;
+  quote: string;
+  instruction: string;
+}): void {
+  const target = useContextMenuStore.getState().target;
+  const baseX = target?.x ?? 40;
+  const baseY = target?.y ?? 40;
+  const vw = globalThis.window?.innerWidth ?? 1280;
+  const vh = globalThis.window?.innerHeight ?? 800;
+  // Default popover footprint. We use the *initial* size of the
+  // popover here (matching what `open` will receive), so the clamp
+  // produces a sensible result for the spawn position. The popover
+  // can grow / shrink afterwards via the resize handle, so we don't
+  // need to re-clamp on drag.
+  const w = 480;
+  const h = 440;
+  const position = clampPopoverSpawnPosition(baseX, baseY, w, h, vw, vh);
+  useContextMenuStore.getState().close();
+  useFloatingAiStore.getState().open({
+    ...input,
+    position,
+    width: w,
+    height: h,
+  });
+}
+
+/**
+ * Clamp a popover's spawn position so the entire window stays inside
+ * the viewport with a small margin. Without this, right-clicking near
+ * the bottom edge spawns a popover that gets cut off (only the top is
+ * visible) — the previous code used `target.y + 12` verbatim which is
+ * fine for top-right clicks but unusable at the bottom.
+ *
+ * Anchor choice: prefer to drop the popover just below the cursor,
+ * but if there's not enough room below, flip above. Likewise for the
+ * right edge. This mirrors how most native context-menus auto-flip.
+ */
+function clampPopoverSpawnPosition(
+  baseX: number,
+  baseY: number,
+  width: number,
+  height: number,
+  viewportW: number,
+  viewportH: number,
+): { x: number; y: number } {
+  const margin = 8;
+  // Anchor just below-right of the cursor, mirroring native menus.
+  let x = baseX + 12;
+  let y = baseY + 12;
+  // Flip horizontally if we don't fit on the right.
+  if (x + width + margin > viewportW) {
+    x = baseX - width - 12;
+  }
+  // Flip vertically if we don't fit below.
+  if (y + height + margin > viewportH) {
+    y = baseY - height - 12;
+  }
+  // Final hard clamp — guarantees visibility even if both directions
+  // overflow (very small viewports, very large popovers, etc.).
+  const maxX = Math.max(margin, viewportW - width - margin);
+  const maxY = Math.max(margin, viewportH - height - margin);
+  return {
+    x: Math.max(margin, Math.min(maxX, x)),
+    y: Math.max(margin, Math.min(maxY, y)),
+  };
+}
+
+/** Common AI-processing submenu used by both selection- and entry-level menus.
+ *
+ *  The selection-level caller passes its own trimmed selection as
+ *  `quote`; the entry-level caller already wraps the file's contents
+ *  in its own prompt template (see `buildEntryAiSubmenu`) and passes
+ *  the wrapped instruction as `quote` so the header preview matches
+ *  what the model actually sees. The four inner items use the same
+ *  hardcoded templates so the prompts stay consistent across the two
+ *  entry points. */
+function buildAiProcessSubmenu(
+  options: { idPrefix: string; quote: string; subtitle: string },
+): MenuItem[] {
+  const { idPrefix, quote, subtitle } = options;
+  const trigger = (label: string, template: (q: string) => string) => () => {
+    openAiPopoverFor({
+      title: label,
+      subtitle,
+      quote,
+      instruction: template(quote),
+    });
+  };
+  return [
+    {
+      id: `${idPrefix}-explain`,
+      label: '解释',
+      icon: <Sparkles size={14} />,
+      action: trigger('AI 解释', (q) => `请帮我解释以下内容：\n\n"""\n${q}\n"""`),
+    },
+    {
+      id: `${idPrefix}-translate`,
+      label: '翻译成英文',
+      icon: <Languages size={14} />,
+      action: trigger(
+        'AI 翻译',
+        (q) => `请把以下内容翻译成英文（保留原文格式与代码块）：\n\n"""\n${q}\n"""`,
+      ),
+    },
+    {
+      id: `${idPrefix}-summarize`,
+      label: '总结',
+      icon: <ListChecks size={14} />,
+      action: trigger(
+        'AI 总结',
+        (q) => `请简要总结以下内容的要点：\n\n"""\n${q}\n"""`,
+      ),
+    },
+    {
+      id: `${idPrefix}-rewrite`,
+      label: '改写',
+      icon: <FileText size={14} />,
+      action: trigger(
+        'AI 改写',
+        (q) => `请把以下内容改写得更清晰流畅，保留原意：\n\n"""\n${q}\n"""`,
+      ),
+    },
+  ];
+}
+
+/**
+ * File kinds that can be safely read as plain text and fed to the
+ * floating AI popover. Docx / xlsx / pdf / images are out — they need
+ * a richer extractor path (already covered elsewhere) and a raw read
+ * would produce garbage. Code / config / data are all UTF-8-friendly
+ * in practice so we include them too.
+ */
+const AI_TEXT_FILE_KINDS = new Set([
+  'markdown',
+  'text',
+  'code',
+  'config',
+  'data',
+]);
+
+/** Cap for file content sent into the AI prompt. Large files would
+ *  blow past the model's context window. 24 KB ≈ 6k CJK chars, which
+ *  fits comfortably in any reasonable ask-mode model. The cap is
+ *  applied per file, per popover; a separate popover can be opened
+ *  for additional content if needed. */
+const AI_FILE_PROMPT_BYTE_CAP = 24 * 1024;
+
+/** Build an "AI 处理" submenu for a file-tree entry. Returns an empty
+ *  array when the entry is a directory or a binary kind — callers
+ *  can spread the result unconditionally. The menu reads the file
+ *  lazily on action so we don't pay the I/O cost when the user just
+ *  browses the right-click options. */
+function buildEntryAiSubmenu(
+  entry: FileEntry,
+  ctx: MenuBuilderContext,
+): MenuItem[] {
+  const { notify } = ctx;
+  if (entry.is_dir) return [];
+  if (!AI_TEXT_FILE_KINDS.has(entry.file_kind)) return [];
+
+  const itemName = basename(entry.path);
+  const subtitle = `${itemName} · ${entry.file_kind}`;
+
+  // The handler is shared across all four submenu items — they only
+  // differ in their prompt template, so we read the file once and
+  // synthesize four actions off the same in-memory content.
+  const trigger = (
+    label: string,
+    buildInstruction: (q: string) => string,
+  ) =>
+    async () => {
+      try {
+        const result = await invoke<{ content: string }>('read_document', {
+          path: entry.path,
+        });
+        const full = result?.content ?? '';
+        // Truncate at a character boundary to avoid splitting a
+        // multi-byte UTF-8 sequence when the cap lands mid-character.
+        let content = full;
+        if (content.length > AI_FILE_PROMPT_BYTE_CAP) {
+          content = `${content.slice(0, AI_FILE_PROMPT_BYTE_CAP)}\n\n[…内容已截断…]`;
+        }
+        const trimmed = content.trim();
+        if (!trimmed) {
+          notify('error', '文件为空', itemName);
+          return;
+        }
+        // Show the *truncated* content in the popover header quote
+        // too — keeps the visible excerpt aligned with what the
+        // model actually sees.
+        openAiPopoverFor({
+          title: label,
+          subtitle,
+          quote: trimmed.length > 800 ? `${trimmed.slice(0, 800)}…` : trimmed,
+          instruction: buildInstruction(trimmed),
+        });
+      } catch (err) {
+        notify(
+          'error',
+          '读取文件失败',
+          reportError('contextmenu-ai-file-read', err),
+        );
+      }
+    };
+
+  return [
+    {
+      id: 'entry-ai-explain',
+      label: '解释',
+      icon: <Sparkles size={14} />,
+      action: trigger(
+        'AI 解释',
+        (q) => `请帮我解释以下文件的内容：\n\n"""\n${q}\n"""`,
+      ),
+    },
+    {
+      id: 'entry-ai-translate',
+      label: '翻译成英文',
+      icon: <Languages size={14} />,
+      action: trigger(
+        'AI 翻译',
+        (q) => `请把以下文件的内容翻译成英文（保留原文格式与代码块）：\n\n"""\n${q}\n"""`,
+      ),
+    },
+    {
+      id: 'entry-ai-summarize',
+      label: '总结',
+      icon: <ListChecks size={14} />,
+      action: trigger(
+        'AI 总结',
+        (q) => `请简要总结以下文件的要点：\n\n"""\n${q}\n"""`,
+      ),
+    },
+    {
+      id: 'entry-ai-rewrite',
+      label: '改写',
+      icon: <FileText size={14} />,
+      action: trigger(
+        'AI 改写',
+        (q) => `请把以下文件的内容改写得更清晰流畅，保留原意：\n\n"""\n${q}\n"""`,
+      ),
+    },
+  ];
+}
+
+export function buildSelectionMenu(
+  selectionText: string,
+  ctx: MenuBuilderContext,
+): MenuItem[] {
+  const { closeMenu, notify } = ctx;
+  const text = selectionText;
+  const trimmed = text.trim();
+  // Empty / whitespace-only selections should never reach the builder,
+  // but guard anyway so a misuse can't render a useless menu.
+  if (trimmed.length === 0) return [];
+
+  const copyAndClose = () => {
+    closeMenu();
+  };
+
+  const copyToClipboard = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      notify('success', '已复制', `${text.length} 字`);
+    } catch (err) {
+      notify('error', '复制失败', reportError('contextmenu-selection-copy', err));
+    }
+    copyAndClose();
+  };
+
+  const searchSelection = () => {
+    // The CmdK palette already supports `? <query>` to push a search
+    // intent. Dispatching through it keeps the workspace search and
+    // the context-menu search on the same code path.
+    window.dispatchEvent(
+      new CustomEvent('inkuo:workspace-search', { detail: { query: trimmed } }),
+    );
+    copyAndClose();
+  };
+
+  // The selection-level AI submenu shares its core with the entry-level
+  // AI submenu (both feed the same floating AI popover). The shared
+  // helper also clamps the spawn position so right-clicking near the
+  // bottom-right corner doesn't push the popover off-screen.
+  const aiSubmenu = buildAiProcessSubmenu({
+    idPrefix: 'selection-ai',
+    quote: trimmed,
+    subtitle: `选区 · ${trimmed.length} 字`,
+  });
+
+  return [
+    {
+      id: 'selection-ai',
+      label: '用 AI 处理选中文本',
+      icon: <Sparkles size={14} />,
+      submenu: aiSubmenu,
+    },
+    {
+      id: 'selection-search',
+      label: '在工作区中搜索',
+      icon: <Search size={14} />,
+      action: searchSelection,
+    },
+    { id: DIVIDER_ID, label: '' },
+    {
+      id: 'selection-copy',
+      label: '复制',
+      icon: <ClipboardCopy size={14} />,
+      action: copyToClipboard,
+    },
+  ];
+}
+
+// ── DOCX editor menu: right-click on the docx editor (empty or collapsed caret) ──
+//
+// Fired by `OfficeViewer` for any right-click inside the docx editor
+// container — regardless of whether the user has a non-empty selection.
+// The previous behaviour fell through to the webview's native context
+// menu on empty selections, which Chromium renders snapped to whatever
+// happens to be on screen (often the bottom-right of the viewport for
+// spell-check suggestions). Routing everything through our app menu
+// keeps the experience consistent across selections and gives the user
+// real, keyboard-accessible editing actions instead of the OS default.
+//
+// We deliberately keep the menu small (Undo / Redo / Cut / Copy /
+// Paste / Find / Replace / Select All) — these are the actions every
+// user expects on a right-click in any text area. The docx editor's
+// own AI / rewrite toolbar is a different surface (the "组件自带的"
+// right-click menu the user reported in the bug report) and stays
+// under the AI flow rather than the right-click menu.
+//
+// The PM commands are captured at click time via `commands` so the
+// action closures don't need to re-resolve the editor view later.
+export function buildDocxMenu(
+  commands: DocxCommands,
+  ctx: MenuBuilderContext,
+): MenuItem[] {
+  const { closeMenu } = ctx;
+  const items: MenuItem[] = [];
+
+  const wrap = (action: () => void): (() => void) => {
+    const wrapped = () => {
+      try {
+        action();
+      } finally {
+        closeMenu();
+      }
+    };
+    return wrapped;
+  };
+
+  items.push({
+    id: 'docx-undo',
+    label: '撤销',
+    icon: <Undo2 size={14} />,
+    shortcut: '⌘Z',
+    disabled: !commands.canUndo,
+    action: wrap(commands.undo),
+  });
+  items.push({
+    id: 'docx-redo',
+    label: '重做',
+    icon: <Redo2 size={14} />,
+    shortcut: '⌘⇧Z',
+    disabled: !commands.canRedo,
+    action: wrap(commands.redo),
+  });
+  items.push({ id: DIVIDER_ID, label: '' });
+  items.push({
+    id: 'docx-cut',
+    label: '剪切',
+    icon: <Scissors size={14} />,
+    shortcut: '⌘X',
+    disabled: !commands.hasSelection,
+    action: wrap(commands.cut),
+  });
+  items.push({
+    id: 'docx-copy',
+    label: '复制',
+    icon: <ClipboardCopy size={14} />,
+    shortcut: '⌘C',
+    disabled: !commands.hasSelection,
+    action: wrap(commands.copy),
+  });
+  items.push({
+    id: 'docx-paste',
+    label: '粘贴',
+    icon: <ClipboardPaste size={14} />,
+    shortcut: '⌘V',
+    disabled: !commands.hasClipboard,
+    action: wrap(commands.paste),
+  });
+  items.push({ id: DIVIDER_ID, label: '' });
+  items.push({
+    id: 'docx-find',
+    label: '查找',
+    icon: <SearchIcon size={14} />,
+    shortcut: '⌘F',
+    action: wrap(commands.find),
+  });
+  items.push({
+    id: 'docx-replace',
+    label: '替换',
+    icon: <Replace size={14} />,
+    shortcut: '⌘H',
+    action: wrap(commands.replace),
+  });
+  items.push({
+    id: 'docx-select-all',
+    label: '全选',
+    icon: <Type size={14} />,
+    shortcut: '⌘A',
+    action: wrap(commands.selectAll),
+  });
+
+  return items;
+}
+
+/**
+ * Empty-selection right-click menu for the markdown / code / text
+ * editor (CodeMirror). Mirrors `buildDocxMenu` for the docx editor
+ * but is scoped down: no Undo/Redo (CodeMirror's history keymap is
+ * mounted separately and the user can already hit ⌘Z directly), and
+ * adds an "AI 处理当前文件" submenu that reads the live document
+ * content via `commands.readContent()`.
+ *
+ * When the user has a non-empty selection we route them to
+ * `buildSelectionMenu` instead (kind: 'selection'), which already
+ * includes the AI submenu. The two paths overlap a little at the
+ * "用 AI 处理" boundary but the selection-menu version acts on the
+ * passage the user highlighted, while this one acts on the whole
+ * document — they target different intents.
+ */
+export function buildEditorMenu(
+  commands: EditorCommands,
+  ctx: MenuBuilderContext,
+): MenuItem[] {
+  const { closeMenu, selectedFile, notify } = ctx;
+  const items: MenuItem[] = [];
+
+  const wrap = (action: () => void): (() => void) => {
+    const wrapped = () => {
+      try {
+        action();
+      } finally {
+        closeMenu();
+      }
+    };
+    return wrapped;
+  };
+
+  items.push({
+    id: 'editor-cut',
+    label: '剪切',
+    icon: <Scissors size={14} />,
+    shortcut: '⌘X',
+    disabled: !commands.readContent || commands.readContent().length === 0,
+    action: wrap(commands.cut),
+  });
+  items.push({
+    id: 'editor-copy',
+    label: '复制',
+    icon: <ClipboardCopy size={14} />,
+    shortcut: '⌘C',
+    action: wrap(commands.copy),
+  });
+  items.push({
+    id: 'editor-paste',
+    label: '粘贴',
+    icon: <ClipboardPaste size={14} />,
+    shortcut: '⌘V',
+    action: wrap(commands.paste),
+  });
+  items.push({ id: DIVIDER_ID, label: '' });
+
+  items.push({
+    id: 'editor-find',
+    label: '查找',
+    icon: <SearchIcon size={14} />,
+    shortcut: '⌘F',
+    action: wrap(commands.find),
+  });
+  items.push({
+    id: 'editor-replace',
+    label: '替换',
+    icon: <Replace size={14} />,
+    shortcut: '⌘H',
+    action: wrap(commands.replace),
+  });
+  items.push({
+    id: 'editor-select-all',
+    label: '全选',
+    icon: <Type size={14} />,
+    shortcut: '⌘A',
+    action: wrap(commands.selectAll),
+  });
+
+  // "AI 处理当前文件" — same idea as the file-tree entry AI submenu,
+  // but uses the *live* editor buffer instead of re-reading the file
+  // from disk. This is the right behavior for users who have unsaved
+  // edits in the editor: the popover should reason about what's
+  // actually on screen, not the last saved snapshot.
+  if (selectedFile) {
+    const aiSubmenu = buildEditorFileAiSubmenu(
+      commands,
+      selectedFile,
+      notify,
+      closeMenu,
+    );
+    if (aiSubmenu.length > 0) {
+      items.push({ id: DIVIDER_ID, label: '' });
+      items.push({
+        id: 'editor-ai',
+        label: '用 AI 处理当前文件',
+        icon: <Sparkles size={14} />,
+        submenu: aiSubmenu,
+      });
+    }
+  }
+
+  return items;
+}
+
+/**
+ * Build the four-item AI submenu for the editor empty-selection
+ * context. Reads the live document content via `commands.readContent`
+ * so the user can pop the AI window on unsaved edits.
+ *
+ * Returns an empty array when the buffer is empty so the caller can
+ * skip the section cleanly.
+ */
+function buildEditorFileAiSubmenu(
+  commands: EditorCommands,
+  filePath: string,
+  notify: MenuBuilderContext['notify'],
+  closeMenu: () => void,
+): MenuItem[] {
+  // Read the buffer synchronously here — `commands.readContent` is a
+  // cheap accessor over the live CM state. Doing it inside the
+  // `trigger` closures would also work but means the user could
+  // dismiss the menu, edit the file, and have the AI run on stale
+  // content. Snapshot at menu-build time instead, which matches the
+  // snapshot-at-right-click rationale used elsewhere in this module.
+  const full = (commands.readContent() ?? '').trim();
+  if (!full) return [];
+
+  const itemName = basename(filePath);
+  let content = full;
+  if (content.length > AI_FILE_PROMPT_BYTE_CAP) {
+    content = `${content.slice(0, AI_FILE_PROMPT_BYTE_CAP)}\n\n[…内容已截断…]`;
+  }
+  const quote = content.length > 800 ? `${content.slice(0, 800)}…` : content;
+  const subtitle = `${itemName} · 编辑器中`;
+
+  const trigger = (label: string, template: (q: string) => string) => () => {
+    openAiPopoverFor({
+      title: label,
+      subtitle,
+      quote,
+      instruction: template(content),
+    });
+    closeMenu();
+  };
+
+  // Surface a notification if the buffer is too small to be useful.
+  if (content.length < 4) {
+    return [];
+  }
+  void notify;
+
+  return [
+    {
+      id: 'editor-ai-explain',
+      label: '解释',
+      icon: <Sparkles size={14} />,
+      action: trigger('AI 解释', (q) => `请帮我解释以下文件的内容：\n\n"""\n${q}\n"""`),
+    },
+    {
+      id: 'editor-ai-translate',
+      label: '翻译成英文',
+      icon: <Languages size={14} />,
+      action: trigger(
+        'AI 翻译',
+        (q) => `请把以下文件的内容翻译成英文（保留原文格式与代码块）：\n\n"""\n${q}\n"""`,
+      ),
+    },
+    {
+      id: 'editor-ai-summarize',
+      label: '总结',
+      icon: <ListChecks size={14} />,
+      action: trigger('AI 总结', (q) => `请简要总结以下文件的要点：\n\n"""\n${q}\n"""`),
+    },
+    {
+      id: 'editor-ai-rewrite',
+      label: '改写',
+      icon: <FileText size={14} />,
+      action: trigger(
+        'AI 改写',
+        (q) => `请把以下文件的内容改写得更清晰流畅，保留原意：\n\n"""\n${q}\n"""`,
+      ),
+    },
+  ];
 }

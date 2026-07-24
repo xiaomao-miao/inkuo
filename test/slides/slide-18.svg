@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" width="1280" height="720">
+  <rect width="1280" height="720" fill="#ffffff"/>
+  <rect width="1280" height="80" fill="#0f1a2e"/>
+  <text x="50" y="50" font-family="Arial, sans-serif" font-size="32" font-weight="bold" fill="#ffffff">快速开始 —— 三步上手</text>
+  <rect x="60" y="140" width="340" height="400" rx="15" fill="#e3f2fd" stroke="#1565c0" stroke-width="2"/>
+  <circle cx="230" cy="200" r="35" fill="#1565c0"/>
+  <text x="230" y="208" text-anchor="middle" font-family="Arial, sans-serif" font-size="28" font-weight="bold" fill="#ffffff">01</text>
+  <text x="230" y="260" text-anchor="middle" font-family="Arial, sans-serif" font-size="22" font-weight="bold" fill="#0d47a1">下载安装</text>
+  <text x="80" y="300" font-family="Arial, sans-serif" font-size="16" fill="#444">
+    <tspan x="230" dy="0" text-anchor="middle">从官网下载 InkUO</tspan>
+    <tspan x="230" dy="28" text-anchor="middle">桌面应用安装包</tspan>
+    <tspan x="230" dy="28" text-anchor="middle">支持 Windows / macOS</tspan>
+    <tspan x="230" dy="28" text-anchor="middle">安装完成即开即用</tspan>
+  </text>
+  <rect x="80" y="440" width="300" height="55" rx="8" fill="#1565c0"/>
+  <text x="230" y="470" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" fill="#ffffff">系统要求：</text>
+  <text x="230" y="487" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" fill="#bbdefb">Win 10+ / macOS 11+</text>
+  <rect x="450" y="140" width="340" height="400" rx="15" fill="#e8f5e9" stroke="#2e7d32" stroke-width="2"/>
+  <circle cx="620" cy="200" r="35" fill="#2e7d32"/>
+  <text x="620" y="208" text-anchor="middle" font-family="Arial, sans-serif" font-size="28" font-weight="bold" fill="#ffffff">02</text>
+  <text x="620" y="260" text-anchor="middle" font-family="Arial, sans-serif" font-size="22" font-weight="bold" fill="#1b5e20">配置工作区</text>
+  <text x="480" y="300" font-family="Arial, sans-serif" font-size="16" fill="#444">
+    <tspan x="620" dy="0" text-anchor="middle">创建或打开已有目录</tspan>
+    <tspan x="620" dy="28" text-anchor="middle">作为工作区</tspan>
+    <tspan x="620" dy="28" text-anchor="middle">（可选）构建知识库</tspan>
+    <tspan x="620" dy="28" text-anchor="middle">一键扫描 → 自动索引</tspan>
+  </text>
+  <rect x="470" y="440" width="300" height="55" rx="8" fill="#2e7d32"/>
+  <text x="620" y="470" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" fill="#ffffff">知识库面板 → 扫描</text>
+  <text x="620" y="487" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" fill="#c8e6c9">秒级完成索引</text>
+  <rect x="840" y="140" width="340" height="400" rx="15" fill="#fff3e0" stroke="#e65100" stroke-width="2"/>
+  <circle cx="1010" cy="200" r="35" fill="#e65100"/>
+  <text x="1010" y="208" text-anchor="middle" font-family="Arial, sans-serif" font-size="28" font-weight="bold" fill="#ffffff">03</text>
+  <text x="1010" y="260" text-anchor="middle" font-family="Arial, sans-serif" font-size="22" font-weight="bold" fill="#bf360c">开始协作</text>
+  <text x="870" y="300" font-family="Arial, sans-serif" font-size="16" fill="#444">
+    <tspan x="1010" dy="0" text-anchor="middle">选择 AI 模式</tspan>
+    <tspan x="1010" dy="28" text-anchor="middle">Ask / Plan / Agent</tspan>
+    <tspan x="1010" dy="28" text-anchor="middle">用自然语言描述需求</tspan>
+    <tspan x="1010" dy="28" text-anchor="middle">AI 帮你完成！</tspan>
+  </text>
+  <rect x="860" y="440" width="300" height="55" rx="8" fill="#e65100"/>
+  <text x="1010" y="470" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" fill="#ffffff">例："帮我写一份周报"</text>
+  <text x="1010" y="487" text-anchor="middle" font-family="Arial, sans-serif" font-size="12" fill="#ffe0b2">AI 直接生成文件</text>
+  <rect x="60" y="580" width="1120" height="100" rx="12" fill="#0f1a2e"/>
+  <text x="80" y="618" font-family="Arial, sans-serif" font-size="20" font-weight="bold" fill="#ffffff">就是这么简单</text>
+  <text x="80" y="650" font-family="Arial, sans-serif" font-size="16" fill="#88b4d9">从下载到完成第一份 AI 协作文档，只需 3 步 · 完全免费 · 无需配置 API Key</text>
+</svg>

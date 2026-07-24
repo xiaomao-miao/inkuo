@@ -20,6 +20,110 @@ pub async fn ai_stream_cancel(session_id: String) -> Result<(), StreamCommandErr
     Ok(())
 }
 
+/// Single-shot streaming chat completion for the floating AI popovers.
+///
+/// Unlike `ai_agent_stream`, this command does **not** run the agent
+/// loop — no tool calls, no iterations, no baseline snapshots. It
+/// routes through `AIProviderAdapter::chat_stream`, which performs a
+/// single streamed chat completion (ask system prompt by default)
+/// and emits one `text` delta per SSE chunk. Frontends listen on
+/// `ai://stream` keyed by `session_id` and accumulate the deltas
+/// into their own UI state.
+///
+/// Cancellation: `ai_ask_cancel` flips the global per-session
+/// cancellation flag that the inner `chat_stream` callback reads
+/// before emitting each delta. The Rust side returns Ok early when
+/// the flag is set.
+#[tauri::command]
+pub async fn ai_ask_stream(
+    session_id: String,
+    message_id: String,
+    instruction: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), StreamCommandError> {
+    // Resolve a fresh AIConfig per call so a rotated cloud access
+    // token is picked up automatically. Mirrors the `ai_edit_stream`
+    // path for consistency.
+    let config = state
+        .ai_config
+        .resolve()
+        .await
+        .map_err(|e| StreamCommandError::AIRequest(format!("resolve AI config: {}", e)))?;
+    let adapter = ai::AIProviderAdapter::new(config);
+
+    let session_id_for_cb = session_id.clone();
+    let message_id_for_cb = message_id.clone();
+
+    // Cleanup guard: any return path from this function must clear the
+    // stream-cancelled flag so it does not leak into the next call.
+    let _cancel_guard = crate::commands::StreamCancelGuard::new(&session_id);
+
+    // `chat_stream` does not take a separate `original_text` slot
+    // (the popover template already inlines the selection into the
+    // `instruction` string), so we pass an empty original_text. The
+    // `mode` defaults to "ask" for any value other than "plan".
+    let result = match adapter
+        .chat_stream(
+            "ask".to_string(),
+            instruction,
+            String::new(),
+            |delta| {
+                if crate::commands::is_stream_cancelled(&session_id_for_cb) {
+                    return;
+                }
+                emit(
+                    &app,
+                    StreamPayload::text(&session_id_for_cb, &message_id_for_cb, &delta),
+                );
+            },
+        )
+        .await
+    {
+        Ok(value) => value,
+        Err(error) => {
+            let message = error.to_string();
+            tracing::error!("AI ask stream error: {}", message);
+            emit(
+                &app,
+                StreamPayload::error(&session_id, &message_id, &message),
+            );
+            return Err(StreamCommandError::AIRequest(message));
+        }
+    };
+
+    if crate::commands::clear_stream_cancelled(&session_id) {
+        _cancel_guard.clear();
+        emit(
+            &app,
+            StreamPayload::cancelled(&session_id, &message_id),
+        );
+        return Ok(());
+    }
+
+    _cancel_guard.clear();
+
+    // Emit a terminal `done` event with the final accumulated content
+    // so the frontend can replace the streamed concatenation with the
+    // model-resolved version (in case any post-processing happened
+    // server-side, e.g. trimming whitespace).
+    emit(
+        &app,
+        StreamPayload::done(&session_id, &message_id, Some(&result)),
+    );
+
+    Ok(())
+}
+
+/// Cancel a running `ai_ask_stream` invocation. Best-effort: the
+/// command always succeeds even if the session id is unknown or the
+/// underlying stream already finished.
+#[tauri::command]
+pub async fn ai_ask_cancel(session_id: String) -> Result<(), StreamCommandError> {
+    crate::commands::mark_stream_cancelled(&session_id);
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn ai_edit_stream(
     session_id: String,

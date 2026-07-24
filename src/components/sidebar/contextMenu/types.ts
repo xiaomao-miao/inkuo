@@ -57,6 +57,12 @@ export const DIVIDER_ID = 'divider';
 /** Reserved id for the workspace-root context (no file entry). */
 export const WORKSPACE_TARGET_KIND = 'workspace';
 
+/** Reserved id for the open-tab context (clicked on a tab in the tab bar). */
+export const TAB_TARGET_KIND = 'tab';
+
+/** Reserved id for the file-tree entry context (right-click on a file/folder). */
+export const ENTRY_TARGET_KIND = 'entry';
+
 /**
  * Convenience predicate for menu builders that need to act on the
  * entry target — a tagged-union selector could replace this if more
