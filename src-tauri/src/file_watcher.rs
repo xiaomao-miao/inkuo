@@ -182,6 +182,10 @@ impl FileWatcherState {
                     if dirs.is_empty() {
                         return;
                     }
+                    tracing::debug!(
+                        "[watcher] emitting dirs-changed for {} dirs",
+                        dirs.len()
+                    );
                     let payload = DirsChangedPayload {
                         dirs: dirs.into_iter().collect(),
                     };

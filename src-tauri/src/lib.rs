@@ -41,8 +41,7 @@ pub use diff::*;
 pub use ai::*;
 use std::panic;
 use tauri::Manager;
-use tracing_subscriber::layer::SubscriberExt;
-use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 /// Minimum Windows build we will even try to launch on. WebView2 itself
 /// only ships runtime support down to Win10 1507 / build 10240. We use
@@ -241,7 +240,15 @@ fn setup_logging() {
             None
         }
     };
+    /// Reads `RUST_LOG` env var to control log levels. Defaults to a
+    /// noisy-but-actionable profile: warnings from third-party crates,
+    /// info from inkuo crates. Set `RUST_LOG=trace` to see everything.
+    fn console_env_filter() -> EnvFilter {
+        EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| EnvFilter::new("warn,inkuo_lib=info"))
+    }
     let subscriber = tracing_subscriber::registry()
+        .with(console_env_filter())
         .with(stdout_layer)
         .with(file_layer);
     // `try_init` instead of `init` so a test harness that already
