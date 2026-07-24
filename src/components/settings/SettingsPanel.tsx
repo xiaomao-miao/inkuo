@@ -1,12 +1,10 @@
 import { useState } from 'react';
 import {
-  Settings2,
   Cpu,
   Palette,
   Type,
   Keyboard,
   Sparkles,
-  Info,
   AlertCircle,
   Brain,
   History,
@@ -29,8 +27,7 @@ type SettingsTab =
   | 'ai'
   | 'web_search'
   | 'snapshots'
-  | 'appearance'
-  | 'about';
+  | 'appearance';
 
 export const SettingsPanel = () => {
   const settings = useSettingsStore((state) => state.settings);
@@ -49,7 +46,6 @@ export const SettingsPanel = () => {
     { id: 'web_search', label: '联网搜索', icon: <Globe size={14} /> },
     { id: 'snapshots', label: '快照', icon: <History size={14} /> },
     { id: 'appearance', label: '外观', icon: <Palette size={14} /> },
-    { id: 'about', label: '关于', icon: <Info size={14} /> },
   ];
 
   const renderTabContent = () => {
@@ -322,43 +318,6 @@ export const SettingsPanel = () => {
         return <WebSearchSettings />;
       case 'snapshots':
         return <SnapshotsSettings />;
-      case 'about':
-        return (
-          <div className={styles.tabContent}>
-            <div className={styles.aboutSection}>
-              <div className={styles.appLogo}>
-                <Settings2 size={48} strokeWidth={1.5} />
-              </div>
-              <h2 className={styles.appName}>Inkuo</h2>
-              <p className={styles.appVersion}>版本 1.0.0</p>
-              <p className={styles.appDescription}>
-                Inkuo 是一个 AI 文档编辑器，帮助你更高效地编辑和管理文档。
-              </p>
-
-              <div className={styles.aboutLinks}>
-                <div className={styles.aboutLink}>
-                  <span className={styles.linkLabel}>GitHub</span>
-                  <span className={styles.linkValue}>github.com/inkuo/inkuo</span>
-                </div>
-                <div className={styles.aboutLink}>
-                  <span className={styles.linkLabel}>文档</span>
-                  <span className={styles.linkValue}>docs.inkuo.com</span>
-                </div>
-              </div>
-
-              <div className={styles.techStack}>
-                <h4>技术栈</h4>
-                <div className={styles.techTags}>
-                  <span className={styles.techTag}>Rust</span>
-                  <span className={styles.techTag}>Tauri</span>
-                  <span className={styles.techTag}>React</span>
-                  <span className={styles.techTag}>TypeScript</span>
-                  <span className={styles.techTag}>CodeMirror</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        );
       default:
         return null;
     }
