@@ -426,6 +426,12 @@ export async function dispatchStreamEvent({
   }
 
   if (event_type === 'tool_call_start') {
+    // Right before the new tool is appended, prune the trailing compact
+    // tool (if any) so a tight `list_dir → read_file` sequence collapses
+    // into a single inline line on the user's screen. We only do this on
+    // the main-message path — sub-agent activity streams keep every tool
+    // visible because the user is reading a sub-task's full trace there.
+    useAIPanelStore.getState().pruneTrailingCompactTool(session_id, message_id);
     handleToolCallStart(payload);
     lastCategoryByMessage.set(message_id, 'tool');
     return;

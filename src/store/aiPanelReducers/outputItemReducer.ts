@@ -338,3 +338,110 @@ export function hardCollapseSessionHistory(session: ChatSession): ChatSession {
   if (!touched) return session;
   return { ...session, messages: next };
 }
+/**
+ * Drop the trailing compact-tool `OutputItem` if and only if it has not
+ * yet received a result. Used by the stream dispatcher right before it
+ * appends a fresh `tool_call_start` so the user only ever sees the *newest*
+ * read-only/directory tool in flight — `list_dir → read_file` collapses to
+ * a single inline "读取文件:foo.md" line, with no stale "列表目录:..." above
+ * it.
+ *
+ * The predicate is intentionally tight: a compact tool only "counts" when
+ * the assistant never produced any text, reasoning, plan, ask_user, or a
+ * different (non-compact) tool call between the previous compact tool and
+ * the trailing one. If anything user-visible happened in between we leave
+ * the previous tool in place — the user already saw something between
+ * them, so the previous tool had time to "land" and shouldn't be removed.
+ *
+ * The "tool has not yet produced a result" check (`result` / `status`
+ * undefined) means a compact tool that finished but had no visible
+ * intermediate content (e.g. `list_dir` then `read_file` with no text
+ * between them) still gets pruned — that's the desired UX.
+ */
+const COMPACT_TOOL_NAMES = new Set([
+  'list_dir',
+  'glob',
+  'grep',
+  'read_file',
+  'read_office_file',
+  'create_dir',
+  'move_file',
+]);
+
+function isCompactToolCallStart(
+  item: OutputItem,
+): item is Extract<OutputItem, { type: 'tool_call_start' }> {
+  return (
+    item.type === 'tool_call_start' && COMPACT_TOOL_NAMES.has(item.toolName)
+  );
+}
+
+function isVisibleContentItem(item: OutputItem): boolean {
+  // Any of these between two compact tools counts as "the assistant said
+  // something" and prevents the previous tool from being pruned.
+  return (
+    item.type === 'text' ||
+    item.type === 'reasoning' ||
+    item.type === 'plan' ||
+    item.type === 'ask_user' ||
+    item.type === 'tool_error' ||
+    (item.type === 'tool_call_start' && !isCompactToolCallStart(item)) ||
+    item.type === 'tool_result'
+  );
+}
+
+function isCompactToolStillPending(
+  item: OutputItem,
+): item is Extract<OutputItem, { type: 'tool_call_start' }> {
+  if (!isCompactToolCallStart(item)) return false;
+  if (item.status !== undefined) return false;
+  if (item.result !== undefined) return false;
+  return true;
+}
+
+export function pruneTrailingCompactTool(message: ChatMessage): ChatMessage {
+  const items = message.outputItems;
+  if (items.length === 0) return message;
+
+  // Find the last compact tool_call_start. Walk backwards; the first
+  // visible-content item we hit is a stop sign (means the previous tool
+  // already "landed" with something between it and the new one).
+  let lastCompactIdx = -1;
+  for (let i = items.length - 1; i >= 0; i -= 1) {
+    const it = items[i];
+    if (isCompactToolCallStart(it)) {
+      lastCompactIdx = i;
+      break;
+    }
+    if (isVisibleContentItem(it)) {
+      // Something user-visible sits between the previous compact tool and
+      // the new one — don't prune.
+      return message;
+    }
+  }
+  if (lastCompactIdx < 0) return message;
+  const last = items[lastCompactIdx];
+  if (!isCompactToolStillPending(last)) return message;
+
+  // Also scan from lastCompactIdx forward: if any later item is a
+  // tool_result for the same toolCallId the tool already finished; bail.
+  for (let i = lastCompactIdx + 1; i < items.length; i += 1) {
+    const it = items[i];
+    if (it.type === 'tool_result' && it.toolCallId === last.toolCallId) {
+      return message;
+    }
+  }
+
+  const next = items.slice();
+  next.splice(lastCompactIdx, 1);
+  return { ...message, outputItems: next };
+}
+
+export function pruneTrailingCompactToolInSession(
+  session: ChatSession,
+  messageId: string,
+): ChatSession {
+  return updateMessages(session, messageId, (message) =>
+    pruneTrailingCompactTool(message),
+  );
+}

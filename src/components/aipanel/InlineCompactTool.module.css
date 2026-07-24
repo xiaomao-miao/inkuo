@@ -1,0 +1,269 @@
+/* ============================================================================
+ * InlineCompactTool —— 紧凑工具调用的内联渲染
+ *
+ * 视觉规则:
+ *   - 没有卡片底:无 border、无 background、无 box-shadow。整行只是一个
+ *     跟正文融在一起的「行内按钮」。
+ *   - 字体略小,看起来像正文的一个 footnote。
+ *   - executing 时:value 区域有横向 shimmer 流光 + label 暗淡。
+ *   - 完成时:流光停止,value 满亮度,右侧显示耗时;整行可点击展开原文。
+ *   - 错误时:整行变红,但仍不挂卡片底;点开展开错误信息。
+ *
+ * 替换规则(由 store 层处理):当前 compact tool 还没拿到 result 时,
+ * 又来了下一个 tool_call_start,就直接把上一个从 outputItems 里删掉,
+ * 所以屏幕上不会同时出现两条「列表目录:」/「读取文件:」之类的占位。
+ * ============================================================================ */
+
+.wrapper {
+  display: flex;
+  flex-direction: column;
+  /* 让它在 assistant 正文里有一行呼吸的间距,但不引入块级高度差 */
+  margin: 2px 0;
+}
+
+/* ── 主行(可点击) ───────────────────────────────────────────────── */
+
+.line {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  /* 与正文 baseline 对齐 */
+  max-width: 100%;
+  padding: 2px 6px 2px 2px;
+  border-radius: 6px;
+  background: transparent;
+  border: none;
+  color: var(--fg-secondary);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 1.55;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color var(--motion-fast) var(--motion-out),
+    color var(--motion-fast) var(--motion-out);
+}
+
+.line:hover {
+  background-color: var(--bg-hover);
+  color: var(--fg-primary);
+}
+
+.caret {
+  display: inline-flex;
+  align-items: center;
+  color: var(--fg-muted);
+  flex-shrink: 0;
+}
+
+.label {
+  font-weight: 500;
+  color: inherit;
+  white-space: nowrap;
+}
+
+.colon {
+  margin-left: 2px;
+  color: var(--fg-muted);
+}
+
+/* ── value 区域(承载 shimmer) ─────────────────────────────────────── */
+
+.value {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--fg-primary);
+  position: relative;
+  /* 让文字自身不溢出的同时,保留一点 padding 给 shimmer 掠过 */
+  padding: 1px 4px;
+  border-radius: 4px;
+  /* 关键:用 background-clip:text + 透明文字色,把背景画在文字剪影里。
+   * Notion 占位符的视觉就是这个套路:浅一档底色 + 一道高亮带循环扫过。 */
+  background-color: var(--bg-elevated);
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in oklch, var(--accent) 14%, transparent) 50%,
+    transparent 100%
+  );
+  background-size: 220% 100%;
+  background-position: 100% 0;
+  -webkit-background-clip: text;
+  background-clip: text;
+  /* 文字色透明,让背景渐变"穿"过字符 */
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+  /* 真实文字还要保证屏幕阅读器/选中复制可读,所以用一个 layer 叠回去:
+   * 我们实际渲染时把 -webkit-text-fill-color 设回 var(--fg-primary),
+   * 改用 background-image 叠加在外层。详见下方的 .value::after 方案。 */
+}
+
+/* 上面把文字色设成透明会让选不中、复制不出来 —— 换一种实现:
+ * 文字保持可见,流光通过 ::after 覆盖层来做。 */
+.value {
+  -webkit-text-fill-color: initial;
+  color: var(--fg-secondary);
+  overflow: hidden;
+}
+
+.value[data-shimmer='off'] {
+  color: var(--fg-primary);
+}
+
+.value[data-shimmer='on'] {
+  color: color-mix(in oklch, var(--fg-primary) 70%, var(--fg-muted));
+  position: relative;
+  isolation: isolate;
+}
+
+/* shimmer 高亮带 —— 覆盖在 value 文字上方 */
+.value[data-shimmer='on']::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in oklch, var(--accent) 22%, transparent) 50%,
+    transparent 100%
+  );
+  background-size: 220% 100%;
+  background-position: 100% 0;
+  animation: inline-tool-shimmer 1.4s linear infinite;
+  mix-blend-mode: screen;
+}
+
+/* 浅色主题下 mix-blend-mode: screen 会偏淡,改用 multiply 提亮不太合适;
+ * 改用 opacity + 高亮色,跨主题统一表现。 */
+[data-theme='paper-white'] .value[data-shimmer='on']::after,
+[data-theme='paper-cream'] .value[data-shimmer='on']::after,
+[data-theme='inkuo-light'] .value[data-shimmer='on']::after,
+[data-theme='high-contrast-light'] .value[data-shimmer='on']::after {
+  mix-blend-mode: normal;
+  opacity: 0.7;
+}
+
+@keyframes inline-tool-shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: -120% 0;
+  }
+}
+
+/* 关闭动效时停掉 shimmer */
+[data-motion='off'] .value[data-shimmer='on']::after {
+  animation: none;
+  opacity: 0.35;
+}
+
+/* ── 行尾状态:执行中 / 耗时 ─────────────────────────────────────── */
+
+.tail {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 4px;
+  font-size: 10.5px;
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+}
+
+.executingHint {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--accent);
+}
+
+.executingHint::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background-color: var(--accent);
+  animation: inline-tool-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes inline-tool-pulse {
+  0%, 100% { opacity: 0.4; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1.1); }
+}
+
+[data-motion='off'] .executingHint::before {
+  animation: none;
+  opacity: 0.7;
+}
+
+.duration {
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── 状态色 ─────────────────────────────────────────────────────── */
+
+.lineExecuting {
+  color: var(--accent);
+}
+
+.lineError {
+  color: var(--error);
+}
+.lineError .label,
+.lineError .value[data-shimmer='off'] {
+  color: var(--error);
+}
+.lineError .value {
+  color: color-mix(in oklch, var(--error) 80%, var(--fg-primary));
+}
+
+.lineDone {
+  color: var(--fg-secondary);
+}
+
+/* ── 展开区:工具结果原文 ────────────────────────────────────────── */
+
+.expanded {
+  margin: 4px 0 2px 22px;
+  padding: 8px 10px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--fg-secondary);
+  background-color: var(--bg-surface);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 360px;
+  overflow: auto;
+  animation: inline-tool-expand-in 180ms var(--motion-out);
+}
+
+.expandedMuted {
+  margin: 4px 0 2px 22px;
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--fg-muted);
+  font-style: italic;
+}
+
+@keyframes inline-tool-expand-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+[data-motion='off'] .expanded {
+  animation: none;
+}

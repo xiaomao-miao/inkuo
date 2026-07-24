@@ -4,6 +4,7 @@ import { LazyTextContent } from './LazyTextContent';
 import { ReasoningBlock } from './ReasoningBlock';
 import { ToolCallCard } from './ToolCallCard';
 import { CompactToolCard } from './CompactToolCard';
+import { InlineCompactTool, isCompactToolItem } from './InlineCompactTool';
 import { DelegateToCard, GetToolHelpCard } from './DelegateToCard';
 import { COMPACT_TOOLS } from './toolUtils';
 import { PlanCard } from './PlanCard';
@@ -100,6 +101,7 @@ export const AssistantMessageBody: React.FC<AssistantMessageBodyProps> = ({
           onAdjustPlan={onAdjustPlan}
           onSavePlan={onSavePlan}
           toolCallMap={toolCallMap}
+          trailingItems={message.outputItems}
         />
       ))}
       {/* Legacy content path */}
@@ -137,6 +139,14 @@ interface OutputItemViewProps {
    * on every streaming token.
    */
   toolCallMap?: Map<string, NonNullable<ChatMessage['toolCalls']>[number]> | null;
+  /**
+   * All OutputItems of the same message, in order. InlineCompactTool uses
+   * this to find the matching tool_result by toolCallId so it can flip
+   * out of the executing state and show the user's expand affordance.
+   * Cheap to pass: the parent already has the array in scope and shallow
+   * references to it don't change between re-renders of sibling items.
+   */
+  trailingItems?: OutputItem[];
 }
 
 const OutputItemView: React.FC<OutputItemViewProps> = ({
@@ -152,6 +162,7 @@ const OutputItemView: React.FC<OutputItemViewProps> = ({
   onAdjustPlan,
   onSavePlan,
   toolCallMap,
+  trailingItems,
 }) => {
   if (item.type === 'text') {
     return (
@@ -233,6 +244,25 @@ const OutputItemView: React.FC<OutputItemViewProps> = ({
               status={status}
               result={item.result}
               duration={item.duration}
+            />
+          }
+        />
+      );
+    }
+
+    // Compact (read-only / directory) tools render inline as a single
+    // text-like line, with shimmer while executing and a click-to-expand
+    // affordance for the raw result. No card chrome.
+    if (isCompactToolItem(item)) {
+      return (
+        <ToolOutputItem
+          isCompact
+          isThisStreaming={isThisStreaming}
+          isLastItem={isLastItem}
+          content={
+            <InlineCompactTool
+              item={item}
+              trailingItems={trailingItems}
             />
           }
         />

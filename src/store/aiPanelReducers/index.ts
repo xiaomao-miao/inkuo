@@ -44,4 +44,6 @@ export {
   collapseOldSessionMessages,
   expandCollapsedSessionMessages,
   hardCollapseSessionHistory,
+  pruneTrailingCompactTool,
+  pruneTrailingCompactToolInSession,
 } from './outputItemReducer';

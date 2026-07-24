@@ -114,6 +114,13 @@ export interface AIPanelMessageSlice {
     matchKey: { toolCallId: string } | { contentContains: string },
     patch: Partial<OutputItem>,
   ) => void;
+  /**
+   * Drop the trailing compact-tool `OutputItem` (if any) from `messageId`,
+   * provided it has not yet received a result. Called by the stream
+   * dispatcher right before appending a new `tool_call_start` so a tight
+   * `list_dir → read_file` sequence collapses into a single inline line.
+   */
+  pruneTrailingCompactTool: (sessionId: string, messageId: string) => void;
   finishMessageStreaming: (sessionId: string, messageId: string, finalContent: string) => void;
   setErrorMessage: (sessionId: string, messageId: string, error: string) => void;
   setMessageSearchResults: (sessionId: string, messageId: string, results: SearchResult[]) => void;

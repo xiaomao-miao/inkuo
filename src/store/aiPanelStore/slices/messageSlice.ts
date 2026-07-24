@@ -26,6 +26,7 @@ import {
   finishSessionMessageStreaming,
   hardCollapseSessionHistory,
   patchMessageOutputState,
+  pruneTrailingCompactToolInSession,
   setMessageOutputItems,
   spliceMessagePrefix,
   touchSession,
@@ -36,7 +37,7 @@ import {
   updateSessions,
 } from '../../aiPanelReducers';
 
-export const createMessageSlice: AIPanelStateCreator<Pick<AIPanelState, 'addMessage' | 'updateMessage' | 'appendMessageContent' | 'setIsStreaming' | 'clearMessages' | 'truncateMessagesAfter' | 'getMessage' | 'updateMessageOutput' | 'addOutputToMessage' | 'patchOutputItem' | 'finishMessageStreaming' | 'setErrorMessage' | 'setMessageSearchResults' | 'expandMessagePrefix' | 'collapseMessagePrefix' | 'toggleReasoningExpansion' | 'autoExpandTruncatedPrefixes' | 'collapseOldMessages' | 'expandCollapsedHistory' | 'hardCollapseHistory' | 'convertTrailingTextToPlanItem' | 'appendPlanDelta' | 'finishPlanItem' | 'setPlanItemFile' | 'clearPlanItemFile' | 'addPlanItem'>> = (set, get) => {
+export const createMessageSlice: AIPanelStateCreator<Pick<AIPanelState, 'addMessage' | 'updateMessage' | 'appendMessageContent' | 'setIsStreaming' | 'clearMessages' | 'truncateMessagesAfter' | 'getMessage' | 'updateMessageOutput' | 'addOutputToMessage' | 'patchOutputItem' | 'pruneTrailingCompactTool' | 'finishMessageStreaming' | 'setErrorMessage' | 'setMessageSearchResults' | 'expandMessagePrefix' | 'collapseMessagePrefix' | 'toggleReasoningExpansion' | 'autoExpandTruncatedPrefixes' | 'collapseOldMessages' | 'expandCollapsedHistory' | 'hardCollapseHistory' | 'convertTrailingTextToPlanItem' | 'appendPlanDelta' | 'finishPlanItem' | 'setPlanItemFile' | 'clearPlanItemFile' | 'addPlanItem'>> = (set, get) => {
   /** Replace the `sessions` array with the result of `updater(sessions)`. */
   const setSessions = (
     updater: (sessions: ChatSession[]) => ChatSession[],
@@ -104,6 +105,21 @@ export const createMessageSlice: AIPanelStateCreator<Pick<AIPanelState, 'addMess
       setSessions((sessions) =>
         updateSessions(sessions, sessionId, (session) =>
           patchMessageOutputState(session, messageId, matchKey, patch),
+        ),
+      ),
+    /**
+     * Drop the trailing compact-tool `OutputItem` (if any) from `messageId`,
+     * provided it has not yet received a result. Called by the stream
+     * dispatcher right before appending a new `tool_call_start` so a tight
+     * `list_dir → read_file` sequence collapses into a single inline line.
+     *
+     * See `pruneTrailingCompactToolInSession` in
+     * `aiPanelReducers/outputItemReducer.ts` for the full predicate.
+     */
+    pruneTrailingCompactTool: (sessionId, messageId) =>
+      setSessions((sessions) =>
+        updateSessions(sessions, sessionId, (session) =>
+          pruneTrailingCompactToolInSession(session, messageId),
         ),
       ),
     finishMessageStreaming: (sessionId, messageId, finalContent) =>
