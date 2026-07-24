@@ -1,5 +1,25 @@
 /* inkuo - Global Styles */
 
+/* Layout panel widths driven by CSS custom properties so the ResizableHandle
+   can update them directly during a drag (zero React re-renders). The values
+   are kept in sync with `layoutStore.sidebarWidth` / `.aipanelWidth`:
+   - On app boot, `layoutStore` writes the persisted values into these
+     variables before the first paint of `<Layout>`.
+   - During a drag, the handle's pointer-move handler mutates the variables
+     directly. The DOM reflows, but React state and Zustand subscribers stay
+     untouched, so heavy editors (DocxEditor + its ResizeObserver stack) don't
+     re-render on every pointer event.
+   - On pointer-up, the handle writes the final value into the store, which
+     persists it via `zustand/middleware`'s `persist`.
+   The min/max here MUST stay in lock-step with `SIDEBAR_MIN_WIDTH` /
+   `SIDEBAR_MAX_WIDTH` / `AIPANEL_MIN_WIDTH` / `AIPANEL_MAX_WIDTH` in
+   `src/store/layoutStore.ts` — clamping happens there before the value
+   reaches the DOM. */
+:root {
+  --sidebar-width: 260px;
+  --aipanel-width: 380px;
+}
+
 * {
   box-sizing: border-box;
   margin: 0;

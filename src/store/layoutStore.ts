@@ -11,9 +11,21 @@ interface LayoutState {
   setActiveView: (view: ViewType) => void;
   toggleSidebar: () => void;
   showSidebar: () => void;
+  /** Set the absolute sidebar width. Also writes the value into the
+   *  `--sidebar-width` CSS variable so the DOM reflows without
+   *  requiring a React re-render — see `Layout.tsx` for the wider
+   *  drag-perf context. */
   setSidebarWidth: (width: number) => void;
+  /** @deprecated Resize through the drag handle's CSS-variable path
+   *  (see `Layout.handleSidebarResize`). This action stays in the
+   *  store API only for back-compat with any external callers (e.g.
+   *  keyboard shortcuts). It still mutates Zustand state and writes
+   *  the CSS variable, but going through it forces a `Layout`
+   *  re-render. Prefer the imperative `useLayoutStore.setState` plus
+   *  the CSS-var write that the drag flow uses. */
   resizeSidebar: (delta: number) => void;
   setAIPanelWidth: (width: number) => void;
+  /** @deprecated See `resizeSidebar`. */
   resizeAIPanel: (delta: number) => void;
 }
 
@@ -26,6 +38,19 @@ const clamp = (value: number, min: number, max: number) => Math.max(min, Math.mi
 const applyResizeDelta = (width: number, delta: number, min: number, max: number) =>
   clamp(width + delta, min, max);
 
+/** Side-effect helper: write a width into the matching CSS custom
+ *  property on `:root`. Called whenever the store's width value
+ *  changes, so DOM-driven consumers (the `Layout` panels) stay in
+ *  sync with persisted state without subscribing to a selector. */
+const syncSidebarCssVar = (width: number) => {
+  if (typeof document === 'undefined') return;
+  document.documentElement.style.setProperty('--sidebar-width', `${width}px`);
+};
+const syncAIPanelCssVar = (width: number) => {
+  if (typeof document === 'undefined') return;
+  document.documentElement.style.setProperty('--aipanel-width', `${width}px`);
+};
+
 export const useLayoutStore = create<LayoutState>()(
   persist(
     (set) => ({
@@ -37,14 +62,26 @@ export const useLayoutStore = create<LayoutState>()(
       setActiveView: (view) => set({ activeView: view, isSidebarVisible: true }),
       toggleSidebar: () => set((state) => ({ isSidebarVisible: !state.isSidebarVisible })),
       showSidebar: () => set({ isSidebarVisible: true }),
-      setSidebarWidth: (width) => set({ sidebarWidth: clamp(width, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH) }),
-      resizeSidebar: (delta) => set((state) => ({
-        sidebarWidth: applyResizeDelta(state.sidebarWidth, delta, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH),
-      })),
-      setAIPanelWidth: (width) => set({ aipanelWidth: clamp(width, AIPANEL_MIN_WIDTH, AIPANEL_MAX_WIDTH) }),
-      resizeAIPanel: (delta) => set((state) => ({
-        aipanelWidth: applyResizeDelta(state.aipanelWidth, -delta, AIPANEL_MIN_WIDTH, AIPANEL_MAX_WIDTH),
-      })),
+      setSidebarWidth: (width) => {
+        const clamped = clamp(width, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH);
+        set({ sidebarWidth: clamped });
+        syncSidebarCssVar(clamped);
+      },
+      resizeSidebar: (delta) => set((state) => {
+        const next = applyResizeDelta(state.sidebarWidth, delta, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH);
+        syncSidebarCssVar(next);
+        return { sidebarWidth: next };
+      }),
+      setAIPanelWidth: (width) => {
+        const clamped = clamp(width, AIPANEL_MIN_WIDTH, AIPANEL_MAX_WIDTH);
+        set({ aipanelWidth: clamped });
+        syncAIPanelCssVar(clamped);
+      },
+      resizeAIPanel: (delta) => set((state) => {
+        const next = applyResizeDelta(state.aipanelWidth, -delta, AIPANEL_MIN_WIDTH, AIPANEL_MAX_WIDTH);
+        syncAIPanelCssVar(next);
+        return { aipanelWidth: next };
+      }),
     }),
     {
       name: 'inkuo-layout',
@@ -54,6 +91,15 @@ export const useLayoutStore = create<LayoutState>()(
         sidebarWidth: state.sidebarWidth,
         aipanelWidth: state.aipanelWidth,
       }),
+      // After zustand rehydrates from disk, push the persisted widths
+      // into the CSS variables so the very first paint of `<Layout>`
+      // already has the user's chosen panel sizes — without waiting
+      // for a React effect to run.
+      onRehydrateStorage: () => (state) => {
+        if (!state) return;
+        syncSidebarCssVar(state.sidebarWidth);
+        syncAIPanelCssVar(state.aipanelWidth);
+      },
     },
   ),
 );
