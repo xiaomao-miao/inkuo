@@ -33,6 +33,19 @@
 // height synchronously. The cleanup function also clears the inline
 // height unconditionally so the panel can always collapse even if
 // React commits a new `expanded` value before the listener fires.
+//
+// INVARIANT for the expanded path:
+//
+//   The CSS rule `.togglePanel { height: 0 }` is the *collapsed*
+//   default. The `[data-open='true']` rule only flips opacity /
+//   transform / pointer-events — it does NOT override `height`.
+//   So if we clear the inline `height` while the panel is still
+//   open, the CSS rule reasserts itself and the panel snaps shut
+//   ~180ms later (the CSS `transition: height …` then runs from
+//   the pinned value down to 0), which looks like "the panel opens
+//   and then closes itself". The fix is to keep the inline height
+//   pinned while `expanded === true`; the collapse branch is the
+//   only place that ever clears it.
 
 import { useLayoutEffect, useRef, type RefObject } from 'react';
 
@@ -121,10 +134,12 @@ export function useComposerPanelAnimation(
       rafId = window.requestAnimationFrame(() => {
         if (isStale()) return;
         el.style.transition = '';
-        scheduleHeightSettle(() => {
-          if (isStale()) return;
-          el.style.height = '';
-        });
+        // IMPORTANT: do NOT clear the inline height here.
+        // `.togglePanel { height: 0 }` is the default and
+        // `[data-open='true']` does not override `height`, so
+        // clearing the inline value would let the CSS rule collapse
+        // the panel back to 0 ~180ms later. The collapse branch is
+        // the only place that ever clears it.
       });
     } else {
       // Pin current height first so the transition has a meaningful
@@ -149,8 +164,9 @@ export function useComposerPanelAnimation(
     return () => {
       window.cancelAnimationFrame(rafId);
       // NOTE: we intentionally do NOT clear `el.style.height`
-      // here. The settle callback is what clears the inline style
-      // once the animation is genuinely done.
+      // here. The collapse branch is the only place that clears
+      // the inline height, and clearing it eagerly would let the
+      // CSS `height: 0` re-collapse an open panel.
     };
   }, [expanded, panelRef]);
 }
