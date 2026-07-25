@@ -6,7 +6,8 @@ import CodeMirror from '@uiw/react-codemirror';
 import { Compartment } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { Sparkles } from 'lucide-react';
-import { useEditorStore, useSidebarStore, useSettingsStore, useContextMenuStore, SETTINGS_TAB_ID, CLOUD_TAB_ID, type OpenTab, type EditorCommands } from '../../store';
+import { useEditorStore, useSidebarStore, useSettingsStore, useContextMenuStore, useEditorHandleStore, SETTINGS_TAB_ID, CLOUD_TAB_ID, type OpenTab, type EditorCommands } from '../../store';
+import { undo as cmUndo, redo as cmRedo, undoDepth, redoDepth } from '@codemirror/commands';
 import { detectFileKind, type FileKind } from '../../types';
 import { DiffOverlay } from './DiffOverlay';
 import { InlineCompleteProvider } from '../inline-complete';
@@ -117,7 +118,36 @@ const EditorContent: React.FC<{
   } : null, refreshToken);
   useExternalFileSync(selectedFile, requestDocumentRefresh);
   const handleSave = useDocumentSave(selectedFile, currentContent, isDirty);
+  // Subscribe to the editor handle store's setters so we can publish
+  // the live CodeMirror commands and capabilities to the top-bar menu.
+  // Done up here (before `handleUpdateWithCapabilities`) so the wrapper
+  // callback can reference the setter without hitting a TDZ.
+  const setEditorCommands = useEditorHandleStore((s) => s.setCommands);
+  const setEditorCapabilities = useEditorHandleStore((s) => s.setCapabilities);
   const handleUpdate = useEditorSelectionSync(selectedFile, currentContent, selection, editorRef);
+  // Wrap selection sync so we also probe undo/redo/selection state on
+  // every CodeMirror transaction. The hook returns a callback of the
+  // same signature, so it's a drop-in replacement for `onUpdate`.
+  const handleUpdateWithCapabilities = useCallback(
+    (update: Parameters<typeof handleUpdate>[0]) => {
+      handleUpdate(update);
+      const view = editorRef.current?.view;
+      if (view && !(view as { isDestroyed?: boolean }).isDestroyed) {
+        // Use the read-only `undoDepth` / `redoDepth` accessors, NOT
+        // the `cmUndo` / `cmRedo` commands. The commands are functions
+        // that fire-and-dispatch a transaction if the corresponding
+        // depth is positive — calling them here would create an
+        // infinite `dispatch → onUpdate → dispatch → ...` loop on
+        // every transaction. The depth accessors just read state.
+        setEditorCapabilities({
+          canUndo: undoDepth(view.state) > 0,
+          canRedo: redoDepth(view.state) > 0,
+          hasSelection: !view.state.selection.main.empty,
+        });
+      }
+    },
+    [handleUpdate, editorRef, setEditorCapabilities],
+  );
   const toggleCurrentPreviewMode = useEditorKeyboardShortcuts(selectedFile, handleSave, togglePreviewMode);
   const {
     autoTriggerStateRef,
@@ -251,6 +281,18 @@ const EditorContent: React.FC<{
           if (!v) return '';
           return v.state.doc.toString();
         },
+        undo: () => {
+          const v = guardView();
+          if (!v) return;
+          v.focus();
+          cmUndo(v);
+        },
+        redo: () => {
+          const v = guardView();
+          if (!v) return;
+          v.focus();
+          cmRedo(v);
+        },
       };
       useContextMenuStore.getState().open({
         kind: 'editor',
@@ -283,7 +325,128 @@ const EditorContent: React.FC<{
     }
   }, [selectedFile, setContent]);
 
+  // Publish the live CodeMirror commands to the shared editor handle
+  // store so the top-bar menu (TitleBar) can dispatch cut/copy/paste/
+  // undo/redo/find/replace without threading the editor's ref through
+  // the component tree. Mirrors the snapshot we already push into the
+  // context menu on right-click — same closure shape, different sink.
+  useEffect(() => {
+    if (!selectedFile) {
+      setEditorCommands(null);
+      return undefined;
+    }
+    const view = editorRef.current?.view ?? null;
+    if (!view) return undefined;
+
+    const readCapabilities = () => {
+      try {
+        // Use the read-only `undoDepth` / `redoDepth` accessors instead
+        // of invoking the `cmUndo` / `cmRedo` commands. The commands
+        // dispatch a transaction when their depth is positive, which
+        // would fire `onUpdate` and recurse back into this same probe.
+        const canUndo = undoDepth(view.state) > 0;
+        const canRedo = redoDepth(view.state) > 0;
+        const hasSelection = !view.state.selection.main.empty;
+        setEditorCapabilities({ canUndo, canRedo, hasSelection });
+      } catch {
+        setEditorCapabilities({ canUndo: false, canRedo: false, hasSelection: false });
+      }
+    };
+
+    const commands: EditorCommands = {
+      cut: () => {
+        if (!view || (view as { isDestroyed?: boolean }).isDestroyed) return;
+        view.focus();
+        document.execCommand('cut');
+      },
+      copy: () => {
+        if (!view || (view as { isDestroyed?: boolean }).isDestroyed) return;
+        view.focus();
+        document.execCommand('copy');
+      },
+      paste: () => {
+        if (!view || (view as { isDestroyed?: boolean }).isDestroyed) return;
+        view.focus();
+        document.execCommand('paste');
+      },
+      selectAll: () => {
+        if (!view || (view as { isDestroyed?: boolean }).isDestroyed) return;
+        view.focus();
+        view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } });
+      },
+      find: () => {
+        if (!view || (view as { isDestroyed?: boolean }).isDestroyed) return;
+        view.focus();
+        const ev = new KeyboardEvent('keydown', {
+          key: 'f',
+          code: 'KeyF',
+          ctrlKey: true,
+          bubbles: true,
+          cancelable: true,
+        });
+        (view.contentDOM ?? view.dom).dispatchEvent(ev);
+      },
+      replace: () => {
+        if (!view || (view as { isDestroyed?: boolean }).isDestroyed) return;
+        view.focus();
+        const ev = new KeyboardEvent('keydown', {
+          key: 'h',
+          code: 'KeyH',
+          ctrlKey: true,
+          bubbles: true,
+          cancelable: true,
+        });
+        (view.contentDOM ?? view.dom).dispatchEvent(ev);
+      },
+      readContent: () => {
+        if (!view || (view as { isDestroyed?: boolean }).isDestroyed) return '';
+        return view.state.doc.toString();
+      },
+      undo: () => {
+        if (!view || (view as { isDestroyed?: boolean }).isDestroyed) return;
+        view.focus();
+        cmUndo(view);
+      },
+      redo: () => {
+        if (!view || (view as { isDestroyed?: boolean }).isDestroyed) return;
+        view.focus();
+        cmRedo(view);
+      },
+    };
+
+    setEditorCommands(commands);
+    readCapabilities();
+
+    // Probe the history fields on every CodeMirror transaction. The
+    // hook here is `EditorView.updateListener`, but we're already
+    // attached via `onUpdate` (selection sync) — extending the same
+    // listener would be ideal, but keeping the publish path colocated
+    // with the commands makes the lifecycle easier to reason about.
+    // We use a one-line `view.dispatch` wrapper via a `MutationObserver`
+    // is overkill; instead, defer to `useEditorSelectionSync` which
+    // already runs on every doc/selection change. We just need an
+    // additional probe inside it — see the `handleUpdate` call below.
+
+    return () => {
+      setEditorCommands(null);
+      setEditorCapabilities({ canUndo: false, canRedo: false, hasSelection: false });
+    };
+  }, [selectedFile, editorRef, setEditorCommands, setEditorCapabilities]);
+
   const inPreviewMode = selectedFile ? !!isPreviewMode[selectedFile] : false;
+
+  // Sync the editor font size setting into a CSS variable so the
+  // CodeMirror theme reads it without rebuilding extensions. The view
+  // menu's 放大/缩小/重置 size buttons all funnel through `updateSetting
+  // ('editor_font_size', ...)`, so this single effect covers every
+  // trigger (top-bar menu, settings panel, future keybindings, etc.).
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    document.documentElement.style.setProperty(
+      '--editor-font-size',
+      `${settings.editor_font_size}px`,
+    );
+  }, [settings.editor_font_size]);
 
   const editorExtensions = useMemo(() => {
     return createEditorExtensions({
@@ -312,7 +475,7 @@ const EditorContent: React.FC<{
               ref={editorRef}
               value={currentContent}
               onChange={handleChange}
-              onUpdate={handleUpdate}
+              onUpdate={handleUpdateWithCapabilities}
               extensions={editorExtensions}
               className={styles.codeMirror}
               basicSetup={{
@@ -353,7 +516,7 @@ const EmptyState: React.FC = () => (
       <div className={styles.noFileHint}>
         <Sparkles size={24} className={styles.hintIcon} />
         <span className={styles.hintText}>
-          选择一个文件开始编辑，或按 <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>I</kbd> 调用 AI 助手
+          选择一个文件开始编辑，或按 <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>L</kbd> 调用 AI 助手
         </span>
       </div>
     </div>

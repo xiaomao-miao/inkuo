@@ -2,8 +2,8 @@ import { EditorView, keymap, lineNumbers, drawSelection, rectangularSelection } 
 import { Prec, type Extension } from '@codemirror/state';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
 import { languages } from '@codemirror/language-data';
-import { historyKeymap } from '@codemirror/commands';
-import { highlightSelectionMatches } from '@codemirror/search';
+import { history, historyKeymap } from '@codemirror/commands';
+import { highlightSelectionMatches, searchKeymap } from '@codemirror/search';
 import { inlineDiffTheme } from './inlineDiffDecorations';
 import { inlineCompletionDecoration } from '../inline-complete';
 import { useInlineCompleteStore } from '../../store';
@@ -131,7 +131,12 @@ export function createEditorTheme() {
   return EditorView.theme({
     '&': {
       height: '100%',
-      fontSize: '14px',
+      // Read from the `--editor-font-size` CSS variable so the font
+      // size can be tuned at runtime (the View menu's 放大/缩小/重置
+      // buttons, the settings panel slider, etc.) without rebuilding
+      // the extension. The variable is set on `:root` by `Editor.tsx`
+      // from the `editor_font_size` setting; falls back to 14px.
+      fontSize: 'var(--editor-font-size, 14px)',
       backgroundColor: 'var(--bg-primary)',
     },
     '&.cm-editor': {
@@ -237,6 +242,11 @@ export function createEditorExtensions(params: {
     lineNumbers(),
     drawSelection(),
     rectangularSelection(),
+    // `history()` is the state field that records undo/redo entries;
+    // basicSetup has `history: false` so editors that relied on it
+    // never had any undo stack. We register it explicitly so Ctrl+Z/Y
+    // (via `historyKeymap`, added below) actually do something.
+    history(),
     highlightSelectionMatches(),
     inlineDiffTheme,
     params.diffDecorationsField,
@@ -244,7 +254,12 @@ export function createEditorExtensions(params: {
     params.inlineAutoTrigger,
     createInlineCompletionKeymap(params.autoTriggerStateRef),
     inlineCompletionDecoration(),
-    keymap.of([...historyKeymap]),
+    // `historyKeymap` binds Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z to the
+    // undo/redo commands. basicSetup has `searchKeymap: false` so we
+    // also add `searchKeymap` from `@codemirror/search` ourselves —
+    // this is what binds Ctrl+F and Ctrl+H to openSearchPanel /
+    // openReplacePanel, which the menu bars in TitleBar piggy-back on.
+    keymap.of([...historyKeymap, ...searchKeymap]),
     createEditorTheme(),
   ];
 }

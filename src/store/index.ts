@@ -30,6 +30,12 @@ export {
   type FloatingAiStatus,
 } from './floatingAiStore';
 export { useConfirmDialogStore, type ConfirmRequest } from './confirmDialogStore';
+export {
+  useEditorHandleStore,
+  getEditorCommands,
+  getEditorCapabilities,
+  type EditorCapabilities,
+} from './editorHandleStore';
 
 export type {
   ActiveToolCall,

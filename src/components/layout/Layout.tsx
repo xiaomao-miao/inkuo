@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { TitleBar } from '../titlebar/TitleBar';
 import { ActivityBar } from '../activitybar/ActivityBar';
 import { Sidebar } from '../sidebar/Sidebar';
@@ -165,8 +166,21 @@ export const Layout = () => {
     if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'l') {
       event.preventDefault();
       togglePanel();
+      return;
     }
-  }, [togglePanel]);
+    if (event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === 'b') {
+      event.preventDefault();
+      toggleSidebar();
+      return;
+    }
+    if (event.key === 'F11') {
+      event.preventDefault();
+      const win = getCurrentWindow();
+      void win.isFullscreen().then((isFull) => {
+        void win.setFullscreen(!isFull);
+      });
+    }
+  }, [togglePanel, toggleSidebar]);
 
   useGlobalKeydown(handleGlobalKeyDown);
 

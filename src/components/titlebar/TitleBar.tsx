@@ -10,7 +10,17 @@ import {
   Minimize2,
 } from 'lucide-react';
 import { invoke } from '@tauri-apps/api/core';
-import { useSidebarStore, useEditorStore, useNotificationStore, useSettingsStore } from '../../store';
+import {
+  useSidebarStore,
+  useEditorStore,
+  useNotificationStore,
+  useSettingsStore,
+  useLayoutStore,
+  useAIPanelStore,
+  useEditorHandleStore,
+  useConfirmDialogStore,
+  type EditorCommands,
+} from '../../store';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { applyWorkspaceDirectoryLoad, openWorkspaceDirectory, switchWorkspace } from '../../services/workspace';
 import { persistDocument } from '../../services/documentSave';
@@ -21,6 +31,14 @@ import { openCloudTab } from '../../utils/openCloudTab';
 import { isTauriRuntime } from '../../utils/tauri';
 import { AppIcon } from '../brand/AppIcon';
 import styles from './TitleBar.module.css';
+
+const FONT_SIZE_MIN = 8;
+const FONT_SIZE_MAX = 32;
+const FONT_SIZE_DEFAULT = 14;
+const FONT_SIZE_STEP = 1;
+
+const clampFontSize = (value: number) =>
+  Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, Math.round(value)));
 
 interface MenuItem {
   label: string;
@@ -238,15 +256,182 @@ export const TitleBar: React.FC = () => {
     await win.close();
   };
 
+  // ---------------------------------------------------------------------------
+  // File menu — 新建文件 / 关闭编辑器
+  // ---------------------------------------------------------------------------
+
+  // `New file` from the top bar: spawn the inline-rename input inside the
+  // workspace root. The existing InlineRenameInput polls the sidebar's
+  // `inlineEdit` state and runs the create flow (`createFileEntry` under
+  // `/services/workspace`), so we just need to flip the state. We default
+  // to a Markdown file because that's the editor's bread and butter.
+  const handleNewFile = () => {
+    if (!isTauri) {
+      pushNotification({
+        kind: 'info',
+        title: '浏览器模式不支持新建文件',
+        message: '新建文件依赖 Tauri 提供的本地后端能力。',
+      });
+      setActiveMenu(null);
+      return;
+    }
+    if (!workspacePath) {
+      pushNotification({
+        kind: 'info',
+        title: '请先打开工作区',
+        message: '新建文件需要先选择一个工作区文件夹。',
+      });
+      setActiveMenu(null);
+      return;
+    }
+    // Make sure the workspace root is expanded so the inline row is
+    // visible immediately — `openWorkspaceFile` does the same dance for
+    // newly opened files.
+    if (!useSidebarStore.getState().isDirExpanded(workspacePath)) {
+      useSidebarStore.getState().toggleDir(workspacePath);
+    }
+    useSidebarStore.getState().startInlineEdit({
+      parentPath: workspacePath,
+      originalPath: null,
+      initialValue: 'untitled.md',
+      extension: 'md',
+      createPayload: {
+        kind: 'file',
+        extension: 'md',
+        template: '# 无标题\n\n开始书写…\n',
+      },
+      mode: 'create',
+    });
+    setActiveMenu(null);
+  };
+
+  // `Close editor` from the top bar: closes the active tab. Mirrors
+  // TabBar's logic — if the tab is dirty, ask the user to discard
+  // before closing. The confirmation dialog is the same one used by
+  // the context menu's `closeTab` action so the UX is consistent.
+  const handleCloseEditor = async () => {
+    if (!selectedFile) {
+      setActiveMenu(null);
+      return;
+    }
+    const sidebar = useSidebarStore.getState();
+    const tab = sidebar.openTabs.find(
+      (t) => t.path === selectedFile && !t.isSettings && !t.isCloud,
+    );
+    if (!tab) {
+      setActiveMenu(null);
+      return;
+    }
+    if (tab.isDirty) {
+      const ok = await useConfirmDialogStore.getState().ask({
+        title: '未保存的更改',
+        message: `"${tab.name}" 有未保存的更改，关闭将丢弃。`,
+        confirmLabel: '丢弃并关闭',
+        danger: true,
+      });
+      if (!ok) {
+        setActiveMenu(null);
+        return;
+      }
+      // Mark the tab clean so `requestCloseTab` will accept the close.
+      sidebar.setOpenTabDirty(tab.path, false);
+    }
+    sidebar.closeTab(tab.id);
+    setActiveMenu(null);
+  };
+
+  // ---------------------------------------------------------------------------
+  // Edit menu — undo/redo/cut/copy/paste/selectAll/find/replace
+  // ---------------------------------------------------------------------------
+
+  // All editing commands dispatch through the editor handle store. The
+  // Editor publishes a stable `EditorCommands` snapshot whenever the
+  // markdown/code/text editor is mounted; we wrap each call so the menu
+  // can `setActiveMenu(null)` between the click and the dispatch.
+  const handleEditCommand = (kind: keyof EditorCommands) => {
+    const commands = useEditorHandleStore.getState().commands;
+    if (!commands) return;
+    commands[kind]();
+    setActiveMenu(null);
+  };
+
+  // ---------------------------------------------------------------------------
+  // View menu — sidebar / AI panel / font size / fullscreen
+  // ---------------------------------------------------------------------------
+
+  const toggleSidebar = useLayoutStore((state) => state.toggleSidebar);
+  const toggleAiPanel = useAIPanelStore((state) => state.togglePanel);
+  const updateSetting = useSettingsStore((state) => state.updateSetting);
+  const editorFontSize = useSettingsStore((state) => state.settings.editor_font_size);
+
+  const handleToggleSidebar = () => {
+    toggleSidebar();
+    setActiveMenu(null);
+  };
+
+  const handleToggleAiPanel = () => {
+    toggleAiPanel();
+    setActiveMenu(null);
+  };
+
+  const changeFontSize = (next: number) => {
+    const clamped = clampFontSize(next);
+    if (clamped === editorFontSize) return;
+    void updateSetting('editor_font_size', clamped);
+    setActiveMenu(null);
+  };
+
+  const handleIncreaseFontSize = () => changeFontSize(editorFontSize + FONT_SIZE_STEP);
+  const handleDecreaseFontSize = () => changeFontSize(editorFontSize - FONT_SIZE_STEP);
+  const handleResetFontSize = () => changeFontSize(FONT_SIZE_DEFAULT);
+
+  // `Fullscreen` from the top bar: toggle the Tauri window's fullscreen
+  // state. In the browser (non-Tauri) we fall back to the web's
+  // `requestFullscreen` on the document body so the shortcut still
+  // does something visible during local dev.
+  const handleToggleFullscreen = async () => {
+    if (isTauri) {
+      const win = getCurrentWindow();
+      try {
+        if (windowState === 'fullscreen') {
+          await win.setFullscreen(false);
+          setWindowState('normal');
+        } else {
+          await win.setFullscreen(true);
+          setWindowState('fullscreen');
+        }
+      } catch (err) {
+        reportError('titlebar-toggle-fullscreen', err);
+      }
+    } else if (typeof document !== 'undefined') {
+      if (document.fullscreenElement) {
+        void document.exitFullscreen();
+      } else {
+        void document.documentElement.requestFullscreen?.();
+      }
+    }
+    setActiveMenu(null);
+  };
+
+  // ---------------------------------------------------------------------------
+  // Editor capability flags (used to disable Edit-menu items when the
+  // current editor doesn't have anything to undo/redo/etc.).
+  // ---------------------------------------------------------------------------
+  const editorCaps = useEditorHandleStore((state) => state.capabilities);
+  const hasEditor = useEditorHandleStore((state) => state.commands !== null);
+  const canUndo = hasEditor && editorCaps.canUndo;
+  const canRedo = hasEditor && editorCaps.canRedo;
+  const hasSelection = hasEditor && editorCaps.hasSelection;
+
   const menus: Menu[] = [
     {
       label: '文件',
       items: [
         { label: '新建窗口', shortcut: 'Ctrl+Shift+N', action: handleNewWindow },
-        { label: '新建文件', shortcut: 'Ctrl+N', action: () => setActiveMenu(null), disabled: true },
+        { label: '新建文件', shortcut: 'Ctrl+N', action: handleNewFile, disabled: !workspacePath },
         // Same-window "Open folder" is disabled once a workspace is loaded:
-// a window is tied to a single workspace for its lifetime. To switch
-// workspaces the user opens a new window from the welcome page.
+        // a window is tied to a single workspace for its lifetime. To switch
+        // workspaces the user opens a new window from the welcome page.
         {
           label: '打开文件夹...',
           shortcut: 'Ctrl+O',
@@ -255,9 +440,8 @@ export const TitleBar: React.FC = () => {
         },
         { divider: true, label: '' },
         { label: '保存', shortcut: 'Ctrl+S', action: handleSave, disabled: !isDirty },
-        { label: '另存为...', shortcut: 'Ctrl+Shift+S', disabled: true },
         { divider: true, label: '' },
-        { label: '关闭编辑器', shortcut: 'Ctrl+W', disabled: !selectedFile },
+        { label: '关闭编辑器', shortcut: 'Ctrl+W', action: handleCloseEditor, disabled: !selectedFile },
         { divider: true, label: '' },
         { label: '退出', shortcut: 'Alt+F4', action: handleClose },
       ],
@@ -265,37 +449,48 @@ export const TitleBar: React.FC = () => {
     {
       label: '编辑',
       items: [
-        { label: '撤销', shortcut: 'Ctrl+Z', disabled: true },
-        { label: '重做', shortcut: 'Ctrl+Y', disabled: true },
+        { label: '撤销', shortcut: 'Ctrl+Z', action: () => handleEditCommand('undo'), disabled: !canUndo },
+        { label: '重做', shortcut: 'Ctrl+Y', action: () => handleEditCommand('redo'), disabled: !canRedo },
         { divider: true, label: '' },
-        { label: '剪切', shortcut: 'Ctrl+X', disabled: true },
-        { label: '复制', shortcut: 'Ctrl+C', disabled: true },
-        { label: '粘贴', shortcut: 'Ctrl+V', disabled: true },
+        { label: '剪切', shortcut: 'Ctrl+X', action: () => handleEditCommand('cut'), disabled: !hasSelection },
+        { label: '复制', shortcut: 'Ctrl+C', action: () => handleEditCommand('copy'), disabled: !hasSelection },
+        { label: '粘贴', shortcut: 'Ctrl+V', action: () => handleEditCommand('paste'), disabled: !hasEditor },
         { divider: true, label: '' },
-        { label: '全选', shortcut: 'Ctrl+A', disabled: true },
-        { label: '查找', shortcut: 'Ctrl+F', disabled: true },
-        { label: '替换', shortcut: 'Ctrl+H', disabled: true },
-      ],
-    },
-    {
-      label: '选择',
-      items: [
-        { label: '全选', shortcut: 'Ctrl+A', disabled: true },
-        { label: '展开', shortcut: 'Ctrl+=', disabled: true },
-        { label: '收起', shortcut: 'Ctrl+-', disabled: true },
+        { label: '全选', shortcut: 'Ctrl+A', action: () => handleEditCommand('selectAll'), disabled: !hasEditor },
+        { label: '查找', shortcut: 'Ctrl+F', action: () => handleEditCommand('find'), disabled: !hasEditor },
+        { label: '替换', shortcut: 'Ctrl+H', action: () => handleEditCommand('replace'), disabled: !hasEditor },
       ],
     },
     {
       label: '视图',
       items: [
-        { label: '侧边栏', shortcut: 'Ctrl+B', disabled: true },
-        { label: 'AI 面板', shortcut: 'Ctrl+Shift+L', disabled: true },
+        { label: '侧边栏', shortcut: 'Ctrl+B', action: handleToggleSidebar },
+        { label: 'AI 面板', shortcut: 'Ctrl+Shift+L', action: handleToggleAiPanel },
         { divider: true, label: '' },
-        { label: '放大字体', shortcut: 'Ctrl++', disabled: true },
-        { label: '缩小字体', shortcut: 'Ctrl+-', disabled: true },
-        { label: '重置字体大小', shortcut: 'Ctrl+0', disabled: true },
+        {
+          label: '放大字体',
+          shortcut: 'Ctrl++',
+          action: handleIncreaseFontSize,
+          disabled: editorFontSize >= FONT_SIZE_MAX,
+        },
+        {
+          label: '缩小字体',
+          shortcut: 'Ctrl+-',
+          action: handleDecreaseFontSize,
+          disabled: editorFontSize <= FONT_SIZE_MIN,
+        },
+        {
+          label: '重置字体大小',
+          shortcut: 'Ctrl+0',
+          action: handleResetFontSize,
+          disabled: editorFontSize === FONT_SIZE_DEFAULT,
+        },
         { divider: true, label: '' },
-        { label: '全屏', shortcut: 'F11', disabled: true },
+        {
+          label: windowState === 'fullscreen' ? '退出全屏' : '全屏',
+          shortcut: 'F11',
+          action: handleToggleFullscreen,
+        },
       ],
     },
     {

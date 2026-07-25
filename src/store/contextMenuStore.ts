@@ -98,6 +98,10 @@ export interface EditorCommands {
   /** Read the current document text — used by file-level AI actions
    *  ("用 AI 处理此文件" inside the editor body). Cheap to call. */
   readContent: () => string;
+  /** Undo the last edit. Bound to Ctrl+Z and the Edit menu's 撤销. */
+  undo: () => void;
+  /** Redo the last undone edit. Bound to Ctrl+Y and the Edit menu's 重做. */
+  redo: () => void;
 }
 
 interface ContextMenuState {
