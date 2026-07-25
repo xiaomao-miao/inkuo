@@ -3674,6 +3674,7 @@ dependencies = [
  "futures-util",
  "glob",
  "hex",
+ "hmac",
  "merman",
  "notify",
  "notify-debouncer-full",

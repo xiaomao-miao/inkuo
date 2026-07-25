@@ -105,6 +105,14 @@ export const TOOL_FIELD_LABELS: Record<string, ToolField[]> = {
     { key: 'output_path', label: '保存到' },
     { key: 'title', label: '标题' },
   ],
+  generate_image: [
+    { key: 'prompt', label: '描述' },
+    { key: 'output_path', label: '保存到' },
+    { key: 'width', label: '宽度' },
+    { key: 'height', label: '高度' },
+    { key: 'model', label: '模型' },
+    { key: 'negative_prompt', label: '反向提示' },
+  ],
 };
 
 /**

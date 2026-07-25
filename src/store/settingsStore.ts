@@ -7,6 +7,8 @@ import type {
   CloudSettings,
   Settings,
   WebSearchProviderConfig,
+  ImageGenProviderConfig,
+  ImageGenProviderType,
 } from '../types';
 import { saveSettings } from '../utils/saveSettings';
 
@@ -55,10 +57,31 @@ interface SettingsState {
     updates: Partial<Settings['web_search']['providers'][number]>
   ) => Promise<Settings>;
 
+  /**
+   * Replace the entire `image_gen` config (master switch + routing +
+   * defaults + provider list). Mirrors `updateWebSearch` for symmetry.
+   */
+  updateImageGen: (next: Settings['image_gen']) => Promise<Settings>;
+  /**
+   * Patch a single image-generation provider. When the provider id
+   * doesn't exist yet, it's added; matches `updateWebSearchProvider`'s
+   * semantics so the panels feel identical to use.
+   */
+  updateImageGenProvider: (
+    providerId: string,
+    updates: Partial<ImageGenProviderConfig>
+  ) => Promise<Settings>;
+
   setCloudModeEnabled: (enabled: boolean) => Promise<Settings>;
   setCloudAccount: (account: CloudAccount | null) => Promise<Settings>;
   setCloudModels: (models: CloudModelEntry[]) => Promise<Settings>;
   setActiveCloudModelId: (id: string | null) => Promise<Settings>;
+  /**
+   * Set the active image-gen provider by its stable id.
+   * The string id is written to `image_gen.routing` so the Rust side
+   * can dispatch directly to the chosen provider without having to
+   * scan for the first enabled entry each time. */
+  setActiveImageGenProvider: (providerId: string) => Promise<Settings>;
 }
 
 function createDefaultAPIConfig(): APIConfig {
@@ -105,6 +128,34 @@ function createDefaultCloudConfig(): CloudSettings {
   };
 }
 
+/** Defaults for the `generate_image` provider list. We ship a single
+ * Ollama entry pointing at the user's local install — no API key
+ * required, so the tool works out of the box for anyone running
+ * `ollama serve`. The Settings panel can add / disable / pin other
+ * providers (cloud OpenAI-compatible, etc.) on top. */
+function createDefaultImageGenConfig(): Settings['image_gen'] {
+  return {
+    enabled: true,
+    providers: [
+      {
+        // Stable id for the built-in local Ollama entry; survives renames.
+        id: 'ollama-default',
+        providerType: 'ollama',
+        apiKey: null,
+        baseUrl: null,
+        secretId: null,
+        secretKey: null,
+        region: null,
+        defaultModel: 'sdxl',
+        enabled: true,
+      },
+    ],
+    routing: 'local',
+    defaultWidth: 1024,
+    defaultHeight: 1024,
+  };
+}
+
 async function persistSettingsSnapshot(settings: Settings): Promise<void> {
   await saveSettings(settings);
 }
@@ -142,6 +193,19 @@ function defineAutoPersist<U extends (current: Settings, ...args: any[]) => Sett
     });
     return next;
   };
+}
+
+/** Force-flush the persisted settings to disk and wait for it.
+ * Call this at points where the user expects the change to survive
+ * a reload — for example right after adding a provider that the
+ * subsequent tool call will route to. The fire-and-forget nature
+ * of `defineAutoPersist` is fine for keystroke-level updates (it
+ * keeps the UI responsive and writes quickly enough), but the
+ * `setState + void persist` race leaves a window where a hot-reload
+ * or quick app close can lose the latest mutation. Awaiting this
+ * helper closes that window. */
+export async function flushSettings(): Promise<void> {
+  await persistSettingsSnapshot(useSettingsStore.getState().settings);
 }
 
 function ensureValidApiConfigs(apiConfigs: APIConfig[]): APIConfig[] {
@@ -199,6 +263,7 @@ const defaultSettings: Settings = {
     word_image_expert: 50,
   },
   web_search: createDefaultWebSearchConfig(),
+  image_gen: createDefaultImageGenConfig(),
   cloud: createDefaultCloudConfig(),
 };
 
@@ -321,6 +386,135 @@ function sanitiseWebSearchConfig(
   }
 
   return { enabled, maxResults, providers, routing: routingValue };
+}
+
+/** Lower / upper bounds for the image dimension defaults. Mirrors the
+ * practical range supported by the upstream image APIs (anything below
+ * 256 is too small to be useful; anything above 2048 either errors out
+ * or is silently downscaled by the provider). */
+const MIN_IMAGE_DIMENSION = 256;
+const MAX_IMAGE_DIMENSION = 2048;
+
+/** Clamp a single image-dimension value into the supported range.
+ * Returns the fallback when the input is not a finite number (NaN,
+ * undefined, etc.) — this keeps the panel crash-proof when a corrupted
+ * settings file lands in storage. */
+function clampDimension(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return defaultSettings.image_gen.defaultWidth;
+  }
+  const rounded = Math.round(value);
+  return Math.min(MAX_IMAGE_DIMENSION, Math.max(MIN_IMAGE_DIMENSION, rounded));
+}
+
+/** Defensive sanitiser for the persisted `image_gen` settings. Mirrors
+ * `sanitiseWebSearchConfig`: any field with the wrong shape falls back
+ * to the in-code default so a corrupted settings file can't crash the
+ * settings panel or the `generate_image` tool.
+ *
+ * Legacy settings files (saved before image generation existed) have no
+ * `image_gen` field, and we want them to keep loading cleanly with the
+ * default Ollama entry. */
+function sanitiseImageGenConfig(
+  raw: Partial<Settings['image_gen']> | undefined
+): Settings['image_gen'] {
+  const fallback = defaultSettings.image_gen;
+  if (!raw || typeof raw !== 'object') {
+    return { ...fallback, providers: fallback.providers.map((p) => ({ ...p })) };
+  }
+
+  const enabled = typeof raw.enabled === 'boolean' ? raw.enabled : fallback.enabled;
+
+  // Accept any string for routing and let the Rust side collapse unknown
+  // values. This keeps the on-disk schema forward-compat: adding a new
+  // routing mode later doesn't require a sanitiser upgrade.
+  const routingValue: Settings['image_gen']['routing'] =
+    typeof raw.routing === 'string' ? raw.routing : fallback.routing;
+
+  const providers: Settings['image_gen']['providers'] = Array.isArray(raw.providers)
+    ? raw.providers
+        .filter((provider): provider is Settings['image_gen']['providers'][number] =>
+          !!provider && typeof provider === 'object'
+        )
+        .map((provider) => {
+          // Legacy payloads (pre-`providerType`) used the literal id
+          // `"ollama"` for the built-in local provider. When we see
+          // that we rewrite the id to the new stable form so the rest
+          // of the codebase can treat it as opaque. For any other
+          // string id we keep whatever the user had — renaming is a
+          // user-controlled action that must never silently rewrite ids.
+          const rawId = typeof provider.id === 'string' ? provider.id.trim() : '';
+          const id = rawId === 'ollama' ? 'ollama-default' : rawId || 'ollama-default';
+
+          // `providerType` is required by the new schema. Legacy entries
+          // don't have it; infer from the (now-rewritten) id when
+          // possible, default to 'openai' (the safe assumption — Ollama
+          // entries without a key still work, but OpenAI entries without
+          // a key need explicit attention from the user anyway).
+          const rawType = (provider as { providerType?: unknown }).providerType;
+          let providerType: ImageGenProviderType;
+          if (
+            rawType === 'ollama' ||
+            rawType === 'openai' ||
+            rawType === 'tencent_token' ||
+            rawType === 'tencent_tc3' ||
+            rawType === 'custom'
+          ) {
+            providerType = rawType;
+          } else if (id === 'ollama-default') {
+            providerType = 'ollama';
+          } else {
+            providerType = 'openai';
+          }
+
+          // Optional secrets/region — only persisted for tencent entries
+          // but we read defensively for any provider so a future provider
+          // type can reuse the same shape. The `unknown` cast is the
+          // cheapest way to silence TS2352 without giving the source
+          // type an index signature (which would defeat the readonly
+          // checks on the rest of the schema).
+          const readString = (k: string): string | null => {
+            const v = (provider as unknown as Record<string, unknown>)[k];
+            return typeof v === 'string' && v.trim() ? v : null;
+          };
+
+          return {
+            id,
+            providerType,
+            apiKey: typeof provider.apiKey === 'string' ? provider.apiKey : null,
+            baseUrl:
+              typeof provider.baseUrl === 'string' && provider.baseUrl.trim()
+                ? provider.baseUrl
+                : null,
+            secretId: readString('secretId'),
+            secretKey: readString('secretKey'),
+            region: readString('region'),
+            defaultModel:
+              typeof provider.defaultModel === 'string' ? provider.defaultModel : '',
+            enabled: typeof provider.enabled === 'boolean' ? provider.enabled : true,
+          };
+        })
+    : fallback.providers.map((p) => ({ ...p }));
+
+  // Empty provider list would silently disable image generation. Fall
+  // back to the default Ollama entry so the user has a working baseline.
+  if (providers.length === 0) {
+    return {
+      enabled,
+      providers: [{ ...fallback.providers[0] }],
+      routing: routingValue,
+      defaultWidth: clampDimension(raw.defaultWidth),
+      defaultHeight: clampDimension(raw.defaultHeight),
+    };
+  }
+
+  return {
+    enabled,
+    providers,
+    routing: routingValue,
+    defaultWidth: clampDimension(raw.defaultWidth),
+    defaultHeight: clampDimension(raw.defaultHeight),
+  };
 }
 
 /** Defensive sanitiser for the persisted cloud settings. Mirrors the
@@ -536,6 +730,94 @@ export const useSettingsStore = create<SettingsState>()(
         }
       ),
 
+      // ── Image generation (mirrors the web_search pattern above) ────────
+
+      updateImageGen: defineAutoPersist((current, next: Settings['image_gen']) => {
+        // Defensive clone so callers can't mutate the stored array by
+        // reference after we set it. We also run each provider through
+        // the same self-heal as `updateImageGenProvider` so a stale
+        // entry that predates the `providerType` field is corrected the
+        // first time the user touches the parent settings object.
+        const clampedWidth = clampDimension(next.defaultWidth);
+        const clampedHeight = clampDimension(next.defaultHeight);
+        const healedProviders = next.providers.map((p) => {
+          const healedType: ImageGenProviderType =
+            p.providerType ??
+            (p.id === 'ollama-default' || p.id === 'ollama' ? 'ollama' : 'openai');
+          return { ...p, providerType: healedType };
+        });
+        const cloned: Settings['image_gen'] = {
+          enabled: next.enabled,
+          // Preserve the routing value from the incoming payload; if the
+          // caller omitted it, keep whatever was previously stored.
+          routing: next.routing ?? current.image_gen.routing,
+          defaultWidth: clampedWidth,
+          defaultHeight: clampedHeight,
+          providers: healedProviders,
+        };
+        return { ...current, image_gen: cloned };
+      }),
+
+      updateImageGenProvider: defineAutoPersist(
+        (current, providerId: string, updates: Partial<ImageGenProviderConfig>) => {
+          const currentImageGen = current.image_gen;
+          const existingIndex = currentImageGen.providers.findIndex((p) => p.id === providerId);
+          const newProviders = currentImageGen.providers.map((p) => ({ ...p }));
+          if (existingIndex >= 0) {
+            const existing = newProviders[existingIndex];
+            // Defensive self-heal: if the entry predates the
+            // `providerType` field, fall back to a sensible value before
+            // layering the caller's updates. Without this, an old
+            // settings file would render with `providerType: undefined`
+            // and the API Key input — which is now always shown —
+            // would still work, but the routing layer would silently
+            // send paid requests to /api/generate.
+            const healedType: ImageGenProviderType =
+              updates.providerType ??
+              existing.providerType ??
+              (existing.id === 'ollama-default' || existing.id === 'ollama'
+                ? 'ollama'
+                : 'openai');
+
+            newProviders[existingIndex] = {
+              ...existing,
+              ...updates,
+              // Preserve the id even if the caller accidentally clears it
+              // — losing it would orphan the provider entry.
+              id: existing.id,
+              providerType: healedType,
+            };
+          } else {
+            // Build the new provider entry from defaults, then layer the
+            // caller's updates on top, then re-assert the id. Spread-
+            // restructure sidesteps TS1117 (duplicate property in
+            // object literal). The base providerType is 'openai' (the
+            // safe default for user-added entries — they almost always
+            // mean "remote image API"), but the UI passes its own value
+            // through `updates`.
+            const base: ImageGenProviderConfig = {
+              id: providerId,
+              providerType: 'openai',
+              apiKey: null,
+              baseUrl: null,
+              secretId: null,
+              secretKey: null,
+              region: null,
+              defaultModel: '',
+              enabled: true,
+            };
+            newProviders.push({ ...base, ...updates, id: providerId });
+          }
+          return {
+            ...current,
+            image_gen: {
+              ...currentImageGen,
+              providers: newProviders,
+            },
+          };
+        }
+      ),
+
       setCloudModeEnabled: defineAutoPersist((current, enabled: boolean) => ({
         ...current,
         cloud: { ...current.cloud, cloud_mode_enabled: enabled },
@@ -555,6 +837,18 @@ export const useSettingsStore = create<SettingsState>()(
         ...current,
         cloud: { ...current.cloud, active_cloud_model_id: id },
       })),
+
+      setActiveImageGenProvider: defineAutoPersist((current, providerId: string) => {
+        // Only accept ids that actually exist in the provider list.
+        const exists = current.image_gen.providers.some((p) => p.id === providerId);
+        return {
+          ...current,
+          image_gen: {
+            ...current.image_gen,
+            routing: exists ? providerId : current.image_gen.routing,
+          },
+        };
+      }),
     }),
     {
       name: 'inkuo-settings',
@@ -630,6 +924,17 @@ export const useSettingsStore = create<SettingsState>()(
           web_search: sanitiseWebSearchConfig(
             persistedSettings?.web_search as
               | Partial<Settings['web_search']>
+              | undefined
+          ),
+          // Image-generation config: same story as web_search. Legacy
+          // settings files have no `image_gen` field; we fill with the
+          // in-code default and only overlay fields the user explicitly
+          // set. The merge is intentionally per-field so a partial
+          // persisted object (e.g. one provider with no apiKey) doesn't
+          // get clobbered.
+          image_gen: sanitiseImageGenConfig(
+            persistedSettings?.image_gen as
+              | Partial<Settings['image_gen']>
               | undefined
           ),
           cloud: sanitiseCloudConfig(

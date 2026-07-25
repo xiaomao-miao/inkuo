@@ -32,6 +32,7 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   // Image / vector tools
   create_svg: '生成 SVG 图片',
   create_pptx: '生成 PPT',
+  generate_image: '生成图片',
   // Meta / sub-agent tools
   get_tool_help: '加载工具帮助',
   delegate_to: '委派子代理',

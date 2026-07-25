@@ -41,6 +41,111 @@ export interface WebSearchSettings {
   routing: WebSearchRouting;
 }
 
+/** Stable identifier for an image-generation provider entry. The same id is
+ * reused across renames/edits; renaming a provider MUST NOT change its id.
+ * Built-in defaults seed their ids from the provider type for readability
+ * (e.g. `"ollama-default"`), but user-added providers get a fresh uuid. */
+export type ImageGenProviderId = string;
+
+/** Routing/transport family for an image-generation provider. The image-gen
+ * tool branches on this value to decide which HTTP path to use:
+ *
+ * - `"ollama"`           — talks to a local Ollama `/api/generate` endpoint.
+ * - `"openai"`           — any OpenAI-compatible `/v1/images/generations`
+ *                            endpoint (DALL·E, DeepSeek-Image, custom
+ *                            gateways, etc.). Auth: Bearer token (`apiKey`).
+ * - `"tencent_token"`     — Tencent Token Hub (tokenhub.tencentmaas.com).
+ *                            OpenAI-compatible wire format with a single Bearer
+ *                            API key — simpler than the TC3-signed aiart API.
+ * - `"tencent_tc3"`      — Tencent Cloud aiart (aiart.tencentcloudapi.com).
+ *                            TC3-HMAC-SHA256 signing with SecretId/SecretKey.
+ *                            Supports hunyuan-pro / hunyuan-lite models.
+ * - `"custom"`           — same wire format as `"openai"` but treated as a
+ *                            generic upstream; useful for self-hosted SD-WebUI
+ *                            or other compatible servers without claiming it
+ *                            is "the OpenAI API".
+ *
+ * The string is persisted alongside `id` so a rename in the UI doesn't
+ * accidentally demote a paid endpoint to local-only routing. */
+export type ImageGenProviderType =
+  | 'ollama'
+  | 'openai'
+  | 'tencent_token'
+  | 'tencent_tc3'
+  | 'custom';
+
+/** Per-provider configuration for the `generate_image` tool.
+ *
+ * Mirrors `WebSearchProviderConfig` so the two panels share the same
+ * UX (one block per provider, key + base URL + enabled toggle).
+ *
+ * `defaultModel` is what `generate_image` uses when the LLM doesn't
+ * pin a specific model in its tool call. */
+export interface ImageGenProviderConfig {
+  /** Stable id; never changes once the entry is created. Used as the
+   * React `key` and as the routing key for the LLM-provided
+   * `model` override. */
+  id: ImageGenProviderId;
+  /** Transport family. Determines which request format `generate_image`
+   * uses. See `ImageGenProviderType`. */
+  providerType: ImageGenProviderType;
+  /** Bearer-style API key. Used by `openai`, `tencent_token`, and `custom`
+   * providers (they all follow the same Authorization: Bearer pattern).
+   * Optional for `ollama` and `tencent_tc3` (the latter uses
+   * `secretId` / `secretKey` instead). */
+  apiKey: string | null;
+  /** Optional override of the upstream endpoint. `null` means use
+   * the provider's compile-time default URL. */
+  baseUrl: string | null;
+  /** Tencent TC3 Cloud `SecretId` (public identifier, paired with
+   * `secretKey`). Only meaningful when `providerType === 'tencent_tc3'`. */
+  secretId: string | null;
+  /** Tencent TC3 Cloud `SecretKey` (HMAC signing secret). Stored only
+   * when `providerType === 'tencent_tc3'`; `null` for everything else. */
+  secretKey: string | null;
+  /** Region hint for cloud providers (e.g. `"ap-guangzhou"` for
+   * Tencent TC3). `null` falls back to the provider's
+   * compile-time default region. */
+  region: string | null;
+  /** Default model id (e.g. `"sdxl"` / `"dall-e-3"`). When the LLM
+   * calls `generate_image` without a `model` override, this is the
+   * model that gets used. */
+  defaultModel: string;
+  /** Per-provider kill switch. */
+  enabled: boolean;
+}
+
+/** Where to send `generate_image` calls.
+ *
+ * - `"local"` prefers the first enabled Ollama provider, falling back to
+ *   any other enabled provider.
+ * - `"cloud"` prefers the first non-Ollama enabled provider, falling
+ *   back to Ollama.
+ * - Anything else is treated as a literal provider id; unknown ids
+ *   collapse to the first enabled provider so a typo never disables
+ *   the tool.
+ *
+ * The Rust side mirrors this exact semantic. */
+export type ImageGenRouting = 'local' | 'cloud' | string;
+
+/** Top-level settings for the `generate_image` tool. */
+export interface ImageGenSettings {
+  /** Master kill switch. When `false`, the tool returns a polite
+   * "disabled" message instead of calling any provider. */
+  enabled: boolean;
+  /** Per-provider configuration. Defaults to one Ollama entry pointing
+   * at `localhost:11434`. */
+  providers: ImageGenProviderConfig[];
+  /** Routing preference. See `ImageGenRouting`. */
+  routing: ImageGenRouting;
+  /** Default image width when the LLM omits it (pixels). 256–2048,
+   * default 1024. */
+  defaultWidth: number;
+  /** Default image height when the LLM omits it (pixels). 256–2048,
+   * default 1024. */
+  defaultHeight: number;
+}
+
 export interface Settings {
   theme: ThemeType;
   accent_color: string;
@@ -90,6 +195,11 @@ export interface Settings {
    * without touching the wire format.
    */
   web_search: WebSearchSettings;
+  /** Configuration for the `generate_image` tool. Same shape as the
+   * Rust `ImageGenSettings` struct; missing on legacy settings files
+   * (older than image generation existed) — sanitised merge falls
+   * back to defaults. */
+  image_gen: ImageGenSettings;
   /** Cloud-mode settings. Optional in legacy settings files (older than
    * cloud mode existed) — sanitised merge falls back to defaults. */
   cloud: CloudSettings;

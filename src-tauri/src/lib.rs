@@ -446,6 +446,7 @@ pub fn run() {
             commands::get_settings,
             commands::save_settings,
             commands::test_api_config,
+            commands::test_image_gen_config,
             commands::watch_directory,
             commands::unwatch_directory,
             inline_complete::ai_inline_complete,

@@ -52,6 +52,29 @@ export interface BackendSettings {
     cached_models: CloudModelEntry[];
     active_cloud_model_id: string | null;
   };
+  /** Image-generation settings. Sent on every `save_settings` IPC so the
+   * Rust side sees the same provider list (and active routing) the user
+   * just edited in the UI. Without this field, the Rust deserialiser
+   * silently falls back to the default single-Ollama provider entry,
+   * which is why adding a new provider in the Settings UI would appear
+   * to "save" but the next tool call would still see only Ollama. */
+  image_gen: {
+    enabled: boolean;
+    providers: Array<{
+      id: string;
+      provider_type: string;
+      api_key: string | null;
+      base_url: string | null;
+      secret_id: string | null;
+      secret_key: string | null;
+      region: string | null;
+      default_model: string;
+      enabled: boolean;
+    }>;
+    routing: string;
+    default_width: number;
+    default_height: number;
+  };
 }
 
 export function toBackendSettings(settings: Settings): BackendSettings {
@@ -95,6 +118,23 @@ export function toBackendSettings(settings: Settings): BackendSettings {
       account: settings.cloud.account,
       cached_models: settings.cloud.cached_models,
       active_cloud_model_id: settings.cloud.active_cloud_model_id,
+    },
+    image_gen: {
+      enabled: settings.image_gen.enabled,
+      providers: settings.image_gen.providers.map((p) => ({
+        id: p.id,
+        provider_type: p.providerType,
+        api_key: p.apiKey,
+        base_url: p.baseUrl,
+        secret_id: p.secretId,
+        secret_key: p.secretKey,
+        region: p.region,
+        default_model: p.defaultModel,
+        enabled: p.enabled,
+      })),
+      routing: settings.image_gen.routing,
+      default_width: settings.image_gen.defaultWidth,
+      default_height: settings.image_gen.defaultHeight,
     },
   };
 }

@@ -516,6 +516,26 @@ pub async fn save_settings(settings: Settings, _state: State<'_, AppState>) -> R
 
 pub type TestResult = AITestResult;
 
+#[derive(Debug, serde::Deserialize)]
+pub struct TestImageGenRequest {
+    pub provider_id: String,
+    pub api_key: Option<String>,
+    pub base_url: String,
+    pub model: String,
+    /// Tencent Cloud `SecretId`. Optional because ollama / openai
+    /// providers don't need it.
+    #[serde(default)]
+    pub secret_id: Option<String>,
+    /// Tencent Cloud `SecretKey`. Optional for the same reason as
+    /// `secret_id`.
+    #[serde(default)]
+    pub secret_key: Option<String>,
+    /// Region hint for cloud providers (e.g. `"ap-guangzhou"` for
+    /// Tencent). Defaults to the provider's compile-time default.
+    #[serde(default)]
+    pub region: Option<String>,
+}
+
 #[tauri::command]
 pub async fn test_api_config(
     request: TestApiConfigRequest,
@@ -525,6 +545,29 @@ pub async fn test_api_config(
         request.api_key.as_deref(),
         &request.base_url,
         &request.model,
+    )
+    .await
+    .map_err(|error| AppCommandError::TestAIConnection(error.to_string()))
+}
+
+#[tauri::command]
+pub async fn test_image_gen_config(
+    request: TestImageGenRequest,
+) -> Result<TestResult, AppCommandError> {
+    tracing::info!(
+        "Testing image gen config: provider={} model={} base_url={}",
+        request.provider_id,
+        request.model,
+        request.base_url
+    );
+    ai_config::test_image_gen_provider_impl(
+        &request.provider_id,
+        request.api_key.as_deref(),
+        &request.base_url,
+        &request.model,
+        request.secret_id.as_deref(),
+        request.secret_key.as_deref(),
+        request.region.as_deref(),
     )
     .await
     .map_err(|error| AppCommandError::TestAIConnection(error.to_string()))

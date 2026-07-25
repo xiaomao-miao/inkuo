@@ -229,6 +229,7 @@ mod pptx; // create_pptx (packs SVGs into editable .pptx; see office_pptx_expert
 mod pptx_anim; // create_pptx_animation + add_pptx_animation
 mod web_search_tool; // web_search (external encyclopedia lookup; today Baike)
 mod media_tools; // read_image / read_pdf  (binary workspace files for multimodal LLMs)
+pub mod image_gen_tools; // generate_image (AI image generation)
 pub mod asset_registry; // binary side-channel: stores asset://<id> entries so LLM context never sees base64
 pub mod ask_user_tools; // ask_user   (meta-tool; see agent_loop::try_handle_meta_tool)
 
@@ -251,6 +252,7 @@ pub use pptx_anim::{CreatePptxAnimationTool, AddAnimationTool};
 pub use web_search_tool::WebSearchTool;
 pub use ask_user_tools::AskUserTool;
 pub use media_tools::{ReadImageTool, ReadPdfTool};
+pub use image_gen_tools::{GenerateImageTool, GenerateImageOutcome};
 
 /// Unified executor enum combining all tool implementations
 pub enum ToolExecutor {
@@ -277,6 +279,7 @@ pub enum ToolExecutor {
     WebSearch(web_search_tool::WebSearchTool),
     ReadImage(media_tools::ReadImageTool),
     ReadPdf(media_tools::ReadPdfTool),
+    GenerateImage(image_gen_tools::GenerateImageTool),
     // Meta tools (intercepted by the agent loop; execute() returns an error
     // if reached directly).
     GetToolHelp(meta_tools::GetToolHelpTool),
@@ -314,6 +317,7 @@ impl ToolExecutor {
             ToolExecutor::WebSearch(_) => "web_search",
             ToolExecutor::ReadImage(_) => "read_image",
             ToolExecutor::ReadPdf(_) => "read_pdf",
+            ToolExecutor::GenerateImage(_) => "generate_image",
             ToolExecutor::GetToolHelp(_) => "get_tool_help",
             ToolExecutor::DelegateTo(_) => "delegate_to",
             ToolExecutor::UpdateTodo(_) => "update_todo",
@@ -347,6 +351,7 @@ impl ToolExecutor {
             ToolExecutor::WebSearch(t) => t.definition(),
             ToolExecutor::ReadImage(t) => t.definition(),
             ToolExecutor::ReadPdf(t) => t.definition(),
+            ToolExecutor::GenerateImage(t) => t.definition(),
             ToolExecutor::GetToolHelp(t) => t.definition(),
             ToolExecutor::DelegateTo(t) => t.definition(),
             ToolExecutor::UpdateTodo(t) => t.definition(),
@@ -414,6 +419,10 @@ impl ToolExecutor {
             ToolExecutor::WebSearch(t) => t.execute(arguments, workspace).await,
             ToolExecutor::ReadImage(t) => t.execute(arguments, workspace).await,
             ToolExecutor::ReadPdf(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::GenerateImage(t) => {
+                let outcome = t.execute(arguments, workspace).await?;
+                Ok(outcome.output)
+            }
             ToolExecutor::GetToolHelp(t) => t.execute(arguments, workspace).await,
             ToolExecutor::DelegateTo(t) => t.execute(arguments, workspace).await,
             ToolExecutor::UpdateTodo(t) => t.execute(arguments, workspace).await,
@@ -567,6 +576,7 @@ impl ToolRegistry {
             ToolExecutor::WebSearch(WebSearchTool::placeholder()),
             ToolExecutor::ReadImage(ReadImageTool),
             ToolExecutor::ReadPdf(ReadPdfTool),
+            ToolExecutor::GenerateImage(image_gen_tools::GenerateImageTool::default()),
             // Meta tools (intercepted in agent loop, but still registered so
             // they appear in tool catalogs and can be schema-validated).
             ToolExecutor::GetToolHelp(GetToolHelpTool),
@@ -645,7 +655,7 @@ impl ToolRegistry {
         // `ToolResult` for the frontend's `file-written` event. Branch on
         // the tool name first so we don't accidentally apply the generic
         // `path` lookup below to either of them.
-        if tool_call.name == "render_mermaid" || tool_call.name == "create_svg" || tool_call.name == "create_pptx" || tool_call.name == "create_pptx_animation" || tool_call.name == "add_pptx_animation" {
+        if tool_call.name == "render_mermaid" || tool_call.name == "create_svg" || tool_call.name == "create_pptx" || tool_call.name == "create_pptx_animation" || tool_call.name == "add_pptx_animation" || tool_call.name == "generate_image" {
             let output_path = tool_call
                 .arguments
                 .get("output_path")

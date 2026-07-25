@@ -1,6 +1,9 @@
 use crate::ai;
 use crate::commands::{ApiConfig, Settings};
 use crate::cloud::CloudClient;
+
+#[used]
+static _MARKER_QQXX42_TENIENT_TOKEN_QQXX42_STATIC: &str = "MARKER_QQXX42_TENIENT_TOKEN_QQXX42_marker_in_ai_config_top";
 use reqwest::{Client, RequestBuilder, Response};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -433,5 +436,371 @@ pub async fn test_ai_connection_impl(
         .map_err(|e| AIConfigError::Network(e.to_string()))?;
 
     parse_test_response(response).await
+}
+
+/// Test an image generation provider by sending a minimal generation request.
+/// For Ollama we hit `/api/generate` with a trivial prompt; for
+/// OpenAI-compatible we hit `/v1/images/generations` with `n=1` and the
+/// smallest standard size.
+///
+/// Ollama: The response may contain base64 images — we don't decode them,
+/// just verify the call succeeds and the `images` array is present.
+///
+/// OpenAI-compatible: We request `b64_json` format so we can verify the
+/// response structure without needing to write a temp file.
+///
+/// Returns `Ok(AITestResult)` on a successful round-trip, `Err` on any
+/// network or protocol error. The result carries the provider's human-readable
+/// response (e.g. "Ollama responded in 1.2s") on success.
+pub async fn test_image_gen_provider_impl(
+    provider_id: &str,
+    api_key: Option<&str>,
+    base_url: &str,
+    model: &str,
+    secret_id: Option<&str>,
+    secret_key: Option<&str>,
+    region: Option<&str>,
+) -> Result<AITestResult, AIConfigError> {
+    let start = std::time::Instant::now();
+
+    tracing::info!("test_image_gen_provider_impl: provider_id={:?} model={:?} base_url={:?}", provider_id, model, base_url);
+    match provider_id {
+        "ollama" => {
+            let url = format!("{}/api/generate", base_url.trim_end_matches('/'));
+            let body = serde_json::json!({
+                "model": model,
+                "prompt": "a small red circle",
+                "stream": false,
+            });
+            let client = reqwest::Client::new();
+            let response = client
+                .post(&url)
+                .header("Content-Type", "application/json")
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| AIConfigError::Network(format!(
+                    "Failed to connect to Ollama at {}: {}", base_url, e
+                )))?;
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let body_text = response.text().await.unwrap_or_default();
+                return Ok(AITestResult {
+                    success: false,
+                    message: format!(
+                        "Ollama 返回 HTTP {} — 请确认服务已运行 (`ollama serve`) \
+                         且模型 '{}' 已拉取 (`ollama pull {}`): {}",
+                        status, model, model, body_text
+                    ),
+                });
+            }
+
+            let json: serde_json::Value = response
+                .json()
+                .await
+                .map_err(|e| AIConfigError::ParseResponse(format!(
+                    "Ollama response was not valid JSON: {}", e
+                )))?;
+
+            let elapsed_ms = start.elapsed().as_millis() as u64;
+            if json.get("images").is_some() {
+                Ok(AITestResult {
+                    success: true,
+                    message: format!(
+                        "Ollama 连接成功，模型 '{}' 可用，耗时 {}ms",
+                        model, elapsed_ms
+                    ),
+                })
+            } else {
+                Ok(AITestResult {
+                    success: false,
+                    message: format!(
+                        "Ollama 连接成功但响应中无 'images' 字段 — \
+                         '{}' 可能不是图像生成模型",
+                        model
+                    ),
+                })
+            }
+        }
+        "tencent_token" => {
+            // Tencent Token Hub uses Bearer auth, same as OpenAI, but hits
+            // a different path.
+            tracing::info!("[tencent_token branch] using path /v1/api/image/lite");
+            let base_url = base_url.trim_end_matches('/');
+            let url = format!("{}/v1/api/image/lite", base_url);
+            let body = serde_json::json!({
+                "model": model,
+                "prompt": "a small red circle",
+                "rsp_img_type": "url",
+            });
+
+            let mut request = crate::ai::HTTP_CLIENT
+                .post(&url)
+                .header("Content-Type", "application/json");
+            if let Some(key) = api_key.filter(|k| !k.is_empty()) {
+                request = request.header("Authorization", format!("Bearer {}", key));
+            }
+
+            let response = request
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| AIConfigError::Network(format!(
+                    "Failed to connect to Tencent Token Hub at {}: {}", url, e
+                )))?;
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let body_text = response.text().await.unwrap_or_default();
+                return Ok(AITestResult {
+                    success: false,
+                    message: format!(
+                        "腾讯 Token Hub 返回 HTTP {}: {}",
+                        status, body_text
+                    ),
+                });
+            }
+
+            let json: serde_json::Value = response
+                .json()
+                .await
+                .map_err(|e| AIConfigError::ParseResponse(format!(
+                    "Response was not valid JSON: {}", e
+                )))?;
+
+            let elapsed_ms = start.elapsed().as_millis() as u64;
+            let has_image = json
+                .pointer("/image_url")
+                .and_then(|v| v.as_str())
+                .is_some()
+                || json
+                    .pointer("/data/0/url")
+                    .and_then(|v| v.as_str())
+                    .is_some();
+
+            if has_image {
+                Ok(AITestResult {
+                    success: true,
+                    message: format!(
+                        "腾讯 Token Hub 连接成功，模型 '{}' 可用，耗时 {}ms",
+                        model, elapsed_ms
+                    ),
+                })
+            } else {
+                Ok(AITestResult {
+                    success: false,
+                    message: format!(
+                        "API 调用成功但未返回图片 — 请检查模型名称 '{}' \
+                         是否正确，以及账户是否有权访问该模型",
+                        model
+                    ),
+                })
+            }
+        }
+        "tencent_tc3" => {
+            // Tencent Cloud authenticates with TC3-HMAC-SHA256, not
+            // Bearer. We re-derive the signing key here so the test
+            // exercises the same code path as a real call.
+            let secret_id = match secret_id.filter(|s| !s.is_empty()) {
+                Some(s) => s,
+                None => {
+                    return Ok(AITestResult {
+                        success: false,
+                        message: "未配置 SecretId — 请在腾讯云控制台 \
+                                  (https://console.cloud.tencent.com/cam/capi) \
+                                  创建 API 密钥并填入"
+                            .to_string(),
+                    });
+                }
+            };
+            let secret_key = match secret_key.filter(|s| !s.is_empty()) {
+                Some(s) => s,
+                None => {
+                    return Ok(AITestResult {
+                        success: false,
+                        message: "未配置 SecretKey — 请在腾讯云控制台 \
+                                  (https://console.cloud.tencent.com/cam/capi) \
+                                  创建 API 密钥并填入"
+                            .to_string(),
+                    });
+                }
+            };
+            let region = region.unwrap_or("ap-guangzhou");
+            let payload = serde_json::json!({
+                "Prompt": "a small red circle",
+                "RspImgType": "url",
+                "Width": 256,
+                "Height": 256,
+                "Model": model,
+            })
+            .to_string();
+
+            // Reuse the TC3 signer from the image-gen tool. We import
+            // the function inline so the test path doesn't have to
+            // dance around module visibility.
+            let now = chrono::Utc::now().timestamp();
+            let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
+            let auth = crate::agent::tools::image_gen_tools::sign_tencent_request(
+                secret_id,
+                secret_key,
+                "aiart.tencentcloudapi.com",
+                "aiart",
+                "TextToImageLite",
+                region,
+                &payload,
+                now,
+                &date,
+            );
+
+            let auth = match auth {
+                Ok(s) => s,
+                Err(e) => {
+                    return Ok(AITestResult {
+                        success: false,
+                        message: format!("签名失败: {}", e),
+                    });
+                }
+            };
+
+            let url = "https://aiart.tencentcloudapi.com/";
+            let response = crate::ai::HTTP_CLIENT
+                .post(url)
+                .header("Authorization", auth)
+                .header("Content-Type", "application/json; charset=utf-8")
+                .header("Host", "aiart.tencentcloudapi.com")
+                .header("X-TC-Action", "TextToImageLite")
+                .header("X-TC-Timestamp", now.to_string())
+                .header("X-TC-Version", "2023-09-01")
+                .header("X-TC-Region", region)
+                .body(payload)
+                .send()
+                .await
+                .map_err(|e| AIConfigError::Network(format!(
+                    "Failed to connect to Tencent Cloud: {}", e
+                )))?;
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let body_text = response.text().await.unwrap_or_default();
+                return Ok(AITestResult {
+                    success: false,
+                    message: format!(
+                        "腾讯云返回 HTTP {}: {}。请检查 SecretId/SecretKey \
+                         是否正确，以及账户是否开通了 aiart 服务",
+                        status, body_text
+                    ),
+                });
+            }
+
+            let json: serde_json::Value = response
+                .json()
+                .await
+                .map_err(|e| AIConfigError::ParseResponse(format!(
+                    "Tencent response was not valid JSON: {}", e
+                )))?;
+
+            let result_image = json
+                .pointer("/Response/ResultImage")
+                .and_then(|v| v.as_str());
+
+            let elapsed_ms = start.elapsed().as_millis() as u64;
+            if result_image.is_some() {
+                Ok(AITestResult {
+                    success: true,
+                    message: format!(
+                        "腾讯云连接成功，模型 '{}' 可用，耗时 {}ms",
+                        model, elapsed_ms
+                    ),
+                })
+            } else {
+                Ok(AITestResult {
+                    success: false,
+                    message: format!(
+                        "腾讯云返回成功但未包含 ResultImage：{}",
+                        json
+                    ),
+                })
+            }
+        }
+        // OpenAI-compatible path: any non-Ollama / non-tencent provider id
+        "custom" | "openai" => {
+            let url = format!("{}/images/generations", base_url.trim_end_matches('/'));
+            let body = serde_json::json!({
+                "model": model,
+                "prompt": "a small red circle",
+                "n": 1,
+                "size": "256x256",
+                "response_format": "b64_json",
+            });
+
+            let mut request = crate::ai::HTTP_CLIENT
+                .post(&url)
+                .header("Content-Type", "application/json");
+            if let Some(key) = api_key.filter(|k| !k.is_empty()) {
+                request = request.header("Authorization", format!("Bearer {}", key));
+            }
+
+            let response = request
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| AIConfigError::Network(format!(
+                    "Failed to connect to {}: {}", base_url, e
+                )))?;
+
+            if !response.status().is_success() {
+                let status = response.status();
+                let body_text = response.text().await.unwrap_or_default();
+                return Ok(AITestResult {
+                    success: false,
+                    message: format!(
+                        "图像 API 返回 HTTP {}: {}",
+                        status, body_text
+                    ),
+                });
+            }
+
+            let json: serde_json::Value = response
+                .json()
+                .await
+                .map_err(|e| AIConfigError::ParseResponse(format!(
+                    "API response was not valid JSON: {}", e
+                )))?;
+
+            let images = json.get("data")
+                .and_then(|d| d.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|item| item.get("b64_json"))
+                .and_then(|b64| b64.as_str());
+
+            let elapsed_ms = start.elapsed().as_millis() as u64;
+            if images.is_some() {
+                Ok(AITestResult {
+                    success: true,
+                    message: format!(
+                        "连接成功！模型 '{}' 可用，耗时 {}ms",
+                        model, elapsed_ms
+                    ),
+                })
+            } else {
+                Ok(AITestResult {
+                    success: false,
+                    message: format!(
+                        "API 调用成功但未返回图片 — 请检查模型名称 '{}' \
+                         是否正确，以及账户是否有权访问该模型",
+                        model
+                    ),
+                })
+            }
+        }
+        // Catch-all for any provider_id not handled above
+        other => {
+            Ok(AITestResult {
+                success: false,
+                message: format!("未识别的 provider 类型: '{}'", other),
+            })
+        }
+    }
 }
 

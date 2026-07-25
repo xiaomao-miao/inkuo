@@ -9,11 +9,12 @@ import {
   Brain,
   History,
   Globe,
+  Image as ImageIcon,
   ChevronDown,
   ChevronRight,
 } from 'lucide-react';
 import { useSettingsStore, useInlineCompleteStore } from '../../store';
-import { ModelsSettings, KnowledgeSettings, WebSearchSettings } from './index';
+import { ModelsSettings, KnowledgeSettings, WebSearchSettings, ImageGenSettings } from './index';
 import { SnapshotsSettings } from './SnapshotsSettings';
 import { AppearanceSettings } from './AppearanceSettings';
 import { Select } from './Select';
@@ -26,6 +27,7 @@ type SettingsTab =
   | 'editor'
   | 'ai'
   | 'web_search'
+  | 'image_gen'
   | 'snapshots'
   | 'appearance';
 
@@ -44,6 +46,7 @@ export const SettingsPanel = () => {
     { id: 'editor', label: '编辑器', icon: <Type size={14} /> },
     { id: 'ai', label: 'AI', icon: <Sparkles size={14} /> },
     { id: 'web_search', label: '联网搜索', icon: <Globe size={14} /> },
+    { id: 'image_gen', label: '图像生成', icon: <ImageIcon size={14} /> },
     { id: 'snapshots', label: '快照', icon: <History size={14} /> },
     { id: 'appearance', label: '外观', icon: <Palette size={14} /> },
   ];
@@ -316,6 +319,8 @@ export const SettingsPanel = () => {
         return <AppearanceSettings />;
       case 'web_search':
         return <WebSearchSettings />;
+      case 'image_gen':
+        return <ImageGenSettings />;
       case 'snapshots':
         return <SnapshotsSettings />;
       default:

@@ -11,7 +11,7 @@ export {
 } from './sidebarStore';
 export { useAIPanelStore } from './aiPanelStore';
 export { useLayoutStore } from './layoutStore';
-export { useSettingsStore } from './settingsStore';
+export { useSettingsStore, flushSettings } from './settingsStore';
 export { useCmdKStore } from './cmdKStore';
 export { useInlineCompleteStore } from './inlineCompleteStore';
 export { useNotificationStore, type NotificationItem } from './notificationStore';

@@ -9,6 +9,10 @@ import {
   extractFileNameFromPath,
   formatArgumentsForDisplay,
 } from './toolUtils';
+import {
+  ToolResultImagePreview,
+  hasImageResultPreview,
+} from './ToolResultImagePreview';
 import styles from './ToolCallCard.module.css';
 
 interface ToolCallCardProps {
@@ -276,6 +280,7 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = React.memo(function Too
   rawArguments,
   streamingContent,
   status,
+  result,
   error,
   duration,
   diffSummary,
@@ -313,6 +318,16 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = React.memo(function Too
     [name, args, rawArguments, streamingContent]
   );
 
+  // For `generate_image` we want to surface the saved image directly,
+  // not just the JSON result blob. The path comes from the args (the
+  // LLM-supplied `output_path`) and matches the path stored by the
+  // Rust side on success.
+  const generatedImagePath =
+    name === 'generate_image'
+      ? (args?.output_path as string | undefined) ??
+        (args?.outputPath as string | undefined)
+      : undefined;
+
   const dataAttrs = useMemo<Record<string, string | undefined>>(() => {
     const attrs: Record<string, string | undefined> = {
       'data-tool-call-id': id,
@@ -346,6 +361,14 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = React.memo(function Too
         onFileClick={onFileClick}
         workspacePath={workspacePath}
       />
+      {hasImageResultPreview(name, finalStatus) && (
+        <ToolResultImagePreview
+          result={result}
+          filePath={generatedImagePath}
+          workspacePath={workspacePath}
+          onFileClick={onFileClick}
+        />
+      )}
       <ToolCardError error={error} />
     </div>
   );

@@ -132,6 +132,121 @@ impl Default for WebSearchSettings {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageGenProviderConfig {
+    /// Stable id; never changes once the entry is created. Used as the
+    /// routing key when the LLM pins a specific provider in its tool call.
+    #[serde(default)]
+    pub id: String,
+    /// Transport family. Determines which HTTP path `generate_image`
+    /// uses. Allowed values: `"ollama"`, `"openai"`, `"tencent_token"`,
+    /// `"tencent_tc3"`, `"custom"`. Anything else collapses to `"openai"`.
+    #[serde(default = "default_image_gen_provider_type")]
+    pub provider_type: String,
+    /// Optional user-provided API key for the image provider. Used for
+    /// Bearer-token auth (`openai` / `custom`). `null` means "not
+    /// configured".
+    #[serde(default)]
+    pub api_key: Option<String>,
+    /// Optional override for the provider's endpoint.
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// Tencent Cloud `SecretId` (paired with `secret_key` for TC3
+    /// HMAC-SHA256 signing). Only meaningful when `provider_type ==
+    /// "tencent"`; defaults to `None` for everything else.
+    #[serde(default)]
+    pub secret_id: Option<String>,
+    /// Tencent Cloud `SecretKey` (HMAC signing secret). Stored only
+    /// when the user opts into a tencent provider; never written for
+    /// any other type.
+    #[serde(default)]
+    pub secret_key: Option<String>,
+    /// Region hint for cloud providers. Today only tencent uses it
+    /// (e.g. `"ap-guangzhou"`); `None` falls back to the provider's
+    /// compile-time default region.
+    #[serde(default)]
+    pub region: Option<String>,
+    /// Default model id to use when the LLM doesn't override.
+    #[serde(default)]
+    pub default_model: String,
+    /// Per-provider kill switch.
+    #[serde(default = "default_image_gen_provider_enabled")]
+    pub enabled: bool,
+}
+
+fn default_image_gen_provider_type() -> String {
+    "openai".to_string()
+}
+
+fn default_image_gen_provider_enabled() -> bool {
+    true
+}
+
+impl Default for ImageGenProviderConfig {
+    fn default() -> Self {
+        Self {
+            // Stable id for the built-in local Ollama entry. The frontend
+            // uses the same literal so a renames in the UI never collide.
+            id: "ollama-default".to_string(),
+            provider_type: "ollama".to_string(),
+            api_key: None,
+            base_url: None,
+            secret_id: None,
+            secret_key: None,
+            region: None,
+            default_model: "llava".to_string(),
+            enabled: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageGenSettings {
+    /// Master kill switch.
+    #[serde(default = "default_image_gen_enabled")]
+    pub enabled: bool,
+    /// Provider-specific configs (Ollama / OpenAI-compatible / etc.).
+    #[serde(default)]
+    pub providers: Vec<ImageGenProviderConfig>,
+    /// Routing mode: which provider to prefer when no `model` override is
+    /// supplied. "local" / "cloud" / a provider id / free-form.
+    #[serde(default = "default_image_gen_routing")]
+    pub routing: String,
+    /// Default image dimensions used when the LLM omits width / height.
+    #[serde(default = "default_image_gen_width")]
+    pub default_width: u32,
+    #[serde(default = "default_image_gen_height")]
+    pub default_height: u32,
+}
+
+fn default_image_gen_enabled() -> bool {
+    true
+}
+
+fn default_image_gen_routing() -> String {
+    "local".to_string()
+}
+
+fn default_image_gen_width() -> u32 {
+    1024
+}
+
+fn default_image_gen_height() -> u32 {
+    1024
+}
+
+impl Default for ImageGenSettings {
+    fn default() -> Self {
+        Self {
+            enabled: default_image_gen_enabled(),
+            providers: vec![ImageGenProviderConfig::default()],
+            routing: default_image_gen_routing(),
+            default_width: default_image_gen_width(),
+            default_height: default_image_gen_height(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CloudSettings {
     /// Whether cloud mode is currently active.
@@ -167,6 +282,8 @@ pub struct Settings {
     #[serde(default)]
     pub web_search: WebSearchSettings,
     #[serde(default)]
+    pub image_gen: ImageGenSettings,
+    #[serde(default)]
     pub cloud: CloudSettings,
 }
 
@@ -200,6 +317,7 @@ impl Default for Settings {
             chunk_overlap: 50,
             snapshot: SnapshotSettings::default(),
             web_search: WebSearchSettings::default(),
+            image_gen: ImageGenSettings::default(),
             cloud: CloudSettings::default(),
         }
     }
@@ -404,5 +522,15 @@ pub fn get_web_search_settings() -> WebSearchSettings {
     match get_settings_cached() {
         Ok(s) => s.web_search,
         Err(_) => WebSearchSettings::default(),
+    }
+}
+
+/// Convenience accessor for the image generation settings. Falls back to
+/// the baked-in defaults when no settings file is on disk yet or the
+/// cache is empty.
+pub fn get_image_gen_settings() -> ImageGenSettings {
+    match get_settings_cached() {
+        Ok(s) => s.image_gen,
+        Err(_) => ImageGenSettings::default(),
     }
 }
