@@ -185,7 +185,79 @@ fn cancel_inline_request(request_id: &str) -> bool {
     }
 }
 
-/// Extract context around cursor position
+/// Iterable cursor marker that the model can actually see in the prompt
+/// (NUL bytes tend to be stripped or merged by some chat-completion APIs and
+/// the model rarely treats them as a strong delimiter). The marker is
+/// intentionally unusual so it does not collide with typical source content.
+const CURSOR_MARKER: &str = "<|cursor|>";
+
+/// Strip leading overlap between the model's output and the text that
+/// already follows the cursor in the source document.
+///
+/// This handles the most common failure mode of inline completion: the model
+/// repeats the trailing characters of the prefix (or worse, the entire
+/// prefix) instead of starting fresh from the cursor. We compare the
+/// completion against the suffix (up to a cap) and trim any matching
+/// leading substring. We also strip the bare cursor marker itself, in case
+/// the model echoes it back.
+fn strip_repeated_prefix(completion: &str, suffix_after_cursor: &str) -> String {
+    let mut text = completion;
+
+    // Model may echo the marker back. Strip any leading occurrences.
+    while let Some(rest) = text.strip_prefix(CURSOR_MARKER) {
+        text = rest;
+    }
+
+    // Trim a leading newline run: the suffix already starts after the cursor
+    // and any newlines the model re-emits would inflate the prefix.
+    while text.starts_with('\n') || text.starts_with('\r') {
+        text = &text[1..];
+    }
+
+    // Cap the comparison length so we never do O(n^2) on huge docs.
+    const MAX_OVERLAP: usize = 256;
+    let suffix_chars: Vec<char> = suffix_after_cursor.chars().take(MAX_OVERLAP).collect();
+    let text_chars: Vec<char> = text.chars().take(MAX_OVERLAP).collect();
+
+    // Find the longest prefix of `text_chars` that is also a prefix of
+    // `suffix_chars`. We only need the longest match, so we walk from the
+    // longest possible length downward and stop at the first match.
+    let mut overlap = 0usize;
+    let max_check = suffix_chars.len().min(text_chars.len());
+    for len in (1..=max_check).rev() {
+        if text_chars[..len] == suffix_chars[..len] {
+            // Require a minimum overlap of 2 chars so we don't strip a
+            // single trivial character (e.g. a stray space) that the user
+            // almost certainly did want.
+            if len >= 2 {
+                overlap = len;
+            }
+            break;
+        }
+    }
+
+    if overlap > 0 {
+        // `overlap` is a *char* count, so we have to walk the original
+        // string by chars (not bytes) to keep the UTF-8 boundary sane.
+        let cut = text.chars().take(overlap).map(|c| c.len_utf8()).sum();
+        text = &text[cut..];
+    }
+
+    text.to_string()
+}
+
+/// Extract context around cursor position.
+///
+/// Returns:
+/// - `context`: the joined snippet text with `CURSOR_MARKER` inserted at
+///   the cursor position.
+/// - `cursor_in_context`: the *character* offset of the marker within
+///   `context` (i.e. the character position a model would slice `context`
+///   at to get "(prefix, suffix)").
+///
+/// The cursor marker is placed inside the source line itself (not on a
+/// separate line) so the model sees the exact byte it needs to continue
+/// from, including whatever indentation the user already has.
 fn extract_context(document: &str, cursor_pos: usize, context_lines: usize) -> (String, usize) {
     // Convert character offset to byte offset. If `cursor_pos` exceeds the
     // document length we clamp to the end, matching what the editor will
@@ -240,7 +312,7 @@ fn extract_context(document: &str, cursor_pos: usize, context_lines: usize) -> (
             let safe_col = col_bytes.min(line.len());
             let (before, after) = line.split_at(safe_col);
 
-            context_parts.push(format!("{}\x00\x00\x00{}\n", before, after));
+            context_parts.push(format!("{}{}{}\n", before, CURSOR_MARKER, after));
         } else {
             context_parts.push(format!("{}\n", line));
         }
@@ -248,22 +320,27 @@ fn extract_context(document: &str, cursor_pos: usize, context_lines: usize) -> (
 
     let context = context_parts.join("");
 
-    // Calculate cursor position in context (in characters)
-    let before_lines: String = lines[start_line..line_index.min(end_line)]
-        .iter()
-        .map(|l| format!("{}\n", l))
-        .collect();
-    let cursor_in_context = before_lines.chars().count();
+    // Locate the marker within the joined context. The marker is plain ASCII
+    // so a byte-level search is correct.
+    let cursor_in_context = context
+        .find(CURSOR_MARKER)
+        .map(|byte_idx| byte_idx)
+        .unwrap_or(0);
 
     (context, cursor_in_context)
 }
 
 // ── Prompt construction ─────────────────────────────────────────────────────────
 
-/// Build prompt for inline completion
+/// Build prompt for inline completion (FIM-style).
+///
+/// `prefix` is the text *before* the cursor (within the snippet window),
+/// `suffix` is the text *after* the cursor. The model is told to output
+/// only the continuation — i.e. the text that should be inserted at the
+/// cursor, *not* a regenerated copy of `prefix` or any portion of it.
 fn build_completion_prompt(
-    context: &str,
-    cursor_pos: usize,
+    prefix: &str,
+    suffix: &str,
     language: &str,
     file_path: Option<&str>,
 ) -> String {
@@ -271,29 +348,13 @@ fn build_completion_prompt(
         .map(|p| format!("Current file: {}\n", p))
         .unwrap_or_default();
 
-    format!(
-        r#"You are an expert code completion assistant. Complete the following {language} code naturally and concisely.
+    let prompt = "You are an expert {language} code completion assistant.\n\n{file_info}The user pressed Tab to request an inline completion. Their cursor sits between the PREFIX and SUFFIX shown below. Output ONLY the text that should be inserted between them. Do NOT repeat, rephrase, or echo any part of the prefix.\n\nRules:\n1. Output ONLY the new text to insert at the cursor. No preamble, no labels, no markdown fences, no explanation.\n2. Match the surrounding code style and indentation exactly (same number of leading spaces/tabs).\n3. Continue the current logical structure (function, block, statement) naturally.\n4. Keep completion concise (typically 1-5 lines).\n5. Do not include explanatory comments.\n6. NEVER repeat the PREFIX (even partially). If the prefix ends with `2. ` or any other list marker, continue from there. Do NOT re-emit a duplicate marker.\n7. Do NOT output the cursor marker or any closing braces / punctuation that already appears at the start of SUFFIX.\n\n```\n<|cursor_start|>PREFIX\n{prefix}<|cursor_end|><|cursor_start|>SUFFIX\n{suffix}<|cursor_end|>\n```\n\nOutput the continuation now:";
 
-{file_info}
-Rules:
-1. Only output the completion text, nothing else
-2. Match the surrounding code style and indentation
-3. Complete the logical structure (function, block, statement)
-4. Keep completion concise (typically 1-5 lines)
-5. Do not include explanatory comments
-
-Code:
-```
-{context}
-```
-Cursor position: {cursor_pos}
-
-Completion:""#,
-        language = language,
-        file_info = file_info,
-        context = context,
-        cursor_pos = cursor_pos
-    )
+    prompt
+        .replace("{language}", language)
+        .replace("{file_info}", &file_info)
+        .replace("{prefix}", prefix)
+        .replace("{suffix}", suffix)
 }
 
 /// Generate a short, URL-safe completion ID. `simple()` returns just the first
@@ -369,27 +430,37 @@ fn load_prompt(name: &str) -> String {
     })
 }
 
-/// Build prompt for docx (Word) inline completion
-fn build_docx_completion_prompt(context: &str, cursor_pos: usize) -> String {
+/// Build prompt for docx (Word) inline completion (FIM-style).
+///
+/// `prefix` is the text before the cursor, `suffix` is the text after the
+/// cursor (within the snippet window surrounding the caret). The model is
+/// told to output only the continuation, not a regenerated copy of the
+/// prefix.
+fn build_docx_completion_prompt(prefix: &str, suffix: &str, cursor_pos: usize) -> String {
     let prompt_template = load_prompt("docx_complete.md");
     if prompt_template.is_empty() {
-        // Fallback minimal prompt
+        // Fallback minimal prompt — still FIM-style so the model is unlikely
+        // to repeat the prefix even when the full prompt template is missing.
         return format!(
-            r#"Complete the following document text at the cursor position.
-Only output the completion text in plain JSON format:
-{{"completion": "...", "styles": []}}
-
-Document:
-{context}
-Cursor position: {cursor_pos}
-
-Completion:"#
+            "Complete the document text at the cursor position (between PREFIX and SUFFIX).\n\
+             Output ONLY a JSON object: {{\"completion\": \"...\", \"styles\": []}}\n\n\
+             Cursor position: {cursor_pos}\n\n\
+             <|cursor_start|>PREFIX\n\
+             {prefix}<|cursor_end|><|cursor_start|>SUFFIX\n\
+             {suffix}<|cursor_end|>",
         );
     }
 
     format!(
-        "{}\n\nDocument:\n```\n{}\n```\nCursor position: {}",
-        prompt_template, context, cursor_pos
+        "{}\n\n\
+         Cursor position: {cursor_pos}\n\n\
+         <|cursor_start|>PREFIX\n\
+         {prefix}<|cursor_end|><|cursor_start|>SUFFIX\n\
+         {suffix}<|cursor_end|>",
+        prompt_template,
+        cursor_pos = cursor_pos,
+        prefix = prefix,
+        suffix = suffix,
     )
 }
 
@@ -475,16 +546,35 @@ pub async fn ai_inline_complete(
         (request.document.as_str(), request.cursor_position)
     };
 
-    // Extract context around cursor (10 lines before and after)
+    // Extract context around cursor (10 lines before and after). The returned
+    // `context` contains the CURSOR_MARKER inlined at the cursor position; we
+    // split around it so the prompt can talk about PREFIX / SUFFIX explicitly
+    // and the model can be told not to repeat the prefix.
     let (context, cursor_in_context) = extract_context(source_text, cursor_pos, 10);
+
+    let (prefix, suffix) = if cursor_in_context < context.len() {
+        context.split_at(cursor_in_context)
+    } else {
+        (context.as_str(), "")
+    };
+    let prefix = if prefix.ends_with(CURSOR_MARKER) {
+        &prefix[..prefix.len() - CURSOR_MARKER.len()]
+    } else {
+        prefix
+    };
+    let suffix = if let Some(stripped) = suffix.strip_prefix(CURSOR_MARKER) {
+        stripped
+    } else {
+        suffix
+    };
 
     // Build prompt based on language
     let prompt = if request.language == "docx" {
-        build_docx_completion_prompt(&context, cursor_in_context)
+        build_docx_completion_prompt(prefix, suffix, cursor_in_context)
     } else {
         build_completion_prompt(
-            &context,
-            cursor_in_context,
+            prefix,
+            suffix,
             &request.language,
             request.file_path.as_deref(),
         )
@@ -528,6 +618,13 @@ pub async fn ai_inline_complete(
             .to_string();
         (cleaned, vec![])
     };
+
+    // Strip overlapping prefix: most models occasionally regurgitate the
+    // last few characters of the original prefix (or worse, the entire
+    // prefix) instead of starting fresh from the cursor. Removing this
+    // overlap is cheap and keeps the user-visible result "continues from
+    // cursor" instead of "stutters and then continues".
+    let completion_text = strip_repeated_prefix(&completion_text, suffix);
 
     // Create completion item
     let item = CompletionItem {
