@@ -318,15 +318,15 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = React.memo(function Too
     [name, args, rawArguments, streamingContent]
   );
 
-  // For `generate_image` we want to surface the saved image directly,
-  // not just the JSON result blob. The path comes from the args (the
-  // LLM-supplied `output_path`) and matches the path stored by the
-  // Rust side on success.
-  const generatedImagePath =
-    name === 'generate_image'
-      ? (args?.output_path as string | undefined) ??
-        (args?.outputPath as string | undefined)
-      : undefined;
+// For `generate_image` we want to surface the saved image directly,
+// not just the JSON result blob. The path comes from the args (the
+// LLM-supplied `output_path`) and matches the path stored by the
+// Rust side on success.
+const generatedImagePath =
+  name === 'generate_image'
+    ? (args?.output_path as string | undefined) ??
+      (args?.outputPath as string | undefined)
+    : undefined;
 
   const dataAttrs = useMemo<Record<string, string | undefined>>(() => {
     const attrs: Record<string, string | undefined> = {

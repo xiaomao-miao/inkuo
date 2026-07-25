@@ -10,18 +10,28 @@
 // path through the same image-viewer pipeline used by the rest of the
 // app (see `ImageViewer.tsx`).
 //
-// This component is small on purpose: it just extracts the file path
-// out of the result, builds an `asset://` URL via Tauri's
-// `convertFileSrc`, and renders an `<img>` with a fixed max-height. We
-// keep the click target on the whole chip so the user can re-open the
-// image in the main editor pane.
+// This component is small on purpose: it extracts the file path out of
+// the result, asks Rust for the base64 bytes via `read_file_for_viewer`,
+// and renders a `<img>` with a fixed max-height. We keep the click
+// target on the whole chip so the user can re-open the image in the
+// main editor pane.
+//
+// Why not `convertFileSrc` (the obvious choice for local files)? Tauri
+// 2 only serves the `asset://` protocol to paths explicitly listed in
+// `tauri.conf.json#app.security.assetProtocol.scope`; we never opted
+// the whole workspace into that scope, so `convertFileSrc` returns a
+// URL that the WebView refuses to load. Going through the same
+// `read_file_for_viewer` command as `ImageViewer` keeps the preview
+// pipeline consistent and avoids a new capability surface.
 //
 // Split out of `ToolCallCard.tsx` so the card stays focused on layout;
 // the chip can be unit-tested in isolation and reused later (e.g. in
 // a "history" sidebar of recently generated images).
 
 import React from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { Image as ImageIcon, ExternalLink } from 'lucide-react';
+import type { ViewerFilePayload } from '../../types';
 import toolPreviewStyles from './ToolResultPreview.module.css';
 
 interface ToolResultImagePreviewProps {
@@ -48,25 +58,14 @@ function extractFilePathFromResult(result: string | undefined): string | null {
   return match ? match[1] : null;
 }
 
-/** Convert a workspace-relative or absolute path to a `tauri://localhost/...`
- * URL that the WebView can load. Mirrors what `ImageViewer` does; we
- * can't import from there without a circular dep, so the conversion is
- * duplicated (one line). When Tauri isn't available (e.g. plain Vite
- * dev preview outside the desktop app), the relative path is returned
- * as-is so the `<img>` fails gracefully. */
-async function toAssetUrl(path: string): Promise<string> {
-  if (typeof window === 'undefined') return path;
-  const w = window as unknown as { __TAURI_INTERNALS__?: unknown };
-  if (!w.__TAURI_INTERNALS__) return path;
-  // convertFileSrc is provided by `@tauri-apps/api/core`. Dynamic import
-  // keeps the desktop runtime as an optional dependency for browser
-  // preview builds (where `__TAURI_INTERNALS__` is undefined).
-  try {
-    const mod = await import('@tauri-apps/api/core');
-    return mod.convertFileSrc(path);
-  } catch {
+/** Resolve a workspace-relative path against the active workspace so
+ * Rust can find the file. The fallback when no workspace is known is
+ * to trust the path as-is (absolute paths survive unchanged). */
+function resolveAbsolutePath(path: string, workspacePath?: string): string {
+  if (!workspacePath || path.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(path)) {
     return path;
   }
+  return `${workspacePath}/${path}`;
 }
 
 export const ToolResultImagePreview: React.FC<ToolResultImagePreviewProps> = ({
@@ -79,27 +78,34 @@ export const ToolResultImagePreview: React.FC<ToolResultImagePreviewProps> = ({
   const targetPath = filePath ?? parsed;
 
   const [src, setSrc] = React.useState<string>('');
+  const [loadError, setLoadError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     let cancelled = false;
-    if (!targetPath) {
-      setSrc('');
-      return;
-    }
-    toAssetUrl(targetPath).then((url) => {
-      if (!cancelled) setSrc(url);
-    });
+    setSrc('');
+    setLoadError(null);
+    if (!targetPath) return;
+
+    const absolutePath = resolveAbsolutePath(targetPath, workspacePath);
+    invoke<ViewerFilePayload>('read_file_for_viewer', { path: absolutePath })
+      .then((payload) => {
+        if (cancelled) return;
+        setSrc(`data:${payload.mime};base64,${payload.data_base64}`);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setLoadError(String(err));
+      });
+
     return () => {
       cancelled = true;
     };
-  }, [targetPath]);
+  }, [targetPath, workspacePath]);
 
   if (!targetPath) return null;
 
   const fileName = targetPath.split(/[/\\]/).pop() ?? targetPath;
-  const fullPath = workspacePath && !targetPath.startsWith('/')
-    ? `${workspacePath}/${targetPath}`
-    : targetPath;
+  const fullPath = resolveAbsolutePath(targetPath, workspacePath);
 
   return (
     <div className={toolPreviewStyles.previewBlock}>
@@ -122,6 +128,14 @@ export const ToolResultImagePreview: React.FC<ToolResultImagePreviewProps> = ({
             draggable={false}
             loading="lazy"
           />
+        )}
+        {!src && !loadError && (
+          <span className={toolPreviewStyles.previewPlaceholder}>加载中…</span>
+        )}
+        {loadError && (
+          <span className={toolPreviewStyles.previewPlaceholder}>
+            加载失败：{loadError}
+          </span>
         )}
         <span className={toolPreviewStyles.previewOverlay}>
           <ExternalLink size={12} />
