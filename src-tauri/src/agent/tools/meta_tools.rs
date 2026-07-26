@@ -17,11 +17,11 @@ impl GetToolHelpTool {
         ToolDefinition::new_with_label(
             "get_tool_help",
             "加载工具帮助",
-            "Load detailed tool usage instructions for a business category. Use this when you need full parameter / behavior details beyond the one-line summary in the system prompt. Categories: `general` (read/write/edit/grep/glob/database_search), `word` (.docx), `excel` (.xlsx), `markdown` (long-form .md writing), `media` (read_image / read_pdf), `svg` (create_svg style guide). The spec is injected into your context as the tool result and is not shown to the user.",
+            "Load detailed tool usage instructions for a business category. Use this when you need full parameter / behavior details beyond the one-line summary in the system prompt. Categories: `general` (read/write/edit/grep/glob/database_search), `word` (.docx via office_word_expert), `excel` (.xlsx via office_excel_expert), `pptx` (.pptx via office_pptx_expert), `markdown` (long-form .md writing), `media` (read_image / read_pdf), `svg` (create_svg style guide). The spec is injected into your context as the tool result and is not shown to the user.",
             ToolParameters::new(
                 vec!["category"],
                 vec![
-                    ("category", "string", Some("Business category. One of: general, word, excel, markdown, media, svg.")),
+                    ("category", "string", Some("Business category. One of: general, word, excel, pptx, markdown, media, svg.")),
                 ],
             ),
         )
@@ -44,14 +44,14 @@ impl DelegateToTool {
         ToolDefinition::new_with_label(
             "delegate_to",
             "委派给子代理",
-            "Delegate a task to a sub-agent. Sub-agent has its own system prompt and tool set. Returns the sub-agent's final summary. Pass `expert` (profile name) and `task` (description). Available experts: office_word_expert, office_excel_expert, md_writer, researcher, batch_editor, code_expert.",
+            "Delegate a task to a sub-agent. Sub-agent has its own system prompt and tool set. Returns the sub-agent's final summary. Pass `expert` (profile name), `task` (description), and optional `context` (extra instructions). Available experts: office_word_expert (Word .docx), office_excel_expert (Excel .xlsx), office_pptx_expert (PowerPoint .pptx — packs existing .svg files only, cannot edit in place), md_writer (long Markdown), researcher (read-only search), batch_editor (multi-file same-rule edits), code_expert (code features/bugs/refactor), flowchart_expert (Mermaid → PNG/SVG/PDF), word_image_expert (insert PNG/JPEG/GIF into .docx).",
             ToolParameters::new(
                 vec!["expert", "task"],
                 vec![
                     (
                         "expert",
                         "string",
-                        Some("Profile name. One of: office_word_expert, office_excel_expert, md_writer, researcher, batch_editor, code_expert."),
+                        Some("Profile name. One of: office_word_expert, office_excel_expert, office_pptx_expert, md_writer, researcher, batch_editor, code_expert, flowchart_expert, word_image_expert."),
                     ),
                     (
                         "task",
