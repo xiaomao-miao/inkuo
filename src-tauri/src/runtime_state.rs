@@ -83,8 +83,12 @@ impl Mode {
             }
             Mode::Agent => {
                 "Full access: read + write tools (write_file, edit_file, create_*, \
-                 shell_run, delegate_to, etc.) are all available. Web search, when \
-                 the toggle is on, is also available."
+                 delegate_to, etc.) are all available. Web search, when \
+                 the toggle is on, is also available. **No script or shell \
+                 execution tool is registered** — you can author .py / .ts files \
+                 as artifacts only when the user explicitly asks for them, and \
+                 you must say they need manual execution. See the \
+                 'No-Execution Contract' in the main system prompt."
             }
         }
     }

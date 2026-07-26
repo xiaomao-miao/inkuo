@@ -184,6 +184,6 @@ The tool rejects SVGs containing any of:
 | Tool rejects: "missing xmlns"                    | Add `xmlns="http://www.w3.org/2000/svg"` to the root `<svg>` element.                          |
 | Tool rejects: "forbidden `<script>`"             | Remove the script. Replace any dynamic effect with a static `<animate>` if you need motion.    |
 | Tool rejects: "external http reference"           | Inline the asset as a `<path>` / `<rect>`. SVGs are vector — there is rarely a reason to fetch. |
-| User says "I wanted a PNG"                       | Re-render with `read_image` → base64 → a Rust-side rasteriser; or call `create_svg` then ask the user to "File → Export as PNG" from the viewer. |
+| User says "I wanted a PNG"                       | You have no rasterisation tool. Hand the user the SVG and ask them to export PNG (most viewers: File → Export as PNG). If the artwork is a diagram, suggest `render_mermaid` instead — but **do not write a Python script to convert**. |
 | User says "I wanted a diagram"                   | Switch to `render_mermaid` — Mermaid has better layout primitives than hand-rolled SVG.       |
 | SVG renders but the user dislikes the aesthetic | Re-call `create_svg` with the same path; the tool overwrites. Adjust palette / spacing / strokes. |

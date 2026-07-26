@@ -68,7 +68,7 @@ Shapes filled with `url(#id)` references **are** supported: the parser walks the
 - If the gradient lives in a different SVG (no matching `<linearGradient id="…">` block in the source file), the reference degrades to `<a:noFill/>` and the shape becomes invisible. The `skipped_elements` field doesn't list this case, so always tell the user to expect solid-colour fills when they ask for gradients.
 - Both the standalone `stop-color="…"` attribute and the inline `style="stop-color:…"` form are honoured.
 
-If the user actually wants the full gradient ramp to land in PPT, the only escape hatch today is `render_mermaid`-style raster output — recommend that instead.
+If the user actually wants the full gradient ramp to land in PPT, **do not attempt to rasterise yourself** — there is no rasterisation tool in your registry. Suggest the user re-author the SVG without a gradient (use a solid fill chosen from the first stop), or that they export the slide manually after the deck is generated.
 
 CSS-style presentation attributes are honoured (`fill="..."`, `stroke="..."`, `stroke-width="..."`, `fill-opacity="..."`, `opacity="..."`). Inline `style="…"` declarations on shape elements are NOT parsed in v1 — the source SVG should prefer presentation attributes. (Inline `style="…"` IS parsed for `<stop>` because that's where `create_svg` and friends put gradient colours.)
 
@@ -103,7 +103,7 @@ Only `translate` + uniform `scale` are honoured. `rotate`, `skewX/Y`, and `matri
 | Tool rejects: a `svg_paths` entry doesn't end in `.svg` | Fix the path.                                                                            |
 | Tool returns: per-slide `skipped_elements` non-empty | Tell the user which elements were dropped (e.g. "slide 1 lost 1 `<image>` element"). Suggest re-authoring if the dropped elements matter. |
 | PowerPoint opens the deck but a shape is invisible   | The source SVG explicitly used `fill="none"` for that shape — re-author with a solid fill, OR the SVG referenced a gradient whose `<defs>` block is in a different file (we degrade to noFill in that case — re-author or merge the gradients into the SVG itself). |
-| User wanted rasterised images for fidelity           | This tool does NOT do that — switch to `render_mermaid` (PNG) for raster output.         |
+| User wanted rasterised images for fidelity           | This tool does NOT do that, and there is no general-purpose rasterisation tool available. If the artwork is a Mermaid diagram, `render_mermaid` can produce PNG; for everything else, ask the user to export manually. |
 
 ---
 

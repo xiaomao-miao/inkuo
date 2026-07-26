@@ -11,6 +11,14 @@
 //! UI-visible labels are localized separately in the frontend (`toolUtils.ts`).
 //!
 //! Every prompt is embedded at compile time via `include_str!`.
+//!
+//! ## Coordination between `tools:` here and `agent.slim.md`
+//!
+//! The `tools:` array for the `"main"` profile is the **authoritative tool
+//! registry** for the orchestrator. It must stay in sync with the Tier 1
+//! table in `prompts/main/agent.slim.md §1.1` (the agent.slim.md table is
+//! the human-readable form sent to the model; this array is the runtime
+//! gate). When you add a tool to one, update the other in the same change.
 
 use crate::agent::profile::AgentProfile;
 use std::sync::OnceLock;

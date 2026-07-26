@@ -1,6 +1,7 @@
 use crate::agent::{
     create_agent_executor,
     get_agent_system_prompt, get_ask_system_prompt, get_plan_system_prompt, list_profiles,
+    resolve_profile,
     AgentError, AgentSession, Message, SharedToolRegistry, ToolCallFunction, ToolCallMessage,
 };
 use crate::agent::tools::ToolRegistry;
@@ -237,21 +238,26 @@ pub async fn ai_agent_stream(
         Mode::Agent
     });
 
-    let (tool_registry, mut system_prompt) = match parsed_mode {
+    let (tool_registry, mut system_prompt, profile_base_tools): (_, String, Option<Vec<String>>) = match parsed_mode {
         Mode::Plan => {
             let registry = get_read_only_tool_registry(&app).await;
             let prompt = get_plan_system_prompt();
-            (registry, prompt)
+            (registry, prompt, None)
         }
         Mode::Ask => {
             let registry = get_read_only_tool_registry(&app).await;
             let prompt = get_ask_system_prompt();
-            (registry, prompt)
+            (registry, prompt, None)
         }
         Mode::Agent => {
+            // Use the "main" profile so the LLM only sees the 14 slim-profile
+            // tools (Tier 1). This keeps the schema small and prevents the model
+            // from "guessing" Office tool names — those tools only live in
+            // sub-agent profiles and are unreachable without delegate_to.
+            let profile = resolve_profile("main", None)
+                .expect("BUG: 'main' profile must be registered in prompts.rs");
             let registry = get_full_tool_registry(&app).await;
-            let prompt = get_agent_system_prompt();
-            (registry, prompt)
+            (registry, profile.system_prompt.clone(), Some(profile.allowed_tools))
         }
     };
 
@@ -274,10 +280,14 @@ pub async fn ai_agent_stream(
     // to expose. If we returned `None` here whenever the user enabled
     // no toggles, an opt-out tool like `web_search` would always be
     // visible (which is the bug this guard used to have).
+    //
+    // For Agent mode, the base is the profile's 14 tools (Tier 1 only).
+    // For Ask/Plan, the base is the read-only registry (all read tools).
     let allowed_tools: Option<Vec<String>> = {
         let registry = tool_registry.read().await;
-        let base = registry.tool_names();
-        Some(feature_toggles::effective_tool_set(&base, &parsed_toggles))
+        let names = registry.tool_names();
+        let base: &[String] = profile_base_tools.as_deref().unwrap_or(&names);
+        Some(feature_toggles::effective_tool_set(base, &parsed_toggles))
     };
 
     let mut session = AgentSession::new(tool_registry).with_allowed_tools(allowed_tools);

@@ -60,6 +60,10 @@ const KB_STRICT_BLOCKED_TOOLS: &[&str] = &[
     "apply_hunk",
     "apply_all_hunks",
     "batch_write_files",
+    // NOTE: "shell_run" / "run_python" are intentionally NOT registered.
+    // The agent has no script-execution tool today. The string is kept
+    // below as a reserved name so that, if a future sandbox tool is
+    // added, KB-strict mode can block it by default without code changes.
     "shell_run",
     "delegate_to",
     "build_knowledge_base",
