@@ -25,8 +25,8 @@ pub async fn ai_stream_cancel(session_id: String) -> Result<(), StreamCommandErr
 /// Unlike `ai_agent_stream`, this command does **not** run the agent
 /// loop — no tool calls, no iterations, no baseline snapshots. It
 /// routes through `AIProviderAdapter::chat_stream`, which performs a
-/// single streamed chat completion (ask system prompt by default)
-/// and emits one `text` delta per SSE chunk. Frontends listen on
+/// single streamed chat completion (uses the edit prompt) and emits
+/// one `text` delta per SSE chunk. Frontends listen on
 /// `ai://stream` keyed by `session_id` and accumulate the deltas
 /// into their own UI state.
 ///
@@ -61,11 +61,9 @@ pub async fn ai_ask_stream(
 
     // `chat_stream` does not take a separate `original_text` slot
     // (the popover template already inlines the selection into the
-    // `instruction` string), so we pass an empty original_text. The
-    // `mode` defaults to "ask" for any value other than "plan".
+    // `instruction` string), so we pass an empty original_text.
     let result = match adapter
         .chat_stream(
-            "ask".to_string(),
             instruction,
             String::new(),
             |delta| {

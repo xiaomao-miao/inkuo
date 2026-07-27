@@ -23,12 +23,11 @@ use super::tools::{ToolCall, ToolResult, SharedToolRegistry};
 // lint. Same goes for `list_profiles` and `resolve_profile`.
 use crate::ai::{AIConfig, AIProvider};
 use crate::diff;
-use crate::streaming::{StreamPayload, FileDiffSummary, StreamDiffHunk, StreamDiffChange, OfficeFileModified, PlanResultData, PlanFileTouchItem, AskUserStreamPayload};
-use crate::agent::tools::ask_user_tools::{register_pending, cancel_pending};
+use crate::streaming::{StreamPayload, FileDiffSummary, StreamDiffHunk, StreamDiffChange, OfficeFileModified};
 
 use crate::agent::agent_helpers::{
-    chrono_from_timestamp, generate_plan_id_for_session, is_leap_year, parse_tool_call_message,
-    save_plan_to_workspace, DeltaFunction, DeltaResponse, DeltaToolCall,
+    parse_tool_call_message,
+    DeltaFunction, DeltaResponse, DeltaToolCall,
 };
 
 /// Check if a session has been cancelled
@@ -393,8 +392,9 @@ impl AgentExecutor {
                     arguments: parsed.arguments.clone(),
                 };
 
-                // Meta-tool short-circuit: `get_tool_help` and `delegate_to`
-                // are handled by the executor itself, not the registry.
+                // Meta-tool short-circuit: `get_tool_help`, `delegate_to`, and
+                // `update_todo` are handled by the executor itself, not the
+                // registry.
                 let mut result = match self
                     .try_handle_meta_tool(
                         &tool_call,
@@ -503,30 +503,18 @@ impl AgentExecutor {
                     new_content: result.new_content.clone(),
                     diff_summary,
                     office_file_modified,
-                    plan_result: None,
-                    ask_user: None,
                 });
 
                 // Add tool result to message history
                 session.add_message(Message::tool_result(&parsed.id, &result.output));
-            }
-
-            // `create_plan` is a terminal tool — once the plan has been
-            // saved and the `plan_result` event emitted, there is nothing
-            // more for the model to do.  Break out of the loop immediately
-            // instead of sending the tool results back for another round
-            // (which would cause the model to produce a redundant
-            // "I've created a plan for you..." text block).
-            if parsed_calls.iter().any(|p| p.name == "create_plan") {
-                return Ok(String::new());
             }
         }
 
         Err(AgentError::MaxIterationsReached(session.max_iterations))
     }
 
-    /// Intercept meta-tools (`get_tool_help`, `delegate_to`) so the loop
-    /// doesn't try to dispatch them via the registry.
+    /// Intercept meta-tools (`get_tool_help`, `delegate_to`, `update_todo`)
+    /// so the loop doesn't try to dispatch them via the registry.
     ///
     /// Returns `Some(ToolResult)` for intercepted calls (caller should
     /// use this directly); returns `None` for normal tools (caller should
@@ -688,187 +676,6 @@ impl AgentExecutor {
                         }
                     };
                     Some(ToolResult::success(&tool_call.id, summary))
-                }
-                "create_plan" => {
-                    // Plan mode: parse the plan JSON, write it to disk,
-                    // and emit a `plan_result` stream event so the frontend
-                    // can render the PlanCard immediately (without needing
-                    // to parse a ```plan fence from streaming text).
-                    let args = tool_call
-                        .arguments
-                        .clone();
-                    let content = args
-                        .get("content")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let plan_summary = args
-                        .get("plan_summary")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let risk = args
-                        .get("risk")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("low")
-                        .to_string();
-                    let risk_reason = args
-                        .get("risk_reason")
-                        .and_then(|v| v.as_str())
-                        .map(String::from);
-                    let files_to_touch_raw = args
-                        .get("files_to_touch")
-                        .and_then(|v| v.as_array())
-                        .cloned()
-                        .unwrap_or_default();
-                    let files_to_touch: Vec<PlanFileTouchItem> = files_to_touch_raw
-                        .iter()
-                        .filter_map(|v| {
-                            serde_json::from_value::<PlanFileTouchItem>(v.clone()).ok()
-                        })
-                        .collect();
-
-                    let workspace = session.tool_registry.read().await.get_workspace().cloned();
-
-                    // Build the Markdown content to write to disk.
-                    let file_list_md = if files_to_touch.is_empty() {
-                        String::new()
-                    } else {
-                        files_to_touch
-                            .iter()
-                            .map(|f| format!("- [{}] {}: {}", f.intent, f.path, f.reason))
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    };
-                    let risk_md = risk_reason
-                        .as_ref()
-                        .map(|r| format!("**Risk**: {}\n", r))
-                        .unwrap_or_default();
-                    let plan_md = format!(
-                        "# Plan\n\n{}\n\n## Summary\n{}\n\n## Files\n{}\n\n## Risk\n- Level: **{}**\n{}",
-                        content,
-                        plan_summary,
-                        file_list_md,
-                        risk,
-                        risk_md
-                    );
-
-                    // Generate plan id and save.
-                    let plan_id = generate_plan_id_for_session();
-                    let saved_path = match &workspace {
-                        Some(ws) => {
-                            match save_plan_to_workspace(ws, &plan_id, &plan_md).await {
-                                Ok(path) => path,
-                                Err(e) => {
-                                    tracing::error!("create_plan: failed to save plan: {}", e);
-                                    return Some(ToolResult::error(
-                                        &tool_call.id,
-                                        format!("Failed to save plan: {}", e),
-                                    ));
-                                }
-                            }
-                        }
-                        None => {
-                            return Some(ToolResult::error(
-                                &tool_call.id,
-                                "No workspace open. Cannot save plan file.".to_string(),
-                            ));
-                        }
-                    };
-
-                    // Emit the plan_result event so the frontend renders the PlanCard.
-                    let plan_data = PlanResultData {
-                        content,
-                        plan_summary,
-                        files_to_touch,
-                        risk,
-                        risk_reason,
-                        saved_path: saved_path.clone(),
-                    };
-                    on_event(StreamPayload::plan_result(
-                        session_id,
-                        message_id,
-                        &tool_call.id,
-                        plan_data,
-                    ));
-
-                    Some(ToolResult::success(
-                        &tool_call.id,
-                        format!("Plan saved to {}", saved_path),
-                    ))
-                }
-                "ask_user" => {
-                    let args = &tool_call.arguments;
-                    let question = args
-                        .get("question")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let options: Vec<String> = args
-                        .get("options")
-                        .and_then(|v| v.as_array())
-                        .map(|arr| {
-                            arr.iter()
-                                .filter_map(|v| v.as_str().map(String::from))
-                                .collect()
-                        })
-                        .unwrap_or_default();
-                    let allow_custom = args
-                        .get("allow_custom")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(true);
-
-                    // Register a oneshot channel so the frontend can wake us up.
-                    let rx = register_pending(&tool_call.id);
-
-                    // Emit the ask_user stream event so the frontend renders the card.
-                    on_event(StreamPayload::ask_user(
-                        session_id,
-                        message_id,
-                        &tool_call.id,
-                        AskUserStreamPayload {
-                            question: question.clone(),
-                            options: options.clone(),
-                            allow_custom,
-                        },
-                    ));
-
-                    // Suspend until the user responds or the session is cancelled.
-                    // Use `&mut rx` so the oneshot receiver is not consumed on
-                    // the first poll — the sleep branch may fire many times
-                    // before the user answers, and we need rx to remain valid.
-                    let mut rx = rx;
-                    let answer = loop {
-                        tokio::select! {
-                            biased;
-                            _ = tokio::time::sleep(tokio::time::Duration::from_millis(250)) => {
-                                if is_session_cancelled(session_id) {
-                                    clear_cancellation(session_id);
-                                    cancel_pending(&tool_call.id);
-                                    return Some(ToolResult::error(
-                                        &tool_call.id,
-                                        "ask_user cancelled by user",
-                                    ));
-                                }
-                            }
-                            result = &mut rx => {
-                                match result {
-                                    Ok(ans) => break ans,
-                                    Err(_) => {
-                                        return Some(ToolResult::error(
-                                            &tool_call.id,
-                                            "ask_user cancelled: sender dropped",
-                                        ));
-                                    }
-                                }
-                            }
-                        }
-                    };
-
-                    // Safety: make sure no stale entry is left around.
-                    cancel_pending(&tool_call.id);
-
-                    Some(ToolResult::success(&tool_call.id, answer))
                 }
                 _ => None,
             }
@@ -1133,8 +940,6 @@ impl AgentExecutor {
                                     new_content: None,
                                     diff_summary: None,
                                     office_file_modified: None,
-                                    plan_result: None,
-                                    ask_user: None,
                                 });
                             }
                             // Also handle reasoning_content (DeepSeek's thinking).
@@ -1161,10 +966,8 @@ impl AgentExecutor {
                                         original_content: None,
                                         new_content: None,
                                         diff_summary: None,
-                                        office_file_modified: None,
-                                        plan_result: None,
-                                        ask_user: None,
-                                    });
+office_file_modified: None,
+                                });
                                 }
                             }
 
@@ -1253,10 +1056,8 @@ impl AgentExecutor {
                                             original_content: None,
                                             new_content: None,
                                             diff_summary: None,
-                                            office_file_modified: None,
-                                            plan_result: None,
-                                            ask_user: None,
-                                        });
+office_file_modified: None,
+                                });
                                     } else if id_updated || name_updated || arg_delta.is_some() {
                                         // Subsequent chunk for the same tool call index.
                                         // Throttle the emission so we don't flood the IPC
@@ -1292,10 +1093,8 @@ impl AgentExecutor {
                                                 original_content: None,
                                                 new_content: None,
                                                 diff_summary: None,
-                                                office_file_modified: None,
-                                                plan_result: None,
-                                                ask_user: None,
-                                            });
+office_file_modified: None,
+                                });
                                         } else {
                                             // Mark that we owe a delta so the *next* chunk
                                             // (or the post-loop flush below) sends the
@@ -1365,10 +1164,8 @@ impl AgentExecutor {
                     original_content: None,
                     new_content: None,
                     diff_summary: None,
-                    office_file_modified: None,
-                    plan_result: None,
-                    ask_user: None,
-                });
+office_file_modified: None,
+                                });
             }
         }
         tool_args_has_pending.clear();

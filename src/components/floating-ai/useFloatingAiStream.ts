@@ -116,10 +116,8 @@ export function useFloatingAiStream({ request }: UseFloatingAiStreamArgs) {
           case 'tool_result':
           case 'subagent_start':
           case 'subagent_end':
-          case 'plan_result':
-          case 'ask_user':
             // Popovers don't surface reasoning, tool calls, or
-            // plan results — they're single-shot explanations.
+            // sub-agent blocks — they're single-shot explanations.
             // Ignore silently.
             break;
           default: {

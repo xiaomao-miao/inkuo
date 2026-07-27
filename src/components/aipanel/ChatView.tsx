@@ -7,7 +7,7 @@ import { SelectionQuickActions } from './SelectionQuickActions';
 import { useAIPanelStore } from '../../store';
 import { TIMING } from '../../constants/timing';
 import type {
-  ChatMessage, ChatSession, ChatMode, ActiveToolCall, CurrentDiff,
+  ChatMessage, ChatSession, ActiveToolCall, CurrentDiff,
 } from '../../store';
 import styles from './AIPanelChatView.module.css';
 
@@ -16,7 +16,6 @@ interface ChatViewProps {
   activeSession: ChatSession | undefined;
   isStreaming: boolean;
   pendingDiff: CurrentDiff | null;
-  mode: ChatMode;
   activeToolCalls: ActiveToolCall[];
   editingMessageId: string | null;
   editingContent: string;
@@ -25,21 +24,6 @@ interface ChatViewProps {
   onSaveEdit: () => void;
   onSetEditingContent: (v: string) => void;
   onSetInput: (v: string) => void;
-  /**
-   * Apply a structured plan. Receives the messageId so the action handler
-   * can locate the trailing plan item and tear down its persisted `.md`
-   * artifact before dispatching the agent-mode follow-up.
-   */
-  onApplyPlan?: (messageId: string, plan: import('../../store').PlanOutput) => void;
-  /** Adjust a structured plan: refill the input with a hint. Same messageId forwarding. */
-  onAdjustPlan?: (messageId: string, plan: import('../../store').PlanOutput) => void;
-  /**
-   * Persist the trailing plan OutputItem's raw text to
-   * `<workspace>/.inkuo/plans/<id>.md`. Implemented in
-   * `useChatSessionActions.handleSavePlan`. Receives the messageId so it
-   * can route the resulting `planFileId` back to the right plan item.
-   */
-  onSavePlan?: (messageId: string) => Promise<void>;
   footer?: React.ReactNode;
   /**
    * Dispatch a fully-formed prompt for the floating selection toolbar.
@@ -64,7 +48,6 @@ export const ChatView: React.FC<ChatViewProps> = ({
   activeSession,
   isStreaming,
   pendingDiff,
-  mode,
   activeToolCalls,
   editingMessageId,
   editingContent,
@@ -73,9 +56,6 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onSaveEdit,
   onSetEditingContent,
   onSetInput,
-  onApplyPlan,
-  onAdjustPlan,
-  onSavePlan,
   footer,
   onRunPrompt,
   selectionToolbarDisabled = false,
@@ -327,7 +307,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           tryExpandHistory();
         }}
       >
-        <ChatEmptyState mode={mode} onSetInput={onSetInput} />
+        <ChatEmptyState onSetInput={onSetInput} />
       </div>
     );
   }
@@ -366,9 +346,6 @@ export const ChatView: React.FC<ChatViewProps> = ({
             onSaveEdit={onSaveEdit}
             onSetEditingContent={onSetEditingContent}
             onSetInput={onSetInput}
-            onApplyPlan={onApplyPlan}
-            onAdjustPlan={onAdjustPlan}
-            onSavePlan={onSavePlan}
             // 整批加载历史消息时不做 stagger(会一连串"叮叮叮"),只有
             // 当前 session 的尾部新消息才按 30ms 一条滑入。streaming
             // 期间也跳过,避免每 chunk 都重启动画。

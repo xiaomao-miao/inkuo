@@ -79,9 +79,7 @@ export interface StreamEvent {
     | 'tool_result'
     | 'done'
     | 'subagent_start'
-    | 'subagent_end'
-    | 'plan_result'
-    | 'ask_user';
+    | 'subagent_end';
   content?: string;
   summary?: string;
   tool_call_id?: string;
@@ -99,8 +97,8 @@ export interface AgentConfig {
   workspacePath?: string;
 }
 
-/** Agent mode */
-export type AgentMode = 'ask' | 'plan' | 'agent';
+/** Agent mode — only "agent" remains after the ask/plan removal. */
+export type AgentMode = 'agent';
 
 /** Agent status */
 export type AgentStatus = 'idle' | 'thinking' | 'executing' | 'error';

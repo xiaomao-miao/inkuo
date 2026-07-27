@@ -81,39 +81,6 @@ pub struct StreamPayload {
     /// Office file that was modified (path -> format: "xlsx" or "docx")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub office_file_modified: Option<OfficeFileModified>,
-
-    /// Structured plan result (for create_plan tool result events).
-    /// Carries the parsed PlanOutput JSON + the workspace path of the saved file.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub plan_result: Option<PlanResultData>,
-
-    /// Structured ask_user payload (for ask_user tool events).
-    /// The frontend renders an interactive option-picker card.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ask_user: Option<AskUserStreamPayload>,
-}
-
-/// Parsed plan data emitted via the `plan_result` stream event.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PlanResultData {
-    /// The full plan content as written to disk (Markdown prose).
-    pub content: String,
-    /// The structured plan JSON fields.
-    pub plan_summary: String,
-    pub files_to_touch: Vec<PlanFileTouchItem>,
-    pub risk: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub risk_reason: Option<String>,
-    /// Absolute path to the saved plan file on disk.
-    pub saved_path: String,
-}
-
-/// A single entry in the plan's files_to_touch array.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PlanFileTouchItem {
-    pub path: String,
-    pub intent: String,
-    pub reason: String,
 }
 
 /// Metadata about an Office file that was modified
@@ -121,20 +88,6 @@ pub struct PlanFileTouchItem {
 pub struct OfficeFileModified {
     pub path: String,
     pub format: String,
-}
-
-/// Payload for the `ask_user` stream event.
-/// The frontend renders an interactive option-picker card; the agent loop
-/// suspends until the user picks an option or types a custom answer.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AskUserStreamPayload {
-    /// The question text shown to the user.
-    pub question: String,
-    /// All available options (the frontend paginates them).
-    pub options: Vec<String>,
-    /// Whether the user is allowed to type a free-form answer
-    /// in addition to choosing from the listed options.
-    pub allow_custom: bool,
 }
 
 impl StreamPayload {
@@ -300,46 +253,6 @@ impl StreamPayload {
             .with_event("subagent_end")
             .with(|p| {
                 p.content = Some(sub_message_id.to_string());
-                p.done = false;
-            })
-    }
-
-    /// Structured plan result event. Emitted after `create_plan` tool
-    /// succeeds so the frontend can render the PlanCard immediately without
-    /// having to wait for a text delta or parse a ```plan fence.
-    pub fn plan_result(
-        session_id: &str,
-        message_id: &str,
-        tool_call_id: &str,
-        result: PlanResultData,
-    ) -> Self {
-        Self::default()
-            .with_ids(session_id, message_id)
-            .with_event("plan_result")
-            .with(|p| {
-                p.tool_call_id = Some(tool_call_id.to_string());
-                let result_clone = result.clone();
-                p.plan_result = Some(result_clone);
-                p.content = Some(serde_json::to_string(&result).unwrap_or_default());
-                p.done = false;
-            })
-    }
-
-    /// Ask-user interaction event. Emitted when the agent calls `ask_user`
-    /// so the frontend can render an interactive choice card and suspend the
-    /// loop until the user picks an option or types a custom answer.
-    pub fn ask_user(
-        session_id: &str,
-        message_id: &str,
-        tool_call_id: &str,
-        payload: AskUserStreamPayload,
-    ) -> Self {
-        Self::default()
-            .with_ids(session_id, message_id)
-            .with_event("ask_user")
-            .with(|p| {
-                p.tool_call_id = Some(tool_call_id.to_string());
-                p.ask_user = Some(payload);
                 p.done = false;
             })
     }

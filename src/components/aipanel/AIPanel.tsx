@@ -39,14 +39,9 @@ export const AIPanel: React.FC = () => {
     handleSend,
     sendWithPrompt,
     handleStop,
-    cycleMode,
     handleStartEdit,
     handleCancelEdit,
     handleSaveEdit,
-    handleApplyPlan,
-    handleAdjustPlan,
-    handleSavePlan,
-    destroySessionPlanFiles,
   } = useChatComposer({
     activeSession,
     mode,
@@ -71,15 +66,7 @@ export const AIPanel: React.FC = () => {
     setHistoryOpen(false);
   };
 
-  /**
-   * Wrap the store's `deleteSession` with a plan-file sweep so the
-   * `.inkuo/plans/<id>.md` artifacts don't outlive the conversation
-   * they came from. The Rust `plan_delete` calls run in parallel and
-   * are best-effort — they're allowed to fail (e.g. workspace already
-   * closed) without blocking the UI removal.
-   */
   const handleDeleteSession = (sessionId: string) => {
-    void destroySessionPlanFiles(sessionId);
     deleteSession(sessionId);
   };
 
@@ -115,7 +102,6 @@ export const AIPanel: React.FC = () => {
               activeSession={activeSession}
               isStreaming={isStreaming}
               pendingDiff={pendingDiff}
-              mode={mode}
               activeToolCalls={activeToolCalls}
               editingMessageId={editingMessageId}
               editingContent={editingContent}
@@ -124,9 +110,6 @@ export const AIPanel: React.FC = () => {
               onSaveEdit={handleSaveEdit}
               onSetEditingContent={setEditingContent}
               onSetInput={setInput}
-              onApplyPlan={handleApplyPlan}
-              onAdjustPlan={handleAdjustPlan}
-              onSavePlan={handleSavePlan}
               onRunPrompt={sendWithPrompt}
               selectionToolbarDisabled={isStreaming}
             />
@@ -141,13 +124,11 @@ export const AIPanel: React.FC = () => {
       <ChatInput
         input={input}
         setInput={setInput}
-        mode={mode}
         isStreaming={isStreaming}
         sessionId={activeSessionId}
         featureToggles={activeSession?.featureToggles}
         onSend={handleSend}
         onStop={handleStop}
-        onCycleMode={cycleMode}
       />
     </aside>
   );

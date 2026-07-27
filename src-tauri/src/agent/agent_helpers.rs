@@ -2,16 +2,13 @@
 //!
 //! Pulled out of `agent_loop.rs` because none of these functions need
 //! the `AgentExecutor` state:
-//!   - `parse_tool_call_message` / `parse_sse_delta` / `parse_ollama_delta`
-//!     / `parse_response` are pure JSON parsers
-//!   - `generate_plan_id_for_session` / `chrono_from_timestamp` /
-//!     `is_leap_year` are pure data formatters
-//!   - `save_plan_to_workspace` is the only side-effecting helper —
-//!     takes a plan id + body, writes a markdown file under the
-//!     workspace `.plans/` dir.
+//!   - `parse_tool_call_message` is a pure JSON parser
+//!   - `DeltaResponse` / `DeltaToolCall` / `DeltaFunction` structs live
+//!     alongside the parsers that produce them.
 //!
-//! The `DeltaResponse` / `DeltaToolCall` / `DeltaFunction` structs live
-//! alongside the parsers that produce them.
+//! The `parse_tool_call_message` helper is the only side-effecting-free
+//! helper left; the rest used to be plan-related and have been removed
+//! along with plan mode.
 
 use serde_json::Value;
 
@@ -37,105 +34,6 @@ pub(crate) struct DeltaFunction {
     pub(crate) arguments: Option<String>,
 }
 
-// Re-export the tool-call message types from `agent_loop` so
-// `parse_tool_call_message` (which lives here) can construct them
-// without depending on a private field structure.
-
-/// Format: `plan-YYYYMMDD-HHmmss-<6-char-base36>` — stable across sessions.
-pub(crate) fn generate_plan_id_for_session() -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = now.as_secs();
-    let t = chrono_from_timestamp(secs);
-    let pad = |n: u64| format!("{:02}", n);
-    let stamp = format!(
-        "{}{}{}-{}-{}{}",
-        t.0, pad(t.1), pad(t.2),
-        pad(t.3), pad(t.4), pad(t.5)
-    );
-    let suffix = (secs % (36u64.pow(6)))
-        .to_string()
-        .chars()
-        .map(|c| {
-            let v = c.to_digit(10).unwrap_or(0);
-            "0123456789abcdefghijklmnopqrstuvwxyz"
-                .chars()
-                .nth(v as usize)
-                .unwrap_or('0')
-        })
-        .collect::<String>();
-    format!("plan-{}-{}", stamp, suffix)
-}
-
-pub(crate) fn chrono_from_timestamp(secs: u64) -> (u64, u64, u64, u64, u64, u64) {
-    // (year, month, day, hour, min, sec) using simple calendar math
-    let mut rem = secs;
-    let sec = rem % 60; rem /= 60;
-    let min = rem % 60; rem /= 60;
-    let hour = rem % 24; rem /= 24;
-    // Days since epoch; approximate year/month
-    let mut year = 1970u64;
-    let mut year_days = 365;
-    while rem >= year_days {
-        rem -= year_days;
-        year += 1;
-        year_days = if is_leap_year(year) { 366 } else { 365 };
-    }
-    let mut month = 1u64;
-    let month_days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-    while rem >= month_days[(month - 1) as usize] {
-        rem -= month_days[(month - 1) as usize];
-        if month == 2 && is_leap_year(year) && rem > 0 {
-            rem -= 1;
-        }
-        month += 1;
-    }
-    let day = rem + 1;
-    (year, month, day, hour, min, sec)
-}
-
-pub(crate) fn is_leap_year(year: u64) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
-}
-
-const PLANS_DIR: &str = ".inkuo";
-const PLANS_SUBDIR: &str = "plans";
-
-/// Write plan markdown to `<workspace>/.inkuo/plans/<plan_id>.md`.
-pub(crate) async fn save_plan_to_workspace(
-    workspace: &str,
-    plan_id: &str,
-    content: &str,
-) -> Result<String, String> {
-    let ws_dir = std::path::Path::new(workspace);
-    if !ws_dir.is_dir() {
-        return Err(format!("Workspace not found: {}", workspace));
-    }
-    let plans_dir = ws_dir.join(PLANS_DIR).join(PLANS_SUBDIR);
-    tokio::fs::create_dir_all(&plans_dir)
-        .await
-        .map_err(|e| format!("create plans dir: {}", e))?;
-
-    let safe_id: String = plan_id
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    let safe_id = if safe_id.is_empty() { "plan" } else { &safe_id };
-    let path = plans_dir.join(format!("{}.md", safe_id));
-
-    tokio::fs::write(&path, content)
-        .await
-        .map_err(|e| format!("write plan file: {}", e))?;
-
-    Ok(path.to_string_lossy().to_string())
-}
 pub(crate) fn parse_tool_call_message(tc: &serde_json::Value) -> Result<ToolCallMessage, String> {
     let id = tc
         .get("id")

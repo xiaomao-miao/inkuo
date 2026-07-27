@@ -56,8 +56,6 @@ pub enum AppError {
     TargetExists,
     #[error("Invalid workspace path: {0}")]
     InvalidWorkspacePath(String),
-    #[error("Workspace path not found or not a directory: {0}")]
-    PlanWorkspaceMissing(String),
 
     // ── Backups ───────────────────────────────────────────────────────────
     #[error("Failed to create backup directory: {0}")]
@@ -104,14 +102,6 @@ pub enum AppError {
     SnapshotWriteFailed(String),
     #[error("Snapshot read failed: {0}")]
     SnapshotReadFailed(String),
-
-    // ── Plans ─────────────────────────────────────────────────────────────
-    #[error("Failed to save plan file: {0}")]
-    PlanSaveFailed(String),
-    #[error("Failed to read plan file: {0}")]
-    PlanReadFailed(String),
-    #[error("Failed to delete plan file: {0}")]
-    PlanDeleteFailed(String),
 }
 
 // ── Conversions from existing sub-module error enums ────────────────────────

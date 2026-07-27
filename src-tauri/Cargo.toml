@@ -65,6 +65,22 @@ urlencoding = "2"
 # download on first run. Re-exports a small facade crate; the
 # `render` + `raster` features pull in layout + SVG + PNG pipelines.
 merman = { version = "0.7", features = ["render", "raster"] }
+# SVG → PNG rasterization (document_converter's svg_to_png tool).
+# `resvg` is the same engine merman uses under the hood for Mermaid
+# rasterization; declaring it directly here keeps `svg_to_png`
+# independent of the Mermaid rendering pipeline.
+resvg = "0.47"
+# Pure-Rust DOCX/XLSX/PPTX → PDF (document_converter's word_to_pdf tool).
+# Powered by Typst under the hood; no LibreOffice / Chromium / Docker.
+office2pdf = "0.6"
+# The .docx writer/parser we delegate md_to_word and word_to_pdf to.
+# `office2pdf` already depends on docx-rs internally (same 0.4.22 line),
+# so we re-use that single resolved version instead of pinning a second
+# one — that's why this is `default-features = false` and we hand-roll
+# the few features we need (paragraphs, runs, tables). docx-rs writes
+# output that docx-rs can read, which is exactly the guarantee we need
+# to round-trip md_to_word → word_to_pdf without tripping the parser.
+docx-rs = { version = "0.4.22", default-features = false }
 
 # Lean release binary: smaller installer, faster cold start.
 # - lto = "thin" gives most of the size/perf win of fat LTO with a much shorter

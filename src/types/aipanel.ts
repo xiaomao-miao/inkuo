@@ -1,16 +1,14 @@
 // AI panel domain types — ChatMessage / ChatSession / ChatMode and the
-// structured-output pieces (OutputItem, PlanOutput, Todo, etc.) used
-// by `AIPanel.tsx` and its sub-components.
+// structured-output pieces (OutputItem, Todo, etc.) used by `AIPanel.tsx`
+// and its sub-components.
 
 import type { DiffHunk } from './diff';
 import type { StreamDiffSummary } from './diff';
 import type { MessageRole, ToolCallStatus } from './agent';
 import type { SearchResult } from './knowledge';
 
-/** Chat mode. The legacy dedicated "knowledge" mode is gone —
- * knowledge-base behavior is now layered on via per-message feature
- * toggles (see `FeatureToggle` / `featureTogglesSlice`). */
-export type ChatMode = 'ask' | 'plan' | 'agent';
+/** Chat mode. Only "agent" remains after the ask/plan removal. */
+export type ChatMode = 'agent';
 
 /**
  * Per-message feature toggles. Each toggle can be flipped on independently
@@ -55,23 +53,6 @@ export interface MessageToolResult {
   isError: boolean;
   duration?: number;
   diffSummary?: StreamDiffSummary;
-}
-
-export type PlanFileIntent = 'read' | 'create' | 'modify' | 'delete' | 'rename';
-export type PlanRisk = 'low' | 'medium' | 'high';
-
-export interface PlanFileTouch {
-  path: string;
-  intent: PlanFileIntent;
-  reason: string;
-}
-
-export interface PlanOutput {
-  plan_summary: string;
-  files_to_touch: PlanFileTouch[];
-  risk: PlanRisk;
-  risk_reason?: string;
-  needs_confirmation: boolean;
 }
 
 /**
@@ -167,48 +148,24 @@ export type OutputItem =
     }
   | { type: 'tool_error'; toolCallId: string; error: string }
   | {
-      type: 'ask_user';
-      toolCallId: string;
-      /** The question the AI wants to ask the user. */
-      question: string;
-      /** Suggested options (can be empty). */
-      options: string[];
-      /** Page index for "换一批" (load next batch of options). */
-      optionPage: number;
-      /** Total pages of options available (for showing/hiding the refresh button). */
-      totalPages: number;
-      /** `true` while waiting for the user's answer. */
-      isPending: boolean;
-      /** Whether the user can type a free-form custom answer. */
-      allowCustom: boolean;
-      /** The chosen answer once submitted. */
-      answer?: string;
-    }
-  | {
-      type: 'plan';
+      type: 'subagent_block';
       /**
-       * Model's raw output text (Markdown prose + ```plan JSON block).
-       * Used for fallback display when plan parsing fails.
+       * Sub-message id used to thread the nested conversation block into
+       * the parent's message list. Each `subagent_start` event mints one.
        */
-      rawText: string;
-      /**
-       * Parsed structured plan data. `null` while still collecting
-       * or if JSON parsing failed.
-       */
-      plan: PlanOutput | null;
-      /** Set when JSON.parse threw after the ```plan block was closed. */
-      parseError?: string;
-      /** True while the model is still streaming the plan output. */
-      isStreaming?: boolean;
-      /**
-       * Plan id (filename stem) under `<workspace>/.inkuo/plans/<planFileId>.md`
-       * once the plan has been persisted. `undefined` means not yet saved.
-       * On apply / cancel / session-close the frontend asks Rust to delete
-       * this file if present.
-       */
-      planFileId?: string;
-      /** Absolute path to the persisted plan md on disk, if known. */
-      planFilePath?: string;
+      subMessageId: string;
+      /** Display label for the block header (e.g. "Word 文档专家"). */
+      label: string;
+      /** Sub-agent's expert name (e.g. "office_word_expert"). */
+      expert: string;
+      /** Task text passed to the sub-agent. Shown when the block is collapsed. */
+      task: string;
+      /** Cached rendered body for the sub-agent — keeps the block cheap to open. */
+      children: import('./agent').AgentMessage[];
+      /** True while the sub-agent is still streaming. */
+      isStreaming: boolean;
+      /** True once the block has been collapsed (rendered as a one-line summary). */
+      collapsed: boolean;
     };
 
 export interface CurrentDiff {

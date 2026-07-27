@@ -50,10 +50,6 @@ export const TOOL_FIELD_LABELS: Record<string, ToolField[]> = {
     { key: 'action', label: '操作' },
     { key: 'items', label: '任务' },
   ],
-  ask_user: [
-    { key: 'question', label: '问题' },
-    { key: 'options', label: '选项' },
-  ],
   delegate_to: [
     { key: 'expert', label: '专家' },
     { key: 'task', label: '任务' },

@@ -158,7 +158,7 @@ export const useSubagentActions = () =>
     })),
   );
 
-// ─── Output item + plan slice ─────────────────────────────────────────────────
+// ─── Output item slice ───────────────────────────────────────────────────────
 
 export const useOutputActions = () =>
   useAIPanelStore(
@@ -166,12 +166,6 @@ export const useOutputActions = () =>
       updateMessageOutput: s.updateMessageOutput,
       addOutputToMessage: s.addOutputToMessage,
       patchOutputItem: s.patchOutputItem,
-      convertTrailingTextToPlanItem: s.convertTrailingTextToPlanItem,
-      appendPlanDelta: s.appendPlanDelta,
-      finishPlanItem: s.finishPlanItem,
-      setPlanItemFile: s.setPlanItemFile,
-      clearPlanItemFile: s.clearPlanItemFile,
-      addPlanItem: s.addPlanItem,
     })),
   );
 

@@ -5,13 +5,8 @@
 //! Each AI turn composes its system prompt from three independent layers
 //! (in order):
 //!
-//!   1. **Mode base prompt** — `prompts/ask.md` / `plan.md` / `agent.*.md`.
-//!      These are static, mode-bound documents. They contain a sentence
-//!      like "You operate in Ask Mode" but that's the *label* of the
-//!      mode, not the *current* mode. If the user switches modes mid-
-//!      session, the prompt changes wholesale — but the LLM is still
-//!      carrying the previous turn's "you can write files" framing in
-//!      its context, and the new prompt may take a turn to overwrite it.
+//!   1. **Mode base prompt** — `prompts/main/agent.slim.md`. Static document
+//!      describing Agent-mode behavior.
 //!
 //!   2. **Feature toggles** — `feature_toggles::enabled_fragment`.
 //!      Per-toggle availability inventory (web_search on/off, kb_strict
@@ -37,22 +32,18 @@
 //! when a new mode is added there, add a row here too.
 use serde::{Deserialize, Serialize};
 
-/// The three first-class modes. The string values match the
+/// First-class mode for AI turns. The string values match the
 /// `mode` field the frontend sends in `ai_agent_stream`. A new
 /// mode must be added to `Mode::ALL` below so the LLM can see it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Mode {
-    Ask,
-    Plan,
     Agent,
 }
 
 impl Mode {
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
-            "ask" => Some(Self::Ask),
-            "plan" => Some(Self::Plan),
             "agent" => Some(Self::Agent),
             _ => None,
         }
@@ -60,8 +51,6 @@ impl Mode {
 
     pub fn label_zh(self) -> &'static str {
         match self {
-            Mode::Ask => "Ask 模式 (问答)",
-            Mode::Plan => "Plan 模式 (规划)",
             Mode::Agent => "Agent 模式 (执行)",
         }
     }
@@ -70,17 +59,6 @@ impl Mode {
     /// mode. Written for the model, not for the user.
     pub fn tool_tier(self) -> &'static str {
         match self {
-            Mode::Ask => {
-                "Read-only: only retrieval tools (read_file, list_dir, glob, grep, \
-                 read_office_file, database_search, etc.) are available. You cannot \
-                 write, edit, delete, or execute side effects."
-            }
-            Mode::Plan => {
-                "Read-only, same tool set as Ask. Use the read tools to understand \
-                 the workspace, then produce a structured plan via the `create_plan` \
-                 tool. You will not execute the plan; the user runs it manually in \
-                 Agent mode."
-            }
             Mode::Agent => {
                 "Full access: read + write tools (write_file, edit_file, create_*, \
                  delegate_to, etc.) are all available. Web search, when \
@@ -99,8 +77,7 @@ impl Mode {
 ///
 /// Always non-empty: even when both lists are empty, the LLM must see
 /// *some* declaration of the current mode — otherwise it falls back to
-/// guessing from earlier turns, and the user-visible bug is "I switched
-/// to Ask but the AI still talks like it can write files".
+/// guessing from earlier turns.
 pub fn runtime_state_fragment(mode: Mode, enabled_toggles: &[super::feature_toggles::ToggleId]) -> String {
     let mut lines: Vec<String> = Vec::new();
 
@@ -160,10 +137,5 @@ pub fn runtime_state_fragment(mode: Mode, enabled_toggles: &[super::feature_togg
         if available_writes { "yes" } else { "no" },
     ));
 
-    lines.push(format!(
-        "- **Read tools available**: YES in every mode (Ask / Plan / Agent)."
-    ));
-
     lines.join("\n")
 }
-

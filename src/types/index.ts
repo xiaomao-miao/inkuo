@@ -26,10 +26,8 @@ export type {
 export type {
   OfficeFileModifiedPayload,
   StreamPayload,
-  AskUserPayload,
   SubagentStartPayload,
   StreamEventType,
-  PlanResultData,
 } from './stream';
 
 export type {
@@ -69,10 +67,6 @@ export type {
   FeatureToggleMap,
   MessageToolCall,
   MessageToolResult,
-  PlanFileIntent,
-  PlanRisk,
-  PlanFileTouch,
-  PlanOutput,
   TodoStatus,
   TodoItem,
   TodoSnapshot,

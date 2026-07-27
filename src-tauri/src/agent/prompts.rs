@@ -146,6 +146,23 @@ pub const PROFILES: &[ProfileDescriptor] = &[
         max_iterations: 50,
     },
     ProfileDescriptor {
+        name: "document_converter",
+        label: "Document Format Converter",
+        system_prompt: include_str!("../../prompts/subagents/document_converter.md"),
+        // Pure-Rust file-to-file converters. Lives outside the main
+        // agent's Tier 1 so the schema stays small; main agent must
+        // `delegate_to` for any of these. Read-only inspection tools
+        // are kept so the converter can locate candidate files.
+        tools: &[
+            "read_file",
+            "list_dir", "glob", "grep",
+            "svg_to_png",
+            "md_to_word",
+            "word_to_pdf",
+        ],
+        max_iterations: 30,
+    },
+    ProfileDescriptor {
         name: "word_image_expert",
         label: "Word Image Expert",
         system_prompt: include_str!("../../prompts/subagents/word_image_expert.md"),
@@ -176,6 +193,7 @@ pub const TOOL_SPECS: &[(&str, &str)] = &[
     ("markdown", include_str!("../../prompts/tool_specs/markdown.md")),
     ("media",    include_str!("../../prompts/tool_specs/media.md")),
     ("svg",      include_str!("../../prompts/tool_specs/svg.md")),
+    ("document_converter", include_str!("../../prompts/tool_specs/document_converter.md")),
 ];
 
 /// Static description of a profile (compile-time constants).
@@ -257,20 +275,8 @@ pub fn resolve_profile(name: &str, override_max_iterations: Option<usize>) -> Op
 // Kept as functions (not consts) for symmetry and future runtime override.
 // ---------------------------------------------------------------------------
 
-pub fn get_ask_system_prompt() -> String {
-    include_str!("../../prompts/ask.md").to_string()
-}
-
-pub fn get_plan_system_prompt() -> String {
-    include_str!("../../prompts/plan.md").to_string()
-}
-
 pub fn get_edit_system_prompt() -> String {
     include_str!("../../prompts/edit.md").to_string()
-}
-
-pub fn get_read_only_system_prompt() -> String {
-    get_ask_system_prompt()
 }
 
 /// Main Agent Mode prompt. Slim by default. Kept as a function so future

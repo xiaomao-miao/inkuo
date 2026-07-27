@@ -53,21 +53,9 @@ export async function handleStreamDone({
   }
 
   if (effectiveContent) {
-    // Plan messages have their OutputItem created via the `plan_result`
-    // stream event (from the `create_plan` tool). Here we just finalize
-    // the session state without touching the message.
-    const messageHasPlan = useAIPanelStore.getState().sessions
-      .find((s) => s.id === session_id)
-      ?.messages.find((m) => m.id === message_id)
-      ?.outputItems.some((it) => it.type === 'plan');
-    if (messageHasPlan) {
-      // Plan item already rendered via plan_result; just stop streaming.
-      useAIPanelStore.getState().updateSession(session_id, (session) => ({ ...session, isStreaming: false }));
-    } else {
-      useAIPanelStore.setState((state) =>
-        finalizeStreamingMessage(state, session_id, message_id, effectiveContent)
-      );
-    }
+    useAIPanelStore.setState((state) =>
+      finalizeStreamingMessage(state, session_id, message_id, effectiveContent)
+    );
   } else {
     useAIPanelStore.getState().updateSession(session_id, (session) => ({ ...session, isStreaming: false }));
   }
@@ -158,14 +146,6 @@ export function handleStreamError({
   flushAllPending();
   delete streamingContentRef.current[message_id];
 
-  // If a plan item exists, mark it as no longer streaming.
-  const messageHasPlan = useAIPanelStore.getState().sessions
-    .find((s) => s.id === session_id)
-    ?.messages.find((m) => m.id === message_id)
-    ?.outputItems.some((it) => it.type === 'plan');
-  if (messageHasPlan) {
-    useAIPanelStore.getState().finishPlanItem(session_id, message_id);
-  }
   useAIPanelStore.setState((state) =>
     applyStreamingError(state, session_id, message_id, error ?? '发生错误')
   );

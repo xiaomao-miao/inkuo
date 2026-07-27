@@ -1,0 +1,2 @@
+#!/bin/sh
+echo 'Pandoc sidecar stub — run ./scripts/fetch-pandoc.sh to install the real binary'

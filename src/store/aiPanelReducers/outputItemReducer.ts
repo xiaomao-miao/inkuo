@@ -2,8 +2,6 @@
 // rendering. This module owns:
 //
 //   - Patch / append / find logic against `message.outputItems`.
-//   - Streaming-plan conversion (text item → plan item) and delta
-//     ingestion for the plan stream.
 //   - Lazy-load window management: collapsing the visible content
 //     into `truncatedPrefix` and splicing it back when the user
 //     expands a message.
@@ -11,8 +9,8 @@
 //     `ChatView.tsx`.
 //
 // Split out from the original monolithic `aiPanelReducers.ts` so that
-// the streaming, plan-handling, and history-collapse logic are easy to
-// reason about and unit-test independently.
+// the streaming and history-collapse logic are easy to reason about
+// and unit-test independently.
 
 import type {
   ChatMessage,
@@ -20,7 +18,6 @@ import type {
   CurrentDiff,
   OutputItem,
 } from '../../types';
-import { parseStreamingPlan } from '../../utils/planStream';
 import { updateMessages } from './sessionReducer';
 
 export type OutputItemMatchKey = { toolCallId: string } | { contentContains: string };
@@ -88,80 +85,6 @@ export function patchMessageOutputState(
   return updateMessages(session, messageId, (message) =>
     patchMessageOutputItems(message, matchKey, patch)
   );
-}
-
-/**
- * Append `delta` to the trailing plan OutputItem of `messageId` and
- * recompute the parsed `plan` / `parseError` fields.
- *
- * If the message has no trailing plan item yet, this is a no-op — the
- * caller is expected to first create the plan item via `addMessageOutputItem`
- * (see `useTextStreaming` which does both: detect ```plan in accumulated
- * text → create plan item → route subsequent deltas here).
- *
- * Returns the session unchanged when no plan item exists.
- */
-export function appendPlanDeltaToMessage(
-  session: ChatSession,
-  messageId: string,
-  delta: string,
-): ChatSession {
-  if (!delta) return session;
-  return updateMessages(session, messageId, (message) => {
-    const items = message.outputItems;
-    let lastIdx = items.length - 1;
-    while (lastIdx >= 0 && items[lastIdx].type !== 'plan') {
-      lastIdx -= 1;
-    }
-    if (lastIdx < 0) return message;
-    const last = items[lastIdx];
-    if (last.type !== 'plan') return message;
-
-    const rawText = last.rawText + delta;
-    const parsed = parseStreamingPlan(rawText);
-    const nextItem: OutputItem = {
-      type: 'plan',
-      rawText,
-      plan: parsed.plan,
-      ...(parsed.parseError ? { parseError: parsed.parseError } : { parseError: undefined }),
-      isStreaming: last.isStreaming ?? true,
-    };
-    const nextItems = items.slice();
-    nextItems[lastIdx] = nextItem;
-    return { ...message, outputItems: nextItems };
-  });
-}
-
-/**
- * Convert the trailing text OutputItem (if any) of `messageId` into a plan
- * OutputItem seeded with `rawText`. Used when the streaming text buffer
- * first crosses the ```plan threshold — we keep the already-streamed
- * Markdown inside `rawText` so the PlanCard can render the details.
- *
- * If there is no trailing text item, this is a no-op (the caller should
- * still add a fresh plan item).
- */
-export function convertTrailingTextToPlanItem(
-  session: ChatSession,
-  messageId: string,
-  rawText: string,
-): ChatSession {
-  return updateMessages(session, messageId, (message) => {
-    const items = message.outputItems;
-    const lastIdx = items.length - 1;
-    if (lastIdx < 0) return message;
-    const last = items[lastIdx];
-    if (last.type !== 'text') return message;
-    const planItem: OutputItem = {
-      type: 'plan',
-      rawText: last.content + rawText,
-      plan: null,
-      isStreaming: true,
-    };
-    const nextItems = items.slice();
-    nextItems[lastIdx] = planItem;
-    return { ...message, outputItems: nextItems };
-  });
 }
 
 export function updatePendingDiffHunks(
@@ -338,6 +261,7 @@ export function hardCollapseSessionHistory(session: ChatSession): ChatSession {
   if (!touched) return session;
   return { ...session, messages: next };
 }
+
 /**
  * Drop the trailing compact-tool `OutputItem` if and only if it has not
  * yet received a result. Used by the stream dispatcher right before it
@@ -347,11 +271,11 @@ export function hardCollapseSessionHistory(session: ChatSession): ChatSession {
  * it.
  *
  * The predicate is intentionally tight: a compact tool only "counts" when
- * the assistant never produced any text, reasoning, plan, ask_user, or a
- * different (non-compact) tool call between the previous compact tool and
- * the trailing one. If anything user-visible happened in between we leave
- * the previous tool in place — the user already saw something between
- * them, so the previous tool had time to "land" and shouldn't be removed.
+ * the assistant never produced any text, reasoning, or a different
+ * (non-compact) tool call between the previous compact tool and the
+ * trailing one. If anything user-visible happened in between we leave the
+ * previous tool in place — the user already saw something between them,
+ * so the previous tool had time to "land" and shouldn't be removed.
  *
  * The "tool has not yet produced a result" check (`result` / `status`
  * undefined) means a compact tool that finished but had no visible
@@ -382,8 +306,6 @@ function isVisibleContentItem(item: OutputItem): boolean {
   return (
     item.type === 'text' ||
     item.type === 'reasoning' ||
-    item.type === 'plan' ||
-    item.type === 'ask_user' ||
     item.type === 'tool_error' ||
     (item.type === 'tool_call_start' && !isCompactToolCallStart(item)) ||
     item.type === 'tool_result'

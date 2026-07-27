@@ -36,8 +36,6 @@ export {
   setMessageDiffState,
   setMessageOutputItems,
   patchMessageOutputState,
-  appendPlanDeltaToMessage,
-  convertTrailingTextToPlanItem,
   updatePendingDiffHunks,
   spliceMessagePrefix,
   collapseMessageHead,

@@ -17,7 +17,6 @@ describe('fieldLabels', () => {
       'move_file',
       'database_search',
       'update_todo',
-      'ask_user',
       'delegate_to',
       'write_file',
       'edit_file',

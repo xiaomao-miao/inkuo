@@ -5,25 +5,17 @@
 // row UI (`ComposerToggleRows`) and the collapsed-mode hint strip
 // (`ActiveToggleStrip`) both read from this list so they stay in
 // sync. To add a new toggle, drop in a new entry.
-//
-// `disabledIn` / `disabledReason` carve out modes where the toggle is
-// unusable (e.g. plan mode doesn't return grounded citations, so
-// `kb_strict` is dimmed). The UI explains the rationale via the
-// tooltip on the dimmed row.
 
 import React from 'react';
 import { Database, Globe } from 'lucide-react';
 
-import type { ChatMode, FeatureToggleId } from '../../../types';
+import type { FeatureToggleId } from '../../../types';
 
 export interface ToggleSpec {
   id: FeatureToggleId;
   label: string;
   hint: string;
   icon: React.ReactNode;
-  /** Modes in which this toggle is unusable. */
-  disabledIn?: ChatMode[];
-  disabledReason?: string;
 }
 
 /**
@@ -39,8 +31,6 @@ export const TOGGLES: ReadonlyArray<ToggleSpec> = [
     label: '严格 KB 引用',
     hint: '回答必须基于知识库检索结果，末尾列出参考来源。',
     icon: <Database size={13} />,
-    disabledIn: ['plan'],
-    disabledReason: 'Plan 模式不返回引用型回答。',
   },
   {
     id: 'web_search',
@@ -57,16 +47,10 @@ export const TOGGLES: ReadonlyArray<ToggleSpec> = [
  * to dim its badges too.
  */
 export function isToggleDisabled(
-  spec: ToggleSpec,
-  args: { sessionId: string | null; disabled?: boolean; mode: ChatMode },
+  args: { sessionId: string | null; disabled?: boolean },
 ): boolean {
-  const { sessionId, disabled, mode } = args;
-  return (
-    !!disabled ||
-    sessionId === null ||
-    sessionId === '' ||
-    (spec.disabledIn?.includes(mode) ?? false)
-  );
+  const { sessionId, disabled } = args;
+  return !!disabled || sessionId === null || sessionId === '';
 }
 
 /**
@@ -76,5 +60,5 @@ export function isToggleDisabled(
  * toggle does.
  */
 export function toggleTooltip(spec: ToggleSpec, disabled: boolean): string {
-  return disabled ? spec.disabledReason ?? '当前模式不可用' : spec.hint;
+  return disabled ? '当前模式不可用' : spec.hint;
 }

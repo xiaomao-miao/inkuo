@@ -1,6 +1,6 @@
 use crate::agent::{
     create_agent_executor,
-    get_agent_system_prompt, get_ask_system_prompt, get_plan_system_prompt, list_profiles,
+    list_profiles,
     resolve_profile,
     AgentError, AgentSession, Message, SharedToolRegistry, ToolCallFunction, ToolCallMessage,
 };
@@ -31,10 +31,8 @@ pub enum AgentCommandError {
     UnknownFeatureToggle(String),
 }
 
-/// Shared tool registries for agent - separate for full and read-only modes
+/// Shared tool registry for agent mode.
 pub static FULL_TOOL_REGISTRY: std::sync::OnceLock<SharedToolRegistry> =
-    std::sync::OnceLock::new();
-pub static READ_ONLY_TOOL_REGISTRY: std::sync::OnceLock<SharedToolRegistry> =
     std::sync::OnceLock::new();
 
 async fn get_full_tool_registry(app: &AppHandle) -> SharedToolRegistry {
@@ -65,44 +63,11 @@ async fn get_full_tool_registry(app: &AppHandle) -> SharedToolRegistry {
     registry
 }
 
-async fn get_read_only_tool_registry(app: &AppHandle) -> SharedToolRegistry {
-    let registry = READ_ONLY_TOOL_REGISTRY
-        .get_or_init(|| Arc::new(RwLock::new(ToolRegistry::new_read_only())))
-        .clone();
-
-    // Same lazy-init pattern as `get_full_tool_registry`. Without
-    // this, `web_search` (which is registered as a placeholder in
-    // `ToolRegistry::new_read_only`) would never receive an
-    // AppHandle and would error out with "AppHandle missing" on
-    // every Plan / Ask mode call. The WebSearchTool now also lazy-
-    // fetches from the process-global registry as a fallback, but
-    // wiring the AppHandle eagerly here keeps the cold path off the
-    // global registry for the common case.
-    {
-        let reg = registry.read().await;
-        if !reg.has_tool("database_search") {
-            drop(reg);
-            let mut reg = registry.write().await;
-            if !reg.has_tool("database_search") {
-                reg.set_app_handle(app.clone());
-            }
-        }
-    }
-
-    registry
-}
-
-/// Update the workspace path for both tool registries. `set_workspace` is
-/// synchronous, so holding the write lock between the two updates does not
-/// yield — the two registries are therefore always updated back-to-back
-/// without an interleaving point, which is the property we want (so the
-/// full and read-only registries never disagree about the active workspace).
+/// Update the workspace path for the tool registry. `set_workspace` is
+/// synchronous, so holding the write lock across the update does not
+/// yield.
 async fn update_registry_workspace(workspace_path: Option<String>) {
     if let Some(registry) = FULL_TOOL_REGISTRY.get() {
-        let mut registry = registry.write().await;
-        registry.set_workspace(workspace_path.clone());
-    }
-    if let Some(registry) = READ_ONLY_TOOL_REGISTRY.get() {
         let mut registry = registry.write().await;
         registry.set_workspace(workspace_path);
     }
@@ -239,21 +204,19 @@ pub async fn ai_agent_stream(
     });
 
     let (tool_registry, mut system_prompt, profile_base_tools): (_, String, Option<Vec<String>>) = match parsed_mode {
-        Mode::Plan => {
-            let registry = get_read_only_tool_registry(&app).await;
-            let prompt = get_plan_system_prompt();
-            (registry, prompt, None)
-        }
-        Mode::Ask => {
-            let registry = get_read_only_tool_registry(&app).await;
-            let prompt = get_ask_system_prompt();
-            (registry, prompt, None)
-        }
         Mode::Agent => {
             // Use the "main" profile so the LLM only sees the 14 slim-profile
             // tools (Tier 1). This keeps the schema small and prevents the model
             // from "guessing" Office tool names — those tools only live in
             // sub-agent profiles and are unreachable without delegate_to.
+            let profile = resolve_profile("main", None)
+                .expect("BUG: 'main' profile must be registered in prompts.rs");
+            let registry = get_full_tool_registry(&app).await;
+            (registry, profile.system_prompt.clone(), Some(profile.allowed_tools))
+        }
+        // Unknown modes fall through to Agent.
+        _ => {
+            tracing::warn!("Unknown mode '{:?}', defaulting to agent", parsed_mode);
             let profile = resolve_profile("main", None)
                 .expect("BUG: 'main' profile must be registered in prompts.rs");
             let registry = get_full_tool_registry(&app).await;
@@ -281,8 +244,7 @@ pub async fn ai_agent_stream(
     // no toggles, an opt-out tool like `web_search` would always be
     // visible (which is the bug this guard used to have).
     //
-    // For Agent mode, the base is the profile's 14 tools (Tier 1 only).
-    // For Ask/Plan, the base is the read-only registry (all read tools).
+    // The base is the profile's 14 tools (Tier 1 only).
     let allowed_tools: Option<Vec<String>> = {
         let registry = tool_registry.read().await;
         let names = registry.tool_names();
@@ -467,16 +429,4 @@ pub async fn get_available_tools(app: AppHandle) -> Result<Vec<serde_json::Value
         .map(|tool| serde_json::to_value(tool).map_err(|error| AgentCommandError::ToolDefinitionsSerialization(error.to_string())))
         .collect::<Result<Vec<_>, _>>()?;
     Ok(tools_json)
-}
-
-#[tauri::command]
-/// Deliver the user's answer back to a suspended `ask_user` tool call.
-/// `tool_call_id` must match the id that was emitted with the `ask_user`
-/// stream event. `answer` is the user's selected or typed response.
-pub async fn answer_ask_user(
-    tool_call_id: String,
-    answer: String,
-) -> Result<(), String> {
-    crate::agent::tools::ask_user_tools::deliver_answer(&tool_call_id, answer)
-        .map_err(|e| e.to_string())
 }

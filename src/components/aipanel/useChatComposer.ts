@@ -30,12 +30,7 @@ export function useChatComposer({
     handleSend,
     sendWithPrompt,
     handleStop,
-    cycleMode,
     handleSaveEdit,
-    handleApplyPlan,
-    handleAdjustPlan,
-    handleSavePlan,
-    destroySessionPlanFiles,
   } = useChatSessionActions({
     activeSession,
     mode,
@@ -57,13 +52,8 @@ export function useChatComposer({
     handleSend,
     sendWithPrompt,
     handleStop,
-    cycleMode,
     handleStartEdit: startEdit,
     handleCancelEdit: cancelEdit,
     handleSaveEdit,
-    handleApplyPlan,
-    handleAdjustPlan,
-    handleSavePlan,
-    destroySessionPlanFiles,
   };
 }

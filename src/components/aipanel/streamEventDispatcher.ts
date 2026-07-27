@@ -452,36 +452,6 @@ export async function dispatchStreamEvent({
     return;
   }
 
-  // `create_plan` tool result — create the plan OutputItem directly from
-  // the structured payload. No need to wait for `done`; the plan file
-  // is already written by Rust.
-  if (event_type === 'plan_result' && payload.plan_result) {
-    useAIPanelStore.getState().addPlanItem(session_id, message_id, payload.plan_result);
-    return;
-  }
-
-  // `ask_user` — the agent loop is suspended waiting for the user to
-  // pick an option or type a custom answer. Create an `ask_user`
-  // OutputItem so the card renders immediately.
-  if (event_type === 'ask_user' && payload.ask_user) {
-    const { question, options, allow_custom } = payload.ask_user;
-    const toolCallId = payload.tool_call_id ?? '';
-    const PAGE_SIZE = 5;
-    const totalPages = Math.ceil((options?.length ?? 0) / PAGE_SIZE) || 1;
-    const outputItem: import('../../types').OutputItem = {
-      type: 'ask_user',
-      toolCallId,
-      question,
-      options: options ?? [],
-      allowCustom: allow_custom ?? true,
-      optionPage: 0,
-      totalPages,
-      isPending: true,
-    };
-    useAIPanelStore.getState().addOutputToMessage(session_id, message_id, outputItem);
-    return;
-  }
-
   if (event_type === 'reasoning') {
     if (typeof content === 'string' && content.length > 0) {
       appendReasoningDelta(message_id, content);

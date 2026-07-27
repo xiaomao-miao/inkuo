@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, UnlistenFn } from '@tauri-apps/api/event';
-import { useCallback, useRef } from 'react';
+import { useCallback } from 'react';
 import {
   useAIPanelStore,
   useSidebarStore,
@@ -9,9 +9,7 @@ import {
   type ChatMessage,
   type ChatMode,
   type ChatSession,
-  type PlanOutput,
 } from '../../store';
-import { nextChatMode } from '../../constants/chatModes';
 import {
   buildConversationHistory,
   buildConversationHistoryBefore,
@@ -23,11 +21,6 @@ import {
   listSnapshots,
   restoreSnapshot,
 } from '../../services/snapshots';
-import {
-  deletePlanFile,
-  generatePlanId,
-  savePlanToFile,
-} from '../../services/planFiles';
 import { useNotificationStore } from '../../store';
 import type { AIProviderType } from '../../types';
 
@@ -76,119 +69,8 @@ export function useChatSessionActions({
   const clearToolCalls = useAIPanelStore((state) => state.clearToolCalls);
   const hardCollapseHistory = useAIPanelStore((state) => state.hardCollapseHistory);
   const collapseOldMessages = useAIPanelStore((state) => state.collapseOldMessages);
-  const setPlanItemFile = useAIPanelStore((state) => state.setPlanItemFile);
-  const clearPlanItemFile = useAIPanelStore((state) => state.clearPlanItemFile);
   const resetSessionDerivedState = useAIPanelStore((state) => state.resetSessionDerivedState);
   const pushNotification = useNotificationStore((s) => s.pushNotification);
-
-  // Keep references so event listeners can read the latest values.
-  const recordBaseline = useRef(useBaselineStore.getState().recordBaseline);
-
-  /**
-   * Locate the trailing plan OutputItem (if any) on `messageId`. Used by
-   * the save / destroy flows to read and patch the same item.
-   */
-  const findTrailingPlanItem = useCallback(
-    (sessionId: string, messageId: string) => {
-      const session = useAIPanelStore
-        .getState()
-        .sessions.find((s) => s.id === sessionId);
-      const message = session?.messages.find((m) => m.id === messageId);
-      if (!message) return undefined;
-      const items = message.outputItems;
-      for (let i = items.length - 1; i >= 0; i -= 1) {
-        const it = items[i];
-        if (it.type === 'plan') return it;
-      }
-      return undefined;
-    },
-    [],
-  );
-
-  /**
-   * Helper: best-effort destroy a single plan file. Swallows errors so a
-   * missing or already-deleted file never blocks user actions (apply,
-   * cancel, close).
-   */
-  const destroyPlanFileSilently = useCallback(
-    async (workspacePath: string, planFileId: string) => {
-      try {
-        await deletePlanFile(workspacePath, planFileId);
-      } catch (err) {
-        // Don't surface — the file may have been removed manually, or
-        // the workspace was closed. Either way, "best effort".
-        console.warn('[plan-destroy] failed:', err);
-      }
-    },
-    [],
-  );
-
-  /**
-   * Persist a plan OutputItem's raw text to `<workspace>/.inkuo/plans/<id>.md`
-   * and stamp the resulting `planFileId` / `planFilePath` back onto the
-   * item. Throws on failure so the PlanCard surface can show the error
-   * inline.
-   */
-  const handleSavePlan = useCallback(
-    async (messageId: string) => {
-      if (!activeSession) throw new Error('No active session');
-      const workspacePath = useSidebarStore.getState().workspacePath;
-      if (!workspacePath) {
-        throw new Error('No workspace path — open a workspace first.');
-      }
-      const item = findTrailingPlanItem(activeSession.id, messageId);
-      if (!item || item.type !== 'plan') {
-        throw new Error('No plan in this message.');
-      }
-      // Re-use an existing planFileId if the user clicks Save again after
-      // an edit. Otherwise generate a fresh one. The Rust side sanitizes
-      // and atomically writes the file.
-      const planFileId = item.planFileId ?? generatePlanId();
-      const { path } = await savePlanToFile(
-        workspacePath,
-        planFileId,
-        item.rawText,
-      );
-      setPlanItemFile(activeSession.id, messageId, planFileId, path);
-    },
-    [activeSession, findTrailingPlanItem, setPlanItemFile],
-  );
-
-  /**
-   * Sweep every plan `planFileId` recorded on this session's plan items
-   * and dispatch `plan_delete` for each. Used by the delete-session flow
-   * in AIPanel (when the user permanently removes a conversation).
-   *
-   * Best-effort: errors are logged and swallowed. We also clear the
-   * in-memory `planFileId` / `planFilePath` on the store so re-opening
-   * the session (in case the store is hydrated from localStorage) won't
-   * double-delete the same id.
-   */
-  const destroySessionPlanFiles = useCallback(
-    async (sessionId: string) => {
-      const workspacePath = useSidebarStore.getState().workspacePath;
-      if (!workspacePath) return;
-      const session = useAIPanelStore
-        .getState()
-        .sessions.find((s) => s.id === sessionId);
-      if (!session) return;
-      const ids = new Set<string>();
-      for (const message of session.messages) {
-        for (const item of message.outputItems) {
-          if (item.type === 'plan' && item.planFileId) {
-            ids.add(item.planFileId);
-            // Clear local state so re-opening (if it's archived, not
-            // deleted) doesn't show a "saved" pill for an absent file.
-            clearPlanItemFile(sessionId, message.id);
-          }
-        }
-      }
-      await Promise.all(
-        Array.from(ids).map((id) => destroyPlanFileSilently(workspacePath, id)),
-      );
-    },
-    [destroyPlanFileSilently, clearPlanItemFile],
-  );
 
   /**
    * Build the `AIConfigInput` payload the Rust command expects, reading
@@ -350,7 +232,7 @@ export function useChatSessionActions({
             'ai_baseline',
             files
           );
-          recordBaseline.current(userMessageId, manifest.snapshotId);
+          useBaselineStore.getState().recordBaseline(userMessageId, manifest.snapshotId);
         }
       } catch (err) {
         // Best-effort: log and continue. console.warn is the right tool here
@@ -368,27 +250,25 @@ export function useChatSessionActions({
     // dropped only when the message/session is deleted or the snapshot
     // is evicted by the LRU pass.
     let unlistenAgent: UnlistenFn | null = null;
-    if (mode === 'agent' || mode === 'plan' || mode === 'ask') {
-      listen<AgentStreamEvent>('ai://stream', (event) => {
-        const payload = event.payload;
-        if (!payload) return;
-        if (payload.session_id !== sessionId) return;
-        if (payload.message_id !== assistantMessageId) return;
-        if (payload.event_type === 'done') {
-          if (unlistenAgent) {
-            unlistenAgent();
-            unlistenAgent = null;
-          }
-        } else if (payload.event_type === 'error') {
-          if (unlistenAgent) {
-            unlistenAgent();
-            unlistenAgent = null;
-          }
+    listen<AgentStreamEvent>('ai://stream', (event) => {
+      const payload = event.payload;
+      if (!payload) return;
+      if (payload.session_id !== sessionId) return;
+      if (payload.message_id !== assistantMessageId) return;
+      if (payload.event_type === 'done') {
+        if (unlistenAgent) {
+          unlistenAgent();
+          unlistenAgent = null;
         }
-      }).then((fn) => {
-        unlistenAgent = fn;
-      });
-    }
+      } else if (payload.event_type === 'error') {
+        if (unlistenAgent) {
+          unlistenAgent();
+          unlistenAgent = null;
+        }
+      }
+    }).then((fn) => {
+      unlistenAgent = fn;
+    });
 
     try {
       const featureToggles = activeSession.featureToggles ?? {};
@@ -404,10 +284,8 @@ export function useChatSessionActions({
         messageId: assistantMessageId,
         instruction,
         workspacePath,
-        // `mode` replaces the old `readOnly` flag. Rust dispatches:
-        //   "plan" → plan prompt + no-tools constraint
-        //   "ask"  → ask prompt + read-only registry
-        //   "agent"→ agent prompt + full registry
+        // Agent mode is the only remaining mode; Rust uses the agent
+        // prompt + full tool registry.
         mode,
         // Forward the user-configured agent loop cap. The Rust side clamps
         // / defaults internally; we just send the raw value (1–200).
@@ -463,89 +341,11 @@ export function useChatSessionActions({
   const handleStop = useCallback(async () => {
     if (!activeSession) return;
     try {
-      if (mode === 'agent') {
-        await invoke('ai_agent_cancel', { sessionId: activeSession.id });
-      } else {
-        await invoke('ai_stream_cancel', { sessionId: activeSession.id });
-      }
+      await invoke('ai_agent_cancel', { sessionId: activeSession.id });
     } catch {
       // ignore
     }
-  }, [activeSession, mode]);
-
-  const cycleMode = useCallback(() => {
-    if (!activeSession) return;
-    useAIPanelStore.getState().setSessionMode(activeSession.id, nextChatMode(mode));
-  }, [activeSession, mode]);
-
-  /**
-   * Build a follow-up instruction from a structured plan and dispatch it
-   * in agent mode. The session's `mode` is flipped to `agent` first so
-   * the `sendMessage` snapshot-baseline branch fires (auto-baseline only
-   * triggers in agent mode).
-   *
-   * Before dispatching, the plan's persisted file (`.inkuo/plans/<id>.md`)
-   * is destroyed via `plan_delete` — ephemeral plans: once the user
-   * commits them, the on-disk artifact is consumed. The `messageId` is
-   * provided by PlanCard so we know which plan item to read the
-   * `planFileId` from.
-   */
-  const handleApplyPlan = useCallback(
-    async (messageId: string, plan: PlanOutput) => {
-      if (!activeSession || isStreaming) return;
-      const workspacePath = useSidebarStore.getState().workspacePath;
-      // Tear down the .md on disk if it was saved. We capture the
-      // planFileId BEFORE flipping modes so the lookup sees the same
-      // store snapshot.
-      const item = findTrailingPlanItem(activeSession.id, messageId);
-      const planFileId = item && item.type === 'plan' ? item.planFileId : undefined;
-      if (planFileId && workspacePath) {
-        void destroyPlanFileSilently(workspacePath, planFileId);
-        clearPlanItemFile(activeSession.id, messageId);
-      }
-
-      const fileList = plan.files_to_touch
-        .map((f: PlanOutput['files_to_touch'][number]) => `- ${f.path} (${f.intent}): ${f.reason}`)
-        .join('\n');
-      const instruction = [
-        `请按照以下计划执行：${plan.plan_summary}`,
-        '',
-        '涉及文件：',
-        fileList,
-        '',
-        plan.risk_reason ? `风险说明：${plan.risk_reason}` : '',
-        '请按顺序处理每个文件，对每个 delete/rename 操作先和我确认。',
-      ]
-        .filter(Boolean)
-        .join('\n');
-      // Flip the session to agent mode BEFORE calling sendMessage so the
-      // auto-baseline path inside sendMessage activates.
-      useAIPanelStore.getState().setSessionMode(activeSession.id, 'agent');
-      setInput(instruction);
-      await sendMessage(instruction);
-    },
-    [activeSession, isStreaming, sendMessage, setInput, findTrailingPlanItem, destroyPlanFileSilently, clearPlanItemFile],
-  );
-
-  /**
-   * Refill the chat input with a hint pointing the user back at the
-   * plan for refinement, without firing the run.
-   */
-  const handleAdjustPlan = useCallback((_messageId: string, plan: PlanOutput) => {
-    if (!activeSession) return;
-    const fileList = plan.files_to_touch
-      .map((f: PlanOutput['files_to_touch'][number]) => `- ${f.path} (${f.intent}): ${f.reason}`)
-      .join('\n');
-    const prompt = [
-      `请调整计划："${plan.plan_summary}"`,
-      '',
-      '当前涉及文件：',
-      fileList,
-      '',
-      '请告诉我需要怎么调整。',
-    ].join('\n');
-    setInput(prompt);
-  }, [activeSession, setInput]);
+  }, [activeSession]);
 
   /**
    * Worker that performs the "re-send an earlier user message" transition
@@ -593,9 +393,7 @@ export function useChatSessionActions({
       const workspacePath = useSidebarStore.getState().workspacePath || undefined;
 
       // Locate the baseline that was captured the first time the user
-      // sent this question. We only require a baseline for agent mode;
-      // ask/plan runs don't modify the workspace, so we can safely fall
-      // back to the current file state.
+      // sent this question. We only require a baseline for agent mode.
       const baselineId = useBaselineStore.getState().peekBaseline(targetUserMessageId);
       if (sessionMode === 'agent' && baselineId && workspacePath) {
         try {
@@ -706,22 +504,20 @@ export function useChatSessionActions({
       // on success so a future re-edit still rolls back to the original
       // pre-instruction state.
       let unlistenAgent: UnlistenFn | null = null;
-      if (sessionMode === 'agent' || sessionMode === 'plan' || sessionMode === 'ask') {
-        listen<AgentStreamEvent>('ai://stream', (event) => {
-          const payload = event.payload;
-          if (!payload) return;
-          if (payload.session_id !== targetSessionId) return;
-          if (payload.message_id !== assistantMessageId) return;
-          if (payload.event_type === 'done' || payload.event_type === 'error') {
-            if (unlistenAgent) {
-              unlistenAgent();
-              unlistenAgent = null;
-            }
+      listen<AgentStreamEvent>('ai://stream', (event) => {
+        const payload = event.payload;
+        if (!payload) return;
+        if (payload.session_id !== targetSessionId) return;
+        if (payload.message_id !== assistantMessageId) return;
+        if (payload.event_type === 'done' || payload.event_type === 'error') {
+          if (unlistenAgent) {
+            unlistenAgent();
+            unlistenAgent = null;
           }
-        }).then((fn) => {
-          unlistenAgent = fn;
-        });
-      }
+        }
+      }).then((fn) => {
+        unlistenAgent = fn;
+      });
 
       try {
         await invoke('ai_agent_stream', {
@@ -782,11 +578,6 @@ export function useChatSessionActions({
     handleSend,
     sendWithPrompt,
     handleStop,
-    cycleMode,
     handleSaveEdit,
-    handleApplyPlan,
-    handleAdjustPlan,
-    handleSavePlan,
-    destroySessionPlanFiles,
   };
 }

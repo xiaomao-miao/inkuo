@@ -18,14 +18,13 @@ const OFFICIAL_BASE_URL: &str = "https://api.inkuo.com/v1";
 // Prompts - loaded from markdown files at compile time
 // ============================================================================
 
-/// System prompt for ask mode (conversational Q&A)
-fn get_ask_prompt() -> &'static str {
-    include_str!("../prompts/ask.md")
-}
-
-/// System prompt for plan mode (structured planning)
-fn get_plan_prompt() -> &'static str {
-    include_str!("../prompts/plan.md")
+/// System prompt for the floating AI popover (single-shot explain-the-passage).
+/// Reuses the edit prompt because the popover's input shape (instruction +
+/// selected text) is conceptually the same as edit (instruction + original
+/// text). Document-editing prompts fit — they ask for a structured
+/// transformation of one piece of text.
+fn get_popover_prompt() -> &'static str {
+    include_str!("../prompts/edit.md")
 }
 
 /// System prompt for edit mode (document editing)
@@ -271,7 +270,6 @@ impl AIProviderAdapter {
 
     pub async fn chat_stream<F>(
         &self,
-        mode: String,
         instruction: String,
         original_text: String,
         mut on_delta: F,
@@ -279,10 +277,7 @@ impl AIProviderAdapter {
     where
         F: FnMut(String) + Send,
     {
-        let system_prompt = match mode.as_str() {
-            "plan" => get_plan_prompt(),
-            _ => get_ask_prompt(),
-        };
+        let system_prompt = get_popover_prompt();
 
         let user_prompt = if original_text.trim().is_empty() {
             instruction
@@ -306,7 +301,30 @@ Context text:
             // the agent tool-calling path). For chat we round-trip the full
             // response and surface it as a single tick to the frontend.
             AIProvider::Ollama { base_url } => {
-                let text = self.call_ollama_chat(base_url, system_prompt, &user_prompt).await?;
+                let url = format!("{}/api/chat", base_url.trim_end_matches('/'));
+                let body = self.build_ollama_body(system_prompt, &user_prompt);
+
+                let response = HTTP_CLIENT
+                    .post(&url)
+                    .header("Content-Type", "application/json")
+                    .json(&body)
+                    .send()
+                    .await
+                    .map_err(|e| AIError::NetworkError(e.to_string()))?;
+
+                if !response.status().is_success() {
+                    return Err(AIError::ModelError(format!("HTTP {}", response.status())));
+                }
+
+                let response_json: serde_json::Value = response
+                    .json()
+                    .await
+                    .map_err(|e| AIError::InvalidResponse(e.to_string()))?;
+
+                let text = response_json["message"]["content"]
+                    .as_str()
+                    .ok_or_else(|| AIError::InvalidResponse("Missing content in response".to_string()))?
+                    .to_string();
                 on_delta(text.clone());
                 Ok(text)
             }
@@ -365,37 +383,6 @@ Context (optional references):
 
 // ── Sync helpers ──────────────────────────────────────────────────────────
 
-    pub async fn chat(&self, mode: String, instruction: String, original_text: String) -> Result<String, AIError> {
-        let system_prompt = match mode.as_str() {
-            "plan" => get_plan_prompt(),
-            _ => get_ask_prompt(),
-        };
-
-        let user_prompt = if original_text.trim().is_empty() {
-            instruction
-        } else {
-            format!(
-                r#"Instruction: {}
-
-Context text:
-{}"#,
-                instruction, original_text
-            )
-        };
-
-        match &self.config.provider {
-            AIProvider::OpenAI { api_key, base_url } => {
-                self.call_openai_compatible_chat(api_key, base_url, system_prompt, &user_prompt)
-                    .await
-            }
-            AIProvider::Ollama { base_url } => self.call_ollama_chat(base_url, system_prompt, &user_prompt).await,
-            AIProvider::Official { api_key } => {
-                self.call_openai_compatible_chat(api_key, OFFICIAL_BASE_URL, system_prompt, &user_prompt)
-                    .await
-            }
-        }
-    }
-
     /// Direct chat call with thinking disabled - optimized for inline completion.
     ///
     /// Always sends `stream: true` so the inkuo Cloud server (which forces
@@ -415,7 +402,32 @@ Context text:
                 self.call_openai_compatible_chat_stream_no_thinking(api_key, base_url, system_prompt, user_prompt)
                     .await
             }
-            AIProvider::Ollama { base_url } => self.call_ollama_chat(base_url, system_prompt, user_prompt).await,
+            AIProvider::Ollama { base_url } => {
+                let url = format!("{}/api/chat", base_url.trim_end_matches('/'));
+                let body = self.build_ollama_body(system_prompt, user_prompt);
+
+                let response = HTTP_CLIENT
+                    .post(&url)
+                    .header("Content-Type", "application/json")
+                    .json(&body)
+                    .send()
+                    .await
+                    .map_err(|e| AIError::NetworkError(e.to_string()))?;
+
+                if !response.status().is_success() {
+                    return Err(AIError::ModelError(format!("HTTP {}", response.status())));
+                }
+
+                let response_json: serde_json::Value = response
+                    .json()
+                    .await
+                    .map_err(|e| AIError::InvalidResponse(e.to_string()))?;
+
+                response_json["message"]["content"]
+                    .as_str()
+                    .map(String::from)
+                    .ok_or_else(|| AIError::InvalidResponse("Missing content in response".to_string()))
+            }
             AIProvider::Official { api_key } => {
                 self.call_openai_compatible_chat_stream_no_thinking(api_key, OFFICIAL_BASE_URL, system_prompt, user_prompt)
                     .await
@@ -546,43 +558,6 @@ Context (optional references):
             }
         }
     }
-    
-    async fn call_openai_compatible_chat(
-        &self,
-        api_key: &str,
-        base_url: &str,
-        system_prompt: &str,
-        user_prompt: &str,
-    ) -> Result<String, AIError> {
-        let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
-        let body = self.build_chat_body(system_prompt, user_prompt);
-
-        let response = HTTP_CLIENT
-            .post(&url)
-            .header("Authorization", format!("Bearer {}", api_key))
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| AIError::NetworkError(e.to_string()))?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_body = response.text().await.unwrap_or_default();
-            return Err(Self::handle_http_error(status, &error_body));
-        }
-
-        let response_json: serde_json::Value = response
-            .json()
-            .await
-            .map_err(|e| AIError::InvalidResponse(e.to_string()))?;
-
-        let content = response_json["choices"][0]["message"]["content"]
-            .as_str()
-            .ok_or_else(|| AIError::InvalidResponse("Missing content in response".to_string()))?;
-
-        Ok(content.to_string())
-    }
 
     async fn call_openai_compatible_chat_stream<F>(
         &self,
@@ -623,15 +598,6 @@ Context (optional references):
         }
 
         Self::stream_sse_text(response, on_delta).await
-    }
-
-    async fn call_ollama_chat(
-        &self,
-        base_url: &str,
-        system_prompt: &str,
-        user_prompt: &str,
-    ) -> Result<String, AIError> {
-        self.call_ollama_chat_only(base_url, system_prompt, user_prompt).await
     }
 
     async fn call_openai_compatible_edit_stream<F>(
@@ -713,7 +679,12 @@ Context (optional references):
         self.parse_ai_response(content)
     }
 
-    async fn call_ollama_chat_only(&self, base_url: &str, system_prompt: &str, user_prompt: &str) -> Result<String, AIError> {
+    async fn call_ollama(
+        &self,
+        base_url: &str,
+        system_prompt: &str,
+        user_prompt: &str,
+    ) -> Result<AIEditResponse, AIError> {
         let url = format!("{}/api/chat", base_url.trim_end_matches('/'));
         let body = self.build_ollama_body(system_prompt, user_prompt);
 
@@ -734,20 +705,10 @@ Context (optional references):
             .await
             .map_err(|e| AIError::InvalidResponse(e.to_string()))?;
 
-        response_json["message"]["content"]
+        let content = response_json["message"]["content"]
             .as_str()
-            .map(String::from)
-            .ok_or_else(|| AIError::InvalidResponse("Missing content in response".to_string()))
-    }
-
-    async fn call_ollama(
-        &self,
-        base_url: &str,
-        system_prompt: &str,
-        user_prompt: &str,
-    ) -> Result<AIEditResponse, AIError> {
-        let content = self.call_ollama_chat_only(base_url, system_prompt, user_prompt).await?;
-        self.parse_ai_response(&content)
+            .ok_or_else(|| AIError::InvalidResponse("Missing content in response".to_string()))?;
+        self.parse_ai_response(content)
     }
 
     fn parse_ai_response(&self, content: &str) -> Result<AIEditResponse, AIError> {

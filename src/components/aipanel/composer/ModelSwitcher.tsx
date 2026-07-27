@@ -1,5 +1,5 @@
 // `<ModelSwitcher>` — dropdown letting the user pick between cloud
-// and local-API routing for the active chat mode.
+// and local-API routing for the active chat.
 //
 // Reads cloud / local settings from `useSettingsStore`. Composes
 // pure helpers from `./modelSwitcher.helpers` so each helper
@@ -9,7 +9,6 @@
 import React from 'react';
 
 import { useSettingsStore } from '../../../store';
-import type { ChatMode } from '../../../types';
 
 import {
   activeSelectionLabel,
@@ -20,11 +19,7 @@ import {
 
 import styles from '../AIPanelInput.module.css';
 
-interface ModelSwitcherProps {
-  mode: ChatMode;
-}
-
-export const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ mode }) => {
+export const ModelSwitcher: React.FC = () => {
   const cloudMode = useSettingsStore((s) => s.settings.cloud.cloud_mode_enabled);
   const cloudAccount = useSettingsStore((s) => s.settings.cloud.account);
   const cloudModels = useSettingsStore((s) => s.settings.cloud.cached_models);
@@ -73,7 +68,6 @@ export const ModelSwitcher: React.FC<ModelSwitcherProps> = ({ mode }) => {
   return (
     <select
       className={styles.modelSwitcher}
-      data-mode={mode}
       data-cloud={cloudMode ? 'true' : undefined}
       value={currentValue}
       onChange={onChange}

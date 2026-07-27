@@ -37,7 +37,6 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   get_tool_help: '加载工具帮助',
   delegate_to: '委派子代理',
   update_todo: '更新任务列表',
-  ask_user: '向用户提问',
 };
 
 const EXPERT_DISPLAY_NAMES: Record<string, string> = {

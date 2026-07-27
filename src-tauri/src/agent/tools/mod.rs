@@ -222,16 +222,15 @@ mod office;
 mod database_tools;
 mod meta_tools; // get_tool_help + delegate_to
 mod todo_tools; // update_todo (read-only meta-tool; see agent_loop::try_handle_meta_tool)
-mod plan_tools;  // create_plan  (read-only meta-tool; see agent_loop::try_handle_meta_tool)
 mod mermaid_tools; // render_mermaid  (in-process merman renderer, mermaid.js 11.15 parity)
 mod svg_tools;  // create_svg  (AI-authored standalone .svg files)
 mod pptx; // create_pptx (packs SVGs into editable .pptx; see office_pptx_expert)
 mod pptx_anim; // create_pptx_animation + add_pptx_animation
 mod web_search_tool; // web_search (external encyclopedia lookup; today Baike)
 mod media_tools; // read_image / read_pdf  (binary workspace files for multimodal LLMs)
+mod convert_tools; // svg_to_png / md_to_word / word_to_pdf  (document_converter sub-agent)
 pub mod image_gen_tools; // generate_image (AI image generation)
 pub mod asset_registry; // binary side-channel: stores asset://<id> entries so LLM context never sees base64
-pub mod ask_user_tools; // ask_user   (meta-tool; see agent_loop::try_handle_meta_tool)
 
 // ── Re-exports ─────────────────────────────────────────────────────────────────
 
@@ -244,14 +243,13 @@ pub use office::{
 pub use database_tools::DatabaseSearchTool;
 pub use meta_tools::{GetToolHelpTool, DelegateToTool};
 pub use todo_tools::{UpdateTodoTool, TodoItem};
-pub use plan_tools::{CreatePlanTool, CreatePlanArgs, PlanFileTouch};
 pub use mermaid_tools::RenderMermaidTool;
 pub use svg_tools::{CreateSvgTool, CreateSvgOutcome};
 pub use pptx::{CreatePptxTool, CreatePptxOutcome};
 pub use pptx_anim::{CreatePptxAnimationTool, AddAnimationTool};
 pub use web_search_tool::WebSearchTool;
-pub use ask_user_tools::AskUserTool;
 pub use media_tools::{ReadImageTool, ReadPdfTool};
+pub use convert_tools::{SvgToPngTool, MdToWordTool, WordToPdfTool};
 pub use image_gen_tools::{GenerateImageTool, GenerateImageOutcome};
 
 /// Unified executor enum combining all tool implementations
@@ -280,13 +278,17 @@ pub enum ToolExecutor {
     ReadImage(media_tools::ReadImageTool),
     ReadPdf(media_tools::ReadPdfTool),
     GenerateImage(image_gen_tools::GenerateImageTool),
+    // Document converter (svg_to_png / md_to_word / word_to_pdf). Lives
+    // in `document_converter` sub-agent profile; main agent must
+    // delegate_to it to reach any of these tools.
+    SvgToPng(convert_tools::SvgToPngTool),
+    MdToWord(convert_tools::MdToWordTool),
+    WordToPdf(convert_tools::WordToPdfTool),
     // Meta tools (intercepted by the agent loop; execute() returns an error
     // if reached directly).
     GetToolHelp(meta_tools::GetToolHelpTool),
     DelegateTo(meta_tools::DelegateToTool),
     UpdateTodo(todo_tools::UpdateTodoTool),
-    CreatePlan(plan_tools::CreatePlanTool),
-    AskUser(ask_user_tools::AskUserTool),
 }
 
 // ── ToolExecutor ────────────────────────────────────────────────────────────────
@@ -318,11 +320,12 @@ impl ToolExecutor {
             ToolExecutor::ReadImage(_) => "read_image",
             ToolExecutor::ReadPdf(_) => "read_pdf",
             ToolExecutor::GenerateImage(_) => "generate_image",
+            ToolExecutor::SvgToPng(_) => "svg_to_png",
+            ToolExecutor::MdToWord(_) => "md_to_word",
+            ToolExecutor::WordToPdf(_) => "word_to_pdf",
             ToolExecutor::GetToolHelp(_) => "get_tool_help",
             ToolExecutor::DelegateTo(_) => "delegate_to",
             ToolExecutor::UpdateTodo(_) => "update_todo",
-            ToolExecutor::CreatePlan(_) => "create_plan",
-            ToolExecutor::AskUser(_) => "ask_user",
         }
     }
 
@@ -352,11 +355,12 @@ impl ToolExecutor {
             ToolExecutor::ReadImage(t) => t.definition(),
             ToolExecutor::ReadPdf(t) => t.definition(),
             ToolExecutor::GenerateImage(t) => t.definition(),
+            ToolExecutor::SvgToPng(t) => t.definition(),
+            ToolExecutor::MdToWord(t) => t.definition(),
+            ToolExecutor::WordToPdf(t) => t.definition(),
             ToolExecutor::GetToolHelp(t) => t.definition(),
             ToolExecutor::DelegateTo(t) => t.definition(),
             ToolExecutor::UpdateTodo(t) => t.definition(),
-            ToolExecutor::CreatePlan(t) => t.definition(),
-            ToolExecutor::AskUser(t) => t.definition(),
         }
     }
 
@@ -423,11 +427,21 @@ impl ToolExecutor {
                 let outcome = t.execute(arguments, workspace).await?;
                 Ok(outcome.output)
             }
+            ToolExecutor::SvgToPng(t) => {
+                let outcome = t.execute(arguments, workspace).await?;
+                Ok(outcome.output)
+            }
+            ToolExecutor::MdToWord(t) => {
+                let outcome = t.execute(arguments, workspace).await?;
+                Ok(outcome.output)
+            }
+            ToolExecutor::WordToPdf(t) => {
+                let outcome = t.execute(arguments, workspace).await?;
+                Ok(outcome.output)
+            }
             ToolExecutor::GetToolHelp(t) => t.execute(arguments, workspace).await,
             ToolExecutor::DelegateTo(t) => t.execute(arguments, workspace).await,
             ToolExecutor::UpdateTodo(t) => t.execute(arguments, workspace).await,
-            ToolExecutor::CreatePlan(t) => t.execute(arguments, workspace).await,
-            ToolExecutor::AskUser(t) => t.execute(arguments, workspace).await,
         }
     }
 }
@@ -467,9 +481,8 @@ impl ToolRegistry {
             ToolExecutor::Glob(GlobTool),
             ToolExecutor::Grep(GrepTool),
             ToolExecutor::ReadOfficeFile(ReadOfficeFileTool),
-            // `web_search` is registered in every mode (ask / plan /
-            // agent) because it's a read-only lookup. Whether the LLM
-            // actually sees it is decided per-turn by the
+            // `web_search` is registered because it's a read-only lookup. Whether
+            // the LLM actually sees it is decided per-turn by the
             // `web_search` feature toggle via
             // `feature_toggles::effective_tool_set` — when the toggle is
             // off, the tool is filtered out of the allowlist and the
@@ -479,19 +492,8 @@ impl ToolRegistry {
             ToolExecutor::WebSearch(WebSearchTool::placeholder()),
             // `update_todo` is a meta-tool — its registry stub always
             // errors out, and the actual implementation lives in
-            // `agent_loop::try_handle_meta_tool`. Registering it here
-            // makes it visible to the model in Plan / Ask mode so the
-            // user can see planning progress, even though Plan mode
-            // never actually executes the listed steps.
+            // `agent_loop::try_handle_meta_tool`.
             ToolExecutor::UpdateTodo(UpdateTodoTool),
-            // `create_plan` is a plan-mode-only meta-tool — same pattern
-            // as `update_todo`: the registry stub errors out, and
-            // `agent_loop::try_handle_meta_tool` does the real work.
-            ToolExecutor::CreatePlan(plan_tools::CreatePlanTool),
-            // `ask_user` is a meta-tool that suspends the agent loop until
-            // the user picks an answer from the UI. Same pattern: registry
-            // stub errors, real work in `agent_loop::try_handle_meta_tool`.
-            ToolExecutor::AskUser(AskUserTool),
         ];
 
         for tool in tools {
@@ -577,11 +579,18 @@ impl ToolRegistry {
             ToolExecutor::ReadImage(ReadImageTool),
             ToolExecutor::ReadPdf(ReadPdfTool),
             ToolExecutor::GenerateImage(image_gen_tools::GenerateImageTool::default()),
+            // Document-format converters. Lives in the
+            // `document_converter` sub-agent profile; registered here
+            // alongside the other file-emitting tools so the registry
+            // knows how to stamp `file_path` on the `ToolResult` and
+            // emit the frontend `file-written` event.
+            ToolExecutor::SvgToPng(convert_tools::SvgToPngTool::new()),
+            ToolExecutor::MdToWord(convert_tools::MdToWordTool::new()),
+            ToolExecutor::WordToPdf(convert_tools::WordToPdfTool::new()),
             // Meta tools (intercepted in agent loop, but still registered so
             // they appear in tool catalogs and can be schema-validated).
             ToolExecutor::GetToolHelp(GetToolHelpTool),
             ToolExecutor::DelegateTo(DelegateToTool),
-            ToolExecutor::AskUser(ask_user_tools::AskUserTool),
         ];
 
         for tool in tools {
@@ -655,7 +664,7 @@ impl ToolRegistry {
         // `ToolResult` for the frontend's `file-written` event. Branch on
         // the tool name first so we don't accidentally apply the generic
         // `path` lookup below to either of them.
-        if tool_call.name == "render_mermaid" || tool_call.name == "create_svg" || tool_call.name == "create_pptx" || tool_call.name == "create_pptx_animation" || tool_call.name == "add_pptx_animation" || tool_call.name == "generate_image" {
+        if tool_call.name == "render_mermaid" || tool_call.name == "create_svg" || tool_call.name == "create_pptx" || tool_call.name == "create_pptx_animation" || tool_call.name == "add_pptx_animation" || tool_call.name == "generate_image" || tool_call.name == "svg_to_png" || tool_call.name == "md_to_word" || tool_call.name == "word_to_pdf" {
             let output_path = tool_call
                 .arguments
                 .get("output_path")

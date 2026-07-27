@@ -12,13 +12,12 @@
 
 import React from 'react';
 
-import type { ChatMode, FeatureToggleId, FeatureToggleMap } from '../../../types';
+import type { FeatureToggleId, FeatureToggleMap } from '../../../types';
 import { isToggleDisabled, toggleTooltip, TOGGLES } from './toggles';
 
 import styles from '../AIPanelInput.module.css';
 
 interface ComposerToggleRowsProps {
-  mode: ChatMode;
   sessionId: string | null;
   featureToggles: FeatureToggleMap | undefined;
   disabled?: boolean;
@@ -29,7 +28,6 @@ interface ComposerToggleRowsProps {
  * Exported so callers (e.g. chat headers, snapshots) can preview the
  * "what's on" state without needing the full Composer. */
 export const ComposerToggleRows: React.FC<ComposerToggleRowsProps> = ({
-  mode,
   sessionId,
   featureToggles,
   disabled,
@@ -38,7 +36,7 @@ export const ComposerToggleRows: React.FC<ComposerToggleRowsProps> = ({
   return (
     <>
       {TOGGLES.map((spec) => {
-        const isDisabled = isToggleDisabled(spec, { sessionId, disabled, mode });
+        const isDisabled = isToggleDisabled({ sessionId, disabled });
         const enabled = !!featureToggles?.[spec.id];
         return (
           <button

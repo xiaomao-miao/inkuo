@@ -283,9 +283,9 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onWorkspaceSelected })
           </div>
 
           <p className={styles.tagline}>
-            一款为长文而生的编辑器
+            一款为文档而生的编辑器
             <span className={styles.taglineSep}> · </span>
-            内置本地 Agent 与知识库
+            更加懂你的文档助手
           </p>
 
           <div className={styles.actions}>
@@ -296,7 +296,7 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onWorkspaceSelected })
               type="button"
             >
               <FolderOpen size={16} />
-              <span>打开工作区</span>
+              <span>打开文档文件夹</span>
               <ArrowRight size={14} className={styles.arrowIcon} />
               <span className={styles.kbdHint}>⌘O</span>
             </button>
@@ -563,7 +563,7 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onWorkspaceSelected })
           <kbd>⌘</kbd>
           <kbd>O</kbd>
         </span>
-        <span>快速打开工作区</span>
+        <span>快速打开文档文件夹</span>
       </footer>
     </div>
   );

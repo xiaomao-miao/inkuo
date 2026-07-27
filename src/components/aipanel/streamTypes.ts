@@ -3,7 +3,6 @@ import type {
   OfficeFileModifiedPayload,
   StreamDiffSummary,
   StreamPayload,
-  PlanResultData,
 } from '../../types';
 
 export type {
@@ -11,5 +10,4 @@ export type {
   StreamDiffSummary,
   StreamPayload,
   WireSearchResult,
-  PlanResultData,
 };

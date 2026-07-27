@@ -6,7 +6,6 @@ import {
   type ChatMessage,
   type ChatSession,
   type ActiveToolCall,
-  type PlanOutput,
 } from '../../store';
 import styles from './AIPanelMessage.module.css';
 
@@ -22,19 +21,6 @@ interface MessageItemProps {
   onSaveEdit: () => void;
   onSetEditingContent: (v: string) => void;
   onSetInput: (v: string) => void;
-  /**
-   * Apply a structured plan: flip session to agent + send follow-up turn.
-   * Receives the messageId so the action handler can locate the trailing
-   * plan item and destroy its `.inkuo/plans/<id>.md` artifact.
-   */
-  onApplyPlan?: (messageId: string, plan: PlanOutput) => void;
-  /**
-   * Adjust a structured plan: refill the input with a hint pointing the
-   * user back at the plan for refinement.
-   */
-  onAdjustPlan?: (messageId: string, plan: PlanOutput) => void;
-  /** Persist a structured plan to `<workspace>/.inkuo/plans/<id>.md`. */
-  onSavePlan?: (messageId: string) => Promise<void>;
   /**
    * Animation delay (ms) for the message entry animation. Used to stagger
    * the last few messages of a freshly-arrived batch so they fade in
@@ -55,9 +41,6 @@ const MessageItemImpl: React.FC<MessageItemProps> = ({
   onSaveEdit,
   onSetEditingContent,
   onSetInput,
-  onApplyPlan,
-  onAdjustPlan,
-  onSavePlan,
   entryDelayMs = 0,
 }) => {
   if (message.role === 'user') {
@@ -100,9 +83,6 @@ const MessageItemImpl: React.FC<MessageItemProps> = ({
               isThisStreaming={isThisStreaming}
               activeToolCalls={activeToolCalls}
               sessionId={activeSession.id}
-              onApplyPlan={onApplyPlan}
-              onAdjustPlan={onAdjustPlan}
-              onSavePlan={onSavePlan}
             />
           )}
 

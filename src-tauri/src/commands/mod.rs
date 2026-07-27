@@ -75,7 +75,7 @@ pub(crate) use snapshot_state::{
 use crate::backup::{create_backup_path, get_backup_dir, request_backup_cleanup};
 use crate::file_watcher::{emit_file_change, FileChangeEvent};
 use crate::office;
-use crate::{ai, ai_config::{self, AITestResult, AIProviderKind, TestApiConfigRequest}, diff, document, file_watcher};
+use crate::{ai, ai_config::{self, AITestResult, TestApiConfigRequest}, diff, document, file_watcher};
 use tauri_plugin_opener::OpenerExt;
 
 pub struct AppState {

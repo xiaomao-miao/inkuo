@@ -192,46 +192,6 @@ export interface AIPanelMessageSlice {
    * while the new assistant response streams in.
    */
   hardCollapseHistory: (sessionId: string) => void;
-  /**
-   * Convert the trailing text OutputItem (if any) of `messageId` into a
-   * plan OutputItem seeded with the already-streamed text. Used by the
-   * streaming text buffer when it first crosses the ```plan threshold.
-   * If the message's last item is not a text item, a fresh plan item is
-   * appended instead.
-   */
-  convertTrailingTextToPlanItem: (sessionId: string, messageId: string, rawText: string) => void;
-  /**
-   * Append a text delta into the trailing plan OutputItem and recompute
-   * the parsed `plan` / `parseError` fields. No-op if no plan item exists.
-   */
-  appendPlanDelta: (sessionId: string, messageId: string, delta: string) => void;
-  /**
-   * Mark the trailing plan OutputItem as no longer streaming. Called
-   * when the model emits a `done` event for plan messages.
-   */
-  finishPlanItem: (sessionId: string, messageId: string) => void;
-  /**
-   * Stamp the trailing plan OutputItem with `planFileId` / `planFilePath`
-   * after the plan has been persisted to `<workspace>/.inkuo/plans/`.
-   */
-  setPlanItemFile: (
-    sessionId: string,
-    messageId: string,
-    planFileId: string,
-    planFilePath: string,
-  ) => void;
-  /**
-   * Drop `planFileId` / `planFilePath` from the trailing plan OutputItem.
-   * Used after the on-disk file has been destroyed (apply / cancel /
-   * session close) so the UI doesn't claim the file is still there.
-   */
-  clearPlanItemFile: (sessionId: string, messageId: string) => void;
-  /**
-   * Create a complete plan OutputItem from a `plan_result` stream event.
-   * Converts the Rust `PlanResultData` to the frontend `PlanOutput` shape
-   * and stamps `planFileId` / `planFilePath` from `saved_path`.
-   */
-  addPlanItem: (sessionId: string, messageId: string, data: import('../types').PlanResultData) => void;
 }
 
 export interface AIPanelToolCallSlice {

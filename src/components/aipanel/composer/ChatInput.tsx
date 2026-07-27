@@ -1,12 +1,11 @@
 // Orchestrator for the AI-panel composer bubble.
 //
-// Composes the four sub-components that used to live inline in
+// Composes the three sub-components that used to live inline in
 // `ChatInput.tsx`:
 //
 //   - `ActiveToggleStrip`   — quiet header line when collapsed
 //   - `ComposerToggleRows`  — the expand-mode toggle rows
 //   - `ModelSwitcher`       — cloud / local model picker
-//   - `ModeButton`          — the mode cycler (still inline)
 //
 // Also wires three hooks that own the side-effects:
 //
@@ -16,12 +15,11 @@
 // The remaining JSX is just the textarea, send button, and bottom row.
 
 import React, { useRef } from 'react';
-import { Send, StopCircle, Terminal, Loader2, Plus } from 'lucide-react';
+import { Send, StopCircle, Loader2, Plus } from 'lucide-react';
 
 import { useAIPanelStore } from '../../../store';
-import type { ChatMode, FeatureToggleMap } from '../../../types';
+import type { FeatureToggleMap } from '../../../types';
 import { Tooltip } from '../../common/Tooltip';
-import { CHAT_MODE_HINT, CHAT_MODE_LABEL } from '../../../constants/chatModes';
 
 import { ActiveToggleStrip } from './ActiveToggleStrip';
 import { ComposerToggleRows } from './ComposerToggleRows';
@@ -34,25 +32,21 @@ import styles from '../AIPanelInput.module.css';
 interface ChatInputProps {
   input: string;
   setInput: (v: string) => void;
-  mode: ChatMode;
   isStreaming: boolean;
   sessionId: string | null;
   featureToggles: FeatureToggleMap | undefined;
   onSend: () => void;
   onStop: () => void;
-  onCycleMode: () => void;
 }
 
 export const ChatInput: React.FC<ChatInputProps> = ({
   input,
   setInput,
-  mode,
   isStreaming,
   sessionId,
   featureToggles,
   onSend,
   onStop,
-  onCycleMode,
 }) => {
   const expanded = useAIPanelStore((state) => state.featureToolbarExpanded);
   const toggleToolbar = useAIPanelStore((state) => state.toggleFeatureToolbar);
@@ -88,7 +82,6 @@ export const ChatInput: React.FC<ChatInputProps> = ({
       >
         <div className={styles.toggleGrid}>
           <ComposerToggleRows
-            mode={mode}
             sessionId={sessionId}
             featureToggles={featureToggles}
             onToggle={(id, enable) => {
@@ -101,11 +94,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
       <textarea
         className={styles.input}
-        placeholder={
-          mode === 'agent'
-            ? '输入指令... (例如：帮我创建一个文档)'
-            : `输入消息... (Enter 发送，Shift+Enter 换行)`
-        }
+        placeholder="输入指令... (例如：帮我创建一个文档)"
         value={input}
         onChange={(e) => setInput(e.target.value)}
         onKeyDown={(e) => {
@@ -119,17 +108,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
       <div className={styles.inputBottomRow}>
         <div className={styles.modeGroup}>
-          <button
-            type="button"
-            className={`${styles.modeButton} ${mode === 'agent' ? styles.agentModeActive : ''}`}
-            onClick={onCycleMode}
-            title={CHAT_MODE_HINT[mode]}
-          >
-            {mode === 'agent' && <Terminal size={12} />}
-            {CHAT_MODE_LABEL[mode]}
-          </button>
-
-          <ModelSwitcher mode={mode} />
+          <ModelSwitcher />
         </div>
 
         <div className={styles.inputActions}>
