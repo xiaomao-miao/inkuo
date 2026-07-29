@@ -51,18 +51,20 @@ public static class WebSearch
             if (string.IsNullOrWhiteSpace(req.Query))
                 return Results.BadRequest(new { error = "query is required" });
 
-            // Quota gate: a search call counts as one web_search query
-            // regardless of how many results the upstream returns. The
-            // gate mirrors `Chat`'s subscription-or-balance check so the
-            // user's quotas can be reasoned about in one place. Without
-            // the gate a desynced client could keep poking web_search
-            // until their balance ran out without anyone noticing.
-            var hasSub = await db.Subscriptions.AnyAsync(s =>
-                s.UserId == userId && s.Status == "active" && s.ExpiresAt > DateTime.UtcNow, ct);
+            // Quota gate: a search call reserves a flat rate of web-search points
+            // (50 points = ¥0.05 / call) regardless of how many results the
+            // upstream returns. The gate mirrors `Chat`'s reservation pattern so
+            // the user's quotas can be reasoned about in one place. Without
+            // the gate a desynced client could keep poking web_search until
+            // their balance ran out without anyone noticing.
+            const long WebSearchCostPoints = 50;
             var user = await db.Users.FindAsync(userId);
             if (user is null) return Results.Unauthorized();
-            if (!hasSub && user.BalanceCents <= 0)
-                return Results.Json(new { error = "No active subscription or balance" }, statusCode: 402);
+            if (user.IsSuspended || user.BalancePoints - user.ReservedPoints < WebSearchCostPoints)
+                return Results.Json(new { error = "Insufficient points balance. Please top up to continue." }, statusCode: 402);
+            await db.Users
+                .Where(u => u.Id == userId)
+                .ExecuteUpdateAsync(s => s.SetProperty(u => u.ReservedPoints, u => u.ReservedPoints + WebSearchCostPoints), ct);
 
             var forward = await forwarder.ForwardAsync(userId, req.Provider, req.Query, req.MaxResults ?? 5, ct);
             if (!forward.IsSuccess || forward.Result is null)
@@ -82,6 +84,23 @@ public static class WebSearch
                 t => loggerFactory.CreateLogger("Inkuso.Cloud.WebSearch").LogWarning(
                     t.Exception, "Unobserved exception in web_search audit log"),
                 TaskContinuationOptions.OnlyOnFaulted);
+
+            // Release the reservation and apply the actual flat-rate cost
+            // (50 points per call). We can't go through LlmForwarder here
+            // because web_search has no per-token dimension.
+            try
+            {
+                await db.Users
+                    .Where(u => u.Id == userId)
+                    .ExecuteUpdateAsync(s => s
+                        .SetProperty(u => u.ReservedPoints, u => u.ReservedPoints - WebSearchCostPoints)
+                        .SetProperty(u => u.BalancePoints, u => u.BalancePoints - WebSearchCostPoints));
+            }
+            catch (Exception ex)
+            {
+                loggerFactory.CreateLogger("Inkuso.Cloud.WebSearch").LogError(ex,
+                    "Failed to settle web_search usage: user={UserId}", userId);
+            }
 
             return Results.Ok(new
             {

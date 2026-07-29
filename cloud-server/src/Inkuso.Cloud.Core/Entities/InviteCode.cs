@@ -4,7 +4,7 @@ public class InviteCode
 {
     public int Id { get; set; }
     public string Code { get; set; } = string.Empty;
-    public decimal FreeQuotaCents { get; set; } = 100; // e.g. 100 = 1 yuan free credit
+    public long FreePoints { get; set; } = 1000; // e.g. 1000 = 1 元 free credit
     public int MaxUses { get; set; } = 1;
     public int UsedCount { get; set; } = 0;
     public DateTime? ExpiresAt { get; set; }

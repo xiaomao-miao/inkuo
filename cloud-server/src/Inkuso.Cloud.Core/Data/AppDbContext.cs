@@ -18,6 +18,7 @@ public class AppDbContext : DbContext
     public DbSet<AdminUser> AdminUsers => Set<AdminUser>();
     public DbSet<WebSearchProvider> WebSearchProviders => Set<WebSearchProvider>();
     public DbSet<WebSearchUsageRecord> WebSearchUsageRecords => Set<WebSearchUsageRecord>();
+    public DbSet<Release> Releases => Set<Release>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -27,7 +28,9 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<User>(e =>
         {
             e.HasIndex(u => u.Email).IsUnique();
-            e.Property(u => u.BalanceCents).HasPrecision(12, 4);
+            // Account currency is points (1 元 = 1000 点). Whole points only — no fractional.
+            e.Property(u => u.BalancePoints);
+            e.Property(u => u.ReservedPoints);
         });
 
         // RefreshToken
@@ -58,20 +61,21 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<InviteCode>(e =>
         {
             e.HasIndex(i => i.Code).IsUnique();
-            e.Property(i => i.FreeQuotaCents).HasPrecision(12, 4);
         });
 
         // RedemptionCode
         modelBuilder.Entity<RedemptionCode>(e =>
         {
             e.HasIndex(r => r.Code).IsUnique();
-            e.Property(r => r.CreditCents).HasPrecision(12, 4);
             e.HasOne(r => r.Plan).WithMany().HasForeignKey(r => r.PlanId);
         });
 
         // ModelConfig
         modelBuilder.Entity<ModelConfig>(e =>
         {
+            // Prices are stored as yuan per 1M tokens and converted to points internally
+            // (1 元 = 1000 点) at billing time. Keeping the storage unit yuan keeps the
+            // admin UI intuitive while the wire-level accounting is in whole points.
             e.Property(m => m.InputPricePerMTokens).HasPrecision(12, 6);
             e.Property(m => m.OutputPricePerMTokens).HasPrecision(12, 6);
             e.Property(m => m.CachedInputPricePerMTokens).HasPrecision(12, 6);
@@ -80,7 +84,6 @@ public class AppDbContext : DbContext
         // UsageRecord
         modelBuilder.Entity<UsageRecord>(e =>
         {
-            e.Property(u => u.CostCents).HasPrecision(12, 6);
             e.HasOne(u => u.User)
                 .WithMany()
                 .HasForeignKey(u => u.UserId)
@@ -90,16 +93,16 @@ public class AppDbContext : DbContext
                 .HasForeignKey(u => u.ModelConfigId)
                 .OnDelete(DeleteBehavior.Restrict);
             e.HasIndex(u => new { u.UserId, u.RecordedAt });
+            e.Property(u => u.BillingStatus).HasMaxLength(16);
         });
 
         // Plan
         modelBuilder.Entity<Plan>(e =>
         {
-            // MonthlyQuotaCents is an int (whole cents) on the entity, so
-            // HasPrecision would be silently ignored by Npgsql. We keep the
-            // schema type as `integer`; if a future schema bump ever wants
-            // fractional cents, change the entity to decimal first.
-            e.Property(p => p.MonthlyQuotaCents);
+            // MonthlyPricePoints is a whole-points integer; OverageXPricePer1k fields
+            // are yuan-per-1k tokens (admin-friendly unit) and converted to points
+            // on the fly during billing.
+            e.Property(p => p.MonthlyPricePoints);
             e.Property(p => p.OverageInputPricePer1k).HasPrecision(12, 6);
             e.Property(p => p.OverageOutputPricePer1k).HasPrecision(12, 6);
         });
@@ -132,24 +135,48 @@ public class AppDbContext : DbContext
             e.HasIndex(u => new { u.UserId, u.RecordedAt });
         });
 
-        // Seed default plans
+        // Release
+        modelBuilder.Entity<Release>(e =>
+        {
+            e.Property(r => r.Version).HasMaxLength(64);
+            e.Property(r => r.Channel).HasMaxLength(32);
+            e.Property(r => r.Platform).HasMaxLength(32);
+            e.Property(r => r.Architecture).HasMaxLength(32);
+            e.Property(r => r.FileName).HasMaxLength(256);
+            e.Property(r => r.Sha256).HasMaxLength(128);
+            e.Property(r => r.StoragePath).HasMaxLength(512);
+            e.Property(r => r.DownloadUrl).HasMaxLength(512);
+            // Prevent publishing the same artifact twice.
+            e.HasIndex(r => new { r.Platform, r.Architecture, r.Channel, r.Version }).IsUnique();
+            e.HasIndex(r => new { r.Enabled, r.IsLatest });
+            e.HasIndex(r => r.CreatedAt);
+        });
+
+        // Seed default plans (prices in points, 1 元 = 1000 点)
         modelBuilder.Entity<Plan>().HasData(
-            new Plan { Id = Guid.Parse("00000000-0000-0000-0000-000000000001"), Name = "Free", MonthlyQuotaCents = 0, MonthlyTokenLimit = 500_000, OverageInputPricePer1k = 0.002m, OverageOutputPricePer1k = 0.004m, Enabled = true, CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc) },
-            new Plan { Id = Guid.Parse("00000000-0000-0000-0000-000000000002"), Name = "Plus", MonthlyQuotaCents = 2900, MonthlyTokenLimit = 5_000_000, OverageInputPricePer1k = 0.002m, OverageOutputPricePer1k = 0.004m, Enabled = true, CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc) },
-            new Plan { Id = Guid.Parse("00000000-0000-0000-0000-000000000003"), Name = "Pro", MonthlyQuotaCents = 9900, MonthlyTokenLimit = 25_000_000, OverageInputPricePer1k = 0.0015m, OverageOutputPricePer1k = 0.003m, Enabled = true, CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc) },
-            new Plan { Id = Guid.Parse("00000000-0000-0000-0000-000000000004"), Name = "Max", MonthlyQuotaCents = 29900, MonthlyTokenLimit = 100_000_000, OverageInputPricePer1k = 0.001m, OverageOutputPricePer1k = 0.002m, Enabled = true, CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc) }
+            new Plan { Id = Guid.Parse("00000000-0000-0000-0000-000000000001"), Name = "Free", MonthlyPricePoints = 0, MonthlyTokenLimit = 500_000, OverageInputPricePer1k = 0.002m, OverageOutputPricePer1k = 0.004m, Enabled = true, CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc) },
+            new Plan { Id = Guid.Parse("00000000-0000-0000-0000-000000000002"), Name = "Plus", MonthlyPricePoints = 29_000, MonthlyTokenLimit = 5_000_000, OverageInputPricePer1k = 0.002m, OverageOutputPricePer1k = 0.004m, Enabled = true, CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc) },
+            new Plan { Id = Guid.Parse("00000000-0000-0000-0000-000000000003"), Name = "Pro", MonthlyPricePoints = 99_000, MonthlyTokenLimit = 25_000_000, OverageInputPricePer1k = 0.0015m, OverageOutputPricePer1k = 0.003m, Enabled = true, CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc) },
+            new Plan { Id = Guid.Parse("00000000-0000-0000-0000-000000000004"), Name = "Max", MonthlyPricePoints = 299_000, MonthlyTokenLimit = 100_000_000, OverageInputPricePer1k = 0.001m, OverageOutputPricePer1k = 0.002m, Enabled = true, CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc) }
         );
 
-        // Seed default invite code (INKUO2026 for early adopters)
+        // Seed default invite code (INKUO2026 for early adopters). 5000 points = ¥5 new-user credit.
         modelBuilder.Entity<InviteCode>().HasData(
-            new InviteCode { Id = 1, Code = "INKUO2026", FreeQuotaCents = 500, MaxUses = 9999, Enabled = true, CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc) }
+            new InviteCode { Id = 1, Code = "INKUO2026", FreePoints = 5000, MaxUses = 9999, Enabled = true, CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc) }
         );
 
-        // Seed default model configs
+        // Seed default model configs (prices in yuan per 1M tokens, converted to points at billing time)
         modelBuilder.Entity<ModelConfig>().HasData(
             new ModelConfig { Id = Guid.Parse("00000000-0000-0000-0001-000000000001"), UpstreamProvider = "deepseek", UpstreamBaseUrl = "https://api.deepseek.com", ModelName = "deepseek-chat", DisplayName = "DeepSeek-V3", InputPricePerMTokens = 1.0m, OutputPricePerMTokens = 2.0m, CachedInputPricePerMTokens = 0.1m, Enabled = true, SortOrder = 1, CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc) },
             new ModelConfig { Id = Guid.Parse("00000000-0000-0000-0001-000000000002"), UpstreamProvider = "openai", UpstreamBaseUrl = "https://api.openai.com/v1", ModelName = "gpt-4o-mini", DisplayName = "GPT-4o Mini", InputPricePerMTokens = 0.15m, OutputPricePerMTokens = 0.6m, CachedInputPricePerMTokens = 0.075m, Enabled = true, SortOrder = 2, CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc) },
             new ModelConfig { Id = Guid.Parse("00000000-0000-0000-0001-000000000003"), UpstreamProvider = "openai", UpstreamBaseUrl = "https://api.openai.com/v1", ModelName = "gpt-4o", DisplayName = "GPT-4o", InputPricePerMTokens = 2.5m, OutputPricePerMTokens = 10.0m, CachedInputPricePerMTokens = 1.25m, Enabled = true, SortOrder = 3, CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc) }
+        );
+
+        // Seed one starter redemption code (5000 points = ¥5) so the admin UI has
+        // an example row immediately after a fresh deploy. Admins can disable or
+        // delete it; the seed is just a convenience.
+        modelBuilder.Entity<RedemptionCode>().HasData(
+            new RedemptionCode { Id = 1, Code = "WELCOME-5000", CreditPoints = 5_000, MaxUses = 9999, UsedCount = 0, Enabled = true, CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc) }
         );
 
         // Seed default web_search provider. The Baidu Baike endpoint

@@ -6,9 +6,9 @@ namespace Inkuso.Cloud.Admin.Endpoints;
 
 public static class DashboardEndpoints
 {
-    public record DailyUsagePoint(DateTime Date, decimal CostCents, long Tokens, int NewUsers);
+    public record DailyUsagePoint(DateTime Date, long CostPoints, long Tokens, int NewUsers);
     public record PlanDistribution(string PlanName, int Subscriptions);
-    public record ModelUsageShare(string ModelName, long Tokens, decimal CostCents);
+    public record ModelUsageShare(string ModelName, long Tokens, long CostPoints);
 
     public static void MapDashboardEndpoints(this WebApplication app)
     {
@@ -30,12 +30,14 @@ public static class DashboardEndpoints
             var usedInviteCodes = await db.InviteCodes.SumAsync(i => (int?)i.UsedCount) ?? 0;
             var totalRedemptionCodes = await db.RedemptionCodes.CountAsync();
             var usedRedemptionCodes = await db.RedemptionCodes.SumAsync(i => (int?)i.UsedCount) ?? 0;
+            var suspendedUsers = await db.Users.CountAsync(u => u.IsSuspended);
 
-            var monthCost = await db.UsageRecords
+            var usageQuery = db.UsageRecords.Where(u => u.BillingStatus != "pending");
+            var monthCost = await usageQuery
                 .Where(u => u.RecordedAt >= monthStart)
-                .SumAsync(u => (decimal?)u.CostCents) ?? 0;
-            var totalRevenue = await db.UsageRecords.SumAsync(u => (decimal?)u.CostCents) ?? 0;
-            var monthTokens = await db.UsageRecords
+                .SumAsync(u => (long?)u.CostPoints) ?? 0L;
+            var totalRevenue = await usageQuery.SumAsync(u => (long?)u.CostPoints) ?? 0L;
+            var monthTokens = await usageQuery
                 .Where(u => u.RecordedAt >= monthStart)
                 .SumAsync(u => (long?)u.PromptTokens + (long?)u.CompletionTokens) ?? 0L;
 
@@ -45,12 +47,13 @@ public static class DashboardEndpoints
                 newUsersThisMonth,
                 newUsersToday,
                 activeSubscriptions = activeSubs,
+                suspendedUsers,
                 totalInviteCodes,
                 usedInviteCodes,
                 totalRedemptionCodes,
                 usedRedemptionCodes,
-                monthRevenueCents = monthCost,
-                totalRevenueCents = totalRevenue,
+                monthRevenuePoints = monthCost,
+                totalRevenuePoints = totalRevenue,
                 monthTokens,
             });
         });
@@ -61,12 +64,12 @@ public static class DashboardEndpoints
             var start = DateTime.UtcNow.Date.AddDays(-29);
 
             var records = await db.UsageRecords
-                .Where(u => u.RecordedAt >= start)
+                .Where(u => u.RecordedAt >= start && u.BillingStatus != "pending")
                 .GroupBy(u => u.RecordedAt.Date)
                 .Select(g => new
                 {
                     Date = g.Key,
-                    Cost = g.Sum(u => u.CostCents),
+                    Cost = g.Sum(u => u.CostPoints),
                     Tokens = g.Sum(u => u.PromptTokens + u.CompletionTokens),
                 })
                 .ToListAsync();
@@ -119,13 +122,13 @@ public static class DashboardEndpoints
             var start = DateTime.UtcNow.Date.AddDays(-29);
 
             var rows = await db.UsageRecords
-                .Where(u => u.RecordedAt >= start)
+                .Where(u => u.RecordedAt >= start && u.BillingStatus != "pending")
                 .GroupBy(u => u.ModelConfigId)
                 .Select(g => new
                 {
                     ModelConfigId = g.Key,
                     Tokens = g.Sum(u => (long)u.PromptTokens + u.CompletionTokens),
-                    Cost = g.Sum(u => u.CostCents),
+                    Cost = g.Sum(u => u.CostPoints),
                 })
                 .OrderByDescending(r => r.Tokens)
                 .Take(20)

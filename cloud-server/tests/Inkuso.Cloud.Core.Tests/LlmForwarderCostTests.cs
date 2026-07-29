@@ -1,7 +1,8 @@
 // <copyright file="LlmForwarderCostTests.cs" company="inkuo">
-// Unit tests for LlmForwarder.CalculateCost — the cost math is the single
-// source of truth for what users are billed, so we want regression coverage
-// on edge cases (zero tokens, cached >= prompt, decimal rounding).
+// Unit tests for LlmForwarder.CalculateCostPoints — the cost math is the
+// single source of truth for what users are billed, so we want regression
+// coverage on edge cases (zero tokens, cached >= prompt, rounding to whole
+// points).
 // </copyright>
 
 using Inkuso.Cloud.Core.Entities;
@@ -26,66 +27,84 @@ public class LlmForwarderCostTests
     public void Zero_Usage_Yields_Zero_Cost()
     {
         var config = MakeConfig();
-        Assert.Equal(0m, LlmForwarder.CalculateCost(config, 0, 0, 0));
+        Assert.Equal(0L, LlmForwarder.CalculateCostPoints(config, 0, 0, 0));
     }
 
     [Fact]
     public void Input_Only_Bills_At_Input_Price()
     {
         var config = MakeConfig(inputPrice: 10m);
-        // 1_000_000 tokens * 10 yuan / 1M = 10 yuan = 1000 cents
-        Assert.Equal(1000m, LlmForwarder.CalculateCost(config, 1_000_000, 0));
+        // 1M tokens * 10 yuan/1M * 1000 (yuan→points) = 10_000 points
+        Assert.Equal(10_000L, LlmForwarder.CalculateCostPoints(config, 1_000_000, 0));
     }
 
     [Fact]
     public void Output_Only_Bills_At_Output_Price()
     {
         var config = MakeConfig(outputPrice: 25m);
-        Assert.Equal(2500m, LlmForwarder.CalculateCost(config, 0, 1_000_000));
+        // 1M tokens * 25 yuan/1M * 1000 = 25_000 points
+        Assert.Equal(25_000L, LlmForwarder.CalculateCostPoints(config, 0, 1_000_000));
     }
 
     [Fact]
     public void Cached_Tokens_Subtract_From_Prompt_Total()
     {
         var config = MakeConfig(inputPrice: 10m, cachedPrice: 1m);
-        // 1_000_000 prompt total, 600_000 cached, 400_000 uncached
-        // cached:   600_000 / 1M * 1   = 0.6 yuan
-        // input:    400_000 / 1M * 10  = 4 yuan
-        // output:   0
-        // total:    4.6 yuan = 460 cents
-        var cost = LlmForwarder.CalculateCost(config, 1_000_000, 0, 600_000);
-        Assert.Equal(460m, cost);
+        // 1M prompt total, 600k cached, 400k uncached
+        // cached: 600k/1M * 1   = 0.6 yuan  ->  600 points
+        // input:  400k/1M * 10  = 4.0 yuan  -> 4000 points
+        // output: 0
+        // total:  4.6 yuan = 4600 points
+        var cost = LlmForwarder.CalculateCostPoints(config, 1_000_000, 0, 600_000);
+        Assert.Equal(4600L, cost);
     }
 
     [Fact]
     public void Cached_Tokens_Above_Prompt_Are_Clamped()
     {
         var config = MakeConfig(inputPrice: 10m, cachedPrice: 1m);
-        // 1_000_000 prompt, 999_999_999 cached — defensive clamp should
-        // treat cached as 1_000_000 and uncached as 0 (otherwise we'd
-        // over-bill because cached price < uncached price).
-        var cost = LlmForwarder.CalculateCost(config, 1_000_000, 0, 999_999_999);
-        Assert.Equal(100m, cost); // 1M / 1M * 1 = 1 yuan = 100 cents
+        // 1M prompt, huge cached — clamp treats cached as 1M, uncached as 0.
+        // Without the clamp, uncached would be negative.
+        var cost = LlmForwarder.CalculateCostPoints(config, 1_000_000, 0, 999_999_999);
+        // 1M / 1M * 1 = 1 yuan = 1000 points
+        Assert.Equal(1000L, cost);
     }
 
     [Fact]
-    public void Negative_Cached_Tokens_Are_Clamped_To_Zero()
+    public void Negative_Cached_Tokens_Are_Rejected()
     {
+        // A negative cached count from upstream is treated as malformed data
+        // and the entire call is billed 0 points rather than risk a credit
+        // (cached bucket would otherwise offset the uncached prompt). This
+        // is intentionally conservative — we'd rather under-bill than pay
+        // the user for a broken upstream response.
         var config = MakeConfig(inputPrice: 10m, cachedPrice: 1m);
-        // Negative cached shouldn't subtract from prompt; the full prompt
-        // is billed at the normal input price.
-        var cost = LlmForwarder.CalculateCost(config, 1_000_000, 0, -50);
-        Assert.Equal(1000m, cost); // 1M / 1M * 10 = 10 yuan = 1000 cents
+        var cost = LlmForwarder.CalculateCostPoints(config, 1_000_000, 0, -50);
+        Assert.Equal(0L, cost);
     }
 
     [Fact]
-    public void Cost_Is_Rounded_To_Cents()
+    public void Cost_Rounds_Up_To_Whole_Points()
     {
-        // Use prices that produce a non-integer yuan amount; the function
-        // must round to cents to keep the integer cents column in DB tidy.
+        // Prices that produce a non-integer point amount must be rounded
+        // UP (ceiling) so a non-zero usage always bills at least 1 point.
+        // Forexample: 333_333 tokens * 1 元/1M = 0.333333... 元 = 333.333
+        // points. AwayFromZero would round to 333 points (0.333 元) which
+        // is close to zero cost; ceiling rounds up to 334 points (0.334 元).
         var config = MakeConfig(inputPrice: 1m, outputPrice: 3m, cachedPrice: 0.5m);
-        var cost = LlmForwarder.CalculateCost(config, 333_333, 0);
-        // 333_333 / 1_000_000 * 1 = 0.333333 yuan -> 33.3333 cents -> 33.33
-        Assert.Equal(33.33m, cost);
+        var cost = LlmForwarder.CalculateCostPoints(config, 333_333, 0);
+        Assert.Equal(334L, cost);
+    }
+
+    [Fact]
+    public void Sub_Point_Usage_Still_Bills_One_Point()
+    {
+        // Any non-zero token consumption must cost at least 1 point, otherwise
+        // tiny requests would round to zero and effectively be free.
+        var config = MakeConfig(inputPrice: 0.0001m);
+        // 1 token * 0.0001 元/1M * 1000 = 0.0000001 points before rounding.
+        // Without ceiling, this would round to 0 — bug.
+        var cost = LlmForwarder.CalculateCostPoints(config, 1, 0);
+        Assert.Equal(1L, cost);
     }
 }

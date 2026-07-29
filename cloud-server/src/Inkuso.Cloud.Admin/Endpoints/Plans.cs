@@ -9,7 +9,7 @@ public static class AdminPlansEndpoints
 {
     public record PlanRequest(
         string Name,
-        int MonthlyQuotaCents,
+        long MonthlyPricePoints,
         long MonthlyTokenLimit,
         decimal OverageInputPricePer1k,
         decimal OverageOutputPricePer1k,
@@ -22,12 +22,12 @@ public static class AdminPlansEndpoints
         group.MapGet("/", async (AppDbContext db) =>
         {
             var plans = await db.Plans
-                .OrderBy(p => p.MonthlyQuotaCents)
+                .OrderBy(p => p.MonthlyPricePoints)
                 .Select(p => new
                 {
                     p.Id,
                     p.Name,
-                    p.MonthlyQuotaCents,
+                    p.MonthlyPricePoints,
                     p.MonthlyTokenLimit,
                     p.OverageInputPricePer1k,
                     p.OverageOutputPricePer1k,
@@ -49,7 +49,7 @@ public static class AdminPlansEndpoints
             var plan = new Plan
             {
                 Name = req.Name,
-                MonthlyQuotaCents = req.MonthlyQuotaCents,
+                MonthlyPricePoints = req.MonthlyPricePoints,
                 MonthlyTokenLimit = req.MonthlyTokenLimit,
                 OverageInputPricePer1k = req.OverageInputPricePer1k,
                 OverageOutputPricePer1k = req.OverageOutputPricePer1k,
@@ -67,7 +67,7 @@ public static class AdminPlansEndpoints
             if (plan == null) return Results.NotFound();
 
             plan.Name = req.Name;
-            plan.MonthlyQuotaCents = req.MonthlyQuotaCents;
+            plan.MonthlyPricePoints = req.MonthlyPricePoints;
             plan.MonthlyTokenLimit = req.MonthlyTokenLimit;
             plan.OverageInputPricePer1k = req.OverageInputPricePer1k;
             plan.OverageOutputPricePer1k = req.OverageOutputPricePer1k;

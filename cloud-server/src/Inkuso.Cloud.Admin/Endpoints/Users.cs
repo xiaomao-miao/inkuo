@@ -7,16 +7,17 @@ namespace Inkuso.Cloud.Admin.Endpoints;
 public static class AdminUsersEndpoints
 {
     public record UserListItem(
-        Guid Id, string Email, decimal BalanceCents, DateTime CreatedAt,
-        string InviteCodeUsed, string? PlanName, DateTime? SubExpiresAt,
-        long TotalTokens, decimal TotalCostCents, int SubscriptionCount, bool Disabled);
+        Guid Id, string Email, long BalancePoints, long ReservedPoints, bool IsSuspended,
+        DateTime CreatedAt, string InviteCodeUsed, string? PlanName, DateTime? SubExpiresAt,
+        long TotalTokens, long TotalCostPoints, int SubscriptionCount);
 
     public record UserDetail(
-        Guid Id, string Email, DateTime CreatedAt, string InviteCodeUsed, decimal BalanceCents);
+        Guid Id, string Email, DateTime CreatedAt, string InviteCodeUsed,
+        long BalancePoints, long ReservedPoints, bool IsSuspended);
 
-    public record AdjustBalanceRequest(decimal DeltaCents, string Reason);
+    public record AdjustBalanceRequest(long DeltaPoints, string Reason);
 
-    public record DisableRequest(bool Disabled);
+    public record SuspendRequest(bool Suspended);
 
     public static void MapAdminUsersEndpoints(this WebApplication app)
     {
@@ -36,8 +37,8 @@ public static class AdminUsersEndpoints
             {
                 ("email", "asc") => query.OrderBy(u => u.Email),
                 ("email", "desc") => query.OrderByDescending(u => u.Email),
-                ("balance", "asc") => query.OrderBy(u => u.BalanceCents),
-                ("balance", "desc") => query.OrderByDescending(u => u.BalanceCents),
+                ("balance", "asc") => query.OrderBy(u => u.BalancePoints),
+                ("balance", "desc") => query.OrderByDescending(u => u.BalancePoints),
                 ("createdat", "asc") => query.OrderBy(u => u.CreatedAt),
                 _ => query.OrderByDescending(u => u.CreatedAt),
             };
@@ -49,7 +50,8 @@ public static class AdminUsersEndpoints
                 .Take(pageSize)
                 .Select(u => new
                 {
-                    u.Id, u.Email, u.BalanceCents, u.CreatedAt, u.InviteCodeUsed,
+                    u.Id, u.Email, u.BalancePoints, u.ReservedPoints, u.IsSuspended,
+                    u.CreatedAt, u.InviteCodeUsed,
                 })
                 .ToListAsync();
 
@@ -64,24 +66,24 @@ public static class AdminUsersEndpoints
                     s => new { PlanName = s.Plan.Name, ExpiresAt = (DateTime?)s.ExpiresAt });
 
             var usage = await db.UsageRecords
-                .Where(u => ids.Contains(u.UserId))
+                .Where(u => ids.Contains(u.UserId) && u.BillingStatus != "pending")
                 .GroupBy(u => u.UserId)
                 .Select(g => new
                 {
                     UserId = g.Key,
                     Tokens = g.Sum(u => (long)u.PromptTokens + u.CompletionTokens),
-                    Cost = g.Sum(u => u.CostCents),
+                    Cost = g.Sum(u => u.CostPoints),
                 })
                 .ToDictionaryAsync(g => g.UserId, g => new { g.Tokens, g.Cost });
 
             var items = rows.Select(r => new UserListItem(
-                r.Id, r.Email, r.BalanceCents, r.CreatedAt, r.InviteCodeUsed ?? "",
+                r.Id, r.Email, r.BalancePoints, r.ReservedPoints, r.IsSuspended,
+                r.CreatedAt, r.InviteCodeUsed ?? "",
                 subs.TryGetValue(r.Id, out var s) ? s.PlanName : null,
                 subs.TryGetValue(r.Id, out var s2) ? s2.ExpiresAt : null,
                 usage.TryGetValue(r.Id, out var u) ? u.Tokens : 0L,
-                usage.TryGetValue(r.Id, out var u2) ? u2.Cost : 0m,
-                subs.ContainsKey(r.Id) ? 1 : 0,
-                false)).ToList();
+                usage.TryGetValue(r.Id, out var u2) ? u2.Cost : 0L,
+                subs.ContainsKey(r.Id) ? 1 : 0)).ToList();
 
             return Results.Ok(new { total, page, pageSize, items });
         });
@@ -99,7 +101,7 @@ public static class AdminUsersEndpoints
 
             var usage = await db.UsageRecords
                 .Include(u => u.ModelConfig)
-                .Where(u => u.UserId == id)
+                .Where(u => u.UserId == id && u.BillingStatus != "pending")
                 .OrderByDescending(u => u.RecordedAt)
                 .Take(100)
                 .ToListAsync();
@@ -113,7 +115,9 @@ public static class AdminUsersEndpoints
 
             return Results.Ok(new
             {
-                user = new UserDetail(user.Id, user.Email, user.CreatedAt, user.InviteCodeUsed ?? "", user.BalanceCents),
+                user = new UserDetail(
+                    user.Id, user.Email, user.CreatedAt, user.InviteCodeUsed ?? "",
+                    user.BalancePoints, user.ReservedPoints, user.IsSuspended),
                 subscriptions = subs.Select(s => new
                 {
                     s.Id,
@@ -125,7 +129,7 @@ public static class AdminUsersEndpoints
                 totalUsage = new
                 {
                     tokens = usage.Sum(u => u.PromptTokens + u.CompletionTokens),
-                    costCents = usage.Sum(u => u.CostCents),
+                    costPoints = usage.Sum(u => u.CostPoints),
                     recordCount = await db.UsageRecords.CountAsync(r => r.UserId == id),
                 },
                 recentUsage = usage.Select(u => new
@@ -134,14 +138,17 @@ public static class AdminUsersEndpoints
                     ModelName = u.ModelConfig.DisplayName,
                     u.PromptTokens,
                     u.CompletionTokens,
-                    u.CostCents,
+                    u.CostPoints,
+                    u.BillingStatus,
                     u.RecordedAt,
                 }),
                 refreshTokens,
             });
         });
 
-        // Adjust balance manually (gift / refund)
+        // Adjust balance manually (gift / refund). Uses a conditional UPDATE so
+        // the audit row's read never sees a stale snapshot in a concurrent
+        // settlement.
         group.MapPost("/{id:guid}/adjust-balance", async (Guid id, AdjustBalanceRequest req, AppDbContext db) =>
         {
             if (string.IsNullOrWhiteSpace(req.Reason))
@@ -150,15 +157,32 @@ public static class AdminUsersEndpoints
             var user = await db.Users.FindAsync(id);
             if (user == null) return Results.NotFound();
 
-            user.BalanceCents += req.DeltaCents;
-            await db.SaveChangesAsync();
+            var newBalance = user.BalancePoints + req.DeltaPoints;
+            if (newBalance < 0)
+                return Results.BadRequest(new { error = "Resulting balance would be negative" });
+
+            await db.Users
+                .Where(u => u.Id == id)
+                .ExecuteUpdateAsync(s => s.SetProperty(u => u.BalancePoints, u => u.BalancePoints + req.DeltaPoints));
 
             return Results.Ok(new
             {
-                newBalanceCents = user.BalanceCents,
-                deltaCents = req.DeltaCents,
+                newBalancePoints = newBalance,
+                deltaPoints = req.DeltaPoints,
                 reason = req.Reason,
             });
+        });
+
+        // Toggle suspension caused by an unpaid billing event. Unsetting
+        // requires an explicit confirmation so an admin can't accidentally
+        // release a debt recorder.
+        group.MapPost("/{id:guid}/suspend", async (Guid id, SuspendRequest req, AppDbContext db) =>
+        {
+            var user = await db.Users.FindAsync(id);
+            if (user == null) return Results.NotFound();
+            user.IsSuspended = req.Suspended;
+            await db.SaveChangesAsync();
+            return Results.Ok(new { id = user.Id, isSuspended = user.IsSuspended });
         });
 
         // Revoke all refresh tokens for the user (force logout)

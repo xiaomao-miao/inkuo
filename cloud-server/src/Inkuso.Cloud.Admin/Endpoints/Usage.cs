@@ -21,6 +21,7 @@ public static class AdminUsageEndpoints
             var q = db.UsageRecords
                 .Include(u => u.User)
                 .Include(u => u.ModelConfig)
+                .Where(u => u.BillingStatus != "pending")
                 .AsQueryable();
 
             if (userId.HasValue) q = q.Where(u => u.UserId == userId.Value);
@@ -29,7 +30,7 @@ public static class AdminUsageEndpoints
             if (to.HasValue) q = q.Where(u => u.RecordedAt <= to.Value);
 
             var total = await q.CountAsync();
-            var totalCost = await q.SumAsync(u => (decimal?)u.CostCents) ?? 0;
+            var totalCost = await q.SumAsync(u => (long?)u.CostPoints) ?? 0L;
             var totalTokens = await q.SumAsync(u => (long?)u.PromptTokens + (long?)u.CompletionTokens) ?? 0L;
 
             var items = await q
@@ -45,7 +46,8 @@ public static class AdminUsageEndpoints
                     ModelName = u.ModelConfig.DisplayName,
                     u.PromptTokens,
                     u.CompletionTokens,
-                    u.CostCents,
+                    u.CostPoints,
+                    u.BillingStatus,
                     u.RecordedAt,
                 })
                 .ToListAsync();
@@ -55,7 +57,7 @@ public static class AdminUsageEndpoints
                 total,
                 page,
                 pageSize,
-                totalCostCents = totalCost,
+                totalCostPoints = totalCost,
                 totalTokens,
                 items,
             });

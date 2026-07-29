@@ -8,8 +8,8 @@ namespace Inkuso.Cloud.Api.Endpoints;
 
 public static class Account
 {
-    public record AccountInfo(Guid Id, string Email, decimal BalanceCents,
-        string? PlanName, long MonthlyTokenLimit, DateTime? SubscriptionExpiresAt,
+    public record AccountInfo(Guid Id, string Email, long BalancePoints, long ReservedPoints,
+        bool IsSuspended, string? PlanName, long MonthlyTokenLimit, DateTime? SubscriptionExpiresAt,
         long TokensUsedThisMonth, long MonthlyTokensRemaining);
 
     public static void MapAccountEndpoints(this WebApplication app)
@@ -48,7 +48,7 @@ public static class Account
             var remaining = Math.Max(0, limit - tokensUsed);
 
             return Results.Ok(new AccountInfo(
-                user.Id, user.Email, user.BalanceCents,
+                user.Id, user.Email, user.BalancePoints, user.ReservedPoints, user.IsSuspended,
                 sub?.Plan.Name, limit,
                 sub?.ExpiresAt,
                 tokensUsed, remaining
@@ -61,7 +61,7 @@ public static class Account
 
             var records = await db.UsageRecords
                 .Include(u => u.ModelConfig)
-                .Where(u => u.UserId == userId)
+                .Where(u => u.UserId == userId && u.BillingStatus != "pending")
                 .OrderByDescending(u => u.RecordedAt)
                 .Take(50)
                 .Select(u => new
@@ -70,7 +70,8 @@ public static class Account
                     Model = u.ModelConfig.DisplayName,
                     u.PromptTokens,
                     u.CompletionTokens,
-                    u.CostCents,
+                    u.CostPoints,
+                    u.BillingStatus,
                     u.RecordedAt,
                 })
                 .ToListAsync();

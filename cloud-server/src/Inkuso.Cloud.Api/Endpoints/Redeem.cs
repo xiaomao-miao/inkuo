@@ -9,7 +9,7 @@ namespace Inkuso.Cloud.Api.Endpoints;
 public static class Redeem
 {
     public record RedeemRequest(string Code);
-    public record RedeemResult(string Message, decimal NewBalanceCents, string? PlanName);
+    public record RedeemResult(string Message, long NewBalancePoints, long GrantedPoints, string? PlanName, int? SubscriptionDaysAdded);
 
     public static void MapRedeemEndpoints(this WebApplication app)
     {
@@ -43,8 +43,11 @@ public static class Redeem
             if (code is null)
                 return Results.BadRequest(new { error = "Invalid or exhausted redemption code" });
 
-            string? newPlan = null;
+            long grantedPoints = 0;
+            int? subscriptionDaysAdded = null;
 
+            // --- Plan grant ---
+            string? newPlan = null;
             if (code.PlanId != null && code.Plan != null)
             {
                 var existingSub = await db.Subscriptions
@@ -66,20 +69,36 @@ public static class Redeem
                 });
 
                 newPlan = code.Plan.Name;
+                subscriptionDaysAdded = 30;
             }
 
+            // --- Credit grant (atomic add) ---
+            // We use a single conditional UPDATE rather than read-modify-write
+            // so a concurrent redemption can't lose the grant under a stale
+            // balance snapshot. The reservation we made above (UsedCount++) still
+            // owns the "this was a valid grant" — if the credit add fails, the
+            // user gets a plan but no points, which is consistent with the code
+            // being applied for both at the same time.
             var user = await db.Users.FindAsync(userId);
-            if (user != null && code.CreditCents > 0)
+            if (code.CreditPoints > 0 && user != null)
             {
-                user.BalanceCents += code.CreditCents;
+                grantedPoints = code.CreditPoints;
+                await db.Users
+                    .Where(u => u.Id == userId)
+                    .ExecuteUpdateAsync(s => s.SetProperty(u => u.BalancePoints, u => u.BalancePoints + grantedPoints));
             }
 
             await db.SaveChangesAsync();
 
+            // Re-fetch to report the accurate final balance.
+            if (user != null) await db.Entry(user).ReloadAsync();
+
             return Results.Ok(new RedeemResult(
                 code.PlanId != null ? "Subscription activated" : "Credit added",
-                user?.BalanceCents ?? 0,
-                newPlan));
+                user?.BalancePoints ?? 0,
+                grantedPoints,
+                newPlan,
+                subscriptionDaysAdded));
         });
     }
 }

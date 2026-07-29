@@ -9,7 +9,7 @@ public static class AdminInviteCodesEndpoints
 {
     public record InviteCodeRequest(
         string Code,
-        decimal FreeQuotaCents,
+        long FreePoints,
         int MaxUses,
         DateTime? ExpiresAt,
         bool Enabled);
@@ -41,7 +41,7 @@ public static class AdminInviteCodesEndpoints
             var invite = new InviteCode
             {
                 Code = req.Code,
-                FreeQuotaCents = req.FreeQuotaCents,
+                FreePoints = req.FreePoints,
                 MaxUses = req.MaxUses,
                 ExpiresAt = req.ExpiresAt,
                 Enabled = req.Enabled,
@@ -58,7 +58,7 @@ public static class AdminInviteCodesEndpoints
             if (invite == null) return Results.NotFound();
 
             invite.Code = req.Code;
-            invite.FreeQuotaCents = req.FreeQuotaCents;
+            invite.FreePoints = req.FreePoints;
             invite.MaxUses = req.MaxUses;
             invite.ExpiresAt = req.ExpiresAt;
             invite.Enabled = req.Enabled;

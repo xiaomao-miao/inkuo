@@ -9,7 +9,7 @@ public static class AdminRedemptionCodesEndpoints
 {
     public record RedemptionCodeRequest(
         string Code,
-        decimal CreditCents,
+        long CreditPoints,
         Guid? PlanId,
         int MaxUses,
         DateTime? ExpiresAt,
@@ -31,7 +31,7 @@ public static class AdminRedemptionCodesEndpoints
                 .Take(pageSize)
                 .Select(r => new
                 {
-                    r.Id, r.Code, r.CreditCents, r.PlanId,
+                    r.Id, r.Code, r.CreditPoints, r.PlanId,
                     PlanName = r.Plan != null ? r.Plan.Name : null,
                     r.MaxUses, r.UsedCount, r.ExpiresAt, r.CreatedAt, r.Enabled
                 })
@@ -52,10 +52,15 @@ public static class AdminRedemptionCodesEndpoints
             if (req.PlanId.HasValue && !await db.Plans.AnyAsync(p => p.Id == req.PlanId.Value))
                 return Results.BadRequest(new { error = "Invalid PlanId" });
 
+            // A code without either points or a plan is useless — refuse to
+            // create it so the admin UI doesn't accumulate empty rows.
+            if (req.CreditPoints <= 0 && !req.PlanId.HasValue)
+                return Results.BadRequest(new { error = "Redemption code must grant points or a plan" });
+
             var r = new RedemptionCode
             {
                 Code = req.Code,
-                CreditCents = req.CreditCents,
+                CreditPoints = req.CreditPoints,
                 PlanId = req.PlanId,
                 MaxUses = req.MaxUses,
                 ExpiresAt = req.ExpiresAt,
@@ -73,7 +78,7 @@ public static class AdminRedemptionCodesEndpoints
             if (r == null) return Results.NotFound();
 
             r.Code = req.Code;
-            r.CreditCents = req.CreditCents;
+            r.CreditPoints = req.CreditPoints;
             r.PlanId = req.PlanId;
             r.MaxUses = req.MaxUses;
             r.ExpiresAt = req.ExpiresAt;

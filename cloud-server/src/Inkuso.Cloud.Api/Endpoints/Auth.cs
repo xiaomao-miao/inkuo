@@ -15,7 +15,7 @@ public static class Auth
     public record LoginRequest(string Email, string Password);
     public record RefreshRequest(string RefreshToken);
     public record AuthResponse(string AccessToken, string RefreshToken, DateTime ExpiresAt, UserDto User);
-    public record UserDto(Guid Id, string Email, decimal BalanceCents, string? PlanName, DateTime? SubscriptionExpiresAt);
+    public record UserDto(Guid Id, string Email, long BalancePoints, bool IsSuspended, string? PlanName, DateTime? SubscriptionExpiresAt);
 
     // Email format check. .NET's MailAddress parser rejects more than the
     // naive Contains('@') (e.g. rejects "foo@@bar" or trailing dots); we use
@@ -51,7 +51,7 @@ public static class Auth
                 return Results.Conflict(new { error = "Email already registered" });
 
             // Validate invite code
-            decimal freeCredit = 0;
+            long freeCredit = 0;
             InviteCode? invite = null;
             if (!string.IsNullOrWhiteSpace(req.InviteCode))
             {
@@ -75,7 +75,7 @@ public static class Auth
                 if (reserved == 0)
                     return Results.BadRequest(new { error = "Invite code has reached its usage limit" });
 
-                freeCredit = invite.FreeQuotaCents;
+                freeCredit = invite.FreePoints;
             }
 
             var user = new User
@@ -83,7 +83,7 @@ public static class Auth
                 Email = normalizedEmail,
                 PasswordHash = BCrypt.Net.BCrypt.HashPassword(req.Password),
                 InviteCodeUsed = req.InviteCode,
-                BalanceCents = freeCredit,
+                BalancePoints = freeCredit,
             };
 
             db.Users.Add(user);
@@ -119,7 +119,7 @@ public static class Auth
                 tokens.AccessToken,
                 tokens.RefreshToken,
                 tokens.AccessExpiresAt,
-                new UserDto(user.Id, user.Email, user.BalanceCents,
+                new UserDto(user.Id, user.Email, user.BalancePoints, user.IsSuspended,
                     sub?.Plan.Name, sub?.ExpiresAt)
             ));
         });
@@ -142,7 +142,7 @@ public static class Auth
                 tokens.AccessToken,
                 tokens.RefreshToken,
                 tokens.AccessExpiresAt,
-                new UserDto(user.Id, user.Email, user.BalanceCents,
+                new UserDto(user.Id, user.Email, user.BalancePoints, user.IsSuspended,
                     sub?.Plan.Name, sub?.ExpiresAt)
             ));
         });

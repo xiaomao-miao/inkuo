@@ -56,8 +56,8 @@ public class ReconciliationWorker : BackgroundService
 
 public static class AdminEndpoints
 {
-    public record CreateRedemptionRequest(string Code, decimal CreditCents, Guid? PlanId, int MaxUses);
-    public record CreateInviteRequest(string Code, decimal FreeQuotaCents, int MaxUses);
+    public record CreateRedemptionRequest(string Code, long CreditPoints, Guid? PlanId, int MaxUses);
+    public record CreateInviteRequest(string Code, long FreePoints, int MaxUses);
 
     public static void MapAdminEndpoints(this WebApplication app)
     {
@@ -77,7 +77,7 @@ public static class AdminEndpoints
             db.RedemptionCodes.Add(new Core.Entities.RedemptionCode
             {
                 Code = req.Code,
-                CreditCents = req.CreditCents,
+                CreditPoints = req.CreditPoints,
                 PlanId = req.PlanId,
                 MaxUses = req.MaxUses,
             });
@@ -95,7 +95,7 @@ public static class AdminEndpoints
             db.InviteCodes.Add(new Core.Entities.InviteCode
             {
                 Code = req.Code,
-                FreeQuotaCents = req.FreeQuotaCents,
+                FreePoints = req.FreePoints,
                 MaxUses = req.MaxUses,
             });
             await db.SaveChangesAsync();
@@ -111,16 +111,18 @@ public static class AdminEndpoints
             var totalUsers = await db.Users.CountAsync();
             var activeSubs = await db.Subscriptions.CountAsync(s => s.Status == "active");
             var monthUsage = await db.UsageRecords
-                .Where(u => u.RecordedAt >= new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1, 0, 0, 0, DateTimeKind.Utc))
-                .SumAsync(u => (decimal?)u.CostCents) ?? 0;
-            var totalRevenue = await db.UsageRecords.SumAsync(u => (decimal?)u.CostCents) ?? 0;
+                .Where(u => u.RecordedAt >= new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1, 0, 0, 0, DateTimeKind.Utc) && u.BillingStatus != "pending")
+                .SumAsync(u => (long?)u.CostPoints) ?? 0L;
+            var totalRevenue = await db.UsageRecords
+                .Where(u => u.BillingStatus != "pending")
+                .SumAsync(u => (long?)u.CostPoints) ?? 0L;
 
             return Results.Ok(new
             {
                 totalUsers,
                 activeSubscriptions = activeSubs,
-                monthRevenueCents = monthUsage,
-                totalRevenueCents = totalRevenue,
+                monthRevenuePoints = monthUsage,
+                totalRevenuePoints = totalRevenue,
             });
         });
     }
