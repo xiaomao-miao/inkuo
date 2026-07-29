@@ -12,6 +12,7 @@ import {
   LogoutOutlined,
   KeyOutlined,
   GlobalOutlined,
+  CloudUploadOutlined,
 } from '@ant-design/icons';
 import { useState } from 'react';
 import { AdminUser, authApi } from '../api/auth';
@@ -39,6 +40,7 @@ export default function AdminLayout({ admin, onLogout }: Props) {
     { key: '/invite-codes', icon: <GiftOutlined />, label: '邀请码' },
     { key: '/redemption-codes', icon: <TagsOutlined />, label: '兑换码' },
     { key: '/usage', icon: <BarChartOutlined />, label: '用量记录' },
+    { key: '/releases', icon: <CloudUploadOutlined />, label: '发行版' },
     { key: '/admins', icon: <TeamOutlined />, label: '管理员' },
   ];
 
@@ -70,6 +72,9 @@ export default function AdminLayout({ admin, onLogout }: Props) {
       <Sider theme="dark" width={220}>
         <div style={{ color: '#fff', textAlign: 'center', padding: '20px 0', fontSize: 18, fontWeight: 600 }}>
           inkuo Cloud
+          <div style={{ fontSize: 11, fontWeight: 400, opacity: 0.6, marginTop: 4 }}>
+            <a href="/" target="_blank" rel="noreferrer" style={{ color: 'inherit' }}>查看首页 ↗</a>
+          </div>
         </div>
         <Menu
           theme="dark"

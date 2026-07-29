@@ -1,5 +1,7 @@
 admin-frontend/node_modules
 admin-frontend/dist
+marketing-frontend/node_modules
+marketing-frontend/dist
 src/bin
 src/obj
 **/bin

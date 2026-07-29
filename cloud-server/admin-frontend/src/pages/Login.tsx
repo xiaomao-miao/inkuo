@@ -66,10 +66,6 @@ export default function LoginPage({ onLogin }: Props) {
             </Button>
           </Form.Item>
         </Form>
-
-        <Text type="secondary" style={{ display: 'block', textAlign: 'center', fontSize: 12 }}>
-          默认账号: admin / admin123 (首次登录后请立即修改)
-        </Text>
       </Card>
     </div>
   );

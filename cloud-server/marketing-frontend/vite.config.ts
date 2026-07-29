@@ -1,21 +1,11 @@
 import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
 
 export default defineConfig({
-  plugins: [react()],
-  // The admin SPA is hosted at /admin/ (the marketing site lives at /).
-  // All asset URLs need to be prefixed accordingly so the runtime can find
-  // /assets/* under /admin/assets/* on the server.
-  base: '/admin/',
   server: {
-    port: 5174,
+    port: 5175,
     host: '0.0.0.0',
     proxy: {
       '/api': {
-        target: 'http://localhost:8082',
-        changeOrigin: true,
-      },
-      '/swagger': {
         target: 'http://localhost:8082',
         changeOrigin: true,
       },

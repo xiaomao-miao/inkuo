@@ -76,11 +76,14 @@ services:
       Jwt__AdminAudience: inkuo-admin
       Admin__SeedUsername: ${ADMIN_SEED_USERNAME:?ADMIN_SEED_USERNAME must be set}
       Admin__SeedPassword: ${ADMIN_SEED_PASSWORD:?ADMIN_SEED_PASSWORD must be set and at least 12 chars}
+      Releases__StorageDir: /var/lib/inkuo/releases
     volumes:
       - dpkeys:/var/lib/inkuo/dp-keys
+      - releases-data:/var/lib/inkuo/releases
     ports:
       - "8082:8082"
 
 volumes:
   pgdata:
   dpkeys:
+  releases-data:

@@ -8,3 +8,4 @@ overrides:
 packages:
   - .
   - cloud-server/admin-frontend
+  - cloud-server/marketing-frontend

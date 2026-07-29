@@ -27,3 +27,12 @@ keys.xml
 # Rider / VSCode leftovers
 .idea/
 .vscode/
+
+# Frontend build outputs
+admin-frontend/dist
+admin-frontend/node_modules
+marketing-frontend/dist
+marketing-frontend/node_modules
+
+# Releases data (uploaded installer binaries; mounted volume in prod)
+releases-data/

@@ -34,8 +34,8 @@
     "targets": "all",
     "publisher": "inkuo team",
     "category": "Productivity",
-    "shortDescription": "AI Document Editor",
-    "longDescription": "InkUO is a desktop AI document editor powered by Tauri + React. Edit markdown, DOCX, spreadsheets and code in one fast, native window with offline-first sync and an embedded semantic search index.",
+    "shortDescription": "AI Document Assistant",
+    "longDescription": "InkUO is a desktop AI assistant for everyday documents. Open a folder, tell it what you need, and it searches your files, drafts new documents, polishes reports, and edits Word, Excel, PPT, and Markdown files for you. Designed for non-technical users.",
     "copyright": "Copyright (c) 2026 inkuo team",
     "homepage": "https://github.com/inkuo/inkuo",
     "icon": [

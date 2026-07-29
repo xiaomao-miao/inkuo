@@ -1,8 +1,9 @@
+using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
-using System.Text;
 using Inkuso.Cloud.Admin.Auth;
 using Inkuso.Cloud.Admin.Endpoints;
 using Inkuso.Cloud.Admin.Middleware;
@@ -10,6 +11,20 @@ using Inkuso.Cloud.Core.Data;
 using Inkuso.Cloud.Core.Security;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Raise request-body limits so admins can upload multi-hundred-MiB Tauri
+// installers via the Releases upload endpoint. Kestrel defaults to 30 MiB
+// which is too small for a NSIS-bundled Windows installer that ships the
+// WebView2 runtime.
+builder.WebHost.ConfigureKestrel(opts =>
+{
+    opts.Limits.MaxRequestBodySize = 2L * 1024 * 1024 * 1024; // 2 GiB
+});
+builder.Services.Configure<FormOptions>(opts =>
+{
+    opts.MultipartBodyLengthLimit = 2L * 1024 * 1024 * 1024; // 2 GiB
+    opts.ValueLengthLimit = int.MaxValue;
+});
 
 // Database
 var connectionString = builder.Configuration.GetConnectionString("Postgres")
@@ -185,6 +200,7 @@ app.MapAdminWebSearchProvidersEndpoints();
 app.MapAdminInviteCodesEndpoints();
 app.MapAdminRedemptionCodesEndpoints();
 app.MapAdminUsageEndpoints();
+app.MapAdminReleasesEndpoints();
 
 // Serve the built React admin SPA (production)
 app.MapAdminSpa();

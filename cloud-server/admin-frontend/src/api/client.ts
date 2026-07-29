@@ -58,8 +58,11 @@ api.interceptors.response.use(
   (error) => {
     if (error.response?.status === 401) {
       tokenStore.clear();
-      if (window.location.pathname !== '/login') {
-        window.location.href = '/login';
+      // The admin SPA lives under /admin; the basename is set on
+      // RouterProvider so navigating to '/login' inside React resolves
+      // to '/admin/login' on the wire.
+      if (!window.location.pathname.endsWith('/login')) {
+        window.location.href = '/admin/login';
       }
     }
     return Promise.reject(error);

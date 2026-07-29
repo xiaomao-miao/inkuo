@@ -18,6 +18,7 @@ import InviteCodesPage from './pages/InviteCodes';
 import RedemptionCodesPage from './pages/RedemptionCodes';
 import UsagePage from './pages/Usage';
 import AdminsPage from './pages/Admins';
+import ReleasesPage from './pages/Releases';
 
 export default function App() {
   const [admin, setAdmin] = useState<AdminUser | null>(null);
@@ -73,10 +74,11 @@ export default function App() {
         { path: '/redemption-codes', element: <RedemptionCodesPage /> },
         { path: '/usage', element: <UsagePage /> },
         { path: '/admins', element: <AdminsPage /> },
+        { path: '/releases', element: <ReleasesPage /> },
       ],
     },
     { path: '*', element: <Navigate to="/" replace /> },
   ]);
 
-  return <RouterProvider router={router} />;
+  return <RouterProvider router={router} basename="/admin" />;
 }

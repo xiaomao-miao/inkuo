@@ -296,6 +296,15 @@ importers:
         specifier: ^5.4.8
         version: 5.4.21
 
+  cloud-server/marketing-frontend:
+    devDependencies:
+      typescript:
+        specifier: ^5.6.2
+        version: 5.8.3
+      vite:
+        specifier: ^5.4.8
+        version: 5.4.21
+
 packages:
 
   '@ant-design/colors@7.2.1':
