@@ -208,10 +208,7 @@ export const WordEditor: React.FC<WordEditorProps> = ({
 }) => {
   const editorRef = useRef<DocxEditorRef>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const hasLoadedRef = useRef(false);
   const pmViewRef = useRef<EditorView | null>(null);
-  const wordLastVersionRef = useRef(-1);
-  const hasInitializedFromCacheRef = useRef(false);
 
   const [mode, setMode] = useState<'editing' | 'suggesting' | 'viewing'>('editing');
   const [pmView, setPmView] = useState<EditorView | null>(null);
@@ -247,15 +244,7 @@ export const WordEditor: React.FC<WordEditorProps> = ({
     };
   }, []);
 
-  const loadFromDiskRef = useRef<() => Promise<void>>(() => Promise.resolve());
-
-  const [documentBuffer, setDocumentBuffer] = useState<Uint8Array | null>(() => {
-    if (initialBuffer) {
-      hasLoadedRef.current = true;
-      return initialBuffer;
-    }
-    return null;
-  });
+  const [documentBuffer, setDocumentBuffer] = useState<Uint8Array | null>(() => initialBuffer);
   const [loading, setLoading] = useState<boolean>(() => initialBuffer === null);
   const [error, setError] = useState<string | null>(null);
   const [isDirty, setIsDirty] = useState(false);
@@ -481,27 +470,105 @@ export const WordEditor: React.FC<WordEditorProps> = ({
     };
   }, [filePath]);
 
-  useEffect(() => {
-    const doLoad = async () => {
-      setLoading(true);
-      setError(null);
+  // Token counter to abort stale loads. When the user asks AI to modify
+  // the document we kick off a disk read for the new bytes — but if the
+  // user immediately asks for another change, two reads race against
+  // each other. Without an abort token the slower read (which is reading
+  // the *earlier* version) can land last and overwrite the newer buffer,
+  // making the editor show stale content even though the file on disk is
+  // already the new one. Bumping this counter on every reload
+  // invalidates every in-flight read so only the latest one is allowed
+  // to commit.
+  const loadTokenRef = useRef(0);
+  // Set after the first successful load (cache or disk). Guards the
+  // "no-op on mount while initialBuffer settles" branches below.
+  const hasInitializedFromCacheRef = useRef(false);
+
+  // Read bytes from disk and push them through every surface that
+  // displays the document:
+  //   - `documentBuffer` state → the `<DocxEditor documentBuffer=...>` reactively reloads;
+  //   - `setDocxBuffer(...)` → mirrors bytes into the editor store so a
+  //     later tab switch / file re-open sees the same content;
+  //   - `editorRef.current?.loadDocumentBuffer(buf)` → imperative reload
+  //     so the editor repaints immediately, not on whatever React commit
+  //     happens to be next.
+  // Returns true if the load committed (i.e. wasn't aborted by a newer
+  // load); the caller uses the return value to know whether to clear the
+  // loading flag.
+  const readAndApplyBuffer = useCallback(
+    async (token: number): Promise<boolean> => {
       try {
         const data = await invoke<number[]>('read_office_file', { path: filePath });
-        const buffer = new Uint8Array(data);
-        setDocumentBuffer(buffer);
+        if (loadTokenRef.current !== token) return false;
+        const buf = new Uint8Array(data);
+        setDocumentBuffer(buf);
         setDocxBuffer(filePath, data);
         setIsDirty(false);
         setOpenTabDirty(filePath, false);
+        await editorRef.current?.loadDocumentBuffer(buf);
+        return loadTokenRef.current === token;
       } catch (err) {
-        const message = reportError('office-word-load', err);
+        if (loadTokenRef.current !== token) return false;
+        const message = reportError('office-word-reload', err);
         setError(message);
-        pushNotification({ kind: 'error', title: '加载 Word 文档失败', message });
-      } finally {
+        pushNotification({
+          kind: 'error',
+          title: '刷新 Word 文档失败',
+          message,
+        });
+        return false;
+      }
+    },
+    [filePath, setDocxBuffer, setOpenTabDirty, pushNotification]
+  );
+
+  // Bump the load token and re-read the document. Used by every code
+  // path that wants the editor to repaint with fresh bytes — including
+  // the initial disk load, the AI-driven version watcher, and any manual
+  // retry.
+  const reloadFromDisk = useCallback(async () => {
+    const token = ++loadTokenRef.current;
+    setLoading(true);
+    setError(null);
+    try {
+      await readAndApplyBuffer(token);
+    } finally {
+      if (loadTokenRef.current === token) {
         setLoading(false);
       }
-    };
-    loadFromDiskRef.current = doLoad;
-  }, [filePath, setOpenTabDirty, setDocxBuffer, pushNotification]);
+    }
+  }, [readAndApplyBuffer]);
+
+  // Stable ref so other code paths (legacy callers, e.g. retry buttons)
+  // can kick off a reload without holding a stale closure.
+  const loadFromDiskRef = useRef<() => Promise<void>>(reloadFromDisk);
+  loadFromDiskRef.current = reloadFromDisk;
+
+  // Initial load: only run once per mounted editor instance. The
+  // `initialBuffer` prop is a snapshot of what the parent had in its
+  // cache when it first mounted us; if it has any bytes we can paint
+  // immediately. Otherwise we read from disk. Either way we don't
+  // re-trigger this effect on subsequent renders — re-renders happen
+  // every time the parent re-renders (which happens any time *any*
+  // field on `state.documentContents[path].office` changes), so
+  // depending on `initialBuffer` would cause a reload loop. The
+  // explicit `filePath` guard handles tab-switching.
+  useEffect(() => {
+    if (hasInitializedFromCacheRef.current) return;
+    hasInitializedFromCacheRef.current = true;
+    if (initialBuffer) {
+      setDocumentBuffer(initialBuffer);
+      setLoading(false);
+    } else {
+      void reloadFromDisk();
+    }
+    // Intentionally NOT depending on `initialBuffer`: it's a one-shot
+    // snapshot from the parent. Subsequent reloads happen via the
+    // `officeBufferVersion` effect below. Re-running this effect every
+    // time the parent re-renders would cause a feedback loop with the
+    // parent's `new Uint8Array(tabCached)` snapshot.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filePath]);
 
   // Re-read from disk when the backing file version changes. The
   // @eigenpal/docx-editor-react editor DOES reactively reload on prop
@@ -512,59 +579,41 @@ export const WordEditor: React.FC<WordEditorProps> = ({
   // new headers/footers (or any other AI-driven edits) to repaint
   // immediately, not on whatever the next React commit cycle happens to
   // be.
+  //
+  // Why this used to be broken: the previous version mixed the initial
+  // load and the version watcher into one effect, with `initialBuffer`
+  // in the dependency list. The parent re-renders this component
+  // every time `state.documentContents[path].office` changes (which
+  // happens whenever `setDocxBuffer` or `invalidateOfficeBuffer` runs,
+  // even if the new content is byte-identical to the old), and the
+  // parent constructs `new Uint8Array(tabCached)` on every render — a
+  // fresh Uint8Array reference. That meant this useEffect re-fired on
+  // every parent render. The `wordLastVersionRef` guard caught most of
+  // those re-fires, but two real bugs slipped through:
+  //   1. If `invalidateOfficeBuffer` ever runs *before* the first
+  //      `setDocxBuffer` for a fresh file, the store still has the
+  //      bufferVersion > 0 but `wordLastVersionRef.current` is sitting
+  //      at 0 from the initial-load pass — which makes the guard fire
+  //      (`0 >= 1` false) and the effect reads the file, but the read
+  //      races against another render and can land in a stale state.
+  //   2. Two AI calls back-to-back (e.g. user notices the first rewrite
+  //      was wrong and asks again before the first reload finishes)
+  //      both pass the `wordLastVersionRef` guard because
+  //      `officeBufferVersion` jumps 0 → 1 → 2 in the same React
+  //      batch, and the second `setDocumentBuffer` can land before the
+  //      first one's `loadDocumentBuffer` resolves — leaving the editor
+  //      showing the older of the two writes.
+  // The token-based abort in `readAndApplyBuffer` closes both holes: any
+  // stale read is detected and its `setDocumentBuffer` is skipped.
   useEffect(() => {
-    if (wordLastVersionRef.current >= officeBufferVersion) return;
-    wordLastVersionRef.current = officeBufferVersion;
-
-    if (officeBufferVersion > 0) {
-      // Refresh from disk. We read the file once via Tauri, then push
-      // the bytes through both paths so the editor repaints:
-      //   (a) `setDocumentBuffer(buf)` updates the `documentBuffer`
-      //       prop, which the library's own Ji({documentBuffer})
-      //       useEffect will pick up and reload;
-      //   (b) `editorRef.current?.loadDocumentBuffer(buf)` does the
-      //       same thing imperatively and synchronously, removing any
-      //       dependency on React commit scheduling.
-      (async () => {
-        try {
-          const data = await invoke<number[]>('read_office_file', { path: filePath });
-          const buf = new Uint8Array(data);
-          setDocumentBuffer(buf);
-          setDocxBuffer(filePath, data);
-          setIsDirty(false);
-          setOpenTabDirty(filePath, false);
-          await editorRef.current?.loadDocumentBuffer(buf);
-        } catch (err) {
-          const message = reportError('office-word-reload', err);
-          setError(message);
-          pushNotification({
-            kind: 'error',
-            title: '刷新 Word 文档失败',
-            message,
-          });
-        }
-      })();
-      return;
-    }
-
-    if (initialBuffer) {
-      hasInitializedFromCacheRef.current = true;
-      setDocumentBuffer(initialBuffer);
-      setLoading(false);
-      return;
-    }
-
-    loadFromDiskRef.current();
-  }, [officeBufferVersion, initialBuffer, filePath, pushNotification, setDocxBuffer, setOpenTabDirty]);
-
-  useEffect(() => {
-    if (!loading || hasInitializedFromCacheRef.current) return;
-    if (initialBuffer) {
-      hasInitializedFromCacheRef.current = true;
-      setDocumentBuffer(initialBuffer);
-      setLoading(false);
-    }
-  }, [initialBuffer, loading]);
+    // Skip the first paint — the initial-load useEffect above already
+    // handled that. After that, every increment of `officeBufferVersion`
+    // (driven by `invalidateOfficeBuffer` from the AI pipeline) is a
+    // signal to re-read the file.
+    if (officeBufferVersion === 0) return;
+    if (!hasInitializedFromCacheRef.current) return;
+    void reloadFromDisk();
+  }, [officeBufferVersion, reloadFromDisk]);
 
   useEffect(() => {
     if (isActive && isDirty) {
@@ -757,7 +806,6 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
   isActive,
 }) => {
   const workbookRef = useRef<WorkbookInstance | null>(null);
-  const hasLoadedRef = useRef(false);
 
   // ── State that actually needs to trigger re-renders ──────────────────────
   // fortuneSheets is the single source of truth for the Workbook data prop.
@@ -774,7 +822,6 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
   const pushNotification = useNotificationStore((s) => s.pushNotification);
 
   // ── External file version watcher ─────────────────────────────────────────
-  const excelLastVersionRef = useRef(-1);
   const officeBufferVersion = useEditorStore(
     (s) => s.documentContents[filePath]?.office.bufferVersion ?? 0,
   );
@@ -872,56 +919,113 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
     }
   };
 
-  // ── Load from disk ──────────────────────────────────────────────────────
+  // Token counter to abort stale loads. See the matching comment in
+  // WordEditor for the full rationale — the same TOCTOU bug exists here:
+  // when the user asks AI to modify the spreadsheet back-to-back, two
+  // `loadFromDisk` calls race against each other. The slower one reads
+  // an *earlier* version and can land last, overwriting the newer
+  // sheets data and leaving the editor showing stale content. Bumping
+  // this counter on every reload invalidates every in-flight load so
+  // only the latest one is allowed to commit.
+  const loadTokenRef = useRef(0);
+  // Set after the first load completes. Guards the version-watcher
+  // effect against firing during the initial paint (where the parent
+  // already passed us the right data).
+  const hasInitializedRef = useRef(false);
+
+  // Load bytes from disk and push them through every surface that
+  // displays the workbook:
+  //   - `fortuneSheets` state → the `<Workbook data=...>` reactively reloads;
+  //   - `setFortuneSheetsToStore(...)` → mirrors sheets into the editor
+  //     store so a later tab switch / file re-open sees the same content;
+  // Returns true if the load committed (i.e. wasn't aborted by a newer
+  // load); the caller uses the return value to know whether to clear
+  // the loading flag.
+  const readAndApplySheets = useCallback(
+    async (token: number): Promise<boolean> => {
+      try {
+        const rustWorkbook = await invoke<RustXlsxWorkbook>('read_xlsx_structured', { path: filePath });
+        if (loadTokenRef.current !== token) return false;
+        const sheets = rustWorkbookToFortuneSheets(rustWorkbook);
+        loadedSheetsRef.current = sheets;
+        setFortuneSheets(sheets);
+        setFortuneSheetsToStore(filePath, { sheets });
+        // Reset the user-edit gate so the post-load Workbook onChange
+        // echo doesn't flip isDirty. See handleFortuneChange for the
+        // full rationale.
+        lastLoadedSheetsRef.current = sheets;
+        lastLoadedFingerprintRef.current = fingerprintSheets(sheets);
+        userEditSeenRef.current = false;
+        setIsDirty(false);
+        setOpenTabDirty(filePath, false);
+        return loadTokenRef.current === token;
+      } catch (err) {
+        if (loadTokenRef.current !== token) return false;
+        const message = reportError('office-excel-reload', err);
+        setError(message);
+        pushNotification({
+          kind: 'error',
+          title: '刷新 Excel 文档失败',
+          message,
+        });
+        return false;
+      }
+    },
+    [filePath, setFortuneSheetsToStore, setOpenTabDirty, pushNotification]
+  );
+
+  // Bump the load token and re-read the workbook. Used by every code
+  // path that wants the editor to repaint with fresh bytes — including
+  // the initial disk load and the AI-driven version watcher.
   const loadFromDisk = useCallback(async () => {
+    const token = ++loadTokenRef.current;
     setLoading(true);
     setError(null);
     try {
-      const rustWorkbook = await invoke<RustXlsxWorkbook>('read_xlsx_structured', { path: filePath });
-      const sheets = rustWorkbookToFortuneSheets(rustWorkbook);
-      loadedSheetsRef.current = sheets;
-      setFortuneSheets(sheets);
-      setFortuneSheetsToStore(filePath, { sheets });
-      // Record the array reference and a structural fingerprint so
-      // handleFortuneChange can ignore Workbook's post-load onChange echoes.
-      // Reset the user-edit gate: only after onOp fires (i.e. the user
-      // performs an actual operation) do subsequent onChange calls flip
-      // isDirty. Without this guard, opening a file would flip isDirty=true
-      // even though no user edit has occurred.
-      lastLoadedSheetsRef.current = sheets;
-      lastLoadedFingerprintRef.current = fingerprintSheets(sheets);
-      userEditSeenRef.current = false;
-      setIsDirty(false);
-      setOpenTabDirty(filePath, false);
-    } catch (err) {
-      const message = reportError('office-excel-load', err);
-      setError(message);
-      pushNotification({ kind: 'error', title: '加载 Excel 文档失败', message });
+      await readAndApplySheets(token);
     } finally {
-      setLoading(false);
+      if (loadTokenRef.current === token) {
+        setLoading(false);
+      }
     }
-  }, [filePath, setFortuneSheetsToStore, setOpenTabDirty, pushNotification]);
+  }, [readAndApplySheets]);
 
-  // Persist the load function
+  // Persist the load function (kept for any legacy callers that grab
+  // the ref instead of going through the version-watcher).
   const loadFromDiskRef = useRef(loadFromDisk);
-  useEffect(() => { loadFromDiskRef.current = loadFromDisk; }, [loadFromDisk]);
+  loadFromDiskRef.current = loadFromDisk;
 
-  // Initial load
+  // Initial load: only run once per mounted editor instance. Re-runs
+  // when `filePath` changes (tab switching), which is the only case we
+  // actually want to reload from disk.
   useEffect(() => {
-    if (hasLoadedRef.current) return;
-    hasLoadedRef.current = true;
-    loadFromDiskRef.current();
-  }, [filePath]);
+    hasInitializedRef.current = false;
+    loadTokenRef.current++; // invalidate any in-flight load from the previous path
+    void loadFromDisk().then(() => {
+      hasInitializedRef.current = true;
+    });
+  }, [filePath, loadFromDisk]);
 
-  // Re-read when external file version changes
+  // Re-read when external file version changes. Driven by the AI
+  // pipeline (`invalidateOfficeBuffer` from streamEventHandlers.ts).
+  //
+  // The previous version mixed `hasLoadedRef = false` into this effect,
+  // trying to piggy-back on the initial-load effect — but that effect
+  // depends on `[filePath]`, which doesn't change here, so the
+  // `hasLoadedRef = false` write was a no-op and the version bump
+  // only worked via the explicit `loadFromDiskRef.current()` call below.
+  // We now read the bytes through the same token-gated path the Word
+  // editor uses, so concurrent AI writes can't race against each other
+  // and leave the editor showing stale content.
   useEffect(() => {
-    if (excelLastVersionRef.current >= officeBufferVersion) return;
-    excelLastVersionRef.current = officeBufferVersion;
-    if (officeBufferVersion > 0) {
-      hasLoadedRef.current = false;
-      loadFromDiskRef.current();
-    }
-  }, [officeBufferVersion]);
+    // Skip the first paint — the initial-load effect above already
+    // handled that. After that, every increment of `officeBufferVersion`
+    // (driven by `invalidateOfficeBuffer` from the AI pipeline) is a
+    // signal to re-read the file.
+    if (officeBufferVersion === 0) return;
+    if (!hasInitializedRef.current) return;
+    void loadFromDisk();
+  }, [officeBufferVersion, loadFromDisk]);
 
   // Sync dirty state to sidebar tab
   useEffect(() => {

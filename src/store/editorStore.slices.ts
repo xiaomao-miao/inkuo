@@ -392,11 +392,27 @@ export const createOfficeSlice: EditorStoreCreator<OfficeSlice> = (set) => ({
   invalidateOfficeBuffer: (path) =>
     set((state) => {
       const current = state.documentContents[path];
-      if (!current) return {};
-
-      return updateDocumentSection(state, path, 'office', {
-        bufferVersion: (current.office.bufferVersion ?? 0) + 1,
-      });
+      // Always bump the bufferVersion for this path, even if no document
+      // content entry exists yet. The WordEditor's version-watcher
+      // effect uses `bufferVersion === 0` as its "skip the first paint"
+      // sentinel, so we MUST publish a non-zero value as soon as we
+      // hear about a real on-disk write — otherwise an AI-driven
+      // `create_word_doc` against a freshly-opened (not-yet-cached) file
+      // would be silently ignored by the editor. The cost of creating
+      // the entry here is a tiny default-shaped placeholder; the editor
+      // immediately overwrites the missing fields on its next disk read.
+      const previousVersion = current?.office.bufferVersion ?? 0;
+      const officeUpdate = {
+        bufferVersion: previousVersion + 1,
+      };
+      if (!current) {
+        return setOrCreateDocumentContent(
+          state,
+          path,
+          () => createDefaultDocumentState({ office: officeUpdate })
+        );
+      }
+      return updateDocumentSection(state, path, 'office', officeUpdate);
     }),
 });
 
