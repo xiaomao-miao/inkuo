@@ -20,6 +20,7 @@ use super::{
     HeaderPart, FooterPart, WordDocument, WordSection,
     parse_document_xml, parse_image_xml, parse_table_xml,
 };
+use crate::office::docx::cell_paragraph_extractor;
 use crate::office::shared::{read_zip_entry, OfficeError};
 
 pub fn read_word_document(bytes: &[u8]) -> Result<WordDocument, OfficeError> {
@@ -32,7 +33,21 @@ pub fn read_word_document(bytes: &[u8]) -> Result<WordDocument, OfficeError> {
     // stable id as their `<inkuo:id>` so the writer can pair them with
     // `WordImage` entries during `<w:drawing>` emission.
     paragraphs.extend(image_markers);
-    let tables = parse_table_xml(&doc_content)?;
+    let mut tables = parse_table_xml(&doc_content)?;
+    // Populate `cell_paragraphs` for design-system container tables
+    // (callouts, code blocks). The main parser flattens cell content
+    // into `TableRow.cells[j].text`, so we run a second pass to
+    // recover the structured paragraphs the writer needs to re-emit
+    // inside the shaded cell on the next save. The returned Vec is
+    // indexed by table-position so we can zip it with `tables`.
+    let cell_paragraphs = cell_paragraph_extractor::extract_container_cell_paragraphs(
+        &doc_content,
+    );
+    for (tbl, cps) in tables.iter_mut().zip(cell_paragraphs.into_iter()) {
+        if !cps.is_empty() {
+            tbl.cell_paragraphs = cps;
+        }
+    }
     // Load header / footer parts from the zip. We scan every
     // `word/headerN.xml` / `word/footerN.xml` entry and parse each one
     // back into a `HeaderPart` / `FooterPart` so the writer can

@@ -369,22 +369,6 @@ fn push_callout(out: &mut RenderedDocument, r: &CalloutRender) {
         row_span: 1,
     };
     let row = crate::office::shared::TableRow { cells: vec![cell] };
-    let table = WordTable {
-        id: r.table_id.clone(),
-        rows: vec![row],
-    };
-    // Stash the visual params into the table id using a magic
-    // prefix so `styled_writer::emit_callout_table_xml` can pull
-    // them out at emit time. The writer strips this prefix row
-    // before emitting real `<w:tr>` tags.
-    let style_marker = format!(
-        "__CALLOUT__|{}|{}",
-        r.bg,
-        r.accent,
-    );
-    let mut marker_table = table;
-    marker_table.rows[0].cells[0].text = style_marker;
-    out.tables.push(marker_table);
     // Tag the paragraphs with a style the styles.xml knows.
     let mut paragraphs = r.paragraphs.clone();
     for p in paragraphs.iter_mut() {
@@ -392,6 +376,46 @@ fn push_callout(out: &mut RenderedDocument, r: &CalloutRender) {
             p.style = Some("CalloutBody".to_string());
         }
     }
+    // Build the container table with `cell_paragraphs` populated so
+    // the writer can re-emit them inside the cell on subsequent saves
+    // (round-trip safety). The reader also populates `cell_paragraphs`
+    // for container tables via `xml_parser::parse_container_cell_paragraphs`.
+    let table = WordTable {
+        id: r.table_id.clone(),
+        rows: vec![row],
+        cell_paragraphs: paragraphs.clone(),
+    };
+    // Stash the visual params into the first cell using a magic
+    // prefix the writer's `classify_and_strip` recognises. The
+    // writer strips this prefix row before emitting real `<w:tr>` tags.
+    let style_marker = format!(
+        "__CALLOUT__|{}|{}",
+        r.bg,
+        r.accent,
+    );
+    let mut marker_table = table;
+    marker_table.rows[0].cells[0].text = style_marker;
+    // Inject a `__tbl_pos_<id>__` marker paragraph so the writer
+    // finds this container in document order and emits the inner
+    // paragraphs *inside* the cell. Without the marker the writer
+    // would skip the callout entirely because there is no
+    // `<__tbl_pos_<id>__>` paragraph pointing at it.
+    let marker_para = WordParagraph {
+        id: format!("__tbl_pos_{}__", r.table_id),
+        text: format!("<__tbl_pos_{}__>", r.table_id),
+        style: None,
+        runs: None,
+        numbering: None,
+        alignment: None,
+        text_direction: None,
+    };
+    out.paragraphs.push(marker_para);
+    out.tables.push(marker_table);
+    // Also append the inner paragraphs as body siblings so the reader
+    // (which doesn't yet extract cell paragraphs back) keeps them in
+    // `doc.paragraphs`. The writer's callout path consumes them via
+    // `emit_callout_inner_paragraphs` (fresh-render path) when
+    // `cell_paragraphs` is empty. Belt-and-braces.
     out.paragraphs.append(&mut paragraphs);
 }
 
@@ -402,14 +426,26 @@ fn push_code(out: &mut RenderedDocument, r: &CodeBlockRender) {
         row_span: 1,
     };
     let row = crate::office::shared::TableRow { cells: vec![cell] };
+    let mut paragraphs = r.paragraphs.clone();
     let table = WordTable {
         id: r.table_id.clone(),
         rows: vec![row],
+        cell_paragraphs: paragraphs.clone(),
     };
     let mut marker_table = table;
     marker_table.rows[0].cells[0].text = format!("__CODE__|{}", r.bg);
+    let marker_para = WordParagraph {
+        id: format!("__tbl_pos_{}__", r.table_id),
+        text: format!("<__tbl_pos_{}__>", r.table_id),
+        style: None,
+        runs: None,
+        numbering: None,
+        alignment: None,
+        text_direction: None,
+    };
+    out.paragraphs.push(marker_para);
     out.tables.push(marker_table);
-    out.paragraphs.append(&mut r.paragraphs.clone());
+    out.paragraphs.append(&mut paragraphs);
 }
 
 /// Convenience entry point: render a top-level [`DocumentContent`]

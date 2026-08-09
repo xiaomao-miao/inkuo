@@ -184,6 +184,7 @@ fn classify_and_strip_recognises_callout_marker() {
     let table = crate::office::docx::types::WordTable {
         id: r.table_id.clone(),
         rows: vec![row],
+        cell_paragraphs: Vec::new(),
     };
     let (kind, stripped) = classify_and_strip(&table.rows);
     match kind {

@@ -429,6 +429,7 @@ pub fn styled_table(
     let mut table = WordTable {
         id: id.to_string(),
         rows: vec![header_row],
+        cell_paragraphs: Vec::new(),
     };
     for row in body_rows {
         table.rows.push(row);

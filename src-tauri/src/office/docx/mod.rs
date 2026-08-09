@@ -40,6 +40,7 @@ pub(crate) mod zip_writer;
 pub(crate) mod zip_reader;
 pub(crate) mod document_helpers;
 pub(crate) mod ooxml_boilerplate;
+pub(crate) mod cell_paragraph_extractor;
 
 #[cfg(test)]
 mod components_tests;
@@ -244,6 +245,19 @@ pub struct WordTable {
     /// Unique identifier for this table, stable across reads.
     pub id: String,
     pub rows: Vec<TableRow>,
+    /// Optional cell-level paragraphs for "container" tables (callouts,
+    /// code blocks, and any future component whose visual is a coloured
+    /// table wrapping one or more paragraphs). The writer splices these
+    /// paragraphs inside the container's first `<w:tc>` so the shaded
+    /// background wraps the actual content rather than sitting empty.
+    ///
+    /// `None` for ordinary data tables — the writer leaves the cells
+    /// populated with `<w:p>`s derived from `rows[i].cells[j].text` as
+    /// before. The reader populates this field for any container table
+    /// it finds a paragraph inside (marker detected via first-cell
+    /// text prefix matching the styled-writer prefix set).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cell_paragraphs: Vec<WordParagraph>,
 }
 
 /// A document element — either a paragraph, a table, or an image.
@@ -505,7 +519,7 @@ impl WordDocument {
                             table_rows.push(TableRow { cells: row });
                         }
                     }
-                    tables.push(WordTable { id, rows: table_rows });
+                    tables.push(WordTable { id, rows: table_rows, cell_paragraphs: Vec::new() });
                 }
                 DocElement::Image { id, position: _, path, width_emu, height_emu } => {
                     // Mirror the table-marker trick: a placeholder paragraph
@@ -720,7 +734,7 @@ impl WordDocument {
                             table_rows.push(super::shared::TableRow { cells: row });
                         }
                     }
-                    tables.push(WordTable { id, rows: table_rows });
+                    tables.push(WordTable { id, rows: table_rows, cell_paragraphs: Vec::new() });
                 }
                 DocElement::Image { id, position: _, path, width_emu, height_emu } => {
                     // Mirror the table-marker trick so the writer can splice
@@ -1072,7 +1086,141 @@ pub struct WordImage {
 
 // ─── Write Functions ──────────────────────────────────────────────────────────
 
-/// Files we always regenerate (these define the document structure).
+/// Brand-aware paragraph / table styles that the design-system
+/// component layer emits. When any of these appear in `doc` we swap
+/// the vanilla `STYLES_XML` payload for `EXTENDED_STYLES_XML` so the
+/// component's font sizes and colours resolve correctly.
+const BRAND_STYLE_IDS: &[&str] = &[
+    "CoverTitle",
+    "CoverSubtitle",
+    "ChapterTitle",
+    "SectionTitle",
+    "SubsectionTitle",
+    "BodyParagraph",
+    "ListBullet",
+    "ListNumber",
+    "CalloutBody",
+    "CodeBlock",
+    "BrandTable",
+];
+
+/// Return `true` when the document references any brand-aware style
+/// or carries a styled-table / callout / code-block marker. The
+/// writer uses this to pick `EXTENDED_STYLES_XML` over the base
+/// `STYLES_XML` so cover titles and callout colours render correctly.
+pub(crate) fn doc_uses_brand_styles(doc: &WordDocument) -> bool {
+    for p in &doc.paragraphs {
+        if let Some(ref s) = p.style {
+            if BRAND_STYLE_IDS.contains(&s.as_str()) {
+                return true;
+            }
+        }
+    }
+    for tbl in &doc.tables {
+        // Any callout/code/styled marker in the first cell of any row
+        // means this table is a brand-styled component.
+        for row in &tbl.rows {
+            for cell in &row.cells {
+                let t = cell.text.as_str();
+                if t.starts_with("__STYLE__|")
+                    || t.starts_with("__CALLOUT__|")
+                    || t.starts_with("__CODE__|")
+                {
+                    return true;
+                }
+            }
+        }
+        // Cover titles are paragraphs — already covered above — but
+        // we also flag the table style id for completeness.
+        // (WordTable doesn't carry a style id today; the existing
+        // `BRAND_STYLE_IDS` list already includes "BrandTable" for
+        // future use.)
+    }
+    false
+}
+
+/// Reserved id for the auto-injected page-number footer. Callers can
+/// override by passing their own `footers` array (which short-circuits
+/// the auto-injection branch in `maybe_inject_default_footer`).
+pub const DEFAULT_FOOTER_ID: &str = "__default_page_footer__";
+
+/// When the document uses brand components and the caller didn't
+/// supply any footers, auto-inject a `第 X 页 / 共 Y 页` footer and
+/// wire its reference into every section that doesn't already have
+/// its own footer ref. The injection is deliberately narrow: only
+/// brand-style docs get a default footer so vanilla Word documents
+/// still behave exactly as before.
+pub(crate) fn maybe_inject_default_footer(doc: &mut WordDocument) {
+    if !doc.footers.is_empty() {
+        return;
+    }
+    if !doc_uses_brand_styles(doc) {
+        return;
+    }
+    // Synthesize the default footer.
+    let footer_id = DEFAULT_FOOTER_ID.to_string();
+    let default_footer = FooterPart {
+        id: footer_id.clone(),
+        paragraphs: vec![WordParagraph {
+            id: "__default_footer_para__".to_string(),
+            text: String::new(),
+            style: Some("Footer".to_string()),
+            runs: Some(vec![
+                FontRun {
+                    text: "第 ".to_string(),
+                    font_size: None,
+                    ..FontRun::default()
+                },
+                FontRun {
+                    text: "1".to_string(),
+                    field: Some(FieldRef::Page),
+                    ..FontRun::default()
+                },
+                FontRun {
+                    text: " 页 / 共 ".to_string(),
+                    ..FontRun::default()
+                },
+                FontRun {
+                    text: "1".to_string(),
+                    field: Some(FieldRef::NumPages),
+                    ..FontRun::default()
+                },
+                FontRun {
+                    text: " 页".to_string(),
+                    ..FontRun::default()
+                },
+            ]),
+            numbering: None,
+            alignment: Some("center".to_string()),
+            text_direction: None,
+        }],
+        tables: Vec::new(),
+        images: Vec::new(),
+    };
+    doc.footers.push(default_footer);
+    // Ensure every section carries a footer ref pointing at the
+    // default. Sections with their own explicit footers are left
+    // alone — they presumably wanted something different.
+    if doc.sections.is_empty() {
+        let mut s = WordSection::default();
+        s.footer_refs.push(FooterPartRef {
+            footer_id: footer_id.clone(),
+            kind: Some("default".to_string()),
+        });
+        doc.sections.push(s);
+    } else {
+        for s in doc.sections.iter_mut() {
+            if s.footer_refs.is_empty() {
+                s.footer_refs.push(FooterPartRef {
+                    footer_id: footer_id.clone(),
+                    kind: Some("default".to_string()),
+                });
+            }
+        }
+    }
+}
+
+
 /// All other entries (styles, settings, fonts, images, etc.) are copied from
 /// the original file to preserve custom formatting and embedded objects.
 const GENERATED_FILES: &[&str] = &[
@@ -1096,6 +1244,12 @@ pub fn write_word_document<W: std::io::Write + std::io::Seek>(
     output: W,
     preserve_from: Option<&[u8]>,
 ) -> Result<(), OfficeError> {
+    // Clone so we can patch the model locally without mutating the
+    // caller's copy. The only patch today is the brand-default
+    // page-number footer (see `maybe_inject_default_footer`).
+    let mut doc = doc.clone();
+    maybe_inject_default_footer(&mut doc);
+    let doc = &doc;
     let mut zip = zip::ZipWriter::new(output);
     let opts = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated)
@@ -1357,7 +1511,18 @@ pub fn write_word_document<W: std::io::Write + std::io::Seek>(
     let content_types_base = CONTENT_TYPES_XML;
     let rels = RELS_XML;
     let word_rels_base = WORD_RELS_XML;
-    let styles = STYLES_XML;
+    // Pick the brand-aware styles.xml whenever the doc carries any
+    // design-system component (styled_table, callout, code, or
+    // brand-styled paragraph styles). The base `STYLES_XML` only knows
+    // about vanilla Heading1/2/3, so a document with cover titles and
+    // callouts would otherwise render with the wrong font sizes and
+    // missing paragraph styles.
+    let use_extended_styles = doc_uses_brand_styles(doc);
+    let styles: &str = if use_extended_styles {
+        styled_styles::EXTENDED_STYLES_XML
+    } else {
+        STYLES_XML
+    };
     let settings = SETTINGS_XML;
     let font_table = FONT_TABLE_XML;
     let theme = THEME_XML;

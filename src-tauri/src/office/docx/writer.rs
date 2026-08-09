@@ -21,6 +21,10 @@
 //! stays focused on the package assembly, not on string templating.
 
 use crate::office::shared::{TableCell, TableRow};
+use super::styled_writer::{
+    build_callout_close_xml, build_callout_container_xml, build_code_block_container_xml,
+    build_styled_table_xml, classify_and_strip, TableKind,
+};
 use super::{
     FieldRef, FontRun, HeaderPart, HeaderPartRef, PageSize, PageSizeMm, WordDocument, WordImage,
     WordParagraph, WordSection, WordTable,
@@ -230,7 +234,12 @@ pub fn build_document_xml(doc: &WordDocument) -> String {
     }
 
     // Iterate over paragraphs directly - markers contain position info
-    for (idx, para) in doc.paragraphs.iter().enumerate() {
+    // We use a manual loop with `i` so we can advance past the inner
+    // paragraphs of callout / code containers when we consume them
+    // inside the cell.
+    let mut idx = 0usize;
+    while idx < doc.paragraphs.len() {
+        let para = &doc.paragraphs[idx];
         // Check if this is a table position marker
         if let Some(rest) = para.text.strip_prefix("<__tbl_pos_") {
             if let Some(end) = rest.find("__>") {
@@ -241,9 +250,75 @@ pub fn build_document_xml(doc: &WordDocument) -> String {
                     xml.push_str("\n    <w:p>");
                     xml.push_str(&format!("<w:pPr><inkuo:id w:val=\"__tbl_pos_{}__\"/></w:pPr>", escape_xml(tbl_id)));
                     xml.push_str("</w:p>");
-                    // Also output the table immediately after
-                    xml.push_str(&build_table_xml(&tbl.id, &tbl.rows));
+                    // Route the table through the styled writer when its first
+                    // row carries a recognised marker (`__STYLE__|`,
+                    // `__CALLOUT__|`, `__CODE__|`). The renderer in
+                    // `components.rs` injects those markers; the styled
+                    // builder in `styled_writer.rs` knows how to render the
+                    // coloured fill / accent border / zebra striping.
+                    // Falls back to the plain `build_table_xml` for tables
+                    // built from low-level `DocElement::Table` payloads.
+                    let (kind, body_rows) = classify_and_strip(&tbl.rows);
+                    match kind {
+                        TableKind::Styled(style) => {
+                            xml.push_str(&build_styled_table_xml(&tbl.id, &body_rows, &style));
+                        }
+                        TableKind::Callout { bg, accent } => {
+                            xml.push_str(&build_callout_container_xml(&bg, &accent));
+                            // Round-trip path takes priority: the
+                            // reader parked the inner paragraphs on
+                            // `tbl.cell_paragraphs` and that's the
+                            // authoritative source. Fresh-render path
+                            // (when no cell paragraphs were recovered)
+                            // falls back to consuming the body-level
+                            // paragraphs that follow the marker.
+                            if tbl.cell_paragraphs.is_empty() {
+                                let consumed = emit_callout_inner_paragraphs(
+                                    &mut xml, doc, idx + 1,
+                                );
+                                idx += consumed;
+                            } else {
+                                emit_inner_paragraphs(
+                                    &mut xml,
+                                    &tbl.cell_paragraphs,
+                                );
+                                // Skip past the body siblings that
+                                // the renderer kept around for the
+                                // fresh-render path.
+                                let consumed = count_callout_inner_paragraphs(doc, idx + 1);
+                                idx += consumed;
+                            }
+                            xml.push_str(&build_callout_close_xml());
+                            tables_emitted.insert(tbl_id);
+                            idx += 1;
+                            continue;
+                        }
+                        TableKind::Code { bg } => {
+                            xml.push_str(&build_code_block_container_xml(&bg));
+                            if tbl.cell_paragraphs.is_empty() {
+                                let consumed = emit_callout_inner_paragraphs(
+                                    &mut xml, doc, idx + 1,
+                                );
+                                idx += consumed;
+                            } else {
+                                emit_inner_paragraphs(
+                                    &mut xml,
+                                    &tbl.cell_paragraphs,
+                                );
+                                let consumed = count_callout_inner_paragraphs(doc, idx + 1);
+                                idx += consumed;
+                            }
+                            xml.push_str(&build_callout_close_xml());
+                            tables_emitted.insert(tbl_id);
+                            idx += 1;
+                            continue;
+                        }
+                        TableKind::Plain => {
+                            xml.push_str(&build_table_xml(&tbl.id, &tbl.rows));
+                        }
+                    }
                     tables_emitted.insert(tbl_id);
+                    idx += 1;
                     continue;
                 }
             }
@@ -266,6 +341,7 @@ pub fn build_document_xml(doc: &WordDocument) -> String {
                     ));
                     xml.push_str(&build_image_drawing_xml(img));
                     xml.push_str("</w:p>");
+                    idx += 1;
                     continue;
                 }
             }
@@ -281,6 +357,7 @@ pub fn build_document_xml(doc: &WordDocument) -> String {
                 let sect = &sections[break_section_idx];
                 xml.push_str(&build_paragraph_ppr_xml(para, Some(sect)));
                 xml.push_str("</w:p>");
+                idx += 1;
                 continue;
             }
         }
@@ -325,12 +402,29 @@ pub fn build_document_xml(doc: &WordDocument) -> String {
             }
         }
         xml.push_str("</w:p>");
+        idx += 1;
     }
 
     // Output any tables that weren't emitted via markers (orphaned tables)
     for tbl in &doc.tables {
         if !tables_emitted.contains(tbl.id.as_str()) {
-            xml.push_str(&build_table_xml(&tbl.id, &tbl.rows));
+            let (kind, body_rows) = classify_and_strip(&tbl.rows);
+            match kind {
+                TableKind::Styled(style) => {
+                    xml.push_str(&build_styled_table_xml(&tbl.id, &body_rows, &style));
+                }
+                TableKind::Callout { bg, accent } => {
+                    xml.push_str(&build_callout_container_xml(&bg, &accent));
+                    xml.push_str(&build_callout_close_xml());
+                }
+                TableKind::Code { bg } => {
+                    xml.push_str(&build_code_block_container_xml(&bg));
+                    xml.push_str(&build_callout_close_xml());
+                }
+                TableKind::Plain => {
+                    xml.push_str(&build_table_xml(&tbl.id, &tbl.rows));
+                }
+            }
         }
     }
 
@@ -537,6 +631,133 @@ fn section_break_section_idx(p: &WordParagraph) -> Option<usize> {
         }
     }
     None
+}
+
+/// Walk the paragraph list and emit each callout/code-block's inner
+/// paragraphs (title + body) right after its marker paragraph. The
+/// paragraph iterator in `build_document_xml` calls this whenever it
+/// hits a callout or code-block `<__tbl_pos_<id>__>` marker. We
+/// re-interpret the following paragraphs as inner-cell paragraphs
+/// (rather than as body siblings) until we hit the next marker.
+///
+/// This is the second half of the `push_callout` / `push_code`
+/// pipeline: the renderer emits `[marker_para, container_table,
+/// inner_para_1, inner_para_2, ...]` into the doc, and the writer
+/// flattens that into `container_table { inner_para_1; inner_para_2; ... }`
+/// so the cell actually contains the title + body text.
+///
+/// Implementation detail: we look ahead in `doc.paragraphs` starting
+/// at `idx + 1` (the paragraph immediately after the current marker
+/// in the for-loop) and pull everything until the next
+/// `__tbl_pos_` / `__img_pos_` / `__sect_break_` marker. We emit each
+/// pulled paragraph's body inline so the callout / code cell ends up
+/// with the right content. Stable ids are preserved on each inner
+/// paragraph so subsequent reads can target them.
+fn emit_callout_inner_paragraphs(
+    xml: &mut String,
+    doc: &WordDocument,
+    start_idx: usize,
+) -> usize {
+    let mut consumed = 0usize;
+    for (i, p) in doc.paragraphs.iter().enumerate().skip(start_idx) {
+        // Stop at any other marker — they're not inner-cell content.
+        if p.text.starts_with("<__tbl_pos_")
+            || p.text.starts_with("<__img_pos_")
+            || p.id.starts_with("__sect_break_")
+        {
+            break;
+        }
+        emit_inner_paragraph(xml, p);
+        consumed += 1;
+    }
+    consumed
+}
+
+/// Emit a list of `WordParagraph` as a stream of `<w:p>...</w:p>`
+/// XML inside an already-open `<w:tc>`. This is the round-trip path
+/// for callout / code-block containers: the reader parked the inner
+/// paragraphs on `WordTable::cell_paragraphs` so they survive the
+/// round-trip even though the body-level `WordDocument::paragraphs`
+/// list only carries the table marker.
+fn emit_inner_paragraphs(xml: &mut String, paragraphs: &[WordParagraph]) {
+    for p in paragraphs {
+        emit_inner_paragraph(xml, p);
+    }
+}
+
+/// Count the body-level paragraphs that follow the callout marker
+/// (the same set `emit_callout_inner_paragraphs` would consume).
+/// Used to advance `idx` past them when the writer is taking the
+/// round-trip path (`cell_paragraphs` is set) so the body's
+/// paragraph list isn't re-emitted as siblings.
+fn count_callout_inner_paragraphs(doc: &WordDocument, start_idx: usize) -> usize {
+    let mut counted = 0usize;
+    for (_i, p) in doc.paragraphs.iter().enumerate().skip(start_idx) {
+        if p.text.starts_with("<__tbl_pos_")
+            || p.text.starts_with("<__img_pos_")
+            || p.id.starts_with("__sect_break_")
+        {
+            break;
+        }
+        counted += 1;
+    }
+    counted
+}
+
+/// Emit a single paragraph as raw `<w:p>...</w:p>` inside an
+/// already-open `<w:tc>` (callout / code-block cell). This skips the
+/// section-tracking machinery used by the main loop because the
+/// inner cell content never carries section properties.
+fn emit_inner_paragraph(xml: &mut String, para: &WordParagraph) {
+    xml.push_str("\n      <w:p>");
+    let has_ppr = para.style.is_some()
+        || para.numbering.is_some()
+        || para.alignment.is_some()
+        || para.text_direction.is_some()
+        || !para.id.is_empty();
+    if has_ppr {
+        xml.push_str("<w:pPr>");
+        if let Some(ref s) = para.style {
+            xml.push_str(&format!("<w:pStyle w:val=\"{}\"/>", escape_xml(s)));
+        }
+        if let Some(ref num) = para.numbering {
+            xml.push_str("<w:numPr>");
+            xml.push_str(&format!("<w:ilvl w:val=\"{}\"/>", num.level));
+            xml.push_str(&format!("<w:numId w:val=\"{}\"/>", num.num_id));
+            xml.push_str("</w:numPr>");
+        }
+        if let Some(ref a) = para.alignment {
+            if !a.is_empty() {
+                xml.push_str(&format!("<w:jc w:val=\"{}\"/>", escape_xml(a)));
+            }
+        }
+        if let Some(ref td) = para.text_direction {
+            if !td.is_empty() {
+                let v = emit_text_direction(td);
+                xml.push_str(&format!("<w:textDirection w:val=\"{}\"/>", v));
+            }
+        }
+        if !para.id.is_empty() {
+            xml.push_str(&format!("<inkuo:id w:val=\"{}\"/>", escape_xml(&para.id)));
+        }
+        xml.push_str("</w:pPr>");
+    }
+    if let Some(ref run_list) = para.runs {
+        for run in run_list {
+            xml.push_str(&build_run_xml(run));
+        }
+    } else if !para.text.is_empty() {
+        for chunk in para.text.split('\n') {
+            if !chunk.is_empty() {
+                xml.push_str(&format!(
+                    "<w:r><w:t xml:space=\"preserve\">{}</w:t></w:r>",
+                    escape_xml(chunk)
+                ));
+            }
+            xml.push_str("<w:r><w:br/></w:r>");
+        }
+    }
+    xml.push_str("</w:p>");
 }
 
 pub(crate) fn build_table_xml(_table_id: &str, rows: &[TableRow]) -> String {

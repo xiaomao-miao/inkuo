@@ -117,6 +117,8 @@ Each entry becomes one `word/headerN.xml` (or `footerN.xml`) file. Shape:
   - Page footer: a paragraph like `runs: [{text: "Page "}, {text: "", field: {kind: "page"}}, {text: " of "}, {text: "", field: {kind: "numpages"}}]`.
   - Cover page: empty paragraph (or a small logo) referenced via `kind: "first"`.
 
+> **Auto-injected page-number footer for brand-styled documents.** If you use any design-system component (cover, chapter, styled_table, callout, code) and you don't supply your own `footers[]`, the backend auto-injects a `第 X 页 / 共 Y 页` footer into every section. To override it, pass your own `footers[]` (e.g. `[{id: "main", paragraphs: [{text: "", runs: [{text: "Page "}, {text: "", field: {kind: "page"}}], alignment: "center"}]}]`) and reference it from `sections[].footer_refs`.
+
 > Headers/footers can carry **text only** in v1. Images, tables, and complex layouts inside headers/footers are not yet supported.
 
 ### Field codes (域代码)

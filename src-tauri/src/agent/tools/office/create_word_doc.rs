@@ -1018,7 +1018,7 @@ impl CreateWordDocTool {
                                     table_rows.push(crate::office::TableRow { cells: row });
                                 }
                             }
-                            new_tables.push(crate::office::WordTable { id, rows: table_rows });
+                            new_tables.push(crate::office::WordTable { id, rows: table_rows, cell_paragraphs: Vec::new() });
                         }
                         crate::office::DocElement::Image { id, position: _, path, width_emu, height_emu } => {
                             new_images.push(crate::office::WordImage {
@@ -1335,9 +1335,13 @@ mod component_bridge_tests {
 
         let doc = run_tool(payload).await;
 
-        // The component emits a 1-row marker table that the styled writer
-        // then expands into a full styled table. Either way the file should
-        // contain a table that mentions the style markers.
+        // The styled writer strips the `__STYLE__|...` marker row at
+        // emit time (it's scaffolding used to carry the visual params
+        // through the model layer). After round-trip the table should
+        // contain only the real header + body cells — col1/col2 in
+        // the header, a/b/c/d in the body. We verify that all four
+        // pieces survived and the marker is gone (so callers can't
+        // accidentally rely on scaffolding leaking through).
         assert!(!doc.tables.is_empty(), "expected at least one table");
         let joined: String = doc.tables.iter()
             .flat_map(|t| t.rows.iter())
@@ -1345,7 +1349,18 @@ mod component_bridge_tests {
             .map(|c| c.text.clone())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(joined.contains("__STYLE__|"), "expected style marker, got: {}", joined);
+        for needle in ["col1", "col2", "a", "b", "c", "d"] {
+            assert!(
+                joined.contains(needle),
+                "expected styled table to contain '{}' after round-trip; got: {}",
+                needle, joined
+            );
+        }
+        assert!(
+            !joined.contains("__STYLE__|"),
+            "styled writer should strip the marker row before round-trip; got: {}",
+            joined
+        );
     }
 
     #[tokio::test]
@@ -1361,14 +1376,44 @@ mod component_bridge_tests {
 
         let doc = run_tool(payload).await;
 
-        // The warning callout's bg starts with F (warning) and accent starts with B.
-        let joined: String = doc.tables.iter()
+        // The callout's title + body paragraphs are stored in the
+        // container table's `cell_paragraphs` field (round-trip-safe)
+        // so the writer can re-emit them inside the shaded cell on
+        // the next save. They survive the round-trip even though
+        // they're not in the top-level `paragraphs` list.
+        let cell_joined: String = doc.tables.iter()
+            .flat_map(|t| t.cell_paragraphs.iter())
+            .map(|p| p.text.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            cell_joined.contains("Heads up") && cell_joined.contains("Be careful with this."),
+            "expected callout title + body in cell_paragraphs; got: {}",
+            cell_joined
+        );
+        // The writer's `classify_and_strip` removes the marker row
+        // before persisting — that's correct (it's internal
+        // scaffolding). The reader still knows this is a container
+        // by its 1×1 shape (no marker row needed). We verify the
+        // cell text round-trips: the title + body appear in the
+        // first cell's flattened text, AND the cell_paragraphs
+        // collection keeps the structured representation.
+        let table_text: String = doc.tables.iter()
             .flat_map(|t| t.rows.iter())
             .flat_map(|r| r.cells.iter())
             .map(|c| c.text.clone())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(joined.contains("__CALLOUT__|"), "expected callout marker, got: {}", joined);
+        assert!(
+            table_text.contains("Heads up") && table_text.contains("Be careful with this."),
+            "expected callout title + body in cell text; got: {}",
+            table_text
+        );
+        assert!(
+            doc.tables.iter().any(|t| t.cell_paragraphs.len() >= 2),
+            "expected at least one container table to have ≥2 cell_paragraphs; got: {:?}",
+            doc.tables.iter().map(|t| t.cell_paragraphs.len()).collect::<Vec<_>>()
+        );
     }
 
     #[tokio::test]
@@ -1384,13 +1429,38 @@ mod component_bridge_tests {
         });
 
         let doc = run_tool(payload).await;
-        let joined: String = doc.tables.iter()
+        // Code lines live in `cell_paragraphs` of the container table
+        // so they survive the round-trip; the marker row identifies
+        // the container as a code block.
+        let cell_joined: String = doc.tables.iter()
+            .flat_map(|t| t.cell_paragraphs.iter())
+            .map(|p| p.text.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        for needle in ["fn main() {", "  println!(\"hi\");", "}", "rust"] {
+            assert!(
+                cell_joined.contains(needle),
+                "expected code block to retain '{}' in cell_paragraphs; got: {}",
+                needle, cell_joined
+            );
+        }
+        // Cell text (flattened) also retains the lines.
+        let table_text: String = doc.tables.iter()
             .flat_map(|t| t.rows.iter())
             .flat_map(|r| r.cells.iter())
             .map(|c| c.text.clone())
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(joined.contains("__CODE__|"), "expected code marker, got: {}", joined);
+        assert!(
+            table_text.contains("fn main() {") && table_text.contains("rust"),
+            "expected code lines + language in cell text; got: {}",
+            table_text
+        );
+        assert!(
+            doc.tables.iter().any(|t| t.cell_paragraphs.len() >= 4),
+            "expected the code-block table to carry ≥4 cell_paragraphs (lang + 3 lines); got: {:?}",
+            doc.tables.iter().map(|t| t.cell_paragraphs.len()).collect::<Vec<_>>()
+        );
     }
 
     #[tokio::test]

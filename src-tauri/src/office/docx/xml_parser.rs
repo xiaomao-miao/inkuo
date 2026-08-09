@@ -972,11 +972,6 @@ pub(crate) fn parse_document_xml(content: &str) -> Result<(Vec<WordParagraph>, V
                 } else if name.as_ref() == b"p" {
                     para_depth = para_depth.saturating_sub(1);
                     if para_depth == 0 && tbl_cell_depth == 0 {
-                        // Always preserve the paragraph's slot in the document.
-                        // We only skip it if it had zero text AND zero runs AND no
-                        // style — i.e. it was a totally empty paragraph that carries
-                        // no information at all. Such paragraphs are usually
-                        // artefacts of trailing whitespace and dropping them is safe.
                         let has_format = current_runs.iter().any(|r| {
                             r.bold || r.italic || r.underline || r.strikethrough
                                 || r.font_size.is_some() || r.color.is_some() || r.font_name.is_some()
@@ -1075,4 +1070,3 @@ pub(crate) fn parse_document_xml(content: &str) -> Result<(Vec<WordParagraph>, V
 
     Ok((paragraphs, image_markers, sections))
 }
-

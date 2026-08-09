@@ -255,7 +255,11 @@ fn resolve_vmerge(raw_tables: Vec<RawTable>) -> Vec<WordTable> {
                 .collect();
             rows.push(TableRow { cells });
         }
-        out.push(WordTable { id: raw.id, rows });
+        out.push(WordTable {
+            id: raw.id,
+            rows,
+            cell_paragraphs: Vec::new(),
+        });
     }
     out
 }
