@@ -11,6 +11,11 @@
 //! |------|----------------|
 //! | `mod.rs` (~1 500 lines) | Public types (`WordDocument`, `WordParagraph`, …), the unified `write_word_document` writer orchestrator, image / header-footer splicing calls into `zip_writer`, and section / margin / page-size helpers. The reader entry point lives in `zip_reader.rs`. |
 //! | `types.rs` | Re-export surface so future sub-modules can `use crate::office::docx::types::WordDocument`. |
+//! | `design_tokens.rs` (~250 lines) | Design system: colours, font sizes, spacing. Single source of truth for the brand visual language. Pure data, no XML. |
+//! | `components.rs` (~500 lines) | Component builders — cover titles, headings, body, lists, styled tables, callouts, code blocks, page breaks. Each component takes a `&DesignTokens` and returns paragraphs / tables. |
+//! | `renderer.rs` (~350 lines) | Bridges the structured `ContentBlock` model to the existing writer. Walks a list of blocks and produces `(paragraphs, tables, images)` for the writer. |
+//! | `styled_styles.rs` | Extended `word/styles.xml` payload with brand-level paragraph styles (`ChapterTitle`, `SectionTitle`, `BodyParagraph`, `CalloutBody`, `CodeBlock`, …). |
+//! | `styled_writer.rs` (~300 lines) | Extended XML builders — styled tables (per-cell fills, zebra striping, header repeat), callout containers, code-block containers. |
 //! | `xml_parser.rs` (~1 080 lines) | `parse_document_xml` + the `RunFormat` parsing helpers + `attr_value_str` used inside the streaming reader. Holds *no* zip / writer state. |
 //! | `table_parser.rs` (~280 lines) | Streaming `<w:tbl>` parser with the `RawCell` / `RawTable` / `VMergeKind` intermediates and `vMerge` resolution. |
 //! | `reader.rs` (~100 lines) | Plain-text / markdown rendering (`word_document_to_text`). Pure string assembly over the public type tree — no XML or zip traffic. |
@@ -21,6 +26,12 @@
 //! | `ooxml_boilerplate.rs` (~360 lines) | Verbatim XML constants (default styles, content-types, settings, font-table, theme, app/core properties, comment ext list) used as building blocks by the writer. |
 
 pub mod types;
+pub mod design_tokens;
+pub mod components;
+pub mod renderer;
+pub mod styled_styles;
+pub mod styled_writer;
+pub mod styled_pipeline;
 pub(crate) mod table_parser;
 pub(crate) mod xml_parser;
 pub(crate) mod reader;
@@ -29,6 +40,12 @@ pub(crate) mod zip_writer;
 pub(crate) mod zip_reader;
 pub(crate) mod document_helpers;
 pub(crate) mod ooxml_boilerplate;
+
+#[cfg(test)]
+mod components_tests;
+
+#[cfg(test)]
+mod styled_pipeline_tests;
 
 // Re-export the OOXML document-tree builders so existing
 // `crate::office::docx::build_run_xml` / `build_document_xml` /

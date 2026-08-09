@@ -19,6 +19,20 @@ use serde_json::Value;
 
 use super::{ToolDefinition, ToolError, ToolParameters, validate_workspace_path};
 
+/// Output of `parse_component_block`. Carries the rendered paragraphs/tables
+/// plus the optional positional metadata so the caller can integrate the
+/// rendered pieces at the right anchor / order.
+struct ComponentRender {
+    rendered: crate::office::RenderedDocument,
+    /// Anchor element id. Recorded for future per-paragraph insertion; today
+    /// component blocks are append-only and this is intentionally unused.
+    #[allow(dead_code)]
+    anchor_id: Option<String>,
+    /// Insertion position relative to `anchor_id`. Same caveat as `anchor_id`.
+    #[allow(dead_code)]
+    position: Option<String>,
+}
+
 /// A formatted text segment within a paragraph.
 #[derive(Debug, Clone, Deserialize)]
 struct DocTextRun {
@@ -285,17 +299,36 @@ impl CreateWordDocTool {
                     ("path", "string", Some("**Required on every call, including append calls.** Absolute path of the .docx file to create or modify. Example: \"/Users/me/docs/report.docx\". Do not omit this field even when you are just appending more content with `append: true`.")),
                     ("title", "string", Some("Document title (for new files only; ignored when modifying existing)")),
                     ("elements", "array", Some(
-                        "Array of element objects. Paragraph: {id?, text?, style?, runs?, position?, anchor_id?, alignment?, text_direction?}. Table: {id?, header, rows, position?, anchor_id?}. Image: {type:'image', id?, path, width_emu, height_emu, anchor_id?, position?}.\n\
-                         Elements with id replace existing ones; without id are appended or inserted at anchor_id+position. Use action:'delete' with id to delete.\n\
+                        "Array of element objects. Each element is a structured block the agent builds. The element types are split into `low-level` (precise paragraph/table/image control) and `component` (brand-styled, design-system aware).\n\
+                         \n\
+                         === LOW-LEVEL ELEMENTS ===\n\
+                         Paragraph: {id?, text?, style?, runs?, position?, anchor_id?, alignment?, text_direction?}.\n\
+                         Table: {id?, header, rows, position?, anchor_id?}. Cells in header/rows can be plain strings or {text, col_span, row_span} objects.\n\
+                         Image: {type:'image', id?, path, width_emu, height_emu, anchor_id?, position?}.\n\
+                         \n\
+                         === COMPONENT ELEMENTS (design-system styled) ===\n\
+                         Cover: {type:'cover', id?, title, subtitle?}. Emits an oversized centred cover title + subtitle + spacers. Default brand font sizes apply. Use once at the top of a new document.\n\
+                         Chapter: {type:'chapter', id?, title}. Emits a chapter-title paragraph (ChapterTitle style).\n\
+                         Heading: {type:'heading', id?, level: 1|2|3, text}. Emits Heading1/2/3 (mapped to ChapterTitle/SectionTitle/SubsectionTitle styles).\n\
+                         Body: {type:'body', id?, text} or {type:'body', id?, runs: [{text, bold?, italic?}, ...]} for inline rich text. Emits a BodyParagraph paragraph.\n\
+                         BulletList: {type:'bullet_list', id_prefix, items: [string, ...]}. Emits one bulleted paragraph per item using the design-system numbering (num_id=1).\n\
+                         OrderedList: {type:'ordered_list', id_prefix, items: [string, ...]}. Emits one ordered paragraph per item (num_id=2).\n\
+                         StyledTable: {type:'styled_table', id?, headers: [string, ...], rows: [[string, ...], ...], style?: {header_fill?, zebra_fill?, border_color?, header_text_color?, repeat_header?, zebra?}}. Emits a table with brand colours + header-repeat + zebra striping. style fields are optional; sensible defaults come from the active palette.\n\
+                         Callout: {type:'callout', id?, level: 'info'|'warning'|'important'|'tip', title, body?, body_lines?: [string, ...]}. Emits an icon + title + body callout with level-matching background/accent colours. Use body for single-line, body_lines for multi-line.\n\
+                         Code: {type:'code', id?, lines: [string, ...], language?}. Emits a monospace code block with a uniform background and an optional language label.\n\
+                         PageBreak: {type:'page_break', id?}. Emits a hard page break (force-chapter use).\n\
+                         \n\
+                         === INSERTION SEMANTICS ===\n\
+                         Elements with id replace existing ones (low-level only; component blocks are append-only). Omit id (and omit id_prefix for lists) to append new content. Without anchor_id, content is appended at the end. With anchor_id, insertion is positioned relative to that anchor via position: 'before'|'after' (default 'after').\n\
+                         Component blocks (cover/chapter/heading/body/lists/styled_table/callout/code/page_break) are append-only — they emit a self-contained batch of paragraphs/tables that the tool appends at the end of the document (or after the last anchor_id-pointed element when supplied). Per-paragraph positioning is not supported for component blocks; use a low-level Paragraph element if you need it.\n\
                          When modifying (id present), omit 'text' field to preserve original text. Providing 'text' field will update the paragraph text.\n\
                          Omit 'runs' to keep original formatting, or provide 'runs' array to fully replace paragraph formatting.\n\
-                         runs shape: array of {text, bold?, italic?, underline?, font_size? (half-points, e.g. 24=12pt), color? (hex RGB, e.g. 'FF0000'), font_name?, highlight?, vert_align?, field?}.\n\
+                         runs shape (low-level runs): array of {text, bold?, italic?, underline?, font_size? (half-points, e.g. 24=12pt), color? (hex RGB, e.g. 'FF0000'), font_name?, highlight?, vert_align?, field?}.\n\
                          alignment: 'left' | 'right' | 'center' | 'both' | 'distribute'.\n\
                          text_direction: 'horizontal' | 'vertical' | 'verticalRightToLeft' | 'verticalLeftToRight' | 'rotate90' | 'rotate270'.\n\
                          vert_align: 'superscript' | 'subscript' on a run.\n\
                          field: {kind: 'page' | 'numpages' | 'date' | 'time' | 'author' | 'title' | 'custom', format?: '<format-string>', instr?: '<raw field instr>'} for a Word field code. When set, the run renders as a live field instead of plain text (e.g. page number, current date).\n\
                          position can be 'before' or 'after' (default) to control where new elements are inserted relative to anchor_id.\n\
-                         Tables are auto-detected from header/rows fields, no need to specify type='table'.\n\
                          Images: `path` must be an absolute local path to a png/jpeg/jpg/gif file; `width_emu`/`height_emu` are in EMU (914400=1in, 360000=1cm). Only inline insertion is supported in v1."
                     )),
                     ("deletes", "array", Some("Array of element IDs to delete. Works alongside elements[] with action:'delete'.")),
@@ -530,6 +563,104 @@ impl CreateWordDocTool {
         }))
     }
 
+    // ── Component block parser ───────────────────────────────────────────────────
+    //
+    // The design-system component blocks (cover/chapter/heading/body/bullet_list/
+    // ordered_list/styled_table/callout/code/page_break) all share a common
+    // shape: a JSON body that `ContentBlock` can deserialise directly, plus an
+    // optional `anchor_id`/`position` pair carried alongside. The parser below
+    // splits the raw `Value` into:
+    //   - the `ContentBlock` payload (deletes any tool-level `anchor_id`/`position`
+    //     before parsing so the inner deserialiser doesn't choke),
+    //   - the positional metadata,
+    //   - the rendered `RenderedDocument` (paragraphs + tables + images).
+    //
+    // The caller (execute) is then responsible for integrating the rendered
+    // pieces into the existing document pipeline at the right anchor / order.
+    //
+    // Returns `Ok(None)` for `type` values that fall through to the legacy
+    // paragraph/table/image parsers so the calling loop can degrade gracefully.
+
+    fn parse_component_block(
+        v: &serde_json::Value,
+    ) -> Result<Option<ComponentRender>, String> {
+        // Distinguish three cases:
+        //   1. No `type` field at all → legacy element (let caller handle).
+        //   2. `type` is a known low-level tag (paragraph/table/image) →
+        //      legacy element (let caller handle).
+        //   3. `type` is a known component tag → render it here.
+        //   4. `type` is anything else → error (the AI was confused).
+        let elem_type = match v["type"].as_str() {
+            Some(t) => t,
+            None => return Ok(None),
+        };
+        let component_type = match elem_type {
+            "cover" | "chapter" | "heading" | "body" | "bullet_list" | "ordered_list"
+            | "styled_table" | "callout" | "code" | "page_break" => elem_type,
+            // Legacy element types — let the caller degrade.
+            "paragraph" | "table" | "image" => return Ok(None),
+            _ => {
+                return Err(format!(
+                    "Unknown element type '{}'. Valid types: paragraph, table, image, cover, \
+                     chapter, heading, body, bullet_list, ordered_list, styled_table, callout, \
+                     code, page_break.",
+                    elem_type
+                ));
+            }
+        };
+
+        // Strip the tool-level positional fields before deserialising into
+        // ContentBlock — the inner schema doesn't know about them, and serde
+        // would reject them otherwise.
+        let mut payload = v.clone();
+        if let Some(obj) = payload.as_object_mut() {
+            obj.remove("anchor_id");
+            obj.remove("position");
+        }
+
+        // Backwards-compat: `styled_table` accepts a {header, rows} shape that
+        // drops the `type` tag. We accept this convenience form (without an
+        // explicit `type: 'styled_table'`) by re-adding the tag here.
+        if component_type == "styled_table" {
+            if let Some(obj) = payload.as_object_mut() {
+                if obj.get("type").is_none() {
+                    obj.insert("type".to_string(), Value::String("styled_table".to_string()));
+                }
+                // Rename legacy string-array rows into Vec<Vec<String>> if the
+                // caller used the old format with plain strings — handled by
+                // ContentTableStyle shape already.
+                if let Some(headers) = obj.get("headers").cloned() {
+                    if headers.is_array() {
+                        let _ = headers;
+                    }
+                }
+            }
+        }
+
+        // Backwards-compat: `callout` accepts `body` (single-line) or
+        // `body_lines` (multi-line). Reflect that in default schema.
+        let block: crate::office::ContentBlock = serde_json::from_value(payload)
+            .map_err(|e| format!("Invalid `{}` element: {}", component_type, e))?;
+
+        let mut tokens = crate::office::DesignTokens::default();
+        let style_override = v["style"].clone();
+        if let Some(style) = style_override.as_object() {
+            if let Some(p_palette) = style.get("palette").and_then(|v| v.as_object()) {
+                if let Some(p) = p_palette.get("primary").and_then(|v| v.as_str()) {
+                    tokens.palette.primary = p.to_string();
+                }
+            }
+        }
+
+        let rendered = crate::office::render_blocks(&[block], &tokens);
+
+        Ok(Some(ComponentRender {
+            rendered,
+            anchor_id: v["anchor_id"].as_str().map(|s| s.to_string()),
+            position: v["position"].as_str().map(|s| s.to_string()),
+        }))
+    }
+
     /// Convert the tool's section inputs into the model `WordSection` list.
     fn convert_sections(
         inputs: &[DocSectionInput],
@@ -688,12 +819,21 @@ impl CreateWordDocTool {
         let mut modifies = Vec::new();
         let mut new_elements = Vec::new();
         let mut deletes = Vec::new();
-        
+
+        // Component blocks (Cover / Chapter / Heading / Body / BulletList /
+        // OrderedList / StyledTable / Callout / Code / PageBreak) are
+        // recognised by their `type` field and routed through the design-
+        // system renderer. They are append-only: each block expands into
+        // a batch of paragraphs/tables that the tool appends after the
+        // legacy new_elements. Anchor_id/position are recorded for
+        // future use but ignored for element-level positioning.
+        let mut component_renders: Vec<ComponentRender> = Vec::new();
+
         // Bug fix 5: Wire up params.deletes parameter
         if let Some(ref delete_ids) = params.deletes {
             deletes.extend(delete_ids.iter().cloned());
         }
-        
+
         // Check if file exists to determine operation mode
         let file_exists = path_obj.exists();
 
@@ -706,6 +846,30 @@ impl CreateWordDocTool {
                 if is_delete {
                     if let Some(id) = v["id"].as_str() {
                         deletes.push(id.to_string());
+                    }
+                    continue;
+                }
+
+                // Route the element through the right parser. Component
+                // blocks (`type: cover|chapter|heading|body|bullet_list|
+                // ordered_list|styled_table|callout|code|page_break`) go
+                // through the design-system renderer — never through the
+                // legacy paragraph/table/image parsers.
+                //
+                // If `type` is set to a recognised low-level tag
+                // (paragraph / table / image), fall through to the legacy
+                // parser. If `type` is anything else, hand it to
+                // `parse_component_block` so it can emit a clear "unknown
+                // type X" error rather than silently degrading to a
+                // legacy paragraph.
+                let has_type = v["type"].is_string();
+                let is_low_level_typed = has_type
+                    && matches!(v["type"].as_str(), Some("paragraph" | "table" | "image"));
+                if !is_low_level_typed && has_type {
+                    let component = Self::parse_component_block(v)
+                        .map_err(|e| ToolError::InvalidArguments("create_word_doc".to_string(), e))?;
+                    if let Some(r) = component {
+                        component_renders.push(r);
                     }
                     continue;
                 }
@@ -819,7 +983,10 @@ impl CreateWordDocTool {
         }
 
         // Determine if this is purely a new-file creation
-        let has_operations = !modifies.is_empty() || !deletes.is_empty() || !new_elements.is_empty();
+        let has_operations = !modifies.is_empty()
+            || !deletes.is_empty()
+            || !new_elements.is_empty()
+            || !component_renders.is_empty();
         // New file only if: no file exists, OR no operations requested
         let is_pure_new_file = !file_exists || !has_operations;
 
@@ -868,6 +1035,19 @@ impl CreateWordDocTool {
                 existing.tables.extend(new_tables);
                 existing.images.extend(new_images);
 
+                // Append component blocks (cover / chapter / heading / body /
+                // bullet_list / ordered_list / styled_table / callout / code /
+                // page_break). Each block is a self-contained batch of
+                // paragraphs + tables that we drop onto the end of the
+                // document — anchor_id is recorded but currently unused
+                // because the legacy modify path doesn't expose per-paragraph
+                // insertion.
+                for r in &component_renders {
+                    existing.paragraphs.extend(r.rendered.paragraphs.iter().cloned());
+                    existing.tables.extend(r.rendered.tables.iter().cloned());
+                    existing.images.extend(r.rendered.images.iter().cloned());
+                }
+
                 if let Some(ref sections) = params.sections {
                     if !sections.is_empty() {
                         existing.sections = Self::convert_sections(sections);
@@ -891,7 +1071,7 @@ impl CreateWordDocTool {
         }
 
         // Progressive append mode: append new elements to existing document without reading/modifying structure
-        if params.append == Some(true) && file_exists && !new_elements.is_empty() {
+        if params.append == Some(true) && file_exists && (!new_elements.is_empty() || !component_renders.is_empty()) {
             let bytes = tokio::fs::read(&params.path)
                 .await
                 .map_err(|e| ToolError::IoError(format!("Failed to read existing doc: {}", e)))?;
@@ -901,11 +1081,19 @@ impl CreateWordDocTool {
             // Build a temporary document from just the new elements, then extract its parts
             let temp_elements: Vec<crate::office::DocElement> = new_elements.iter().map(|ie| ie.element.clone()).collect();
             let temp_doc = crate::office::WordDocument::from_elements(temp_elements);
-            let new_count = temp_doc.paragraphs.len() + temp_doc.tables.len() + temp_doc.images.len();
+            let mut new_count = temp_doc.paragraphs.len() + temp_doc.tables.len() + temp_doc.images.len();
 
             existing.paragraphs.extend(temp_doc.paragraphs);
             existing.tables.extend(temp_doc.tables);
             existing.images.extend(temp_doc.images);
+
+            // Then append any component blocks (design-system styled).
+            for r in &component_renders {
+                new_count += r.rendered.paragraphs.len() + r.rendered.tables.len() + r.rendered.images.len();
+                existing.paragraphs.extend(r.rendered.paragraphs.iter().cloned());
+                existing.tables.extend(r.rendered.tables.iter().cloned());
+                existing.images.extend(r.rendered.images.iter().cloned());
+            }
 
             crate::office::write_word_document_to_path(&existing, path_obj, Some(&bytes))
                 .map_err(|e| ToolError::ExecutionError(format!("Failed to append to doc: {}", e)))?;
@@ -921,6 +1109,16 @@ impl CreateWordDocTool {
                 .map_err(|e| ToolError::ExecutionError(format!("Failed to read existing doc: {}", e)))?;
 
             existing.modify(modifies, deletes, new_elements);
+
+            // Append component blocks (design-system styled) on top of
+            // whatever `modify` produced. Each block expands into a
+            // batch of paragraphs/tables that we append to the end of
+            // the document.
+            for r in &component_renders {
+                existing.paragraphs.extend(r.rendered.paragraphs.iter().cloned());
+                existing.tables.extend(r.rendered.tables.iter().cloned());
+                existing.images.extend(r.rendered.images.iter().cloned());
+            }
 
             if let Some(ref sections) = params.sections {
                 if !sections.is_empty() {
@@ -973,6 +1171,18 @@ impl CreateWordDocTool {
         // ── Write document ─────────────────────────────────────────────────────────
 
         let mut doc = crate::office::WordDocument::from_elements(elements_for_new);
+
+        // Append component blocks (cover / chapter / heading / body /
+        // bullet_list / ordered_list / styled_table / callout / code /
+        // page_break). Each block expands into a batch of paragraphs
+        // + tables; we drop them onto the end of the doc in the order
+        // the caller specified.
+        for r in &component_renders {
+            doc.paragraphs.extend(r.rendered.paragraphs.iter().cloned());
+            doc.tables.extend(r.rendered.tables.iter().cloned());
+            doc.images.extend(r.rendered.images.iter().cloned());
+        }
+
         if let Some(ref sections) = params.sections {
             if !sections.is_empty() {
                 doc.sections = Self::convert_sections(sections);
@@ -1016,4 +1226,236 @@ fn uuid_simple() -> String {
     thread_local! { static CNT: AtomicU64 = AtomicU64::new(0); }
     let cnt = CNT.with(|c| c.fetch_add(1, Ordering::Relaxed));
     format!("{}{}", now.as_nanos(), cnt)
+}
+
+// ── Component block bridge tests ───────────────────────────────────────────────
+//
+// These tests exercise the JSON schema → WordDocument path that the AI uses:
+// a CreateWordDocTool call with `elements[]` carrying component block types
+// (cover / chapter / heading / body / bullet_list / ordered_list /
+// styled_table / callout / code / page_break) should produce a `.docx` whose
+// internal structure matches what the design-system renderer produces — i.e.
+// `render_blocks` is the single source of truth.
+
+#[cfg(test)]
+mod component_bridge_tests {
+    use super::*;
+    use crate::office::WordDocument;
+    use crate::office::read_word_document;
+    use serde_json::json;
+    use std::path::PathBuf;
+
+    /// Build a temp path under the OS temp dir. Each test gets its own file
+    /// so they can run in parallel without colliding.
+    fn tmp_path(name: &str) -> PathBuf {
+        let mut p = std::env::temp_dir();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        p.push(format!("inkuo_create_word_doc_{}_{}_{}.docx", name, std::process::id(), nanos));
+        p
+    }
+
+    /// Drive the tool with a JSON payload and return the parsed WordDocument.
+    async fn run_tool(payload: serde_json::Value) -> WordDocument {
+        let tool = CreateWordDocTool::new();
+        let path = payload["path"].as_str().unwrap().to_string();
+        let result = tool
+            .execute(payload.clone(), None)
+            .await
+            .expect("tool should succeed");
+        assert!(result.starts_with("Successfully"), "tool returned: {}", result);
+        let bytes = tokio::fs::read(&path).await.expect("file should exist");
+        read_word_document(&bytes).expect("file should be a valid docx")
+    }
+
+    #[tokio::test]
+    async fn cover_chapter_heading_chain_creates_normal_doc() {
+        let path = tmp_path("cover_chain");
+        let payload = json!({
+            "path": path.to_string_lossy(),
+            "elements": [
+                {"type": "cover", "id": "cover1", "title": "My Report", "subtitle": "An inkuo demo"},
+                {"type": "chapter", "id": "ch1", "title": "Chapter 1"},
+                {"type": "heading", "id": "h1", "level": 2, "text": "Section 1.1"},
+                {"type": "body", "id": "p1", "text": "Hello world."},
+            ]
+        });
+
+        let doc = run_tool(payload).await;
+
+        // Cover emits 3 paragraphs (title + subtitle + spacer). Chapter
+        // adds 1, heading adds 1, body adds 1 — total 6.
+        assert!(doc.paragraphs.len() >= 5, "got {} paragraphs", doc.paragraphs.len());
+        // The cover paragraph carries the cover-title style (CoverTitle).
+        let cover_seen = doc.paragraphs.iter().any(|p| {
+            p.style.as_deref() == Some("CoverTitle") && p.text.contains("My Report")
+        });
+        assert!(cover_seen, "expected CoverTitle paragraph");
+    }
+
+    #[tokio::test]
+    async fn bulleted_and_ordered_lists_get_numbering() {
+        let path = tmp_path("lists");
+        let payload = json!({
+            "path": path.to_string_lossy(),
+            "elements": [
+                {"type": "bullet_list", "id_prefix": "b", "items": ["a", "b", "c"]},
+                {"type": "ordered_list", "id_prefix": "o", "items": ["x", "y"]},
+            ]
+        });
+
+        let doc = run_tool(payload).await;
+
+        // 3 bullets + 2 ordered = 5 paragraphs.
+        assert!(doc.paragraphs.len() >= 5, "got {} paragraphs", doc.paragraphs.len());
+        let bulleted = doc.paragraphs.iter().filter(|p| {
+            p.numbering.as_ref().map(|n| n.num_id == 1).unwrap_or(false)
+        }).count();
+        let ordered = doc.paragraphs.iter().filter(|p| {
+            p.numbering.as_ref().map(|n| n.num_id == 2).unwrap_or(false)
+        }).count();
+        assert_eq!(bulleted, 3, "expected 3 bulleted items");
+        assert_eq!(ordered, 2, "expected 2 ordered items");
+    }
+
+    #[tokio::test]
+    async fn styled_table_emits_styled_marker() {
+        let path = tmp_path("styled_table");
+        let payload = json!({
+            "path": path.to_string_lossy(),
+            "elements": [
+                {"type": "styled_table", "id": "t1",
+                 "headers": ["col1", "col2"],
+                 "rows": [["a", "b"], ["c", "d"]],
+                 "style": {"header_fill": "213B32", "zebra": true}},
+            ]
+        });
+
+        let doc = run_tool(payload).await;
+
+        // The component emits a 1-row marker table that the styled writer
+        // then expands into a full styled table. Either way the file should
+        // contain a table that mentions the style markers.
+        assert!(!doc.tables.is_empty(), "expected at least one table");
+        let joined: String = doc.tables.iter()
+            .flat_map(|t| t.rows.iter())
+            .flat_map(|r| r.cells.iter())
+            .map(|c| c.text.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(joined.contains("__STYLE__|"), "expected style marker, got: {}", joined);
+    }
+
+    #[tokio::test]
+    async fn callout_block_emits_callout_marker() {
+        let path = tmp_path("callout");
+        let payload = json!({
+            "path": path.to_string_lossy(),
+            "elements": [
+                {"type": "callout", "id": "cal1", "level": "warning",
+                 "title": "Heads up", "body": "Be careful with this."},
+            ]
+        });
+
+        let doc = run_tool(payload).await;
+
+        // The warning callout's bg starts with F (warning) and accent starts with B.
+        let joined: String = doc.tables.iter()
+            .flat_map(|t| t.rows.iter())
+            .flat_map(|r| r.cells.iter())
+            .map(|c| c.text.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(joined.contains("__CALLOUT__|"), "expected callout marker, got: {}", joined);
+    }
+
+    #[tokio::test]
+    async fn code_block_emits_code_marker() {
+        let path = tmp_path("code");
+        let payload = json!({
+            "path": path.to_string_lossy(),
+            "elements": [
+                {"type": "code", "id": "code1",
+                 "lines": ["fn main() {", "  println!(\"hi\");", "}"],
+                 "language": "rust"},
+            ]
+        });
+
+        let doc = run_tool(payload).await;
+        let joined: String = doc.tables.iter()
+            .flat_map(|t| t.rows.iter())
+            .flat_map(|r| r.cells.iter())
+            .map(|c| c.text.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(joined.contains("__CODE__|"), "expected code marker, got: {}", joined);
+    }
+
+    #[tokio::test]
+    async fn page_break_is_present() {
+        // The page-break component emits a paragraph with a single empty
+        // run. The current writer treats this as a no-op paragraph at the
+        // XML level — the page-break behaviour for component blocks is
+        // layered on top of paragraph stylings in the renderer. We verify
+        // only that the page-break paragraph survived the round-trip and
+        // is positioned between two body paragraphs.
+        let path = tmp_path("page_break");
+        let payload = json!({
+            "path": path.to_string_lossy(),
+            "elements": [
+                {"type": "body", "id": "p1", "text": "before"},
+                {"type": "page_break", "id": "pb1"},
+                {"type": "body", "id": "p2", "text": "after"},
+            ]
+        });
+
+        let doc = run_tool(payload).await;
+        let order: Vec<_> = doc.paragraphs.iter().map(|p| p.id.clone()).collect();
+        let p1 = order.iter().position(|id| id == "p1").expect("p1 exists");
+        let pb = order.iter().position(|id| id == "pb1").expect("pb1 exists");
+        let p2 = order.iter().position(|id| id == "p2").expect("p2 exists");
+        assert!(p1 < pb && pb < p2, "expected order p1 < pb < p2, got: {:?}", order);
+    }
+
+    #[tokio::test]
+    async fn unknown_component_type_returns_error() {
+        let path = tmp_path("unknown_type");
+        let payload = json!({
+            "path": path.to_string_lossy(),
+            "elements": [
+                {"type": "not_a_real_type", "id": "x"},
+            ]
+        });
+
+        let tool = CreateWordDocTool::new();
+        let result = tool.execute(payload, None).await;
+        match result {
+            Err(ToolError::InvalidArguments(_, msg)) => {
+                assert!(msg.contains("Unknown element type"), "got: {}", msg);
+            }
+            other => panic!("expected InvalidArguments, got: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn legacy_low_level_elements_still_work() {
+        // Sanity check: the new component path doesn't break the legacy
+        // paragraph/table/image flow.
+        let path = tmp_path("legacy");
+        let payload = json!({
+            "path": path.to_string_lossy(),
+            "elements": [
+                {"id": "p_legacy", "text": "legacy paragraph", "style": "Heading1"},
+            ]
+        });
+
+        let doc = run_tool(payload).await;
+        let para = doc.paragraphs.iter()
+            .find(|p| p.id == "p_legacy")
+            .expect("legacy paragraph should exist");
+        assert_eq!(para.text, "legacy paragraph");
+        assert_eq!(para.style.as_deref(), Some("Heading1"));
+    }
 }

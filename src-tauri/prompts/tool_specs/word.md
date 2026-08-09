@@ -51,6 +51,44 @@ Create, modify, append, or delete content in a .docx. A single tool covers every
 4. When you supply `runs`, they replace the entire run list. To bold a single word you must echo the other runs' text.
 5. Always `read_office_file` first — otherwise ids won't line up and edits will land in the wrong paragraph.
 
+## Design-system components (recommended for new documents)
+> **Preferred path for new documents.** In addition to the low-level `paragraph` / `table` / `image` elements, `create_word_doc` accepts a set of **component blocks** that produce brand-styled output (custom font scales, palette colours, header-repeat, zebra striping, callout containers, code blocks). Use these instead of building the same look by hand with `paragraph` + `style` + `runs`.
+
+**Component element types** — each entry in `elements[]` may set `type` to one of:
+- `cover` — `{type: "cover", id?, title, subtitle?}`. Oversized centred cover-page title + subtitle + spacer. Use once at the top of a new document.
+- `chapter` — `{type: "chapter", id?, title}`. Chapter title (maps to `ChapterTitle` style).
+- `heading` — `{type: "heading", id?, level: 1|2|3, text}`. `1` = chapter (ChapterTitle), `2` = section (SectionTitle), `3` = subsection (SubsectionTitle).
+- `body` — `{type: "body", id?, text}` or `{type: "body", id?, runs: [{text, bold?, italic?}, ...]}`. Body paragraph (BodyParagraph style). Use `runs` for inline rich text.
+- `bullet_list` — `{type: "bullet_list", id_prefix, items: [string, ...]}`. One bulleted paragraph per item (uses numbering `num_id: 1`).
+- `ordered_list` — `{type: "ordered_list", id_prefix, items: [string, ...]}`. One ordered paragraph per item (uses numbering `num_id: 2`).
+- `styled_table` — `{type: "styled_table", id?, headers: [string, ...], rows: [[string, ...], ...], style?: {...}}`. Brand-styled table with optional zebra striping + header repeat. `style` fields: `{header_fill?, zebra_fill?, border_color?, header_text_color?, repeat_header?, zebra?}` — all optional, sensible defaults from the active palette.
+- `callout` — `{type: "callout", id?, level: "info"|"warning"|"important"|"tip", title, body?, body_lines?: [string, ...]}`. Coloured-background callout with level-matching accent. Use `body` for single-line text, `body_lines` for multi-line.
+- `code` — `{type: "code", id?, lines: [string, ...], language?}`. Monospace code block with uniform background and optional language label.
+- `page_break` — `{type: "page_break", id?}`. Force a hard page break.
+
+**Insertion semantics**: component blocks are **append-only**. Each block expands into a self-contained batch of paragraphs/tables that the tool appends to the end of the document (or after the existing content when modifying). `anchor_id` / `position` are recorded but currently ignored for component blocks — if you need per-paragraph positioning, fall back to a low-level `paragraph` element.
+
+**Mixing high-level and low-level**: you can mix `type: "chapter"` and `type: "paragraph"` in the same `elements[]` array. The legacy elements are still processed exactly as before.
+
+**Example — multi-chapter report with brand styling**:
+```json
+{
+  "path": "/Users/me/docs/annual-report.docx",
+  "elements": [
+    {"type": "cover", "id": "cover1", "title": "Annual Report 2026", "subtitle": "InkUO Inc."},
+    {"type": "chapter", "id": "ch1", "title": "Overview"},
+    {"type": "body", "id": "p1", "text": "This year InkUO shipped 12 major features."},
+    {"type": "callout", "id": "cal1", "level": "info", "title": "Growth", "body": "Revenue grew 47% YoY."},
+    {"type": "chapter", "id": "ch2", "title": "Engineering"},
+    {"type": "heading", "id": "h2", "level": 2, "text": "Highlights"},
+    {"type": "bullet_list", "id_prefix": "bl", "items": ["Shipped 12 features", "Cut p95 latency by 35%", "Reduced infra cost by 18%"]},
+    {"type": "styled_table", "id": "t1", "headers": ["metric", "value"], "rows": [["users", "12k"], ["revenue", "$1.4M"]]},
+    {"type": "code", "id": "code1", "lines": ["fn main() { println!(\"hi\"); }"], "language": "rust"}
+  ]
+}
+```
+The resulting `.docx` carries the brand palette throughout — coloured headings, brand-coloured table header with white text, zebra-striped body rows, an info callout with brand accent, and a Rust-labelled code block — all without any manual `style` + `runs` wiring.
+
 ## Sections, headers, footers
 Modern Word documents are partitioned into **sections**, each with its own page size, orientation, margins, text direction, columns, and header/footer references. The `create_word_doc` tool exposes this directly via three top-level arrays.
 
