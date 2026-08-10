@@ -7,8 +7,15 @@ pub mod render_check;
 mod docx;
 mod xlsx;
 
+// Re-export the document XML builder so other in-crate callers (e.g.
+// `agent::tools::office::paragraph_columns` tests) can drive the
+// writer without needing `pub mod docx`. The function is the same one
+// `write_word_document_to_path` uses internally.
+#[cfg(test)]
+pub(crate) use docx::writer::build_document_xml;
+
 pub use shared::{OfficeError, TableCell, TableRow};
-pub use docx::{WordDocument, WordParagraph, WordTable, WordImage, FontRun, FieldRef, DocElement, InsertElement, NumberingRef, WordSection, PageSize, PageSizeMm, PageMargins, HeaderPart, FooterPart, HeaderPartRef, FooterPartRef, read_word_document, word_document_to_text, write_word_document_to_path};
+pub use docx::{ElementId, WordDocument, WordParagraph, WordTable, WordImage, FontRun, FieldRef, DocElement, InsertElement, NumberingRef, WordSection, PageSize, PageSizeMm, PageMargins, HeaderPart, FooterPart, HeaderPartRef, FooterPartRef, read_word_document, word_document_to_text, write_word_document_to_path};
 // Re-export the brand new design-system surface so callers can
 // `use crate::office::{DesignTokens, ContentBlock, render_blocks}`.
 // These are pure additions; existing call sites that only use the

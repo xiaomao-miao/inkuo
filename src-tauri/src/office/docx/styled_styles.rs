@@ -239,6 +239,7 @@ pub const EXTENDED_STYLES_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" st
     <w:name w:val="List Bullet"/>
     <w:basedOn w:val="BodyParagraph"/>
     <w:pPr>
+      <w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr>
       <w:spacing w:after="80" w:line="293" w:lineRule="auto"/>
       <w:contextualSpacing/>
     </w:pPr>
@@ -248,6 +249,7 @@ pub const EXTENDED_STYLES_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" st
     <w:name w:val="List Number"/>
     <w:basedOn w:val="BodyParagraph"/>
     <w:pPr>
+      <w:numPr><w:ilvl w:val="0"/><w:numId w:val="2"/></w:numPr>
       <w:spacing w:after="80" w:line="293" w:lineRule="auto"/>
       <w:contextualSpacing/>
     </w:pPr>

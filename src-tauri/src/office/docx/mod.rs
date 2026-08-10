@@ -48,6 +48,12 @@ mod components_tests;
 #[cfg(test)]
 mod styled_pipeline_tests;
 
+#[cfg(test)]
+mod bug_fixes_tests;
+
+#[cfg(test)]
+mod smoke_test;
+
 // Re-export the OOXML document-tree builders so existing
 // `crate::office::docx::build_run_xml` / `build_document_xml` /
 // `escape_xml` etc. import paths continue to resolve. The orchestrator
@@ -83,8 +89,8 @@ pub use zip_reader::read_word_document;
 // callers (notably the in-app template picker) pull these directly so
 // the writer's public surface stays a thin wrapper.
 pub use ooxml_boilerplate::{
-    CONTENT_TYPES_XML, FONT_TABLE_XML, NUMBERING_XML, RELS_XML, SETTINGS_XML, STYLES_XML,
-    THEME_XML, WORD_RELS_XML,
+    build_dynamic_numbering_body, collect_referenced_num_ids, CONTENT_TYPES_XML,
+    FONT_TABLE_XML, NUMBERING_XML, RELS_XML, SETTINGS_XML, STYLES_XML, THEME_XML, WORD_RELS_XML,
 };
 
 use serde::{Deserialize, Serialize};
@@ -135,6 +141,11 @@ pub struct FontRun {
     /// - `FieldRef::Custom("DOCPROPERTY MyField")` -> any other instr text
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub field: Option<FieldRef>,
+    /// When `true`, this run emits a hard page break. The text content
+    /// is ignored; only the break is emitted. This is the proper way
+    /// to force a page break in OOXML.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub page_break: bool,
 }
 
 /// Word field code (域代码). When a `FontRun` carries one of these, the
@@ -1678,9 +1689,23 @@ pub fn write_word_document<W: std::io::Write + std::io::Seek>(
         zip.write_all(theme.as_bytes())?;
 
         // Only emit numbering.xml if the document references any list items.
+        // When it does, build a numbering.xml that covers every distinct
+        // numId the doc references — the built-in numIds 1 and 2 plus
+        // auto-registered decimal extras for anything higher. Without the
+        // dynamic builder, paragraphs that reference numId 10/11/... would
+        // silently render as plain text in Word (the numPr points at a
+        // missing num). See the `dynamic_numbering_registers_unknown_numids`
+        // regression test.
         if doc_has_numbering(doc) {
             zip.start_file("word/numbering.xml", opts)?;
-            zip.write_all(NUMBERING_XML.as_bytes())?;
+            let referenced = collect_referenced_num_ids(doc);
+            let body = build_dynamic_numbering_body(&referenced);
+            let numbering_xml = format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n\
+                 <w:numbering xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">\n{}</w:numbering>",
+                body,
+            );
+            zip.write_all(numbering_xml.as_bytes())?;
         }
     }
 

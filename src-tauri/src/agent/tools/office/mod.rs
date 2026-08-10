@@ -11,6 +11,8 @@ pub use create_word_doc::CreateWordDocTool;
 mod inspect_office;
 pub use inspect_office::InspectOfficeTool;
 
+mod paragraph_columns;
+
 pub struct ReadOfficeFileTool;
 
 impl ReadOfficeFileTool {

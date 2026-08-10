@@ -455,6 +455,7 @@ fn walk_container_paragraphs(
                                     highlight: cur_run_format.highlight.clone(),
                                     vert_align: cur_run_vert_align.take(),
                                     field: cur_run_field.take(),
+                                    page_break: false,
                                 });
                             } else {
                                 cur_run_vert_align = None;

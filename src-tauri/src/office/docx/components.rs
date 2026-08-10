@@ -69,6 +69,7 @@ pub(crate) fn run(
         highlight: None,
         vert_align: None,
         field: None,
+        page_break: false,
     }
 }
 
@@ -96,6 +97,7 @@ pub(crate) fn run_owned_color(
         highlight: None,
         vert_align: None,
         field: None,
+        page_break: false,
     }
 }
 
@@ -265,6 +267,7 @@ pub fn body_runs(
                 highlight: None,
                 vert_align: None,
                 field: None,
+                page_break: false,
             }
         })
         .collect();
@@ -305,6 +308,7 @@ pub fn bulleted_list(tokens: &DesignTokens, id_prefix: &str, items: &[&str]) -> 
                 highlight: None,
                 vert_align: None,
                 field: None,
+                page_break: false,
             };
             WordParagraph {
                 id: format!("{}-{}", id_prefix, i),
@@ -341,6 +345,7 @@ pub fn ordered_list(tokens: &DesignTokens, id_prefix: &str, items: &[&str]) -> V
                 highlight: None,
                 vert_align: None,
                 field: None,
+                page_break: false,
             };
             WordParagraph {
                 id: format!("{}-{}", id_prefix, i),
@@ -692,6 +697,7 @@ pub fn code_block(
                 highlight: None,
                 vert_align: None,
                 field: None,
+                page_break: false,
             };
             WordParagraph {
                 id: format!("{}-{}", id, i),
@@ -721,7 +727,7 @@ pub struct CodeBlockRender {
 
 // ─── Page break ───────────────────────────────────────────────────────────────
 
-/// Build a paragraph carrying only a hard page break. Useful for
+/// Build a paragraph carrying a hard page break. Useful for
 /// forcing a chapter to start on a fresh page without setting up a
 /// new section.
 pub fn page_break(id: &str) -> Vec<WordParagraph> {
@@ -741,6 +747,7 @@ pub fn page_break(id: &str) -> Vec<WordParagraph> {
             highlight: None,
             vert_align: None,
             field: None,
+            page_break: true,
         }]),
         numbering: None,
         alignment: None,

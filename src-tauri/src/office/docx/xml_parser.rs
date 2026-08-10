@@ -961,6 +961,7 @@ pub(crate) fn parse_document_xml(content: &str) -> Result<(Vec<WordParagraph>, V
                                 highlight: current_run_format.highlight.clone(),
                                 vert_align: current_run_vert_align.take(),
                                 field: current_run_field.take(),
+                                page_break: false,
                             });
                         } else {
                             // Discard any per-run transient state so it

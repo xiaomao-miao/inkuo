@@ -361,3 +361,143 @@ pub const NUMBERING_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalo
   <w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>
   <w:num w:numId="2"><w:abstractNumId w:val="1"/></w:num>
 </w:numbering>"#;
+
+/// Generate the `<w:numbering>` body (the part inside the root
+/// `<w:numbering>` element) covering a set of numIds. Used by the
+/// writer when the document references numIds beyond the two built-ins
+/// (numId 1 = bullet, numId 2 = decimal) so they don't silently
+/// disappear in Word.
+///
+/// Convention:
+/// - numId 1 → bullet (built-in)
+/// - numId 2 → decimal (built-in)
+/// - any other numId → decimal by default (numbered list)
+///
+/// The generated abstractNums start at abstractNumId 100 (well above
+/// the two built-ins at 0/1) so they can't collide with anything
+/// Word already has. The caller decides whether to use this body in
+/// place of `NUMBERING_XML`.
+pub fn build_dynamic_numbering_body(referenced_num_ids: &[u32]) -> String {
+    use std::fmt::Write as _;
+
+    // Always include the two built-ins.
+    let mut out = String::new();
+    out.push_str(
+        r#"  <w:abstractNum w:abstractNumId="0">
+    <w:lvl w:ilvl="0">
+      <w:start w:val="1"/>
+      <w:numFmt w:val="bullet"/>
+      <w:lvlText w:val="•"/>
+      <w:lvlJc w:val="left"/>
+      <w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr>
+    </w:lvl>
+    <w:lvl w:ilvl="1">
+      <w:start w:val="1"/>
+      <w:numFmt w:val="bullet"/>
+      <w:lvlText w:val="◦"/>
+      <w:lvlJc w:val="left"/>
+      <w:pPr><w:ind w:left="1440" w:hanging="360"/></w:pPr>
+    </w:lvl>
+    <w:lvl w:ilvl="2">
+      <w:start w:val="1"/>
+      <w:numFmt w:val="bullet"/>
+      <w:lvlText w:val="▪"/>
+      <w:lvlJc w:val="left"/>
+      <w:pPr><w:ind w:left="2160" w:hanging="360"/></w:pPr>
+    </w:lvl>
+  </w:abstractNum>
+  <w:abstractNum w:abstractNumId="1">
+    <w:lvl w:ilvl="0">
+      <w:start w:val="1"/>
+      <w:numFmt w:val="decimal"/>
+      <w:lvlText w:val="%1."/>
+      <w:lvlJc w:val="left"/>
+      <w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr>
+    </w:lvl>
+    <w:lvl w:ilvl="1">
+      <w:start w:val="1"/>
+      <w:numFmt w:val="lowerLetter"/>
+      <w:lvlText w:val="%2)"/>
+      <w:lvlJc w:val="left"/>
+      <w:pPr><w:ind w:left="1440" w:hanging="360"/></w:pPr>
+    </w:lvl>
+    <w:lvl w:ilvl="2">
+      <w:start w:val="1"/>
+      <w:numFmt w:val="lowerRoman"/>
+      <w:lvlText w:val="%3."/>
+      <w:lvlJc w:val="left"/>
+      <w:pPr><w:ind w:left="2160" w:hanging="360"/></w:pPr>
+    </w:lvl>
+  </w:abstractNum>
+"#,
+    );
+
+    // Build the extra abstractNums for any numId > 2 the doc references.
+    let mut next_abstract_id: u32 = 100;
+    let mut extras: Vec<(u32, u32)> = Vec::new(); // (num_id, abstract_num_id)
+    for &nid in referenced_num_ids {
+        if nid <= 2 {
+            continue; // already defined
+        }
+        extras.push((nid, next_abstract_id));
+        let _ = write!(
+            out,
+            r#"  <w:abstractNum w:abstractNumId="{abs}">
+    <w:lvl w:ilvl="0">
+      <w:start w:val="1"/>
+      <w:numFmt w:val="decimal"/>
+      <w:lvlText w:val="%1."/>
+      <w:lvlJc w:val="left"/>
+      <w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr>
+    </w:lvl>
+    <w:lvl w:ilvl="1">
+      <w:start w:val="1"/>
+      <w:numFmt w:val="lowerLetter"/>
+      <w:lvlText w:val="%2)"/>
+      <w:lvlJc w:val="left"/>
+      <w:pPr><w:ind w:left="1440" w:hanging="360"/></w:pPr>
+    </w:lvl>
+    <w:lvl w:ilvl="2">
+      <w:start w:val="1"/>
+      <w:numFmt w:val="lowerRoman"/>
+      <w:lvlText w:val="%3."/>
+      <w:lvlJc w:val="left"/>
+      <w:pPr><w:ind w:left="2160" w:hanging="360"/></w:pPr>
+    </w:lvl>
+  </w:abstractNum>
+"#,
+            abs = next_abstract_id,
+        );
+        next_abstract_id = next_abstract_id.saturating_add(1);
+    }
+
+    // Built-in numIds.
+    out.push_str(r#"  <w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>
+  <w:num w:numId="2"><w:abstractNumId w:val="1"/></w:num>
+"#);
+    // Extras.
+    for (nid, abs) in extras {
+        let _ = write!(
+            out,
+            "  <w:num w:numId=\"{nid}\"><w:abstractNumId w:val=\"{abs}\"/></w:num>\n",
+            nid = nid,
+            abs = abs,
+        );
+    }
+
+    out
+}
+
+/// Collect every distinct numId referenced by the document's
+/// paragraphs. Used to decide which extras the dynamic numbering
+/// builder needs to register.
+pub fn collect_referenced_num_ids(doc: &super::WordDocument) -> Vec<u32> {
+    use std::collections::BTreeSet;
+    let mut ids: BTreeSet<u32> = BTreeSet::new();
+    for p in &doc.paragraphs {
+        if let Some(ref n) = p.numbering {
+            ids.insert(n.num_id);
+        }
+    }
+    ids.into_iter().collect()
+}

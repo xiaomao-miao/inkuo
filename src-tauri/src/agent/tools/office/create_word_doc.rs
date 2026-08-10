@@ -13,11 +13,14 @@
 //! lines and most of that weight was this one tool's input schemas.
 
 use std::collections::HashMap;
+use std::io::Read;
 
 use serde::Deserialize;
 use serde_json::Value;
 
 use super::{ToolDefinition, ToolError, ToolParameters, validate_workspace_path};
+use crate::office::ElementId;
+use super::paragraph_columns::expand_paragraph_columns;
 
 /// Output of `parse_component_block`. Carries the rendered paragraphs/tables
 /// plus the optional positional metadata so the caller can integrate the
@@ -31,6 +34,10 @@ struct ComponentRender {
     /// Insertion position relative to `anchor_id`. Same caveat as `anchor_id`.
     #[allow(dead_code)]
     position: Option<String>,
+    /// Per-paragraph column-wrap hint extracted from `columns` field on body
+    /// component blocks. The writer's `expand_paragraph_columns` uses the id to
+    /// locate the target paragraph and wraps it with continuous section breaks.
+    column_wrap: Option<(String, u32)>,
 }
 
 /// A formatted text segment within a paragraph.
@@ -103,6 +110,12 @@ struct DocParagraph {
     /// "verticalRightToLeft" | "verticalLeftToRight" | "rotate90" | "rotate270".
     #[serde(default)]
     text_direction: Option<String>,
+    /// Number of text columns for this paragraph only. When set, the tool
+    /// injects continuous section breaks around this paragraph so it (and only
+    /// it) is laid out in N columns. The surrounding document stays single-column.
+    /// Must be 2..=9. A value of 1 is silently ignored.
+    #[serde(default)]
+    columns: Option<u32>,
 }
 
 /// Same shape as `NumberingRef` but deserialized from the wire-format JSON.
@@ -302,15 +315,17 @@ impl CreateWordDocTool {
                         "Array of element objects. Each element is a structured block the agent builds. The element types are split into `low-level` (precise paragraph/table/image control) and `component` (brand-styled, design-system aware).\n\
                          \n\
                          === LOW-LEVEL ELEMENTS ===\n\
-                         Paragraph: {id?, text?, style?, runs?, position?, anchor_id?, alignment?, text_direction?}.\n\
+                         Paragraph: {id?, text?, style?, runs?, position?, anchor_id?, alignment?, text_direction?, columns?}.\n\
                          Table: {id?, header, rows, position?, anchor_id?}. Cells in header/rows can be plain strings or {text, col_span, row_span} objects.\n\
                          Image: {type:'image', id?, path, width_emu, height_emu, anchor_id?, position?}.\n\
+                         \n\
+                         **columns (Paragraph only)**: Set this to 2..9 to lay out ONLY this single paragraph (and any paragraphs that immediately follow it in the same section) in N columns. The tool injects continuous section breaks around it so the rest of the document stays single-column. Use this instead of `sections[].cols` when you only want part of the document multi-column.\n\
                          \n\
                          === COMPONENT ELEMENTS (design-system styled) ===\n\
                          Cover: {type:'cover', id?, title, subtitle?}. Emits an oversized centred cover title + subtitle + spacers. Default brand font sizes apply. Use once at the top of a new document.\n\
                          Chapter: {type:'chapter', id?, title}. Emits a chapter-title paragraph (ChapterTitle style).\n\
                          Heading: {type:'heading', id?, level: 1|2|3, text}. Emits Heading1/2/3 (mapped to ChapterTitle/SectionTitle/SubsectionTitle styles).\n\
-                         Body: {type:'body', id?, text} or {type:'body', id?, runs: [{text, bold?, italic?}, ...]} for inline rich text. Emits a BodyParagraph paragraph.\n\
+                         Body: {type:'body', id?, text, columns?} or {type:'body', id?, runs: [{text, bold?, italic?}, ...], columns?}. Emits a BodyParagraph paragraph. The `columns` field (2..9) scopes a multi-column layout to this single body paragraph only — the surrounding document stays single-column.\n\
                          BulletList: {type:'bullet_list', id_prefix, items: [string, ...]}. Emits one bulleted paragraph per item using the design-system numbering (num_id=1).\n\
                          OrderedList: {type:'ordered_list', id_prefix, items: [string, ...]}. Emits one ordered paragraph per item (num_id=2).\n\
                          StyledTable: {type:'styled_table', id?, headers: [string, ...], rows: [[string, ...], ...], style?: {header_fill?, zebra_fill?, border_color?, header_text_color?, repeat_header?, zebra?}}. Emits a table with brand colours + header-repeat + zebra striping. style fields are optional; sensible defaults come from the active palette.\n\
@@ -341,12 +356,12 @@ impl CreateWordDocTool {
                          - margins: {top, right, bottom, left, header?, footer?, gutter?}. Twips.\n\
                          - text_direction: 'horizontal' (default) | 'verticalRightToLeft' | 'verticalLeftToRight'.\n\
                          - title_pg: true to give the first page of the section a different header/footer (cover page).\n\
-                         - cols: number of text columns. 1 = single column. >1 = multi-column.\n\
+                         - cols: number of text columns for THIS ENTIRE SECTION. 1 = single column. >1 = multi-column. **WARNING: setting cols>1 on the only/last section will make the ENTIRE document multi-column** — there is no \"apply to just this paragraph\" primitive in Word. Use `columns` on individual paragraph elements instead for partial-column effects.\n\
                          - page_num_start: starting page number (omit to continue from previous section).\n\
                          - page_num_format: 'decimal' (default) | 'upperRoman' | 'lowerRoman' | 'upperLetter' | 'lowerLetter'.\n\
                          - header_refs: array of {header_id, kind?} where kind is 'default' (default) | 'first' | 'even'.\n\
                          - footer_refs: array of {footer_id, kind?} with the same kind values.\n\
-                         For multi-section docs (e.g. cover page in landscape + body in portrait vertical), list each section in order; the LAST section's sectPr is the trailing one in the body, the rest are embedded as section breaks at the end of their section's content."
+                         For multi-section docs (e.g. cover page in landscape + body in portrait vertical), list each section in order; the LAST section's sectPr is the trailing one in the body, the rest are embedded as section breaks at the end of their section's content. For partial-column effects, use `columns` on individual paragraph elements instead of `sections[].cols`."
                     )),
                     ("headers", "array", Some(
                         "Reusable header parts. Each entry becomes one `word/headerN.xml` file. Shape: {id, paragraphs: [...]}. paragraphs uses the same shape as elements[] paragraphs. Common contents: chapter title, page number (with runs:[{text:'', field:{kind:'page'}}]), date. Reference from sections via `sections[].header_refs[]`."
@@ -372,10 +387,14 @@ impl CreateWordDocTool {
             highlight: r.highlight,
             vert_align: r.vert_align,
             field: r.field,
+            page_break: false,
         }
     }
 
-    fn parse_paragraph(v: &serde_json::Value) -> Result<Option<crate::office::DocElement>, String> {
+    /// Parse a low-level paragraph element from raw JSON.
+    fn parse_paragraph(
+        v: &serde_json::Value,
+    ) -> Result<Option<crate::office::DocElement>, String> {
         if v["action"].as_str() == Some("delete") {
             if let Some(id) = v["id"].as_str() {
                 return Ok(Some(crate::office::DocElement::Paragraph {
@@ -432,6 +451,7 @@ impl CreateWordDocTool {
                         highlight: r["highlight"].as_str().map(|s| s.to_string()),
                         vert_align,
                         field,
+                        page_break: false,
                     })
                 }).collect()
             })
@@ -616,6 +636,10 @@ impl CreateWordDocTool {
         if let Some(obj) = payload.as_object_mut() {
             obj.remove("anchor_id");
             obj.remove("position");
+            // Also strip `columns` — we handle it separately in the caller
+            // so it can be injected into the expansion pass regardless of
+            // whether the paragraph is low-level or a component block.
+            obj.remove("columns");
         }
 
         // Backwards-compat: `styled_table` accepts a {header, rows} shape that
@@ -658,6 +682,23 @@ impl CreateWordDocTool {
             rendered,
             anchor_id: v["anchor_id"].as_str().map(|s| s.to_string()),
             position: v["position"].as_str().map(|s| s.to_string()),
+            // Extract `columns: N` from the raw JSON. This is a hint that the
+            // caller wants this paragraph rendered in N-column layout.
+            // Supported on: body component (the paragraph uses the block's id).
+            // For other block types (heading, callout, etc.) we ignore it silently
+            // since they render to multiple paragraphs where per-paragraph cols
+            // doesn't make sense.
+            column_wrap: if component_type == "body" {
+                v["columns"].as_u64().map(|n| {
+                    // The block's id is the paragraph's id after rendering.
+                    let id = v["id"].as_str()
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| format!("__new_p{}", uuid_simple()));
+                    (id, n as u32)
+                })
+            } else {
+                None
+            },
         }))
     }
 
@@ -820,6 +861,14 @@ impl CreateWordDocTool {
         let mut new_elements = Vec::new();
         let mut deletes = Vec::new();
 
+        // Per-paragraph column-wrap hints. When the caller sets
+        // `columns: N` on a paragraph element (low-level or body component),
+        // we record the (paragraph_id, N) pair here so that after
+        // `existing.modify(...)` materialises the paragraph list we can
+        // inject the section-break markers that scope the column layout
+        // to just that one paragraph.
+        let mut column_wraps: Vec<(String, u32)> = Vec::new();
+
         // Component blocks (Cover / Chapter / Heading / Body / BulletList /
         // OrderedList / StyledTable / Callout / Code / PageBreak) are
         // recognised by their `type` field and routed through the design-
@@ -882,17 +931,23 @@ impl CreateWordDocTool {
                         "paragraph"
                     }
                 });
-                let result = if elem_type == "table" {
+                let elem = if elem_type == "table" {
                     Self::parse_table(v)
                 } else if elem_type == "image" {
                     Self::parse_image(v)
                 } else {
                     Self::parse_paragraph(v)
-                };
-
-                let elem = result.map_err(|e| ToolError::InvalidArguments("create_word_doc".to_string(), e))?;
+                }
+                .map_err(|e| ToolError::InvalidArguments("create_word_doc".to_string(), e))?;
 
                 if let Some(e) = elem {
+                    // Collect `columns: N` hint from the raw JSON before we
+                    // consume `e` into modifies/new_elements.
+                    if let Some(cols) = v["columns"].as_u64() {
+                        let id = e.id();
+                        column_wraps.push((id.to_string(), cols as u32));
+                    }
+
                     // Bug fix: For new file creation, all elements go to new_elements
                     // For existing files, elements with ID are modifications
                     if file_exists && has_id && !has_anchor {
@@ -919,8 +974,14 @@ impl CreateWordDocTool {
                         deletes.push(id.clone());
                     }
                 } else {
+                    let paragraph_id = p.id.clone().unwrap_or_else(|| format!("__new_p{}", uuid_simple()));
+                    if let Some(cols) = p.columns {
+                        if cols > 1 {
+                            column_wraps.push((paragraph_id.clone(), cols));
+                        }
+                    }
                     let elem = crate::office::DocElement::Paragraph {
-                        id: p.id.clone().unwrap_or_else(|| format!("__new_p{}", uuid_simple())),
+                        id: paragraph_id,
                         text: p.text.clone(),
                         omit_text: false,
                         style: p.style.clone(),
@@ -1048,6 +1109,48 @@ impl CreateWordDocTool {
                     existing.images.extend(r.rendered.images.iter().cloned());
                 }
 
+                // Collect column-wrap hints from component blocks. Body component
+                // blocks carry `columns: N` via their `column_wrap` field.
+                let mut all_column_wraps = column_wraps.clone();
+                for r in &component_renders {
+                    if let Some(hint) = &r.column_wrap {
+                        all_column_wraps.push(hint.clone());
+                    }
+                }
+
+                // Expand per-paragraph column hints into section-break markers.
+                // This injects `__sect_break_<idx>__` paragraphs and additional
+                // `WordSection` entries so only the targeted paragraphs are
+                // laid out in the requested number of columns.
+                if let Err(e) = expand_paragraph_columns(
+                    &mut existing.paragraphs,
+                    &mut existing.sections,
+                    &all_column_wraps,
+                ) {
+                    return Err(ToolError::InvalidArguments("create_word_doc".to_string(), e));
+                }
+
+                // Validate sections[].cols usage: warn when a single section
+                // carries cols>1, because without an explicit section break the
+                // column layout applies to the whole document — almost certainly
+                // not what the AI intended when it asked for "分栏" or "columns".
+                if let Some(ref sects) = params.sections {
+                    if sects.len() == 1 {
+                        if let Some(cols) = sects[0].cols {
+                            if cols > 1 {
+                                eprintln!(
+                                    "[create_word_doc] WARNING: sections[0].cols={} would make \
+                                     the ENTIRE document {} columns. If you only wanted a \
+                                     portion of the document in multiple columns, use \
+                                     `columns` on individual paragraph elements instead of \
+                                     `sections[].cols`. The document was written as-is.",
+                                    cols, cols
+                                );
+                            }
+                        }
+                    }
+                }
+
                 if let Some(ref sections) = params.sections {
                     if !sections.is_empty() {
                         existing.sections = Self::convert_sections(sections);
@@ -1087,6 +1190,40 @@ impl CreateWordDocTool {
             existing.tables.extend(temp_doc.tables);
             existing.images.extend(temp_doc.images);
 
+            // Collect column-wrap hints from component blocks.
+            let mut all_column_wraps = column_wraps.clone();
+            for r in &component_renders {
+                if let Some(hint) = &r.column_wrap {
+                    all_column_wraps.push(hint.clone());
+                }
+            }
+
+            // Expand per-paragraph column hints into section-break markers.
+            if let Err(e) = expand_paragraph_columns(
+                &mut existing.paragraphs,
+                &mut existing.sections,
+                &all_column_wraps,
+            ) {
+                return Err(ToolError::InvalidArguments("create_word_doc".to_string(), e));
+            }
+
+            // Validate sections[].cols usage.
+            if let Some(ref sects) = params.sections {
+                if sects.len() == 1 {
+                    if let Some(cols) = sects[0].cols {
+                        if cols > 1 {
+                            eprintln!(
+                                "[create_word_doc] WARNING: sections[0].cols={} would make \
+                                 the ENTIRE document {} columns. Use `columns` on individual \
+                                 paragraph elements instead of `sections[].cols` to limit the \
+                                 multi-column layout to a specific section of the document.",
+                                cols, cols
+                            );
+                        }
+                    }
+                }
+            }
+
             // Then append any component blocks (design-system styled).
             for r in &component_renders {
                 new_count += r.rendered.paragraphs.len() + r.rendered.tables.len() + r.rendered.images.len();
@@ -1108,6 +1245,38 @@ impl CreateWordDocTool {
             let mut existing = crate::office::read_word_document(&bytes)
                 .map_err(|e| ToolError::ExecutionError(format!("Failed to read existing doc: {}", e)))?;
 
+            // Bug fix: when a low-level element (paragraph/table/image) carries
+            // an `id` that does NOT match any pre-existing element, the modify
+            // path silently drops it (the modify_map is keyed by id and only
+            // matches against existing elements). Re-route those orphans into
+            // `new_elements` so they get inserted instead. Without this, callers
+            // who pass an `id` for a brand-new image (instead of relying on
+            // anchor_id) would see the image vanish — see the
+            // `image_with_id_falls_back_to_insert` regression test.
+            let existing_ids: std::collections::HashSet<String> = {
+                let snapshot = existing.to_elements();
+                snapshot.iter().map(|e| e.id().to_string()).collect()
+            };
+            let mut orphans: Vec<crate::office::InsertElement> = Vec::new();
+            modifies.retain(|e| {
+                if existing_ids.contains(e.id()) {
+                    true
+                } else {
+                    // Treat the orphan as a new insertion. Carry its anchor_id /
+                    // position from the original input JSON if present (none for
+                    // legacy modifies[]); default to end-of-doc.
+                    orphans.push(crate::office::InsertElement {
+                        element: e.clone(),
+                        anchor_id: None,
+                        position: None,
+                    });
+                    false
+                }
+            });
+            // New elements that already have an anchor_id keep their anchor;
+            // append orphans after them so anchor positioning isn't disturbed.
+            new_elements.extend(orphans);
+
             existing.modify(modifies, deletes, new_elements);
 
             // Append component blocks (design-system styled) on top of
@@ -1118,6 +1287,40 @@ impl CreateWordDocTool {
                 existing.paragraphs.extend(r.rendered.paragraphs.iter().cloned());
                 existing.tables.extend(r.rendered.tables.iter().cloned());
                 existing.images.extend(r.rendered.images.iter().cloned());
+            }
+
+            // Collect column-wrap hints from component blocks.
+            let mut all_column_wraps = column_wraps.clone();
+            for r in &component_renders {
+                if let Some(hint) = &r.column_wrap {
+                    all_column_wraps.push(hint.clone());
+                }
+            }
+
+            // Expand per-paragraph column hints into section-break markers.
+            if let Err(e) = expand_paragraph_columns(
+                &mut existing.paragraphs,
+                &mut existing.sections,
+                &all_column_wraps,
+            ) {
+                return Err(ToolError::InvalidArguments("create_word_doc".to_string(), e));
+            }
+
+            // Validate sections[].cols usage.
+            if let Some(ref sects) = params.sections {
+                if sects.len() == 1 {
+                    if let Some(cols) = sects[0].cols {
+                        if cols > 1 {
+                            eprintln!(
+                                "[create_word_doc] WARNING: sections[0].cols={} would make \
+                                 the ENTIRE document {} columns. Use `columns` on individual \
+                                 paragraph elements instead of `sections[].cols` to limit the \
+                                 multi-column layout to a specific section of the document.",
+                                cols, cols
+                            );
+                        }
+                    }
+                }
             }
 
             if let Some(ref sections) = params.sections {
@@ -1137,7 +1340,7 @@ impl CreateWordDocTool {
             }
 
             crate::office::write_word_document_to_path(&existing, path_obj, Some(&bytes))
-                .map_err(|e| ToolError::ExecutionError(format!("Failed to write doc: {}", e)))?;
+                .map_err(|e| ToolError::ExecutionError(format!("Failed to modify document: {}", e)))?;
             return Ok(format!("Successfully modified document: {}", params.path));
         }
 
@@ -1181,6 +1384,40 @@ impl CreateWordDocTool {
             doc.paragraphs.extend(r.rendered.paragraphs.iter().cloned());
             doc.tables.extend(r.rendered.tables.iter().cloned());
             doc.images.extend(r.rendered.images.iter().cloned());
+        }
+
+        // Collect column-wrap hints from component blocks.
+        let mut all_column_wraps = column_wraps.clone();
+        for r in &component_renders {
+            if let Some(hint) = &r.column_wrap {
+                all_column_wraps.push(hint.clone());
+            }
+        }
+
+        // Expand per-paragraph column hints into section-break markers.
+        if let Err(e) = expand_paragraph_columns(
+            &mut doc.paragraphs,
+            &mut doc.sections,
+            &all_column_wraps,
+        ) {
+            return Err(ToolError::InvalidArguments("create_word_doc".to_string(), e));
+        }
+
+        // Validate sections[].cols usage.
+        if let Some(ref sects) = params.sections {
+            if sects.len() == 1 {
+                if let Some(cols) = sects[0].cols {
+                    if cols > 1 {
+                        eprintln!(
+                            "[create_word_doc] WARNING: sections[0].cols={} would make \
+                             the ENTIRE document {} columns. Use `columns` on individual \
+                             paragraph elements instead of `sections[].cols` to limit the \
+                             multi-column layout to a specific section of the document.",
+                            cols, cols
+                        );
+                    }
+                }
+            }
         }
 
         if let Some(ref sections) = params.sections {
@@ -1527,5 +1764,83 @@ mod component_bridge_tests {
             .expect("legacy paragraph should exist");
         assert_eq!(para.text, "legacy paragraph");
         assert_eq!(para.style.as_deref(), Some("Heading1"));
+    }
+
+    #[tokio::test]
+    async fn image_with_id_falls_back_to_insert() {
+        // Regression: an image element with an explicit `id` that does
+        // not match any pre-existing element used to be silently dropped
+        // by the modify path (the modify_map is keyed by id and the
+        // element vanished if no key matched). The fix re-routes the
+        // orphan into `new_elements` so it lands in the doc instead.
+        //
+        // We seed an existing document with one body paragraph, then
+        // run a modify operation that supplies an image with a fresh
+        // id (no matching existing element) and no anchor. The image
+        // must end up in the saved doc.
+        let path = tmp_path("img_id_orphan");
+        let seed = json!({
+            "path": path.to_string_lossy(),
+            "elements": [
+                {"type": "body", "id": "seed", "text": "seed body"},
+            ]
+        });
+        // Write the seed.
+        run_tool(seed).await;
+
+        // Build a tiny PNG (1x1 transparent) into a temp file. The
+        // writer only needs the bytes + extension to be valid; the
+        // dimensions we pass below are what matter for layout.
+        let png_path = {
+            let mut p = std::env::temp_dir();
+            let nanos = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            p.push(format!("inkuo_orphan_{}.png", nanos));
+            p
+        };
+        // Minimal valid 1x1 PNG (89 bytes).
+        let png_bytes: &[u8] = &[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+            0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+            0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+            0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+            0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41,
+            0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
+            0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00,
+            0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
+            0x42, 0x60, 0x82,
+        ];
+        std::fs::write(&png_path, png_bytes).expect("write png");
+
+        let modify = json!({
+            "path": path.to_string_lossy(),
+            "elements": [
+                {"type": "image", "id": "img_orphan",
+                 "path": png_path.to_string_lossy(),
+                 "width_emu": 914400, "height_emu": 914400},
+            ]
+        });
+        run_tool(modify).await;
+
+        // Re-open the resulting docx and verify the image is present.
+        let bytes = std::fs::read(&path).expect("read back");
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("open zip");
+        let mut doc_xml = String::new();
+        zip.by_name("word/document.xml")
+            .expect("document.xml")
+            .read_to_string(&mut doc_xml)
+            .expect("read");
+        assert!(
+            doc_xml.contains("<w:drawing>"),
+            "orphan image with id must still be inserted; document.xml has no <w:drawing>"
+        );
+        assert!(
+            doc_xml.contains("img_orphan") || doc_xml.contains("__img_pos_img_orphan"),
+            "image marker or stable id should appear in document.xml"
+        );
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&png_path);
     }
 }

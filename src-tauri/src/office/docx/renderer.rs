@@ -343,6 +343,7 @@ fn render_code(
             highlight: None,
             vert_align: None,
             field: None,
+            page_break: false,
         };
         let lang_para = WordParagraph {
             id: format!("{}-lang", id),

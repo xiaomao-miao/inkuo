@@ -383,3 +383,82 @@ fn content_block_round_trip_through_serde() {
     assert!(json.contains("\"type\":\"callout\""));
     assert!(json.contains("\"level\":\"tip\""));
 }
+
+#[test]
+fn styled_table_xml_has_complete_ooxml_structure() {
+    // Verify that the styled table XML contains all required OOXML elements:
+    // - w:tblGrid (column definitions)
+    // - w:tblW (table width)
+    // - w:tblInd (table indent)
+    // - w:tblCellMar (cell margins)
+    // - w:tblHeader (header repeat)
+    // - w:tcW (cell width)
+    let t = styled_table(
+        &tokens(),
+        "t1",
+        &["col1", "col2", "col3"],
+        &[
+            vec!["a".into(), "b".into(), "c".into()],
+            vec!["d".into(), "e".into(), "f".into()],
+        ],
+        &TableStyle {
+            header_fill: Some("213B32".into()),
+            zebra_fill: Some("EAF0EC".into()),
+            border_color: Some("DDDDDD".into()),
+            header_text_color: Some("FFFFFF".into()),
+            repeat_header: true,
+            zebra: true,
+        },
+    );
+    let (kind, stripped) = classify_and_strip(&t.rows);
+    let style = match kind {
+        TableKind::Styled(s) => *s,
+        _ => panic!("expected styled"),
+    };
+    let xml = build_styled_table_xml("t1", &stripped, &style);
+    
+    // Required OOXML elements for proper table structure
+    assert!(xml.contains("<w:tblGrid>"), "must have w:tblGrid");
+    assert!(xml.contains("<w:gridCol"), "must have w:gridCol for each column");
+    assert!(xml.contains("<w:tblW"), "must have w:tblW (table width)");
+    assert!(xml.contains("<w:tblInd"), "must have w:tblInd (table indent)");
+    assert!(xml.contains("<w:tblCellMar>"), "must have w:tblCellMar (cell margins)");
+    assert!(xml.contains("<w:tblHeader/>"), "must have w:tblHeader for repeat header");
+    assert!(xml.contains("<w:tcW"), "must have w:tcW (cell width) in each cell");
+    assert!(xml.contains("<w:tcMar>"), "must have w:tcMar (cell margins) in cells");
+    assert!(xml.contains("<w:shd"), "must have w:shd (cell shading)");
+    assert!(xml.contains("<w:tcBorders>"), "must have w:tcBorders (cell borders)");
+}
+
+#[test]
+fn plain_table_xml_has_complete_ooxml_structure() {
+    // Verify that even plain tables have proper OOXML structure
+    use crate::office::shared::{TableCell, TableRow};
+    use crate::office::docx::writer::build_table_xml;
+    
+    let rows = vec![
+        TableRow {
+            cells: vec![
+                TableCell::plain("Header1"),
+                TableCell::plain("Header2"),
+            ],
+        },
+        TableRow {
+            cells: vec![
+                TableCell::plain("Cell1"),
+                TableCell::plain("Cell2"),
+            ],
+        },
+    ];
+    
+    let xml = build_table_xml("plain_table", &rows, None);
+    
+    // Plain tables should also have tblGrid
+    assert!(xml.contains("<w:tblGrid>"), "plain table must have w:tblGrid");
+    assert!(xml.contains("<w:gridCol"), "plain table must have w:gridCol");
+    assert!(xml.contains("<w:tblW"), "plain table must have w:tblW");
+    assert!(xml.contains("<w:tblInd"), "plain table must have w:tblInd");
+    assert!(xml.contains("<w:tcW"), "plain table cells must have w:tcW");
+    assert!(xml.contains("<w:tcMar>"), "plain table cells must have w:tcMar");
+    assert!(xml.contains("<w:tcBorders>"), "plain table cells must have w:tcBorders");
+}

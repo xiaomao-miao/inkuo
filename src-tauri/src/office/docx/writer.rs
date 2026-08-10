@@ -25,6 +25,7 @@ use super::styled_writer::{
     build_callout_close_xml, build_callout_container_xml, build_code_block_container_xml,
     build_styled_table_xml, classify_and_strip, TableKind,
 };
+use super::components::TableStyle;
 use super::{
     FieldRef, FontRun, HeaderPart, HeaderPartRef, PageSize, PageSizeMm, WordDocument, WordImage,
     WordParagraph, WordSection, WordTable,
@@ -38,6 +39,11 @@ pub fn build_run_xml(run: &FontRun) -> String {
     // same formatting (bold, font, color, etc.) as the parent run.
     if let Some(ref field) = run.field {
         return build_field_run_xml(run, field);
+    }
+
+    // Page break: emit just the break element with no text content.
+    if run.page_break {
+        return "<w:r><w:br w:type=\"page\"/></w:r>".to_string();
     }
 
     let mut xml = String::from("<w:r>");
@@ -217,10 +223,17 @@ pub fn build_document_xml(doc: &WordDocument) -> String {
 
     // Walk paragraphs, assigning each to a section index. The last
     // section is the trailing one (no marker; sectPr is body-level).
-    // For N sections and M paragraphs without markers we put all M
-    // paragraphs into the last section and emit empty (placeholder)
-    // sectPrs at body-level for the rest. With markers we honour
-    // them precisely.
+    // For N sections and M paragraphs:
+    //   - With explicit `__sect_break_<idx>__` markers, we honour them
+    //     precisely (one section per marker span).
+    //   - Without markers, all paragraphs would land in the last
+    //     section by default — which means any `cols > 1` on an
+    //     earlier section silently applies to the whole document. The
+    //     caller likely meant "split the doc across sections". Distribute
+    //     paragraphs evenly across all sections so multi-column /
+    //     cover-page settings apply only to the part they were meant
+    //     for. See the `sections_without_markers_distribute_paragraphs`
+    //     regression test.
     let mut para_section_idx: Vec<usize> = vec![total_sections - 1; doc.paragraphs.len()];
     if total_sections > 1 && section_breaks.len() + 1 == total_sections {
         let mut current_section = 0;
@@ -230,6 +243,29 @@ pub fn build_document_xml(doc: &WordDocument) -> String {
                 current_section = current_section.saturating_add(1).min(total_sections - 1);
             }
             let _ = p;
+        }
+    } else if total_sections > 1 {
+        // Even split: each non-final section gets `total / N` paragraphs;
+        // the last section absorbs any remainder. This way `cols: 2`
+        // on a single Section entry doesn't silently span the whole
+        // body — the section's properties apply to its share only.
+        let total_paras = doc.paragraphs.len();
+        let base = total_paras / total_sections;
+        let mut idx_section = 0usize;
+        let mut paragraphs_in_current = 0usize;
+        for i in 0..total_paras {
+            para_section_idx[i] = idx_section;
+            paragraphs_in_current += 1;
+            // Move to the next section when this one has had its share,
+            // but always leave at least one paragraph for the final
+            // (body-level) section.
+            if idx_section + 1 < total_sections
+                && paragraphs_in_current >= base
+                && (i + 1) + (total_sections - idx_section - 1) <= total_paras
+            {
+                idx_section += 1;
+                paragraphs_in_current = 0;
+            }
         }
     }
 
@@ -314,7 +350,7 @@ pub fn build_document_xml(doc: &WordDocument) -> String {
                             continue;
                         }
                         TableKind::Plain => {
-                            xml.push_str(&build_table_xml(&tbl.id, &tbl.rows));
+                            xml.push_str(&build_table_xml(&tbl.id, &tbl.rows, None));
                         }
                     }
                     tables_emitted.insert(tbl_id);
@@ -367,14 +403,27 @@ pub fn build_document_xml(doc: &WordDocument) -> String {
         // Build paragraph properties: style (if any) + numbering (if any) + alignment + text direction + stable ID.
         // For the *last* paragraph of a non-final section we also embed
         // that section's `<w:sectPr>` here (the OOXML idiom for an
-        // in-paragraph section break).
+        // in-paragraph section break). Two ways a paragraph counts as
+        // the last in its section:
+        //   1. The next paragraph is a section-break marker for this
+        //      section (the explicit `__sect_break_<idx>__` path).
+        //   2. The next paragraph belongs to a *different* section per
+        //      `para_section_idx` (the auto-distributed path used when
+        //      sections are provided without markers).
         let sect_idx = para_section_idx[idx];
+        let next_sect_idx = if idx + 1 < doc.paragraphs.len() {
+            para_section_idx[idx + 1]
+        } else {
+            // Past-the-end: this paragraph is the last in the doc and
+            // belongs to whichever section it's in. Section-emission
+            // for the final section happens via the body-level sectPr
+            // below; we don't embed anything here.
+            total_sections
+        };
         let is_last_para_of_section = if sect_idx + 1 < total_sections {
-            // The next paragraph is the section-break marker for THIS
-            // section, or this is the very last paragraph in the
-            // section's range. We check the marker at idx+1.
             idx + 1 < doc.paragraphs.len()
-                && section_break_section_idx(&doc.paragraphs[idx + 1]) == Some(sect_idx)
+                && (section_break_section_idx(&doc.paragraphs[idx + 1]) == Some(sect_idx)
+                    || next_sect_idx != sect_idx)
         } else {
             false
         };
@@ -422,7 +471,7 @@ pub fn build_document_xml(doc: &WordDocument) -> String {
                     xml.push_str(&build_callout_close_xml());
                 }
                 TableKind::Plain => {
-                    xml.push_str(&build_table_xml(&tbl.id, &tbl.rows));
+                    xml.push_str(&build_table_xml(&tbl.id, &tbl.rows, None));
                 }
             }
         }
@@ -760,12 +809,26 @@ fn emit_inner_paragraph(xml: &mut String, para: &WordParagraph) {
     xml.push_str("</w:p>");
 }
 
-pub(crate) fn build_table_xml(_table_id: &str, rows: &[TableRow]) -> String {
+pub(crate) fn build_table_xml(table_id: &str, rows: &[TableRow], style: Option<&TableStyle>) -> String {
     let mut xml = String::new();
     xml.push_str("\n    <w:tbl>");
     xml.push_str("\n      <w:tblPr>");
     xml.push_str("<w:tblStyle w:val=\"TableGrid\"/>");
+    
+    // Table width: use auto with 0 (Word will auto-size), but emit explicit w:w
+    // for better compatibility with parsers that require it
     xml.push_str("<w:tblW w:type=\"auto\" w:w=\"0\"/>");
+    
+    // Table indent: default to 0, can be overridden by style
+    xml.push_str("<w:tblInd w:type=\"dxa\" w:w=\"0\"/>");
+    
+    // Table layout: fixed ensures consistent rendering
+    xml.push_str("<w:tblLayout w:type=\"fixed\"/>");
+    
+    // Default table look for compatibility
+    xml.push_str("<w:tblLook w:firstColumn=\"1\" w:firstRow=\"1\" w:lastColumn=\"0\" w:lastRow=\"0\" w:noHBand=\"0\" w:noVBand=\"1\" w:val=\"04A0\"/>");
+    
+    // Table borders
     xml.push_str("<w:tblBorders>");
     xml.push_str("<w:top w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
     xml.push_str("<w:left w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
@@ -774,21 +837,83 @@ pub(crate) fn build_table_xml(_table_id: &str, rows: &[TableRow]) -> String {
     xml.push_str("<w:insideH w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
     xml.push_str("<w:insideV w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
     xml.push_str("</w:tblBorders>");
+    
     xml.push_str("</w:tblPr>");
 
-    let render_row = |xml: &mut String, cells: &[TableCell]| {
+    // Calculate column count and build tblGrid
+    let col_count = rows.first().map(|r| r.cells.len()).unwrap_or(0);
+    if col_count > 0 {
+        xml.push_str("\n      <w:tblGrid>");
+        // Default column width: divide available width evenly
+        // Using 1440 twips (1 inch) as default column width
+        let default_col_width = 1440u32;
+        for _ in 0..col_count {
+            xml.push_str(&format!("<w:gridCol w:w=\"{}\"/>", default_col_width));
+        }
+        xml.push_str("</w:tblGrid>");
+    }
+
+    // Render rows
+    for (row_idx, row) in rows.iter().enumerate() {
+        let is_header_row = row_idx == 0;
         xml.push_str("\n        <w:tr>");
-        for cell in cells {
+        
+        // Row properties: mark first row as header for repeat if requested
+        let has_header_repeat = style.map(|s| s.repeat_header && is_header_row).unwrap_or(false);
+        let has_row_props = has_header_repeat;
+        
+        if has_row_props {
+            xml.push_str("<w:trPr>");
+            if has_header_repeat {
+                xml.push_str("<w:tblHeader/>");
+            }
+            xml.push_str("</w:trPr>");
+        }
+        
+        for cell in &row.cells {
             let col_span = cell.col_span.max(1);
             let row_span = cell.row_span.max(1);
+            
             xml.push_str("<w:tc><w:tcPr>");
+            
+            // Grid span for merged cells
             if col_span > 1 {
                 xml.push_str(&format!("<w:gridSpan w:val=\"{}\"/>", col_span));
             }
+            
+            // Vertical merge for row-spanning cells
             if row_span > 1 {
                 xml.push_str("<w:vMerge w:val=\"restart\"/>");
             }
+            
+            // Cell width: distribute evenly across col_span
+            let cell_width = 1440u32 * col_span as u32;
+            xml.push_str(&format!("<w:tcW w:type=\"dxa\" w:w=\"{}\"/>", cell_width));
+            
+            // Cell margins (inner padding) for comfortable reading
+            xml.push_str("<w:tcMar>");
+            xml.push_str("<w:top w:w=\"100\" w:type=\"dxa\"/>");
+            xml.push_str("<w:left w:w=\"120\" w:type=\"dxa\"/>");
+            xml.push_str("<w:bottom w:w=\"100\" w:type=\"dxa\"/>");
+            xml.push_str("<w:right w:w=\"120\" w:type=\"dxa\"/>");
+            xml.push_str("</w:tcMar>");
+            
+            // Cell vertical alignment
+            xml.push_str("<w:vAlign w:val=\"center\"/>");
+            
+            // Cell borders
+            xml.push_str("<w:tcBorders>");
+            xml.push_str("<w:top w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
+            xml.push_str("<w:left w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
+            xml.push_str("<w:bottom w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
+            xml.push_str("<w:right w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
+            xml.push_str("<w:insideH w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
+            xml.push_str("<w:insideV w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
+            xml.push_str("</w:tcBorders>");
+            
             xml.push_str("</w:tcPr><w:p>");
+            
+            // Render cell text with line breaks preserved
             let lines: Vec<&str> = cell.text.split('\n').collect();
             for (chunk_idx, chunk) in lines.iter().enumerate() {
                 if !chunk.is_empty() {
@@ -801,19 +926,14 @@ pub(crate) fn build_table_xml(_table_id: &str, rows: &[TableRow]) -> String {
                     xml.push_str("<w:r><w:br/></w:r>");
                 }
             }
+            
             xml.push_str("</w:p></w:tc>");
         }
         xml.push_str("</w:tr>");
-    };
-
-    // Render all rows (first row is header, rest are body)
-    for row in rows {
-        if !row.cells.is_empty() {
-            render_row(&mut xml, &row.cells);
-        }
     }
 
     xml.push_str("\n    </w:tbl>");
+    let _ = table_id;
     xml
 }
 

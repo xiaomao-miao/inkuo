@@ -93,40 +93,57 @@ pub fn build_styled_table_xml(table_id: &str, rows: &[TableRow], style: &TableSt
     xml.push_str("\n      <w:tblPr>");
     xml.push_str("<w:tblStyle w:val=\"BrandTable\"/>");
 
-    // Full-width table (auto, 0 twips). Word will scale the columns
-    // to fill the printable area when we lay out a `<w:tblGrid>`.
-    xml.push_str("<w:tblW w:type=\"auto\" w:w=\"0\"/>");
+    // Table width: calculate based on content or use full width
+    // For styled tables, we use dxa type with explicit width (twips)
+    // A4 page width minus margins: (210mm - 50mm) * 56.7 twips/mm ≈ 9072 twips
+    let table_width = 9360u32;
+    xml.push_str(&format!("<w:tblW w:type=\"dxa\" w:w=\"{}\"/>", table_width));
+
+    // Table indent (left margin)
+    xml.push_str("<w:tblInd w:type=\"dxa\" w:w=\"120\"/>");
+    
+    // Table layout: fixed ensures consistent rendering
+    xml.push_str("<w:tblLayout w:type=\"fixed\"/>");
+    
+    // Table look for row banding and header styling
+    let has_zebra = style.zebra && style.zebra_fill.is_some();
+    xml.push_str(&format!(
+        "<w:tblLook w:firstColumn=\"{}\" w:firstRow=\"1\" w:lastColumn=\"0\" w:lastRow=\"0\" w:noHBand=\"{}\" w:noVBand=\"1\" w:val=\"04A0\"/>",
+        if has_zebra { "1" } else { "0" },
+        if has_zebra { "0" } else { "1" }
+    ));
 
     // Borders
     let border_color = style.border_color.clone().unwrap_or_else(|| "DDDDDD".to_string());
+    let border_size = "5"; // Slightly thicker borders for styled tables
     xml.push_str("<w:tblBorders>");
     xml.push_str(&format!(
-        "<w:top w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"{}\"/>",
-        border_color
+        "<w:top w:val=\"single\" w:sz=\"{}\" w:space=\"0\" w:color=\"{}\"/>",
+        border_size, border_color
     ));
     xml.push_str(&format!(
-        "<w:left w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"{}\"/>",
-        border_color
+        "<w:left w:val=\"single\" w:sz=\"{}\" w:space=\"0\" w:color=\"{}\"/>",
+        border_size, border_color
     ));
     xml.push_str(&format!(
-        "<w:bottom w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"{}\"/>",
-        border_color
+        "<w:bottom w:val=\"single\" w:sz=\"{}\" w:space=\"0\" w:color=\"{}\"/>",
+        border_size, border_color
     ));
     xml.push_str(&format!(
-        "<w:right w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"{}\"/>",
-        border_color
+        "<w:right w:val=\"single\" w:sz=\"{}\" w:space=\"0\" w:color=\"{}\"/>",
+        border_size, border_color
     ));
     xml.push_str(&format!(
-        "<w:insideH w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"{}\"/>",
-        border_color
+        "<w:insideH w:val=\"single\" w:sz=\"{}\" w:space=\"0\" w:color=\"{}\"/>",
+        border_size, border_color
     ));
     xml.push_str(&format!(
-        "<w:insideV w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"{}\"/>",
-        border_color
+        "<w:insideV w:val=\"single\" w:sz=\"{}\" w:space=\"0\" w:color=\"{}\"/>",
+        border_size, border_color
     ));
     xml.push_str("</w:tblBorders>");
 
-    // Cell margins (inner padding).
+    // Cell margins (inner padding) for comfortable reading
     xml.push_str("<w:tblCellMar>");
     xml.push_str("<w:top w:w=\"100\" w:type=\"dxa\"/>");
     xml.push_str("<w:left w:w=\"140\" w:type=\"dxa\"/>");
@@ -136,8 +153,28 @@ pub fn build_styled_table_xml(table_id: &str, rows: &[TableRow], style: &TableSt
 
     xml.push_str("</w:tblPr>");
 
-    // No explicit tblGrid — Word auto-sizes. We rely on per-cell
-    // text widths via `<w:tcW w:type="auto"/>`.
+    // Build tblGrid: calculate column widths based on first row
+    // For styled tables, we divide the table width among columns
+    let col_count = rows.first().map(|r| r.cells.len()).unwrap_or(0);
+    if col_count > 0 {
+        xml.push_str("\n      <w:tblGrid>");
+        // Distribute width evenly among columns
+        // Use different ratios based on typical content needs
+        let col_widths: Vec<u32> = if col_count == 2 {
+            vec![2304, 7056]  // 25% / 75%
+        } else if col_count == 3 {
+            vec![2304, 3024, 4032]  // 25% / 32% / 43%
+        } else {
+            // Default: divide evenly
+            let base = table_width / col_count as u32;
+            (0..col_count).map(|_| base).collect()
+        };
+        for (i, width) in col_widths.iter().enumerate() {
+            let w = if i < col_count { *width } else { table_width / col_count as u32 };
+            xml.push_str(&format!("<w:gridCol w:w=\"{}\"/>", w));
+        }
+        xml.push_str("</w:tblGrid>");
+    }
 
     for (idx, row) in rows.iter().enumerate() {
         let is_header = idx == 0;
@@ -152,31 +189,113 @@ pub fn build_styled_table_xml(table_id: &str, rows: &[TableRow], style: &TableSt
         let header_repeat = is_header && style.repeat_header;
 
         xml.push_str("\n        <w:tr>");
-        if header_repeat {
-            xml.push_str("<w:trPr><w:tblHeader/></w:trPr>");
+        
+        // Row properties
+        if header_repeat || has_zebra {
+            xml.push_str("<w:trPr>");
+            if header_repeat {
+                xml.push_str("<w:tblHeader/>");
+            }
+            if has_zebra && !is_header {
+                // Don't split rows for zebra styling
+                // xml.push_str("<w:cantSplit/>");  // Optional: prevent row splitting
+            }
+            xml.push_str("</w:trPr>");
         }
-        if let Some(fill) = body_default_fill {
-            for cell in &row.cells {
-                xml.push_str("<w:tc><w:tcPr>");
-                xml.push_str(&format!(
-                    "<w:tcW w:type=\"auto\" w:w=\"0\"/>"
-                ));
+        
+        // Calculate cell widths based on tblGrid
+        let cell_widths: Vec<u32> = if col_count == 2 {
+            vec![2304, 7056]
+        } else if col_count == 3 {
+            vec![2304, 3024, 4032]
+        } else {
+            let base = table_width / col_count.max(1) as u32;
+            (0..row.cells.len()).map(|_| base).collect()
+        };
+        
+        for (cell_idx, cell) in row.cells.iter().enumerate() {
+            let col_span = cell.col_span.max(1);
+            let row_span = cell.row_span.max(1);
+            
+            // Calculate cell width based on col_span
+            let cell_width: u32 = if col_count == 2 {
+                if cell_idx == 0 { 2304 } else { 7056 }
+            } else if col_count == 3 {
+                if cell_idx == 0 { 2304 } 
+                else if cell_idx == 1 { 3024 } 
+                else { 4032 }
+            } else {
+                table_width / col_count.max(1) as u32
+            };
+            let total_cell_width = cell_width * col_span as u32;
+            
+            xml.push_str("<w:tc><w:tcPr>");
+            
+            // Grid span for merged cells
+            if col_span > 1 {
+                xml.push_str(&format!("<w:gridSpan w:val=\"{}\"/>", col_span));
+            }
+            
+            // Vertical merge for row-spanning cells
+            if row_span > 1 {
+                xml.push_str("<w:vMerge w:val=\"restart\"/>");
+            }
+            
+            // Cell width in twips
+            xml.push_str(&format!("<w:tcW w:type=\"dxa\" w:w=\"{}\"/>", total_cell_width));
+            
+            // Cell margins
+            xml.push_str("<w:tcMar>");
+            xml.push_str("<w:top w:w=\"100\" w:type=\"dxa\"/>");
+            xml.push_str("<w:left w:w=\"120\" w:type=\"dxa\"/>");
+            xml.push_str("<w:bottom w:w=\"100\" w:type=\"dxa\"/>");
+            xml.push_str("<w:right w:w=\"120\" w:type=\"dxa\"/>");
+            xml.push_str("</w:tcMar>");
+            
+            // Cell vertical alignment
+            xml.push_str("<w:vAlign w:val=\"center\"/>");
+            
+            // Cell background fill
+            if let Some(ref fill) = body_default_fill {
                 xml.push_str(&format!(
                     "<w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"{}\"/>",
                     fill
                 ));
-                xml.push_str("</w:tcPr><w:p>");
-                render_cell_text(&mut xml, &cell.text, is_header, style);
-                xml.push_str("</w:p></w:tc>");
             }
-        } else {
-            for cell in &row.cells {
-                xml.push_str("<w:tc><w:tcPr>");
-                xml.push_str("<w:tcW w:type=\"auto\" w:w=\"0\"/>");
-                xml.push_str("</w:tcPr><w:p>");
-                render_cell_text(&mut xml, &cell.text, is_header, style);
-                xml.push_str("</w:p></w:tc>");
+            
+            // Cell borders
+            xml.push_str("<w:tcBorders>");
+            xml.push_str(&format!(
+                "<w:top w:val=\"single\" w:sz=\"{}\" w:space=\"0\" w:color=\"{}\"/>",
+                border_size, border_color
+            ));
+            xml.push_str(&format!(
+                "<w:left w:val=\"single\" w:sz=\"{}\" w:space=\"0\" w:color=\"{}\"/>",
+                border_size, border_color
+            ));
+            xml.push_str(&format!(
+                "<w:bottom w:val=\"single\" w:sz=\"{}\" w:space=\"0\" w:color=\"{}\"/>",
+                border_size, border_color
+            ));
+            xml.push_str(&format!(
+                "<w:right w:val=\"single\" w:sz=\"{}\" w:space=\"0\" w:color=\"{}\"/>",
+                border_size, border_color
+            ));
+            if col_count > 1 {
+                xml.push_str(&format!(
+                    "<w:insideH w:val=\"single\" w:sz=\"{}\" w:space=\"0\" w:color=\"{}\"/>",
+                    border_size, border_color
+                ));
+                xml.push_str(&format!(
+                    "<w:insideV w:val=\"single\" w:sz=\"{}\" w:space=\"0\" w:color=\"{}\"/>",
+                    border_size, border_color
+                ));
             }
+            xml.push_str("</w:tcBorders>");
+            
+            xml.push_str("</w:tcPr><w:p>");
+            render_cell_text(&mut xml, &cell.text, is_header, style);
+            xml.push_str("</w:p></w:tc>");
         }
         xml.push_str("</w:tr>");
     }
@@ -187,9 +306,6 @@ pub fn build_styled_table_xml(table_id: &str, rows: &[TableRow], style: &TableSt
 }
 
 fn render_cell_text(xml: &mut String, text: &str, is_header: bool, style: &TableStyle) {
-    if text.is_empty() {
-        return;
-    }
     let color = if is_header {
         style
             .header_text_color
@@ -198,22 +314,43 @@ fn render_cell_text(xml: &mut String, text: &str, is_header: bool, style: &Table
     } else {
         "2A2A2A".to_string()
     };
-    let size = if is_header { 17 } else { 17 }; // 8.5pt half-points
+    let size = 18; // 9pt half-points for compact cells
     let bold = is_header;
-    for (i, line) in text.split('\n').enumerate() {
+    
+    // Split text by newlines and render each line
+    let lines: Vec<&str> = text.split('\n').collect();
+    for (i, line) in lines.iter().enumerate() {
+        // Add line break between lines (except for the first line)
         if i > 0 {
             xml.push_str("<w:r><w:br/></w:r>");
         }
-        xml.push_str(&format!(
-            "<w:r><w:rPr><w:b/>{}<w:sz w:val=\"{}\"/><w:szCs w:val=\"{}\"/></w:rPr><w:t xml:space=\"preserve\">{}</w:t></w:r>",
-            if color.is_empty() { String::new() } else { format!("<w:color w:val=\"{}\"/>", color) },
-            size,
-            size,
-            super::writer::escape_xml(line),
-        ));
+        
+        if line.is_empty() {
+            continue;
+        }
+        
+        // Build run properties
+        let mut rpr = String::new();
+        if bold {
+            rpr.push_str("<w:b/>");
+        }
+        rpr.push_str(&format!("<w:color w:val=\"{}\"/>", color));
+        rpr.push_str(&format!("<w:sz w:val=\"{}\"/>", size));
+        rpr.push_str(&format!("<w:szCs w:val=\"{}\"/>", size));
+        
+        if rpr.is_empty() {
+            xml.push_str(&format!(
+                "<w:r><w:t xml:space=\"preserve\">{}</w:t></w:r>",
+                super::writer::escape_xml(line),
+            ));
+        } else {
+            xml.push_str(&format!(
+                "<w:r><w:rPr>{}</w:rPr><w:t xml:space=\"preserve\">{}</w:t></w:r>",
+                rpr,
+                super::writer::escape_xml(line),
+            ));
+        }
     }
-    // Unused param suppression for style (we already used `style.header_text_color`).
-    let _ = style;
 }
 
 /// Render a callout container — a 1-row, 1-cell table with the
@@ -225,31 +362,40 @@ fn render_cell_text(xml: &mut String, text: &str, is_header: bool, style: &Table
 /// we instead emit just the wrapper `<w:tbl>…</w:tbl>` and rely on
 /// the caller (the orchestrator) to splice in the inner content.
 pub fn build_callout_container_xml(bg: &str, accent: &str) -> String {
-    format!(
-        concat!(
-            "<w:tbl>",
-            "<w:tblPr>",
-            "<w:tblW w:type=\"pct\" w:w=\"5000\"/>",
-            "<w:tblBorders>",
-            "<w:top w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"{bg}\"/>",
-            "<w:left w:val=\"single\" w:sz=\"24\" w:space=\"0\" w:color=\"{accent}\"/>",
-            "<w:bottom w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"{bg}\"/>",
-            "<w:right w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"{bg}\"/>",
-            "</w:tblBorders>",
-            "<w:tblCellMar>",
-            "<w:top w:w=\"200\" w:type=\"dxa\"/>",
-            "<w:left w:w=\"280\" w:type=\"dxa\"/>",
-            "<w:bottom w:w=\"200\" w:type=\"dxa\"/>",
-            "<w:right w:w=\"240\" w:type=\"dxa\"/>",
-            "</w:tblCellMar>",
-            "</w:tblPr>",
-            "<w:tr><w:tc><w:tcPr><w:tcW w:type=\"pct\" w:w=\"5000\"/>",
-            "<w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"{bg}\"/>",
-            "</w:tcPr>"
-        ),
-        bg = bg,
-        accent = accent,
-    )
+    // Use pct type for full-width (5000 = 100%)
+    let mut xml = String::new();
+    xml.push_str("<w:tbl>");
+    xml.push_str("<w:tblPr>");
+    xml.push_str("<w:tblW w:type=\"pct\" w:w=\"5000\"/>");
+    xml.push_str("<w:tblInd w:type=\"dxa\" w:w=\"0\"/>");
+    xml.push_str("<w:tblLayout w:type=\"fixed\"/>");
+    xml.push_str("<w:tblBorders>");
+    xml.push_str(&format!("<w:top w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"{}\"/>", bg));
+    xml.push_str(&format!("<w:left w:val=\"single\" w:sz=\"24\" w:space=\"0\" w:color=\"{}\"/>", accent));
+    xml.push_str(&format!("<w:bottom w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"{}\"/>", bg));
+    xml.push_str(&format!("<w:right w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"{}\"/>", bg));
+    xml.push_str("</w:tblBorders>");
+    xml.push_str("<w:tblCellMar>");
+    xml.push_str("<w:top w:w=\"200\" w:type=\"dxa\"/>");
+    xml.push_str("<w:left w:w=\"280\" w:type=\"dxa\"/>");
+    xml.push_str("<w:bottom w:w=\"200\" w:type=\"dxa\"/>");
+    xml.push_str("<w:right w:w=\"240\" w:type=\"dxa\"/>");
+    xml.push_str("</w:tblCellMar>");
+    xml.push_str("</w:tblPr>");
+    xml.push_str("<w:tblGrid><w:gridCol w:w=\"9360\"/></w:tblGrid>");
+    xml.push_str("<w:tr>");
+    xml.push_str("<w:tc>");
+    xml.push_str("<w:tcPr>");
+    xml.push_str("<w:tcW w:type=\"dxa\" w:w=\"9360\"/>");
+    xml.push_str("<w:tcMar>");
+    xml.push_str("<w:top w:w=\"200\" w:type=\"dxa\"/>");
+    xml.push_str("<w:left w:w=\"280\" w:type=\"dxa\"/>");
+    xml.push_str("<w:bottom w:w=\"200\" w:type=\"dxa\"/>");
+    xml.push_str("<w:right w:w=\"240\" w:type=\"dxa\"/>");
+    xml.push_str("</w:tcMar>");
+    xml.push_str(&format!("<w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"{}\"/>", bg));
+    xml.push_str("</w:tcPr>");
+    xml
 }
 
 /// Emit the closing tags of a callout / code-block container cell.
@@ -260,30 +406,39 @@ pub fn build_callout_close_xml() -> String {
 /// Render a code-block container — same shape as a callout but
 /// uniformly shaded and with no accent border.
 pub fn build_code_block_container_xml(bg: &str) -> String {
-    format!(
-        concat!(
-            "<w:tbl>",
-            "<w:tblPr>",
-            "<w:tblW w:type=\"pct\" w:w=\"5000\"/>",
-            "<w:tblBorders>",
-            "<w:top w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"{bg}\"/>",
-            "<w:left w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"{bg}\"/>",
-            "<w:bottom w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"{bg}\"/>",
-            "<w:right w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"{bg}\"/>",
-            "</w:tblBorders>",
-            "<w:tblCellMar>",
-            "<w:top w:w=\"240\" w:type=\"dxa\"/>",
-            "<w:left w:w=\"280\" w:type=\"dxa\"/>",
-            "<w:bottom w:w=\"240\" w:type=\"dxa\"/>",
-            "<w:right w:w=\"280\" w:type=\"dxa\"/>",
-            "</w:tblCellMar>",
-            "</w:tblPr>",
-            "<w:tr><w:tc><w:tcPr><w:tcW w:type=\"pct\" w:w=\"5000\"/>",
-            "<w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"{bg}\"/>",
-            "</w:tcPr>"
-        ),
-        bg = bg,
-    )
+    let mut xml = String::new();
+    xml.push_str("<w:tbl>");
+    xml.push_str("<w:tblPr>");
+    xml.push_str("<w:tblW w:type=\"pct\" w:w=\"5000\"/>");
+    xml.push_str("<w:tblInd w:type=\"dxa\" w:w=\"0\"/>");
+    xml.push_str("<w:tblLayout w:type=\"fixed\"/>");
+    xml.push_str("<w:tblBorders>");
+    xml.push_str(&format!("<w:top w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"{}\"/>", bg));
+    xml.push_str(&format!("<w:left w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"{}\"/>", bg));
+    xml.push_str(&format!("<w:bottom w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"{}\"/>", bg));
+    xml.push_str(&format!("<w:right w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"{}\"/>", bg));
+    xml.push_str("</w:tblBorders>");
+    xml.push_str("<w:tblCellMar>");
+    xml.push_str("<w:top w:w=\"240\" w:type=\"dxa\"/>");
+    xml.push_str("<w:left w:w=\"280\" w:type=\"dxa\"/>");
+    xml.push_str("<w:bottom w:w=\"240\" w:type=\"dxa\"/>");
+    xml.push_str("<w:right w:w=\"280\" w:type=\"dxa\"/>");
+    xml.push_str("</w:tblCellMar>");
+    xml.push_str("</w:tblPr>");
+    xml.push_str("<w:tblGrid><w:gridCol w:w=\"9360\"/></w:tblGrid>");
+    xml.push_str("<w:tr>");
+    xml.push_str("<w:tc>");
+    xml.push_str("<w:tcPr>");
+    xml.push_str("<w:tcW w:type=\"dxa\" w:w=\"9360\"/>");
+    xml.push_str("<w:tcMar>");
+    xml.push_str("<w:top w:w=\"240\" w:type=\"dxa\"/>");
+    xml.push_str("<w:left w:w=\"280\" w:type=\"dxa\"/>");
+    xml.push_str("<w:bottom w:w=\"240\" w:type=\"dxa\"/>");
+    xml.push_str("<w:right w:w=\"280\" w:type=\"dxa\"/>");
+    xml.push_str("</w:tcMar>");
+    xml.push_str(&format!("<w:shd w:val=\"clear\" w:color=\"auto\" w:fill=\"{}\"/>", bg));
+    xml.push_str("</w:tcPr>");
+    xml
 }
 
 /// Emit a `<w:br w:type="page"/>` inside a `<w:r>` to force a
