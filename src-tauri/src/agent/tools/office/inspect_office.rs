@@ -27,6 +27,7 @@ impl InspectOfficeTool {
             "查看 Office 文件",
             "Inspect a Word (.docx) or Excel (.xlsx) file. Returns a summary at the level chosen by `mode`. Use this before doing any edits to gauge file size and structure.\n\n\
              - format=docx, mode=info: paragraph / table / word / character counts.\n\
+             - format=docx, mode=elements: list all element IDs (paragraphs, tables, images) with their text content preview. Use this to get IDs for use with create_word_doc's deletes[] parameter.\n\
              - format=xlsx, mode=info: workbook / sheet / cell / formula counts.\n\
              - format=xlsx, mode=metadata: per-sheet merged ranges, used range, and full formula list.\n\
              - format=xlsx, mode=range: cells in a specific A1:B3 range (requires `sheet` + `range`).",
@@ -35,7 +36,7 @@ impl InspectOfficeTool {
                 vec![
                     ("path", "string", Some("Absolute path to the .docx or .xlsx file")),
                     ("format", "string", Some("\"docx\" or \"xlsx\" (must match the file extension)")),
-                    ("mode", "string", Some("Inspection depth: \"info\" | \"metadata\" | \"range\". For .docx only \"info\" is meaningful; for .xlsx all three are valid.")),
+                    ("mode", "string", Some("Inspection depth: \"info\" | \"elements\" for .docx; \"info\" | \"metadata\" | \"range\" for .xlsx.")),
                     ("sheet", "string", Some("format=xlsx + mode=range or mode=metadata: sheet name (case-sensitive). Optional for mode=metadata (returns all sheets).")),
                     ("range", "string", Some("format=xlsx + mode=range: A1:B3-style cell range, e.g. \"A1:D10\". Single cell \"B2\", row \"1:10\", column \"A:A\" also valid.")),
                     ("include_styles", "string", Some("format=xlsx + mode=range: comma-separated style properties. Default: bg_color,font_color,number_format")),
@@ -77,9 +78,10 @@ impl InspectOfficeTool {
         match format {
             "docx" => match mode {
                 "info" => inspect_docx_info(path, path_obj).await,
+                "elements" => inspect_docx_elements(path, path_obj).await,
                 other => Err(ToolError::InvalidArguments(
                     "inspect_office".to_string(),
-                    format!("For format=docx, mode must be 'info' (got '{}')", other),
+                    format!("For format=docx, mode must be 'info' or 'elements' (got '{}')", other),
                 )),
             },
             "xlsx" => match mode {
@@ -161,6 +163,101 @@ async fn inspect_docx_info(path: &str, path_obj: &std::path::Path) -> Result<Str
         "has_footers": has_footers,
         "has_images": has_images,
         "file_size_bytes": bytes.len(),
+    });
+    Ok(result.to_string())
+}
+
+/// List all document elements with their IDs and content preview.
+/// Used to get element IDs for use with create_word_doc's deletes[] parameter.
+async fn inspect_docx_elements(path: &str, path_obj: &std::path::Path) -> Result<String, ToolError> {
+    let bytes = tokio::fs::read(path).await
+        .map_err(|e| ToolError::IoError(format!("Failed to read {}: {}", path, e)))?;
+    let doc = crate::office::read_word_document(&bytes)
+        .map_err(|e| ToolError::ExecutionError(format!("Failed to parse docx: {}", e)))?;
+
+    // Collect paragraph elements (excluding position marker paragraphs)
+    let paragraphs: Vec<serde_json::Value> = doc.paragraphs.iter()
+        .filter(|p| !p.id.starts_with("__tbl_pos_") && !p.id.starts_with("__img_pos_") && !p.id.starts_with("__sect_break_"))
+        .map(|p| {
+            // Truncate text preview to 100 chars for readability
+            // Use char_indices to avoid splitting multi-byte characters (e.g., Chinese)
+            let text_preview = if p.text.chars().count() > 100 {
+                let mut chars_taken = 0;
+                let end_byte = p.text.char_indices()
+                    .nth(100)
+                    .map(|(idx, _)| idx)
+                    .unwrap_or(p.text.len());
+                format!("{}...", &p.text[..end_byte])
+            } else {
+                p.text.clone()
+            };
+            serde_json::json!({
+                "type": "paragraph",
+                "id": p.id,
+                "text_preview": text_preview,
+                "text_length": p.text.len(),
+                "style": p.style,
+                "runs_count": p.runs.as_ref().map(|r| r.len()).unwrap_or(0),
+            })
+        })
+        .collect();
+
+    // Collect table elements
+    let tables: Vec<serde_json::Value> = doc.tables.iter()
+        .map(|t| {
+            // Collect header text for preview
+            // Use char_indices to avoid splitting multi-byte characters (e.g., Chinese)
+            let header_preview: Vec<String> = t.rows.first()
+                .map(|row| row.cells.iter().map(|c| {
+                    if c.text.chars().count() > 30 {
+                        let mut chars_taken = 0;
+                        let end_byte = c.text.char_indices()
+                            .nth(30)
+                            .map(|(idx, _)| idx)
+                            .unwrap_or(c.text.len());
+                        format!("{}...", &c.text[..end_byte])
+                    } else {
+                        c.text.clone()
+                    }
+                }).collect())
+                .unwrap_or_default();
+
+            serde_json::json!({
+                "type": "table",
+                "id": t.id,
+                "row_count": t.rows.len(),
+                "col_count": t.rows.first().map(|r| r.cells.len()).unwrap_or(0),
+                "header_preview": header_preview,
+                "has_cell_paragraphs": !t.cell_paragraphs.is_empty(),
+            })
+        })
+        .collect();
+
+    // Collect image elements
+    let images: Vec<serde_json::Value> = doc.images.iter()
+        .map(|img| {
+            serde_json::json!({
+                "type": "image",
+                "id": img.id,
+                "width_emu": img.width_emu,
+                "height_emu": img.height_emu,
+                "source_path": img.path,
+            })
+        })
+        .collect();
+
+    let file_name = path_obj.file_name().and_then(|n| n.to_str()).unwrap_or("unknown");
+    let result = serde_json::json!({
+        "file_name": file_name,
+        "path": path,
+        "format": "docx",
+        "mode": "elements",
+        "paragraph_count": paragraphs.len(),
+        "table_count": tables.len(),
+        "image_count": images.len(),
+        "paragraphs": paragraphs,
+        "tables": tables,
+        "images": images,
     });
     Ok(result.to_string())
 }

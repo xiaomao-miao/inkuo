@@ -1118,16 +1118,39 @@ impl CreateWordDocTool {
                     }
                 }
 
+                // Collect column-wrap hints from component blocks.
+                let mut all_column_wraps = column_wraps.clone();
+                for r in &component_renders {
+                    if let Some(hint) = &r.column_wrap {
+                        all_column_wraps.push(hint.clone());
+                    }
+                }
+
+                // Apply user sections FIRST, before expand_paragraph_columns.
+                // This ensures the baseline for column-wrap sections is set correctly.
+                // The user's section (if provided) becomes the trailing section,
+                // and expand_paragraph_columns will use it as the baseline to clone
+                // the column-wrap sections.
+                if let Some(ref sections) = params.sections {
+                    if !sections.is_empty() {
+                        existing.sections = Self::convert_sections(sections);
+                    }
+                }
+
                 // Expand per-paragraph column hints into section-break markers.
                 // This injects `__sect_break_<idx>__` paragraphs and additional
                 // `WordSection` entries so only the targeted paragraphs are
                 // laid out in the requested number of columns.
-                if let Err(e) = expand_paragraph_columns(
-                    &mut existing.paragraphs,
-                    &mut existing.sections,
-                    &all_column_wraps,
-                ) {
-                    return Err(ToolError::InvalidArguments("create_word_doc".to_string(), e));
+                // IMPORTANT: This must run AFTER user sections are applied,
+                // so the column-wrap sections are based on the user's section baseline.
+                if !all_column_wraps.is_empty() {
+                    if let Err(e) = expand_paragraph_columns(
+                        &mut existing.paragraphs,
+                        &mut existing.sections,
+                        &all_column_wraps,
+                    ) {
+                        return Err(ToolError::InvalidArguments("create_word_doc".to_string(), e));
+                    }
                 }
 
                 // Validate sections[].cols usage: warn when a single section
@@ -1148,12 +1171,6 @@ impl CreateWordDocTool {
                                 );
                             }
                         }
-                    }
-                }
-
-                if let Some(ref sections) = params.sections {
-                    if !sections.is_empty() {
-                        existing.sections = Self::convert_sections(sections);
                     }
                 }
                 if let Some(ref headers) = params.headers {
@@ -1198,13 +1215,27 @@ impl CreateWordDocTool {
                 }
             }
 
+            // Apply user sections FIRST, before expand_paragraph_columns.
+            // This ensures the baseline for column-wrap sections is set correctly.
+            if let Some(ref sections) = params.sections {
+                if !sections.is_empty() {
+                    existing.sections = Self::convert_sections(sections);
+                }
+            }
+
             // Expand per-paragraph column hints into section-break markers.
-            if let Err(e) = expand_paragraph_columns(
-                &mut existing.paragraphs,
-                &mut existing.sections,
-                &all_column_wraps,
-            ) {
-                return Err(ToolError::InvalidArguments("create_word_doc".to_string(), e));
+            // This injects `__sect_break_<idx>__` paragraphs and additional
+            // `WordSection` entries so only the targeted paragraphs are
+            // laid out in the requested number of columns.
+            // IMPORTANT: This must run AFTER user sections are applied.
+            if !all_column_wraps.is_empty() {
+                if let Err(e) = expand_paragraph_columns(
+                    &mut existing.paragraphs,
+                    &mut existing.sections,
+                    &all_column_wraps,
+                ) {
+                    return Err(ToolError::InvalidArguments("create_word_doc".to_string(), e));
+                }
             }
 
             // Validate sections[].cols usage.
@@ -1297,13 +1328,27 @@ impl CreateWordDocTool {
                 }
             }
 
+            // Apply user sections FIRST, before expand_paragraph_columns.
+            // This ensures the baseline for column-wrap sections is set correctly.
+            if let Some(ref sections) = params.sections {
+                if !sections.is_empty() {
+                    existing.sections = Self::convert_sections(sections);
+                }
+            }
+
             // Expand per-paragraph column hints into section-break markers.
-            if let Err(e) = expand_paragraph_columns(
-                &mut existing.paragraphs,
-                &mut existing.sections,
-                &all_column_wraps,
-            ) {
-                return Err(ToolError::InvalidArguments("create_word_doc".to_string(), e));
+            // This injects `__sect_break_<idx>__` paragraphs and additional
+            // `WordSection` entries so only the targeted paragraphs are
+            // laid out in the requested number of columns.
+            // IMPORTANT: This must run AFTER user sections are applied.
+            if !all_column_wraps.is_empty() {
+                if let Err(e) = expand_paragraph_columns(
+                    &mut existing.paragraphs,
+                    &mut existing.sections,
+                    &all_column_wraps,
+                ) {
+                    return Err(ToolError::InvalidArguments("create_word_doc".to_string(), e));
+                }
             }
 
             // Validate sections[].cols usage.
@@ -1320,12 +1365,6 @@ impl CreateWordDocTool {
                             );
                         }
                     }
-                }
-            }
-
-            if let Some(ref sections) = params.sections {
-                if !sections.is_empty() {
-                    existing.sections = Self::convert_sections(sections);
                 }
             }
             if let Some(ref headers) = params.headers {
@@ -1394,13 +1433,27 @@ impl CreateWordDocTool {
             }
         }
 
+        // Apply user sections FIRST, before expand_paragraph_columns.
+        // This ensures the baseline for column-wrap sections is set correctly.
+        if let Some(ref sections) = params.sections {
+            if !sections.is_empty() {
+                doc.sections = Self::convert_sections(sections);
+            }
+        }
+
         // Expand per-paragraph column hints into section-break markers.
-        if let Err(e) = expand_paragraph_columns(
-            &mut doc.paragraphs,
-            &mut doc.sections,
-            &all_column_wraps,
-        ) {
-            return Err(ToolError::InvalidArguments("create_word_doc".to_string(), e));
+        // This injects `__sect_break_<idx>__` paragraphs and additional
+        // `WordSection` entries so only the targeted paragraphs are
+        // laid out in the requested number of columns.
+        // IMPORTANT: This must run AFTER user sections are applied.
+        if !all_column_wraps.is_empty() {
+            if let Err(e) = expand_paragraph_columns(
+                &mut doc.paragraphs,
+                &mut doc.sections,
+                &all_column_wraps,
+            ) {
+                return Err(ToolError::InvalidArguments("create_word_doc".to_string(), e));
+            }
         }
 
         // Validate sections[].cols usage.
@@ -1417,12 +1470,6 @@ impl CreateWordDocTool {
                         );
                     }
                 }
-            }
-        }
-
-        if let Some(ref sections) = params.sections {
-            if !sections.is_empty() {
-                doc.sections = Self::convert_sections(sections);
             }
         }
         if let Some(ref headers) = params.headers {

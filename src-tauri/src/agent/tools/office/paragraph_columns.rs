@@ -544,4 +544,131 @@ mod tests {
 
         let _ = std::fs::remove_file(&path);
     }
+
+    /// Regression test: when both `sections[]` and `columns` are provided,
+    /// the column wrap should work correctly without being overwritten by
+    /// user-provided sections.
+    ///
+    /// Bug: In the original code, expand_paragraph_columns was called BEFORE
+    /// convert_sections, which meant the column-wrap sections were
+    /// completely overwritten by user sections. This test verifies the fix.
+    #[tokio::test]
+    async fn columns_with_sections_both_provided() {
+        use crate::agent::tools::office::CreateWordDocTool;
+
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "inkuo_cols_sects_test_{}.docx",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+
+        let tool = CreateWordDocTool::new();
+
+        // Test 1: sections[] with columns - the key regression case
+        let payload = serde_json::json!({
+            "path": path.to_string_lossy(),
+            "elements": [
+                {"type": "paragraph", "id": "pre", "text": "Before column section"},
+                {"type": "paragraph", "id": "col_target", "text": "This should be in two columns", "columns": 2},
+                {"type": "paragraph", "id": "post", "text": "After column section"},
+            ],
+            "sections": [
+                {"id": "main", "cols": 1}
+            ]
+        });
+
+        tool.execute(payload, None)
+            .await
+            .expect("tool should succeed with both sections and columns");
+
+        let bytes = std::fs::read(&path).expect("file should exist");
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).expect("valid zip");
+        let mut doc_xml = String::new();
+        zip.by_name("word/document.xml")
+            .expect("document.xml")
+            .read_to_string(&mut doc_xml)
+            .expect("readable");
+
+        // The two-column section MUST appear - this was the bug!
+        assert!(
+            doc_xml.contains(r#"<w:cols w:num="2""#),
+            "BUG: columns hint was overwritten by sections[]. cols=2 must appear; got: {}",
+            doc_xml
+        );
+
+        // Content should survive
+        assert!(
+            doc_xml.contains("Before column section"),
+            "pre paragraph should survive; got: {}",
+            doc_xml
+        );
+        assert!(
+            doc_xml.contains("This should be in two columns"),
+            "target paragraph should survive; got: {}",
+            doc_xml
+        );
+        assert!(
+            doc_xml.contains("After column section"),
+            "post paragraph should survive; got: {}",
+            doc_xml
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Regression test: columns with append mode
+    #[tokio::test]
+    async fn columns_with_append_mode() {
+        use crate::agent::tools::office::CreateWordDocTool;
+
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "inkuo_cols_append_test_{}.docx",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+
+        let tool = CreateWordDocTool::new();
+
+        // Create initial document
+        let initial = serde_json::json!({
+            "path": path.to_string_lossy(),
+            "elements": [
+                {"type": "paragraph", "id": "init", "text": "Initial paragraph"},
+            ]
+        });
+        tool.execute(initial, None).await.expect("initial creation should succeed");
+
+        // Append with columns
+        let append = serde_json::json!({
+            "path": path.to_string_lossy(),
+            "append": true,
+            "elements": [
+                {"type": "paragraph", "id": "col_target", "text": "Column section text", "columns": 2},
+            ]
+        });
+        tool.execute(append, None).await.expect("append with columns should succeed");
+
+        let bytes = std::fs::read(&path).expect("file should exist");
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).expect("valid zip");
+        let mut doc_xml = String::new();
+        zip.by_name("word/document.xml")
+            .expect("document.xml")
+            .read_to_string(&mut doc_xml)
+            .expect("readable");
+
+        // The two-column section must appear
+        assert!(
+            doc_xml.contains(r#"<w:cols w:num="2""#),
+            "columns in append mode should work; got: {}",
+            doc_xml
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
 }
