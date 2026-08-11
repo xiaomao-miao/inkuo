@@ -2,27 +2,22 @@
 //! into the generic writer/renderer pipeline.
 //!
 //! Today this module hosts [`expand_paragraph_columns`], which
-//! translates the tool's per-paragraph `columns` hint into OOXML
-//! section-break markers around the target paragraph. Word's native
+//! translates the tool's per-paragraph `columns` hint into ordered OOXML
+//! section-break markers around balanced paragraph runs. Word's native
 //! data model is section-centric: `<w:cols w:num="N"/>` lives inside
 //! `<w:sectPr>` and applies to every paragraph in the section. There
-//! is no "this one paragraph is in two columns" primitive, so the
-//! only way to scope a column layout to a single paragraph (or a
-//! short run of paragraphs) is to bracket it with two `continuous`
-//! section breaks whose middle section carries the desired `cols`.
+//! is no paragraph-level column primitive, so a partial-column region
+//! must be bracketed by `continuous` section breaks whose middle
+//! section carries the desired `cols`.
 //!
-//! The writer already understands the marker convention
-//! (`__sect_break_<idx>__` paragraph ids), so all this helper does is:
+//! The writer understands the `__sect_break_<idx>__` marker convention.
+//! This helper therefore:
 //!
-//!   1. Locate each target paragraph by id.
-//!   2. Snapshot the trailing section's properties as a "neutral"
-//!      baseline for the brackets.
-//!   3. Insert a leading marker (closes the pre-wrap section, reuses
-//!      the trailing section's properties) and a trailing marker
-//!      (closes the wrap section, with `cols = N`).
-//!   4. Append two new `WordSection` entries to the document so the
-//!      writer's `section_breaks.len() + 1 == total_sections` invariant
-//!      holds.
+//!   1. Validates and locates every target id.
+//!   2. Recovers the document's existing physical section order.
+//!   3. Coalesces adjacent targets with the same count into one section.
+//!   4. Rebuilds sequential markers and sections while enforcing
+//!      `section_breaks.len() + 1 == total_sections`.
 
 // NOTE: The tests in `#[cfg(test)]` below need `tokio::test` (async) and
 // `zip::ZipArchive`; those crates are already in Cargo.toml's `[dependencies]`
@@ -30,19 +25,17 @@
 // available without extra imports here. The one test-only import needed is
 // `zip::ZipArchive` for reading the raw docx bytes back.
 
+use std::collections::HashMap;
+
 use crate::office::{WordParagraph, WordSection};
 
-/// Wrap every paragraph whose id appears in `targets` in its own
-/// continuous section break pair, so that the middle section can carry
-/// the requested `<w:cols w:num="N"/>` while the surrounding body
-/// stays at the document's default column count.
+/// Overlay column layouts on the paragraphs named by `targets`.
 ///
-/// `targets` is `(paragraph_id, columns)` pairs. `columns == 1` is
-/// treated as a no-op (the surrounding section's properties already
-/// produce a single-column layout) and is filtered out. `columns == 0`
-/// or `columns > 9` is rejected with an error — Word's column count is
-/// a small positive integer (1..=9) and accepting anything outside
-/// that range would silently produce a malformed document.
+/// Adjacent targets with the same column count are deliberately coalesced into
+/// one section. A multi-column section is the unit Word balances across its
+/// columns; wrapping each paragraph independently leaves every short paragraph
+/// with an empty column and creates the staggered layout this helper exists to
+/// avoid.
 ///
 /// Paragraphs not found by id raise a clear error so the AI gets
 /// useful feedback ("you asked to column-wrap paragraph 'p1' but no
@@ -50,11 +43,12 @@ use crate::office::{WordParagraph, WordSection};
 /// common AI failure mode of mistyping ids or referencing a paragraph
 /// that was deleted in the same call.
 ///
-/// Existing section properties (page size, margins, headers, footers,
-/// page numbering) on the trailing section are propagated to both the
-/// leading "before" section and the trailing "after" section so the
-/// brackets don't accidentally change the document's look. Only the
-/// column count is overridden.
+/// The function also normalises the document's section representation. Writer
+/// markers and `sections` must obey one invariant: `markers + 1 == sections`.
+/// Older versions appended three sections for every two markers, causing the
+/// writer to ignore the markers and fall back to an even paragraph split. We
+/// rebuild both collections in physical document order so this invariant is
+/// true after every successful call, including when repairing an existing file.
 pub fn expand_paragraph_columns(
     paragraphs: &mut Vec<WordParagraph>,
     sections: &mut Vec<WordSection>,
@@ -64,9 +58,8 @@ pub fn expand_paragraph_columns(
         return Ok(());
     }
 
-    // Filter + validate. We keep the (id, cols) pairs only when cols
-    // is in the legal range (2..=9); cols == 1 means "no wrap needed".
-    let mut effective: Vec<(String, u32)> = Vec::with_capacity(targets.len());
+    // Filter, validate, and reject ambiguous duplicate hints.
+    let mut effective: HashMap<String, u32> = HashMap::with_capacity(targets.len());
     for (id, cols) in targets {
         if *cols == 1 {
             // cols=1 is the default; no wrap needed.
@@ -80,100 +73,36 @@ pub fn expand_paragraph_columns(
                 cols, id
             ));
         }
-        effective.push((id.clone(), *cols));
+        if let Some(previous) = effective.insert(id.clone(), *cols) {
+            if previous != *cols {
+                return Err(format!(
+                    "Conflicting `columns` values for paragraph '{}': {} and {}.",
+                    id, previous, cols
+                ));
+            }
+        }
     }
     if effective.is_empty() {
         return Ok(());
     }
 
-    // Snapshot the trailing section as the "neutral" baseline for the
-    // brackets. If the document has no sections yet (a brand-new
-    // document with no caller-supplied sections), fall back to the
-    // default A4 portrait section so the brackets inherit sane
-    // geometry.
-    let baseline = sections
-        .last()
-        .cloned()
-        .unwrap_or_else(WordSection::default);
-
-    // Walk paragraphs from the start. For each target, insert two
-    // synthetic marker paragraphs immediately before and after it, and
-    // append a pair of new sections to the document's section list.
-    //
-    // `idx` is the index in the *current* `paragraphs` vec. Because we
-    // insert before processing the next paragraph, every inserted
-    // marker shifts later indices by +1 each, so we walk with a manual
-    // loop and bump `i` by 3 (target + 2 markers) when we hit a target.
-    let mut i = 0usize;
-    while i < paragraphs.len() {
-        let p = &paragraphs[i];
-        let target = effective.iter().find(|(id, _)| id == &p.id).cloned();
-        if let Some((id, cols)) = target {
-            // The middle section carries `cols = cols`. It MUST be
-            // `continuous` so the wrap doesn't force a page break.
-            let mut wrap_section = baseline.clone();
-            wrap_section.cols = Some(cols);
-            wrap_section.section_type = Some("continuous".to_string());
-            // Give it a fresh id so it doesn't collide with the
-            // baseline id when the writer looks up section properties.
-            wrap_section.id = format!("__col_wrap_{}__", id);
-
-            // The "after" section is a clone of the baseline so the
-            // body returns to its original column count.
-            let mut after_section = baseline.clone();
-            after_section.id = format!("__col_after_{}__", id);
-            // Force cols=Some(1) so the writer emits `<w:cols w:space="..."/>`
-            // rather than inheriting whatever the wrap section set.
-            after_section.cols = Some(1);
-
-            // The number of existing sections grows by 2 with each
-            // wrap. The new indices for the markers are
-            // `total_sections` and `total_sections + 1` *before* the
-            // append (so `total_sections - 1` becomes the wrap index).
-            let new_idx_before = sections.len();
-            let new_idx_wrap = sections.len() + 1;
-
-            // Marker 1 (before the target paragraph): closes section
-            // `new_idx_before`, which is a clone of the baseline.
-            let mut before_marker = baseline.clone();
-            before_marker.id = format!("__col_before_{}__", id);
-            before_marker.section_type = Some("continuous".to_string());
-            before_marker.cols = Some(1);
-            let marker_before = make_section_break_marker(new_idx_before, &id, "before");
-
-            // Marker 2 (after the target paragraph): closes section
-            // `new_idx_wrap`, which is the cols=N wrap section.
-            let marker_after = make_section_break_marker(new_idx_wrap, &id, "after");
-
-            // Push the trailing "after" section first, then the wrap
-            // section, then the leading "before" section, so the new
-            // sections land at indices `len`, `len + 1`, `len + 2` in
-            // that order — matching the marker indices.
-            sections.push(before_marker);
-            sections.push(wrap_section);
-            sections.push(after_section);
-
-            // Splice: marker_before, target, marker_after.
-            let target_para = paragraphs[i].clone();
-            paragraphs.remove(i);
-            paragraphs.insert(i, marker_before);
-            paragraphs.insert(i + 1, target_para);
-            paragraphs.insert(i + 2, marker_after);
-            // Skip past the inserted triplet.
-            i += 3;
-        } else {
-            i += 1;
+    // Validate ids before mutating either collection. Section-break markers are
+    // implementation details and can never be valid user targets.
+    let mut matched: HashMap<&str, usize> = HashMap::new();
+    for paragraph in paragraphs
+        .iter()
+        .filter(|p| section_break_index(p).is_none())
+    {
+        if effective.contains_key(&paragraph.id) {
+            *matched.entry(paragraph.id.as_str()).or_insert(0) += 1;
         }
     }
-
-    // Sanity check: every requested id must have matched a paragraph.
-    // If any didn't, surface the leftover ids so the AI can fix its
-    // payload on the next retry.
-    let remaining: Vec<&str> = effective
-        .iter()
-        .filter(|(id, _)| !paragraphs.iter().any(|p| p.id == *id))
-        .map(|(id, _)| id.as_str())
+    let mut remaining: Vec<&str> = effective
+        .keys()
+        .filter(|id| !matched.contains_key(id.as_str()))
+        .map(String::as_str)
         .collect();
+    remaining.sort_unstable();
     if !remaining.is_empty() {
         return Err(format!(
             "`columns` hint requested for paragraph id(s) that don't exist in the \
@@ -182,8 +111,149 @@ pub fn expand_paragraph_columns(
             remaining.join(", ")
         ));
     }
+    if let Some((id, count)) = matched.iter().find(|(_, count)| **count > 1) {
+        return Err(format!(
+            "`columns` hint is ambiguous because paragraph id '{}' occurs {} times.",
+            id, count
+        ));
+    }
 
+    let baseline = sections
+        .last()
+        .cloned()
+        .unwrap_or_else(WordSection::default);
+    let source_paragraphs = std::mem::take(paragraphs);
+    let source_sections = std::mem::take(sections);
+    let mut base_segments =
+        split_existing_sections(source_paragraphs, &source_sections, &baseline)?;
+
+    // Split each original section into ordinary / multi-column runs. Runs never
+    // cross an original section boundary. Adjacent targets with the same count
+    // stay in the same run and therefore balance across the same Word section.
+    let mut output_segments: Vec<(Vec<WordParagraph>, WordSection)> = Vec::new();
+    for (segment_paragraphs, base_section) in base_segments.drain(..) {
+        if segment_paragraphs.is_empty() {
+            output_segments.push((Vec::new(), base_section));
+            continue;
+        }
+
+        let mut runs: Vec<(Vec<WordParagraph>, Option<u32>)> = Vec::new();
+        for paragraph in segment_paragraphs {
+            let requested = effective.get(&paragraph.id).copied();
+            if runs.last().map(|(_, cols)| *cols) == Some(requested) {
+                runs.last_mut().expect("run exists").0.push(paragraph);
+            } else {
+                runs.push((vec![paragraph], requested));
+            }
+        }
+
+        let run_count = runs.len();
+        for (run_index, (run_paragraphs, requested)) in runs.into_iter().enumerate() {
+            let mut section = base_section.clone();
+            if let Some(cols) = requested {
+                section.cols = Some(cols);
+                section.id = format!("__col_wrap_{}__", run_paragraphs[0].id);
+            }
+            // A boundary introduced inside an existing section must not force a
+            // page break. The last run keeps the original section's break type.
+            if run_index + 1 < run_count {
+                section.section_type = Some("continuous".to_string());
+            }
+            output_segments.push((run_paragraphs, section));
+        }
+    }
+
+    if output_segments.is_empty() {
+        output_segments.push((Vec::new(), baseline));
+    }
+
+    let segment_count = output_segments.len();
+    for (section_index, (segment_paragraphs, section)) in output_segments.into_iter().enumerate() {
+        sections.push(section);
+        paragraphs.extend(segment_paragraphs);
+        if section_index + 1 < segment_count {
+            paragraphs.push(make_section_break_marker(section_index, "", "boundary"));
+        }
+    }
+
+    debug_assert_eq!(
+        paragraphs
+            .iter()
+            .filter(|p| section_break_index(p).is_some())
+            .count()
+            + 1,
+        sections.len()
+    );
     Ok(())
+}
+
+/// Convert the writer's existing physical section representation into ordered
+/// paragraph/property segments. Explicit markers take priority. When callers
+/// supplied multiple sections without markers, mirror the writer's legacy even
+/// split once and then make the result explicit.
+fn split_existing_sections(
+    source_paragraphs: Vec<WordParagraph>,
+    source_sections: &[WordSection],
+    baseline: &WordSection,
+) -> Result<Vec<(Vec<WordParagraph>, WordSection)>, String> {
+    let has_markers = source_paragraphs
+        .iter()
+        .any(|p| section_break_index(p).is_some());
+    if has_markers {
+        let mut segments = Vec::new();
+        let mut current = Vec::new();
+        for paragraph in source_paragraphs {
+            if let Some(section_index) = section_break_index(&paragraph) {
+                let section = source_sections.get(section_index).cloned().ok_or_else(|| {
+                    format!(
+                        "Section-break marker references missing section index {} ({} sections exist).",
+                        section_index,
+                        source_sections.len()
+                    )
+                })?;
+                segments.push((std::mem::take(&mut current), section));
+            } else {
+                current.push(paragraph);
+            }
+        }
+        segments.push((current, baseline.clone()));
+        return Ok(segments);
+    }
+
+    if source_sections.len() <= 1 {
+        return Ok(vec![(source_paragraphs, baseline.clone())]);
+    }
+
+    let section_count = source_sections.len();
+    let total = source_paragraphs.len();
+    let base = total / section_count;
+    let mut distributed: Vec<Vec<WordParagraph>> = vec![Vec::new(); section_count];
+    let mut section_index = 0usize;
+    let mut in_current = 0usize;
+    for (paragraph_index, paragraph) in source_paragraphs.into_iter().enumerate() {
+        distributed[section_index].push(paragraph);
+        in_current += 1;
+        if section_index + 1 < section_count
+            && in_current >= base
+            && (paragraph_index + 1) + (section_count - section_index - 1) <= total
+        {
+            section_index += 1;
+            in_current = 0;
+        }
+    }
+
+    Ok(distributed
+        .into_iter()
+        .zip(source_sections.iter().cloned())
+        .collect())
+}
+
+fn section_break_index(paragraph: &WordParagraph) -> Option<usize> {
+    paragraph
+        .id
+        .strip_prefix("__sect_break_")
+        .and_then(|rest| rest.strip_suffix("__"))
+        .and_then(|value| value.parse::<usize>().ok())
 }
 
 /// Build a synthetic `<w:sectPr>`-carrying paragraph whose id matches
@@ -264,18 +334,26 @@ mod tests {
             .and_then(|s| s.split("__").next())
             .and_then(|s| s.parse::<usize>().ok())
             .expect("second marker should parse");
-        assert_eq!(mid_marker_idx, 1, "first marker closes section 1 (was 0)");
-        assert_eq!(end_marker_idx, 2, "second marker closes section 2 (wrap)");
+        assert_eq!(mid_marker_idx, 0, "first marker closes the leading section");
+        assert_eq!(end_marker_idx, 1, "second marker closes the column section");
 
-        // Sections: [baseline (s0), before_marker_clone (s1), wrap (s2), after_clone (s3)]
-        assert_eq!(doc.sections.len(), 4);
-        assert_eq!(doc.sections[2].cols, Some(2));
+        // Sections: [baseline before, two-column run, baseline after].
+        assert_eq!(doc.sections.len(), 3);
+        assert_eq!(doc.sections[1].cols, Some(2));
         assert_eq!(
-            doc.sections[2].section_type,
+            doc.sections[1].section_type,
             Some("continuous".to_string()),
             "wrap section must be continuous so it doesn't force a page break"
         );
-        assert_eq!(doc.sections[3].cols, Some(1));
+        assert_eq!(
+            doc.paragraphs
+                .iter()
+                .filter(|p| section_break_index(p).is_some())
+                .count()
+                + 1,
+            doc.sections.len(),
+            "writer marker invariant must hold"
+        );
     }
 
     #[test]
@@ -361,11 +439,35 @@ mod tests {
         assert!(ids[7].starts_with("__sect_break_"));
         assert_eq!(ids[8], "z");
 
-        // Sections: baseline(0), before_first(1), wrap_first(2), after_first(3),
-        //           before_last(4), wrap_last(5), after_last(6)
-        assert_eq!(doc.sections.len(), 7);
-        assert_eq!(doc.sections[2].cols, Some(2));
-        assert_eq!(doc.sections[5].cols, Some(3));
+        // Sections: baseline, first wrap, baseline, last wrap, baseline.
+        assert_eq!(doc.sections.len(), 5);
+        assert_eq!(doc.sections[1].cols, Some(2));
+        assert_eq!(doc.sections[3].cols, Some(3));
+    }
+
+    #[test]
+    fn adjacent_paragraphs_with_same_columns_share_one_section() {
+        let mut doc = WordDocument::default();
+        doc.paragraphs = vec![
+            make_paragraph("a", "A"),
+            make_paragraph("first", "F"),
+            make_paragraph("second", "S"),
+            make_paragraph("z", "Z"),
+        ];
+        doc.sections = vec![WordSection::default()];
+
+        expand_paragraph_columns(
+            &mut doc.paragraphs,
+            &mut doc.sections,
+            &[("first".into(), 2), ("second".into(), 2)],
+        )
+        .expect("adjacent paragraphs should share a column section");
+
+        assert_eq!(doc.sections.len(), 3);
+        assert_eq!(doc.sections.iter().filter(|s| s.cols == Some(2)).count(), 1);
+        assert_eq!(doc.paragraphs.len(), 6);
+        assert_eq!(doc.paragraphs[2].id, "first");
+        assert_eq!(doc.paragraphs[3].id, "second");
     }
 
     #[test]
@@ -389,9 +491,9 @@ mod tests {
 
         expand_paragraph_columns(&mut doc.paragraphs, &mut doc.sections, &[("a".into(), 2)])
             .expect("wrap with no existing sections should fall back to default");
-        assert_eq!(doc.paragraphs.len(), 3);
-        assert_eq!(doc.sections.len(), 3);
-        assert_eq!(doc.sections[1].cols, Some(2));
+        assert_eq!(doc.paragraphs.len(), 1);
+        assert_eq!(doc.sections.len(), 1);
+        assert_eq!(doc.sections[0].cols, Some(2));
     }
 
     /// End-to-end check: build the writer's actual document XML and
@@ -414,6 +516,11 @@ mod tests {
             .expect("wrap should succeed");
 
         let xml = build_document_xml(&doc);
+        assert_eq!(
+            xml.matches("<w:sectPr>").count(),
+            doc.sections.len(),
+            "writer should emit exactly one sectPr per physical section"
+        );
         assert!(
             xml.contains(r#"<w:cols w:num="2""#),
             "wrap section must emit <w:cols w:num=\"2\"/>; got: {}",
@@ -545,6 +652,58 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// Regression for the visible failure: adjacent body paragraphs with the
+    /// same `columns` value must share one balanced physical section.
+    #[tokio::test]
+    async fn adjacent_body_columns_emit_one_balanced_section() {
+        use crate::agent::tools::office::CreateWordDocTool;
+
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "inkuo_adjacent_body_cols_test_{}.docx",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+
+        let payload = serde_json::json!({
+            "path": path.to_string_lossy(),
+            "elements": [
+                {"type": "body", "id": "intro", "text": "Full-width introduction"},
+                {"type": "body", "id": "column_left", "text": "First column paragraph", "columns": 2},
+                {"type": "body", "id": "column_right", "text": "Second column paragraph", "columns": 2},
+                {"type": "body", "id": "outro", "text": "Full-width conclusion"},
+            ]
+        });
+
+        CreateWordDocTool::new()
+            .execute(payload, None)
+            .await
+            .expect("adjacent body column hints should succeed");
+
+        let bytes = std::fs::read(&path).expect("file should exist");
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).expect("valid zip");
+        let mut doc_xml = String::new();
+        zip.by_name("word/document.xml")
+            .expect("document.xml")
+            .read_to_string(&mut doc_xml)
+            .expect("readable");
+
+        assert_eq!(
+            doc_xml.matches(r#"<w:cols w:num="2""#).count(),
+            1,
+            "adjacent paragraphs must share exactly one two-column section"
+        );
+        assert_eq!(
+            doc_xml.matches("<w:sectPr>").count(),
+            3,
+            "full-width / two-column / full-width requires exactly three sections"
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
     /// Regression test: when both `sections[]` and `columns` are provided,
     /// the column wrap should work correctly without being overwritten by
     /// user-provided sections.
@@ -668,6 +827,58 @@ mod tests {
             "columns in append mode should work; got: {}",
             doc_xml
         );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn body_columns_work_in_progressive_append_mode() {
+        use crate::agent::tools::office::CreateWordDocTool;
+
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            "inkuo_body_cols_append_test_{}.docx",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+
+        let tool = CreateWordDocTool::new();
+        tool.execute(
+            serde_json::json!({
+                "path": path.to_string_lossy(),
+                "elements": [{"type": "body", "id": "initial", "text": "Initial"}]
+            }),
+            None,
+        )
+        .await
+        .expect("initial creation should succeed");
+
+        tool.execute(
+            serde_json::json!({
+                "path": path.to_string_lossy(),
+                "append": true,
+                "elements": [
+                    {"type": "body", "id": "append_left", "text": "Left", "columns": 2},
+                    {"type": "body", "id": "append_right", "text": "Right", "columns": 2}
+                ]
+            }),
+            None,
+        )
+        .await
+        .expect("component paragraphs must be appended before column ids are resolved");
+
+        let bytes = std::fs::read(&path).expect("file should exist");
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).expect("valid zip");
+        let mut doc_xml = String::new();
+        zip.by_name("word/document.xml")
+            .expect("document.xml")
+            .read_to_string(&mut doc_xml)
+            .expect("readable");
+        assert_eq!(doc_xml.matches(r#"<w:cols w:num="2""#).count(), 1);
+        assert!(doc_xml.contains("Left"));
+        assert!(doc_xml.contains("Right"));
 
         let _ = std::fs::remove_file(&path);
     }
