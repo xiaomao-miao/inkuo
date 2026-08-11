@@ -20,6 +20,8 @@ import {
   Image,
   Table2,
   Columns,
+  Subscript,
+  Superscript,
 } from 'lucide-react';
 import type { BapbongEditorRef } from './BapbongEditor';
 import styles from './BapbongToolbar.module.css';
@@ -51,24 +53,46 @@ export const BapbongToolbar: React.FC<BapbongToolbarProps> = ({
   onZoomOut,
 }) => {
   const [, setTick] = useState(0);
+  const [activeStates, setActiveStates] = useState({
+    bold: false,
+    italic: false,
+    underline: false,
+    strike: false,
+    subscript: false,
+    superscript: false,
+  });
 
   // Poll for active state changes
   useEffect(() => {
     const interval = setInterval(() => {
-      // For now, just tick to force re-render
-      // In full implementation, we'd read editor state
+      const editor = editorRef.current;
+      if (!editor) return;
+
+      // Check active states from editor
+      setActiveStates({
+        bold: editor.isCommandActive('bold'),
+        italic: editor.isCommandActive('italic'),
+        underline: editor.isCommandActive('underline'),
+        strike: editor.isCommandActive('strike'),
+        subscript: editor.isCommandActive('subscript'),
+        superscript: editor.isCommandActive('superscript'),
+      });
+
+      // Force re-render
       setTick((t) => t + 1);
     }, POLL_INTERVAL_MS);
 
     return () => clearInterval(interval);
-  }, []);
+  }, [editorRef]);
 
   // Execute a command on the editor
-  const executeCommand = useCallback((commandName: string) => {
-    if (!editorRef) return;
-    // Commands would be executed via editor.commands.get(commandName)?.run(...)
-    // For now, this is a placeholder
-    console.log('Execute command:', commandName);
+  const executeCommand = useCallback((commandName: string, params?: unknown) => {
+    editorRef.current?.executeCommand(commandName, params);
+  }, [editorRef]);
+
+  // Set columns
+  const setColumns = useCallback((count: number) => {
+    editorRef.current?.executeCommand('columns', count);
   }, [editorRef]);
 
   return (
@@ -106,32 +130,46 @@ export const BapbongToolbar: React.FC<BapbongToolbarProps> = ({
       {/* Font formatting */}
       <div className={styles.toolbarSection}>
         <button
-          className={styles.toolbarButton}
+          className={`${styles.toolbarButton} ${activeStates.bold ? styles.active : ''}`}
           onClick={() => executeCommand('bold')}
           title="加粗 (Ctrl+B)"
         >
           <Bold size={16} />
         </button>
         <button
-          className={styles.toolbarButton}
+          className={`${styles.toolbarButton} ${activeStates.italic ? styles.active : ''}`}
           onClick={() => executeCommand('italic')}
           title="斜体 (Ctrl+I)"
         >
           <Italic size={16} />
         </button>
         <button
-          className={styles.toolbarButton}
+          className={`${styles.toolbarButton} ${activeStates.underline ? styles.active : ''}`}
           onClick={() => executeCommand('underline')}
           title="下划线 (Ctrl+U)"
         >
           <Underline size={16} />
         </button>
         <button
-          className={styles.toolbarButton}
+          className={`${styles.toolbarButton} ${activeStates.strike ? styles.active : ''}`}
           onClick={() => executeCommand('strike')}
           title="删除线"
         >
           <Strikethrough size={16} />
+        </button>
+        <button
+          className={`${styles.toolbarButton} ${activeStates.superscript ? styles.active : ''}`}
+          onClick={() => executeCommand('superscript')}
+          title="上标"
+        >
+          <Superscript size={16} />
+        </button>
+        <button
+          className={`${styles.toolbarButton} ${activeStates.subscript ? styles.active : ''}`}
+          onClick={() => executeCommand('subscript')}
+          title="下标"
+        >
+          <Subscript size={16} />
         </button>
       </div>
 
@@ -215,21 +253,21 @@ export const BapbongToolbar: React.FC<BapbongToolbarProps> = ({
       <div className={styles.toolbarSection}>
         <button
           className={styles.toolbarButton}
-          onClick={() => executeCommand('columns-1')}
+          onClick={() => setColumns(1)}
           title="一栏"
         >
           <span className={styles.iconText}>1</span>
         </button>
         <button
           className={styles.toolbarButton}
-          onClick={() => executeCommand('columns-2')}
+          onClick={() => setColumns(2)}
           title="两栏"
         >
           <Columns size={16} />
         </button>
         <button
           className={styles.toolbarButton}
-          onClick={() => executeCommand('columns-3')}
+          onClick={() => setColumns(3)}
           title="三栏"
         >
           <span className={styles.iconText}>3</span>

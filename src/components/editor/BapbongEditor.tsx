@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { BapbongEditor } from '@shadow-garden/bapbong-editor';
 import type { BapbongEditorOptions } from '@shadow-garden/bapbong-editor';
 import type { EditorChange } from '@shadow-garden/bapbong-contracts';
+import type { Collection } from '@shadow-garden/bapbong-contracts';
+import type { Command } from '@shadow-garden/bapbong-contracts';
 
 export interface BapbongEditorRef {
   loadDocx: (bytes: ArrayBuffer) => Promise<{ headerKeys: string[]; footerKeys: string[] }>;
@@ -12,6 +14,12 @@ export interface BapbongEditorRef {
   setZoom: (zoom: number) => void;
   getZoom: () => number;
   print: () => void;
+  /** Execute a named command (e.g., 'bold', 'italic', 'columns-2') */
+  executeCommand: (commandName: string, params?: unknown) => void;
+  /** Get the commands collection for checking enabled state */
+  getCommands: () => Collection<Command> | null;
+  /** Check if a command is currently active (e.g., bold is applied) */
+  isCommandActive: (commandName: string) => boolean;
 }
 
 export interface BapbongEditorProps {
@@ -33,15 +41,6 @@ export interface BapbongEditorProps {
 
 /**
  * React wrapper for bapbong editor
- * 
- * @example
- * ```tsx
- * <BapbongEditor
- *   documentBuffer={docxBuffer}
- *   onChange={() => setIsDirty(true)}
- *   onLoad={(info) => console.log('Loaded:', info)}
- * />
- * ```
  */
 export const BapbongEditorComponent = ({
   documentBuffer,
@@ -76,6 +75,38 @@ export const BapbongEditorComponent = ({
         }
       });
 
+      // Helper to execute commands
+      const executeCommand = (commandName: string, _params?: unknown) => {
+        try {
+          const cmd = editor.commands.get(commandName);
+          if (cmd) {
+            cmd.run(editor.state, editor.dispatch.bind(editor));
+          } else {
+            console.warn(`Command '${commandName}' not found`);
+          }
+        } catch (err) {
+          console.error(`Failed to execute command '${commandName}':`, err);
+        }
+      };
+
+      // Helper to check command active state
+      const isCommandActive = (commandName: string): boolean => {
+        try {
+          const cmd = editor.commands.get(commandName);
+          if (cmd && cmd.isActive) {
+            return cmd.isActive(editor.state);
+          }
+          return false;
+        } catch {
+          return false;
+        }
+      };
+
+      // Get commands collection
+      const getCommands = (): Collection<Command> | null => {
+        return editor.commands;
+      };
+
       // Create ref handle
       const handle: BapbongEditorRef = {
         loadDocx: async (bytes: ArrayBuffer) => {
@@ -109,6 +140,9 @@ export const BapbongEditorComponent = ({
         },
         getZoom: () => zoomRef.current,
         print: () => window.print(),
+        executeCommand,
+        getCommands,
+        isCommandActive,
       };
 
       // Notify parent that editor is ready
