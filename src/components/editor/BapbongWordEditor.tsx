@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { BapbongEditorComponent, type BapbongEditorRef } from './BapbongEditor';
-import { Save } from 'lucide-react';
+import { BapbongToolbar } from './BapbongToolbar';
 import { useKeyboardSave } from './useKeyboardSave';
 import { useSidebarStore, useEditorStore, useNotificationStore } from '../../store';
 import { reportError } from '../../utils/errors';
@@ -90,9 +90,6 @@ export const BapbongWordEditor: React.FC<WordEditorProps> = ({
     }
   }, [readAndApplyBuffer]);
 
-  const loadFromDiskRef = useRef<() => Promise<void>>(reloadFromDisk);
-  loadFromDiskRef.current = reloadFromDisk;
-
   // Initial load
   useEffect(() => {
     if (hasInitializedFromCacheRef.current) return;
@@ -171,33 +168,39 @@ export const BapbongWordEditor: React.FC<WordEditorProps> = ({
     });
   }, [pushNotification]);
 
+  // Toolbar handlers
+  const handleFind = useCallback(() => {
+    editorRef.current?.focus();
+  }, []);
+
+  const handlePrint = useCallback(() => {
+    editorRef.current?.print();
+  }, []);
+
+  const handleZoomIn = useCallback(() => {
+    const currentZoom = editorRef.current?.getZoom() ?? 1;
+    editorRef.current?.setZoom(Math.min(currentZoom * 1.25, 3));
+  }, []);
+
+  const handleZoomOut = useCallback(() => {
+    const currentZoom = editorRef.current?.getZoom() ?? 1;
+    editorRef.current?.setZoom(Math.max(currentZoom / 1.25, 0.5));
+  }, []);
+
   return (
     <div className={styles.officeEditor}>
-      {/* Toolbar */}
-      <div className={styles.editorToolbar}>
-        <div className={styles.toolbarLeft}>
-          <span className={styles.fileName}>
-            {fileName}
-            {isDirty && <span className={styles.dirtyDot}>·</span>}
-          </span>
-        </div>
-        <div className={styles.toolbarRight}>
-          <span className={`${styles.editMode} ${isDirty ? styles.dirtyBadge : ''}`}>
-            可编辑
-          </span>
-          <button
-            className={`${styles.saveButton} ${isDirty ? styles.dirty : ''}`}
-            onClick={handleSave}
-            disabled={!isDirty || loading || !!error}
-            title="保存 (Ctrl+S)"
-          >
-            <Save size={14} />
-            <span>保存</span>
-          </button>
-        </div>
-      </div>
+      <BapbongToolbar
+        editorRef={editorRef}
+        fileName={fileName}
+        isDirty={isDirty}
+        onSave={handleSave}
+        canSave={isDirty && !loading && !error}
+        onFind={handleFind}
+        onPrint={handlePrint}
+        onZoomIn={handleZoomIn}
+        onZoomOut={handleZoomOut}
+      />
       
-      {/* Editor */}
       <div ref={containerRef} className={styles.docxContainer} data-office-editor-root="word">
         <BapbongEditorComponent
           documentBuffer={documentBuffer}
