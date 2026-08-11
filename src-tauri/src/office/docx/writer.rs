@@ -405,11 +405,11 @@ pub fn build_document_xml(doc: &WordDocument) -> String {
         // that section's `<w:sectPr>` here (the OOXML idiom for an
         // in-paragraph section break). Two ways a paragraph counts as
         // the last in its section:
-        //   1. The next paragraph is a section-break marker for this
-        //      section (the explicit `__sect_break_<idx>__` path).
-        //   2. The next paragraph belongs to a *different* section per
-        //      `para_section_idx` (the auto-distributed path used when
-        //      sections are provided without markers).
+        // When explicit `__sect_break_<idx>__` markers are present, the
+        // marker branch above emits the closing `<w:sectPr>` itself. Do not
+        // also attach that section to the preceding body paragraph: doing so
+        // writes every explicit boundary twice. The transition check below
+        // is only for the legacy auto-distributed path without markers.
         let sect_idx = para_section_idx[idx];
         let next_sect_idx = if idx + 1 < doc.paragraphs.len() {
             para_section_idx[idx + 1]
@@ -421,9 +421,7 @@ pub fn build_document_xml(doc: &WordDocument) -> String {
             total_sections
         };
         let is_last_para_of_section = if sect_idx + 1 < total_sections {
-            idx + 1 < doc.paragraphs.len()
-                && (section_break_section_idx(&doc.paragraphs[idx + 1]) == Some(sect_idx)
-                    || next_sect_idx != sect_idx)
+            idx + 1 < doc.paragraphs.len() && next_sect_idx != sect_idx
         } else {
             false
         };

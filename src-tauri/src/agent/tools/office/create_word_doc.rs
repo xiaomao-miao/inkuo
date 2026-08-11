@@ -36,7 +36,8 @@ struct ComponentRender {
     position: Option<String>,
     /// Per-paragraph column-wrap hint extracted from `columns` field on body
     /// component blocks. The writer's `expand_paragraph_columns` uses the id to
-    /// locate the target paragraph and wraps it with continuous section breaks.
+    /// locate the target paragraph and merge adjacent hints into one balanced
+    /// multi-column section.
     column_wrap: Option<(String, u32)>,
 }
 
@@ -319,13 +320,13 @@ impl CreateWordDocTool {
                          Table: {id?, header, rows, position?, anchor_id?}. Cells in header/rows can be plain strings or {text, col_span, row_span} objects.\n\
                          Image: {type:'image', id?, path, width_emu, height_emu, anchor_id?, position?}.\n\
                          \n\
-                         **columns (Paragraph only)**: Set this to 2..9 to lay out ONLY this single paragraph (and any paragraphs that immediately follow it in the same section) in N columns. The tool injects continuous section breaks around it so the rest of the document stays single-column. Use this instead of `sections[].cols` when you only want part of the document multi-column.\n\
+                         **columns (Paragraph only)**: Set this to 2..9 on EVERY adjacent paragraph that belongs to the same multi-column region. Consecutive paragraphs with the same value are coalesced into one balanced Word section. The tool injects continuous section breaks around the region so the rest of the document stays single-column. Use this instead of `sections[].cols` when you only want part of the document multi-column.\n\
                          \n\
                          === COMPONENT ELEMENTS (design-system styled) ===\n\
                          Cover: {type:'cover', id?, title, subtitle?}. Emits an oversized centred cover title + subtitle + spacers. Default brand font sizes apply. Use once at the top of a new document.\n\
                          Chapter: {type:'chapter', id?, title}. Emits a chapter-title paragraph (ChapterTitle style).\n\
                          Heading: {type:'heading', id?, level: 1|2|3, text}. Emits Heading1/2/3 (mapped to ChapterTitle/SectionTitle/SubsectionTitle styles).\n\
-                         Body: {type:'body', id?, text, columns?} or {type:'body', id?, runs: [{text, bold?, italic?}, ...], columns?}. Emits a BodyParagraph paragraph. The `columns` field (2..9) scopes a multi-column layout to this single body paragraph only — the surrounding document stays single-column.\n\
+                         Body: {type:'body', id?, text, columns?} or {type:'body', id?, runs: [{text, bold?, italic?}, ...], columns?}. Emits a BodyParagraph paragraph. For a multi-paragraph region, set the same `columns` value (2..9) on every adjacent body block; they are balanced together while the surrounding document stays single-column.\n\
                          BulletList: {type:'bullet_list', id_prefix, items: [string, ...]}. Emits one bulleted paragraph per item using the design-system numbering (num_id=1).\n\
                          OrderedList: {type:'ordered_list', id_prefix, items: [string, ...]}. Emits one ordered paragraph per item (num_id=2).\n\
                          StyledTable: {type:'styled_table', id?, headers: [string, ...], rows: [[string, ...], ...], style?: {header_fill?, zebra_fill?, border_color?, header_text_color?, repeat_header?, zebra?}}. Emits a table with brand colours + header-repeat + zebra striping. style fields are optional; sensible defaults come from the active palette.\n\
@@ -865,8 +866,8 @@ impl CreateWordDocTool {
         // `columns: N` on a paragraph element (low-level or body component),
         // we record the (paragraph_id, N) pair here so that after
         // `existing.modify(...)` materialises the paragraph list we can
-        // inject the section-break markers that scope the column layout
-        // to just that one paragraph.
+        // inject section-break markers around balanced runs. Adjacent
+        // paragraphs with the same count share one multi-column section.
         let mut column_wraps: Vec<(String, u32)> = Vec::new();
 
         // Component blocks (Cover / Chapter / Heading / Body / BulletList /
@@ -1118,14 +1119,6 @@ impl CreateWordDocTool {
                     }
                 }
 
-                // Collect column-wrap hints from component blocks.
-                let mut all_column_wraps = column_wraps.clone();
-                for r in &component_renders {
-                    if let Some(hint) = &r.column_wrap {
-                        all_column_wraps.push(hint.clone());
-                    }
-                }
-
                 // Apply user sections FIRST, before expand_paragraph_columns.
                 // This ensures the baseline for column-wrap sections is set correctly.
                 // The user's section (if provided) becomes the trailing section,
@@ -1207,6 +1200,17 @@ impl CreateWordDocTool {
             existing.tables.extend(temp_doc.tables);
             existing.images.extend(temp_doc.images);
 
+            // Component paragraphs must exist before their column hints are
+            // resolved by id. The old order expanded first and appended the
+            // components afterwards, so `body.columns` failed in progressive
+            // append mode with a missing-paragraph error.
+            for r in &component_renders {
+                new_count += r.rendered.paragraphs.len() + r.rendered.tables.len() + r.rendered.images.len();
+                existing.paragraphs.extend(r.rendered.paragraphs.iter().cloned());
+                existing.tables.extend(r.rendered.tables.iter().cloned());
+                existing.images.extend(r.rendered.images.iter().cloned());
+            }
+
             // Collect column-wrap hints from component blocks.
             let mut all_column_wraps = column_wraps.clone();
             for r in &component_renders {
@@ -1253,14 +1257,6 @@ impl CreateWordDocTool {
                         }
                     }
                 }
-            }
-
-            // Then append any component blocks (design-system styled).
-            for r in &component_renders {
-                new_count += r.rendered.paragraphs.len() + r.rendered.tables.len() + r.rendered.images.len();
-                existing.paragraphs.extend(r.rendered.paragraphs.iter().cloned());
-                existing.tables.extend(r.rendered.tables.iter().cloned());
-                existing.images.extend(r.rendered.images.iter().cloned());
             }
 
             crate::office::write_word_document_to_path(&existing, path_obj, Some(&bytes))

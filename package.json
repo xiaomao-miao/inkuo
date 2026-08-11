@@ -24,6 +24,7 @@
     "build": "tsc --noEmit && vite build",
     "build:vite": "vite build",
     "preview": "vite preview",
+    "postinstall": "node scripts/patch-eigenpal-columns.mjs",
     "tauri": "tauri",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
