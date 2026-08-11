@@ -19,7 +19,6 @@ import {
   Save,
   Image,
   Table2,
-  Columns,
   Subscript,
   Superscript,
 } from 'lucide-react';
@@ -88,11 +87,6 @@ export const BapbongToolbar: React.FC<BapbongToolbarProps> = ({
   // Execute a command on the editor
   const executeCommand = useCallback((commandName: string, params?: unknown) => {
     editorRef.current?.executeCommand(commandName, params);
-  }, [editorRef]);
-
-  // Set columns
-  const setColumns = useCallback((count: number) => {
-    editorRef.current?.executeCommand('columns', count);
   }, [editorRef]);
 
   return (
@@ -244,33 +238,6 @@ export const BapbongToolbar: React.FC<BapbongToolbarProps> = ({
           title="插入表格"
         >
           <Table2 size={16} />
-        </button>
-      </div>
-
-      <div className={styles.separator} />
-
-      {/* Columns - This is the key feature! */}
-      <div className={styles.toolbarSection}>
-        <button
-          className={styles.toolbarButton}
-          onClick={() => setColumns(1)}
-          title="一栏"
-        >
-          <span className={styles.iconText}>1</span>
-        </button>
-        <button
-          className={styles.toolbarButton}
-          onClick={() => setColumns(2)}
-          title="两栏"
-        >
-          <Columns size={16} />
-        </button>
-        <button
-          className={styles.toolbarButton}
-          onClick={() => setColumns(3)}
-          title="三栏"
-        >
-          <span className={styles.iconText}>3</span>
         </button>
       </div>
 

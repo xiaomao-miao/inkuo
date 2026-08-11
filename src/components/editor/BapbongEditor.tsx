@@ -80,7 +80,8 @@ export const BapbongEditorComponent = ({
         try {
           const cmd = editor.commands.get(commandName);
           if (cmd) {
-            cmd.run(editor.state, editor.dispatch.bind(editor));
+            // ProseMirror commands take (state, dispatch) - we pass them directly
+            cmd.run(editor.state, editor.dispatch);
           } else {
             console.warn(`Command '${commandName}' not found`);
           }
