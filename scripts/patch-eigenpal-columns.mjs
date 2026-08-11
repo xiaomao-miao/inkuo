@@ -33,6 +33,13 @@ const replacements = [
     after:
       '(L??"nextPage")==="continuous"&&(W.columns?.count??1)>1&&Qe({blocks:e,measures:t,paginator:M,start:w+1,end:d[I+1]??e.length})',
   },
+  {
+    label: 'only force page break when columns increase, not when they decrease',
+    before:
+      'case "continuous":{let i=t.getCurrentState().page.size,s=n.pageSize;s!=null&&(Math.round(s.w)!==Math.round(i.w)||Math.round(s.h)!==Math.round(i.h))?(t.updatePageLayout(n.pageSize,n.margins),t.forcePageBreak()):t.updatePageLayout(n.pageSize,n.margins,false);break}}t.updateColumns(n.columns??tt);}',
+    after:
+      'case "continuous":{let i=t.getCurrentState().page.size,s=n.pageSize,o=t.columns;if(o&&o.count>1&&n.columns&&n.columns.count===1){t.updatePageLayout(n.pageSize,n.margins,false);break}s!=null&&(Math.round(s.w)!==Math.round(i.w)||Math.round(s.h)!==Math.round(i.h))?(t.updatePageLayout(n.pageSize,n.margins),t.forcePageBreak()):t.updatePageLayout(n.pageSize,n.margins,false);break}}t.updateColumns(n.columns??tt);}',
+  },
 ];
 
 const distDir = path.join(packageRoot, 'dist');

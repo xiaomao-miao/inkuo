@@ -27,6 +27,7 @@ describe('fieldLabels', () => {
       'inspect_office',
       'create_svg',
       'create_pptx',
+      'generate_image',
     ];
     expect(Object.keys(TOOL_FIELD_LABELS).sort()).toEqual([...expected].sort());
   });

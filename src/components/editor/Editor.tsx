@@ -551,7 +551,7 @@ const RouteFallback: React.FC<{ label: string }> = ({ label }) => (
 // boundary returns a Suspense fallback (skeleton) until the chunk arrives,
 // keeping the right-hand editor pane visually stable.
 const WordEditor = lazy(() =>
-  import('./OfficeViewer').then((m) => ({ default: m.WordEditor }))
+  import('./BapbongWordEditor').then((m) => ({ default: m.BapbongWordEditor }))
 );
 const ExcelEditor = lazy(() =>
   import('./OfficeViewer').then((m) => ({ default: m.ExcelEditor }))

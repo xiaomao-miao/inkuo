@@ -67,6 +67,9 @@ describe('Eigenpal continuous column layout patch', () => {
     const right = fragments.find((fragment) => fragment.blockId === 'right');
     const footer = fragments.find((fragment) => fragment.blockId === 'footer');
 
+    // With the patch, all content fits on a single page
+    // heading starts the page, columns are used for left/right, footer follows
+    expect(layout.pages.length).toBe(1);
     expect(left).toMatchObject({ x: 60, y: 80, width: 228 });
     expect(right).toMatchObject({ x: 312, y: 80, width: 228 });
     expect(footer).toMatchObject({ x: 60, y: 280, width: 480 });
