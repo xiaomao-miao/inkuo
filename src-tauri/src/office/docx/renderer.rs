@@ -135,6 +135,8 @@ impl From<CalloutLevelName> for CalloutLevel {
 
 /// Rich run input — serialised as JSON-friendly tuples. The internal
 /// `FontRun` carries more fields but those are for the OOXML layer.
+/// NOTE: This struct mirrors `crate::office::FontRun` for JSON compatibility
+/// but uses Option<T> for all optional fields.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RichRun {
     pub text: String,
@@ -142,6 +144,40 @@ pub struct RichRun {
     pub bold: bool,
     #[serde(default)]
     pub italic: bool,
+    #[serde(default)]
+    pub underline: bool,
+    #[serde(default)]
+    pub strikethrough: bool,
+    #[serde(default)]
+    pub font_size: Option<u32>,  // half-points, e.g. 24 = 12pt
+    #[serde(default)]
+    pub color: Option<String>,   // hex RGB, e.g. "FF0000"
+    #[serde(default)]
+    pub font_name: Option<String>,
+    #[serde(default)]
+    pub highlight: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vert_align: Option<String>,  // "superscript", "subscript"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field: Option<crate::office::FieldRef>,
+}
+
+impl Default for RichRun {
+    fn default() -> Self {
+        RichRun {
+            text: String::new(),
+            bold: false,
+            italic: false,
+            underline: false,
+            strikethrough: false,
+            font_size: None,
+            color: None,
+            font_name: None,
+            highlight: None,
+            vert_align: None,
+            field: None,
+        }
+    }
 }
 
 /// Style inputs the JSON caller can specify. Mirrors `components::TableStyle`
@@ -229,11 +265,7 @@ fn render_one(block: &ContentBlock, tokens: &DesignTokens, out: &mut RenderedDoc
         }
         ContentBlock::Body { id, text, runs } => {
             if let Some(rs) = runs {
-                let tuples: Vec<(String, bool, bool)> = rs
-                    .iter()
-                    .map(|r| (r.text.clone(), r.bold, r.italic))
-                    .collect();
-                out.paragraphs.extend(body_runs(tokens, id, &tuples));
+                out.paragraphs.extend(body_runs(tokens, id, rs));
             } else if let Some(t) = text {
                 out.paragraphs.extend(body_paragraph(tokens, id, t));
             }
@@ -331,19 +363,24 @@ fn render_code(
         // Prepend a small "lang" label line in muted text. We
         // synthesise a paragraph rather than threading another
         // parameter through the component to keep the API narrow.
+        // The label is rendered at half the caption size so it reads
+        // as a header strip rather than competing with the code
+        // body — and we drop the leading whitespace so it lines up
+        // with the rest of the code container.
         let lang_run = FontRun {
-            text: format!("  {}", lang),
+            text: lang.to_string(),
             bold: true,
             italic: false,
             underline: false,
             strikethrough: false,
-            font_size: Some(tokens.fonts.caption_pt),
+            font_size: Some(tokens.fonts.caption_pt / 2),
             color: Some(tokens.palette.text_muted.to_string()),
             font_name: None,
             highlight: None,
             vert_align: None,
             field: None,
             page_break: false,
+            column_break: false,
         };
         let lang_para = WordParagraph {
             id: format!("{}-lang", id),
@@ -353,6 +390,7 @@ fn render_code(
             numbering: None,
             alignment: Some("right".to_string()),
             text_direction: None,
+            page_break: None,
         };
         rendered.paragraphs.insert(0, lang_para);
     }
@@ -409,6 +447,7 @@ fn push_callout(out: &mut RenderedDocument, r: &CalloutRender) {
         numbering: None,
         alignment: None,
         text_direction: None,
+        page_break: None,
     };
     out.paragraphs.push(marker_para);
     out.tables.push(marker_table);
@@ -443,6 +482,7 @@ fn push_code(out: &mut RenderedDocument, r: &CodeBlockRender) {
         numbering: None,
         alignment: None,
         text_direction: None,
+        page_break: None,
     };
     out.paragraphs.push(marker_para);
     out.tables.push(marker_table);

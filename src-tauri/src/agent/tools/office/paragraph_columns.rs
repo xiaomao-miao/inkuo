@@ -27,7 +27,11 @@
 
 use std::collections::HashMap;
 
-use crate::office::{WordParagraph, WordSection};
+use crate::office::{PageSize, WordParagraph, WordSection};
+
+/// A4 page size in twips (1 inch = 1440 twips, A4 = 210mm × 297mm)
+const A4_WIDTH_TWIPS: u32 = 11906;
+const A4_HEIGHT_TWIPS: u32 = 16838;
 
 /// Overlay column layouts on the paragraphs named by `targets`.
 ///
@@ -153,6 +157,15 @@ pub fn expand_paragraph_columns(
             if let Some(cols) = requested {
                 section.cols = Some(cols);
                 section.id = format!("__col_wrap_{}__", run_paragraphs[0].id);
+                // Force A4 page size for multi-column sections to ensure proper rendering.
+                // Column sections can inherit non-A4 sizes from the base section,
+                // which may cause rendering issues in Word.
+                section.page_size_twips = Some(PageSize {
+                    width: A4_WIDTH_TWIPS,
+                    height: A4_HEIGHT_TWIPS,
+                    orient: Some("portrait".to_string()),
+                });
+                section.page_size_mm = None;
             }
             // A boundary introduced inside an existing section must not force a
             // page break. The last run keeps the original section's break type.
@@ -277,6 +290,7 @@ fn make_section_break_marker(section_idx: usize, _target_id: &str, _role: &str) 
         numbering: None,
         alignment: None,
         text_direction: None,
+        page_break: None,
     }
 }
 
@@ -295,6 +309,7 @@ mod tests {
             numbering: None,
             alignment: None,
             text_direction: None,
+            page_break: None,
         }
     }
 

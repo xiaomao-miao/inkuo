@@ -29,12 +29,13 @@ pub const CONTENT_TYPES_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" stan
   <Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>
   <Override PartName="/word/fontTable.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.fontTable+xml"/>
   <Override PartName="/word/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>
-  <Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>
+  <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
 </Types>"#;
 
 pub const RELS_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
 </Relationships>"#;
 
 pub const WORD_RELS_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -43,7 +44,6 @@ pub const WORD_RELS_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalo
   <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/>
   <Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable" Target="fontTable.xml"/>
   <Relationship Id="rId4" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/>
-  <Relationship Id="rId5" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>
 </Relationships>"#;
 
 pub const STYLES_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -500,4 +500,93 @@ pub fn collect_referenced_num_ids(doc: &super::WordDocument) -> Vec<u32> {
         }
     }
     ids.into_iter().collect()
+}
+
+/// Append a numbering.xml Override to [Content_Types].xml.
+/// Call this ONLY when the document uses lists (doc_has_numbering returns true).
+pub fn append_numbering_override(base: &str) -> String {
+    let close = "</Types>";
+    match base.rfind(close) {
+        Some(pos) => {
+            let mut out = base[..pos].to_string();
+            out.push_str("  <Override PartName=\"/word/numbering.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml\"/>\n");
+            out.push_str(&base[pos..]);
+            out
+        }
+        None => base.to_string(),
+    }
+}
+
+/// Append a numbering.xml Relationship to word/_rels/document.xml.rels.
+/// Call this ONLY when the document uses lists (doc_has_numbering returns true).
+/// Uses the provided rId for the numbering relationship.
+pub fn append_numbering_relationship(base: &str, rid: u32) -> String {
+    let close = "</Relationships>";
+    match base.rfind(close) {
+        Some(pos) => {
+            let mut out = base[..pos].to_string();
+            out.push_str(&format!(
+                "  <Relationship Id=\"rId{}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering\" Target=\"numbering.xml\"/>\n",
+                rid
+            ));
+            out.push_str(&base[pos..]);
+            out
+        }
+        None => base.to_string(),
+    }
+}
+
+/// Build core.xml with document properties.
+/// Uses the chrono crate for ISO 8601 timestamp generation.
+pub fn build_core_xml(
+    title: Option<&str>,
+    author: Option<&str>,
+    subject: Option<&str>,
+    description: Option<&str>,
+    keywords: Option<&str>,
+) -> String {
+    use chrono::Utc;
+    let now = Utc::now().format("%Y-%m-%dT%H:%M:%SZ");
+    let escaped_title = escape_xml_attr(title.unwrap_or(""));
+    let escaped_author = escape_xml_attr(author.unwrap_or(""));
+    let escaped_subject = escape_xml_attr(subject.unwrap_or(""));
+    let escaped_description = escape_xml_attr(description.unwrap_or(""));
+    let escaped_keywords = escape_xml_attr(keywords.unwrap_or(""));
+    let mut body = format!(
+        "<dc:title>{}</dc:title>\n  <dc:creator>{}</dc:creator>",
+        escaped_title, escaped_author
+    );
+    if !escaped_subject.is_empty() {
+        body.push_str(&format!("\n  <dc:subject>{}</dc:subject>", escaped_subject));
+    }
+    if !escaped_description.is_empty() {
+        body.push_str(&format!(
+            "\n  <dc:description>{}</dc:description>",
+            escaped_description
+        ));
+    }
+    if !escaped_keywords.is_empty() {
+        body.push_str(&format!(
+            "\n  <cp:keywords>{}</cp:keywords>",
+            escaped_keywords
+        ));
+    }
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  {}
+  <dcterms:created xsi:type="dcterms:W3CDTF">{}</dcterms:created>
+  <dcterms:modified xsi:type="dcterms:W3CDTF">{}</dcterms:modified>
+</cp:coreProperties>"#,
+        body, now, now
+    )
+}
+
+/// Escape special XML characters for attribute values.
+fn escape_xml_attr(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
 }

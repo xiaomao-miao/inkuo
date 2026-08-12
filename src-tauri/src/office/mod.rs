@@ -15,7 +15,7 @@ mod xlsx;
 pub(crate) use docx::writer::build_document_xml;
 
 pub use shared::{OfficeError, TableCell, TableRow};
-pub use docx::{ElementId, WordDocument, WordParagraph, WordTable, WordImage, FontRun, FieldRef, DocElement, InsertElement, NumberingRef, WordSection, PageSize, PageSizeMm, PageMargins, HeaderPart, FooterPart, HeaderPartRef, FooterPartRef, read_word_document, word_document_to_text, write_word_document_to_path};
+pub use docx::{ElementId, WordDocument, WordDocumentMeta, WordParagraph, WordTable, WordImage, FontRun, FieldRef, DocElement, InsertElement, NumberingRef, WordSection, PageSize, PageSizeMm, PageMargins, HeaderPart, FooterPart, HeaderPartRef, FooterPartRef, read_word_document, word_document_to_text, write_word_document_to_path};
 // Re-export the brand new design-system surface so callers can
 // `use crate::office::{DesignTokens, ContentBlock, render_blocks}`.
 // These are pure additions; existing call sites that only use the

@@ -16,7 +16,7 @@
 //! constructing a `WordDocument` by hand.
 
 use crate::office::docx::renderer::{render_document, DocumentContent};
-use crate::office::docx::types::{WordDocument, WordParagraph, WordTable};
+use crate::office::docx::types::{WordDocument, WordDocumentMeta, WordParagraph, WordTable};
 use crate::office::docx::write_word_document_to_path;
 use crate::office::shared::OfficeError;
 use std::path::Path;
@@ -45,6 +45,7 @@ pub fn write_styled_docx(
         sections: vec![],
         headers: vec![],
         footers: vec![],
+        meta: WordDocumentMeta::default(),
     };
     let mut doc = doc;
     // Auto-inject a default section so the writer's fallback sectPr

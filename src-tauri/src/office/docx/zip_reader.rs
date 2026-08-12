@@ -17,7 +17,7 @@
 use std::io::Read;
 
 use super::{
-    HeaderPart, FooterPart, WordDocument, WordSection,
+    HeaderPart, FooterPart, WordDocument, WordDocumentMeta, WordSection,
     parse_document_xml, parse_image_xml, parse_table_xml,
 };
 use crate::office::docx::cell_paragraph_extractor;
@@ -28,12 +28,68 @@ pub fn read_word_document(bytes: &[u8]) -> Result<WordDocument, OfficeError> {
     let rels_content = read_zip_entry(bytes, "word/_rels/document.xml.rels")
         .unwrap_or_default();
     let (mut paragraphs, image_markers, mut sections) = parse_document_xml(&doc_content)?;
-    let images = parse_image_xml(&doc_content, &rels_content, &image_markers);
-    // `image_markers` are synthetic paragraphs each carrying the image's
-    // stable id as their `<inkuo:id>` so the writer can pair them with
-    // `WordImage` entries during `<w:drawing>` emission.
-    paragraphs.extend(image_markers);
+    let mut images = parse_image_xml(&doc_content, &rels_content, &image_markers);
+    // Image markers are now kept in the main paragraphs list (preserves
+    // their document position). The side channel is unused by
+    // `parse_image_xml` (it recovers images directly from the XML); we
+    // drop it here. Stale markers in the side channel would otherwise
+    // be appended to the end and lose their anchor position.
     let mut tables = parse_table_xml(&doc_content)?;
+    // Associate table markers (paragraphs with text `<__tbl_pos_<id>__>`)
+    // with their corresponding tables so the table's stable id matches the
+    // marker. Without this, parse_table_xml auto-assigns `t0`, `t1`, ... and
+    // the original id (often `__new_tXXX` for inserted tables) is lost.
+    // This breaks anchor-based insertion: `to_elements()` looks up the table
+    // by id from the marker, fails to find it, and appends the table at the
+    // end of the document.
+    //
+    // We pair markers and tables in document order. When the counts match,
+    // each marker corresponds to one table. When they don't (e.g. some
+    // tables have no preceding marker — newly-parsed documents), we leave
+    // the auto-assigned ids intact.
+    let mut pending_marker_ids: Vec<String> = Vec::new();
+    for p in &paragraphs {
+        if let Some(rest) = p.text.strip_prefix("<__tbl_pos_") {
+            if let Some(end) = rest.find("__>") {
+                let tbl_id = rest[..end].to_string();
+                pending_marker_ids.push(tbl_id);
+            }
+        }
+    }
+    if pending_marker_ids.len() == tables.len() {
+        for (tbl, marker_id) in tables.iter_mut().zip(pending_marker_ids.into_iter()) {
+            // Only override the auto-assigned id if it matches the simple
+            // counter pattern (`t0`, `t1`, ...). This way pre-existing tables
+            // that already have meaningful ids are preserved.
+            if tbl.id.starts_with('t') && tbl.id.len() > 1 {
+                if tbl.id[1..].chars().all(|c| c.is_ascii_digit()) {
+                    tbl.id = marker_id;
+                }
+            }
+        }
+    }
+    // Same marker-vs-id pairing for images. `parse_image_xml` auto-assigns
+    // `image0`, `image1`, …; we patch those against the markers we found
+    // in the body so the rendered image's id matches the marker's id
+    // (and therefore matches the original id from `parse_image`).
+    let mut pending_img_marker_ids: Vec<String> = Vec::new();
+    for p in &paragraphs {
+        if let Some(rest) = p.text.strip_prefix("<__img_pos_") {
+            if let Some(end) = rest.find("__>") {
+                let img_id = rest[..end].to_string();
+                pending_img_marker_ids.push(img_id);
+            }
+        }
+    }
+    if pending_img_marker_ids.len() == images.len() {
+        for (img, marker_id) in images.iter_mut().zip(pending_img_marker_ids.into_iter()) {
+            if img.id.starts_with("image") && img.id.len() > 5 {
+                if img.id[5..].chars().all(|c| c.is_ascii_digit()) {
+                    img.id = marker_id;
+                }
+            }
+        }
+    }
     // Populate `cell_paragraphs` for design-system container tables
     // (callouts, code blocks). The main parser flattens cell content
     // into `TableRow.cells[j].text`, so we run a second pass to
@@ -59,6 +115,12 @@ pub fn read_word_document(bytes: &[u8]) -> Result<WordDocument, OfficeError> {
     // We translate every section's ref into a `HeaderPart.id` /
     // `FooterPart.id` so the writer can look them up directly.
     resolve_section_refs(&mut sections, &rels_content, &headers, &footers);
+    // Pull document metadata (`dc:title`, `dc:creator`, …) from
+    // `docProps/core.xml` so callers that round-trip a doc through
+    // `read_word_document` don't lose the metadata the writer just
+    // emitted. Without this, AUTHOR/TITLE fields can never resolve
+    // back to their source strings after a single read/write cycle.
+    let meta = parse_core_xml_meta(bytes).unwrap_or_default();
     Ok(WordDocument {
         paragraphs,
         tables,
@@ -66,7 +128,73 @@ pub fn read_word_document(bytes: &[u8]) -> Result<WordDocument, OfficeError> {
         sections,
         headers,
         footers,
+        meta,
     })
+}
+
+/// Best-effort parse of `docProps/core.xml` into `WordDocumentMeta`.
+/// Returns `Ok(default())` if the entry is missing or malformed so
+/// callers can treat the result as "empty metadata" instead of erroring
+/// out — many real-world DOCX files ship without a core.xml at all
+/// (e.g. blank templates created by very old Word versions).
+fn parse_core_xml_meta(bytes: &[u8]) -> Result<WordDocumentMeta, OfficeError> {
+    let content = match read_zip_entry(bytes, "docProps/core.xml") {
+        Ok(s) => s,
+        Err(_) => return Ok(WordDocumentMeta::default()),
+    };
+    let extract = |tag: &str| -> String {
+        let open = format!("<{}>", tag);
+        let close = format!("</{}>", tag);
+        if let Some(start) = content.find(&open) {
+            let body_start = start + open.len();
+            if let Some(end) = content[body_start..].find(&close) {
+                let raw = &content[body_start..body_start + end];
+                return decode_xml_entities(raw);
+            }
+        }
+        String::new()
+    };
+    Ok(WordDocumentMeta {
+        title: extract("dc:title"),
+        author: extract("dc:creator"),
+        subject: extract("dc:subject"),
+        description: extract("dc:description"),
+        keywords: extract("cp:keywords"),
+    })
+}
+
+/// Decode the small subset of XML entities that Word uses in core.xml
+/// (`&amp;`, `&lt;`, `&gt;`, `&quot;`, `&apos;` and numeric refs).
+/// Anything more exotic is left as-is.
+fn decode_xml_entities(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let bytes = input.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'&' {
+            if let Some(end) = input[i..].find(';') {
+                let entity = &input[i + 1..i + end];
+                let decoded = match entity {
+                    "amp" => Some('&'),
+                    "lt" => Some('<'),
+                    "gt" => Some('>'),
+                    "quot" => Some('"'),
+                    "apos" => Some('\''),
+                    _ => None,
+                };
+                if let Some(c) = decoded {
+                    out.push(c);
+                    i += end + 1;
+                    continue;
+                }
+            }
+        }
+        // Push the next char (handles UTF-8 multibyte correctly).
+        let ch = input[i..].chars().next().unwrap();
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
 }
 
 /// Walk every `word/headerN.xml` / `word/footerN.xml` zip entry and
@@ -108,8 +236,7 @@ fn parse_header_footer_parts(bytes: &[u8]) -> Result<(Vec<HeaderPart>, Vec<Foote
         // header/footer parts are a follow-up — the model round-trips
         // them as plain text for now, which is correct for the
         // overwhelmingly common case (page numbers, titles, dates).
-        let mut all_paras = paras;
-        all_paras.extend(image_markers);
+        let all_paras = paras;
         if name.starts_with("word/header") {
             headers.push(HeaderPart {
                 id,

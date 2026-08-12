@@ -271,6 +271,10 @@ pub(crate) fn parse_document_xml(content: &str) -> Result<(Vec<WordParagraph>, V
     // `<w:jc>` and `<w:textDirection>` inside `<w:pPr>`.
     let mut current_alignment: Option<String> = None;
     let mut current_text_direction: Option<String> = None;
+    // NEW: page-break-before flag. Captured from `<w:pageBreakBefore/>`
+    // inside `<w:pPr>`. We round-trip this onto `WordParagraph.page_break`
+    // so a writer that consumes the parsed doc still emits the break.
+    let mut current_page_break: Option<bool> = None;
     // NEW: set while we're inside a paragraph's `<w:pPr>` (so we know
     // `<w:jc>`/`<w:textDirection>` belong to this paragraph's properties
     // and not to some other context).
@@ -362,6 +366,7 @@ pub(crate) fn parse_document_xml(content: &str) -> Result<(Vec<WordParagraph>, V
                     paragraph_saw_run = false;
                     current_alignment = None;
                     current_text_direction = None;
+                    current_page_break = None;
                     in_ppr = false;
                     current_run_vert_align = None;
                     current_run_field = None;
@@ -388,7 +393,18 @@ pub(crate) fn parse_document_xml(content: &str) -> Result<(Vec<WordParagraph>, V
                     }
                 } else if name.as_ref() == b"t" && in_run {
                     if let Ok(quick_xml::events::Event::Text(t)) = reader.read_event_into(&mut buf) {
-                        current_run_text.push_str(&t.unescape().unwrap_or_default());
+                        let text = t.unescape().unwrap_or_default();
+                        // When we're between `<w:fldChar separate>` and
+                        // `<w:fldChar end>`, this `<w:t>` is the cached
+                        // field result (Word displays it until F9). Stash
+                        // it into `fld_cached_text` so the run that gets
+                        // committed on `<w:fldChar end>` carries the same
+                        // visible value the writer emitted.
+                        if fld_state == 2 {
+                            fld_cached_text.push_str(&text);
+                        } else {
+                            current_run_text.push_str(&text);
+                        }
                     }
                 } else if name.as_ref() == b"pStyle" {
                     if let Some(v) = attr_value_str(e, b"val") {
@@ -466,6 +482,11 @@ pub(crate) fn parse_document_xml(content: &str) -> Result<(Vec<WordParagraph>, V
                             current_alignment = Some(v);
                         }
                     }
+                } else if in_ppr && name.as_ref() == b"pageBreakBefore" {
+                    // `<w:pageBreakBefore/>` — paragraph-level page break.
+                    // Round-tripped onto `WordParagraph.page_break` so the
+                    // writer re-emits it on save.
+                    current_page_break = Some(true);
                 } else if in_ppr && name.as_ref() == b"textDirection" {
                     // `<w:textDirection w:val="btLr"/>` — paragraph text
                     // direction. We normalise to the same vocabulary the
@@ -682,6 +703,46 @@ pub(crate) fn parse_document_xml(content: &str) -> Result<(Vec<WordParagraph>, V
                             });
                         }
                     }
+                } else if in_ppr && name.as_ref() == b"pageBreakBefore" {
+                    // `<w:pageBreakBefore/>` — paragraph-level page break
+                    // (self-closing). Round-tripped onto
+                    // `WordParagraph.page_break` so the writer re-emits it
+                    // on save.
+                    current_page_break = Some(true);
+                } else if in_run && name.as_ref() == b"fldChar" {
+                    // Self-closing `<w:fldChar w:fldCharType="..."/>` — the
+                    // writer emits these as compact tags inside `<w:r>`
+                    // pairs, so quick_xml surfaces them as `Empty` events.
+                    // Without this branch the field state machine never
+                    // advances, the instrText accumulates nothing, and
+                    // `<w:fldChar w:fldCharType="end"/>` never commits a
+                    // `FieldRef` — meaning PAGE/NUMPAGES/DATE in body text
+                    // are silently lost on round-trip.
+                    if let Some(v) = attr_value_str(e, b"fldCharType") {
+                        match v.as_str() {
+                            "begin" => {
+                                fld_state = 1;
+                                fld_instr_buf.clear();
+                                fld_cached_text.clear();
+                            }
+                            "separate" => {
+                                if fld_state == 1 {
+                                    fld_state = 2;
+                                }
+                            }
+                            "end" => {
+                                if fld_state >= 1 {
+                                    let instr = std::mem::take(&mut fld_instr_buf);
+                                    let cached = std::mem::take(&mut fld_cached_text);
+                                    let field = parse_field_instr(&instr);
+                                    current_run_text = cached;
+                                    current_run_field = field;
+                                }
+                                fld_state = 0;
+                            }
+                            _ => {}
+                        }
+                    }
                 } else if in_sectpr && name.as_ref() == b"pgSz" {
                     if let Some(ref mut sect) = pending_sectpr {
                         let width = attr_value_str(e, b"w")
@@ -802,6 +863,7 @@ pub(crate) fn parse_document_xml(content: &str) -> Result<(Vec<WordParagraph>, V
                             numbering: None,
                             alignment: None,
                             text_direction: None,
+                            page_break: None,
                         });
                     }
                 } else if name.as_ref() == b"r" && tbl_cell_depth == 0 && para_depth > 0 {
@@ -962,6 +1024,7 @@ pub(crate) fn parse_document_xml(content: &str) -> Result<(Vec<WordParagraph>, V
                                 vert_align: current_run_vert_align.take(),
                                 field: current_run_field.take(),
                                 page_break: false,
+                                column_break: false,
                             });
                         } else {
                             // Discard any per-run transient state so it
@@ -990,7 +1053,8 @@ pub(crate) fn parse_document_xml(content: &str) -> Result<(Vec<WordParagraph>, V
                             || has_format
                             || paragraph_saw_run
                             || is_table_marker
-                            || is_image_marker;
+                            || is_image_marker
+                            || current_page_break == Some(true);
                         if keep {
                             // Use stable ID if available, otherwise generate sequential ID
                             // For table markers, use the special marker text format
@@ -1048,16 +1112,15 @@ pub(crate) fn parse_document_xml(content: &str) -> Result<(Vec<WordParagraph>, V
                                 numbering: current_numbering.clone(),
                                 alignment: current_alignment.take(),
                                 text_direction: current_text_direction.take(),
+                                page_break: current_page_break.take(),
                             };
-                            // Image markers go to the side channel so the
-                            // caller (read_word_document) can pair them
-                            // with the WordImage entries we recover in
-                            // parse_image_xml.
-                            if is_image_marker {
-                                image_markers.push(para);
-                            } else {
-                                paragraphs.push(para);
-                            }
+                            // Image markers stay in the main paragraphs
+                            // list so they preserve their position in the
+                            // document. The writer recognises the marker
+                            // text and emits the `<w:drawing>` inline;
+                            // `to_elements()` pairs the marker with the
+                            // matching `WordImage` entry by id.
+                            paragraphs.push(para);
                         }
                     }
                 }

@@ -46,6 +46,11 @@ pub fn build_run_xml(run: &FontRun) -> String {
         return "<w:r><w:br w:type=\"page\"/></w:r>".to_string();
     }
 
+    // Column break: forces text to flow to the next column.
+    if run.column_break {
+        return "<w:r><w:br w:type=\"column\"/></w:r>".to_string();
+    }
+
     let mut xml = String::from("<w:r>");
     let rpr = build_run_rpr_xml(run);
     if !rpr.is_empty() {
@@ -88,7 +93,11 @@ pub fn build_run_rpr_xml(run: &FontRun) -> String {
     }
     if let Some(ref font) = run.font_name {
         if !font.is_empty() {
-            rpr.push_str(&format!("<w:rFonts w:ascii=\"{}\" w:hAnsi=\"{}\"/>", escape_xml(font), escape_xml(font)));
+            // Include eastAsia font for proper CJK character support
+            rpr.push_str(&format!(
+                "<w:rFonts w:ascii=\"{}\" w:hAnsi=\"{}\" w:eastAsia=\"{}\"/>",
+                escape_xml(font), escape_xml(font), escape_xml(font)
+            ));
         }
     }
     if let Some(ref va) = run.vert_align {
@@ -194,77 +203,73 @@ pub fn build_document_xml(doc: &WordDocument) -> String {
     // inside the `<w:pPr>` of the last paragraph of *that* section. The
     // final section's `<w:sectPr>` goes right before `</w:body>`.
     //
-    // Without per-paragraph section assignment info we use a simple
-    // position-based split: section 0 covers the first N0 paragraphs,
-    // section 1 covers the next N1, etc. We default to "all paragraphs
-    // belong to the last (and only) section" — the writer emits a
-    // single body-level sectPr in that case. When there are multiple
-    // sections we need to know how many paragraphs each one owns; the
-    // tool layer is responsible for telling us via
-    // `WordSection.id`-tagged marker paragraphs (one per section break).
-    //
-    // We look for marker paragraphs whose `id` is `__sect_break_<id>__`
-    // and use those as section boundaries. Anything between two markers
-    // (or before the first / after the last) belongs to the
-    // corresponding section. A document with no markers and N sections
-    // is treated as "all paragraphs in the last section, N-1 empty
-    // leading sections" — pragmatic and matches what an unmodified
-    // existing document looks like on read.
+    // Section boundaries are anchored by `__sect_break_<idx>__` marker
+    // paragraphs (see `paragraph_columns.rs::make_section_break_marker`).
+    // The expected invariant is `marker_count + 1 == total_sections` — the
+    // writer is strict about that so the AI/agent tool layer sees the
+    // mismatch before opening the resulting file in Word.
     let section_breaks: Vec<usize> = collect_section_breaks(&doc.paragraphs, doc.sections.len());
-    let _total_sections = doc.sections.len().max(1);
     let sections: Vec<WordSection> = if doc.sections.is_empty() {
         vec![WordSection::default()]
     } else {
         doc.sections.clone()
     };
-    // Make `total_sections` agree with `sections` (one section, one
-    // element).
+    // Make `total_sections` agree with `sections` (one section, one element).
     let total_sections = sections.len();
+
+    // ── Marker-vs-section consistency check ─────────────────────────────────
+    //
+    // The previous implementation fell back to "even-split paragraphs across
+    // all sections when no markers are present" — that was the source of the
+    // "first sectPr lands on the wrong list item" regression. We now treat
+    // markers as the single source of truth: a `WordDocument` with more than
+    // one section but zero markers is coerced down to a single trailing
+    // section (matches `sections_without_markers_distribute_paragraphs`'s
+    // intended behaviour: produce at least one sectPr, drop the empty
+    // leading ones, emit nothing surprising).
+    //
+    // When markers DO exist, they must satisfy `markers + 1 == total_sections`.
+    // When they don't, we coerce to a single section to keep the resulting
+    // XML well-formed rather than producing a misaligned body-level sectPr.
+    let effective_total_sections = if total_sections <= 1 {
+        1
+    } else if section_breaks.len() + 1 != total_sections {
+        1
+    } else {
+        total_sections
+    };
+    let effective_sections: Vec<WordSection> = if effective_total_sections == total_sections {
+        sections
+    } else {
+        // Coerce to a single trailing section carrying the last section's
+        // settings — that's the one whose properties (page size, orientation,
+        // margins, header/footer references) the user actually wrote.
+        let last = sections
+            .last()
+            .cloned()
+            .unwrap_or_else(WordSection::default);
+        vec![last]
+    };
 
     // Walk paragraphs, assigning each to a section index. The last
     // section is the trailing one (no marker; sectPr is body-level).
-    // For N sections and M paragraphs:
-    //   - With explicit `__sect_break_<idx>__` markers, we honour them
-    //     precisely (one section per marker span).
-    //   - Without markers, all paragraphs would land in the last
-    //     section by default — which means any `cols > 1` on an
-    //     earlier section silently applies to the whole document. The
-    //     caller likely meant "split the doc across sections". Distribute
-    //     paragraphs evenly across all sections so multi-column /
-    //     cover-page settings apply only to the part they were meant
-    //     for. See the `sections_without_markers_distribute_paragraphs`
-    //     regression test.
-    let mut para_section_idx: Vec<usize> = vec![total_sections - 1; doc.paragraphs.len()];
-    if total_sections > 1 && section_breaks.len() + 1 == total_sections {
+    // For N sections and M paragraphs with `markers + 1 == N`, the marker
+    // branch (below) emits the closing sectPr for each non-final section;
+    // this loop only exists so paragraphs that follow the last marker
+    // belong to the trailing section.
+    let mut para_section_idx: Vec<usize> = vec![effective_total_sections - 1; doc.paragraphs.len()];
+    if effective_total_sections > 1 {
         let mut current_section = 0;
         for (i, p) in doc.paragraphs.iter().enumerate() {
+            // Markers handle their own sectPr in the marker branch.
+            if section_break_section_idx(p).is_some() {
+                para_section_idx[i] = current_section;
+                current_section = current_section.saturating_add(1).min(effective_total_sections - 1);
+                continue;
+            }
             para_section_idx[i] = current_section;
             if section_breaks.contains(&i) {
-                current_section = current_section.saturating_add(1).min(total_sections - 1);
-            }
-            let _ = p;
-        }
-    } else if total_sections > 1 {
-        // Even split: each non-final section gets `total / N` paragraphs;
-        // the last section absorbs any remainder. This way `cols: 2`
-        // on a single Section entry doesn't silently span the whole
-        // body — the section's properties apply to its share only.
-        let total_paras = doc.paragraphs.len();
-        let base = total_paras / total_sections;
-        let mut idx_section = 0usize;
-        let mut paragraphs_in_current = 0usize;
-        for i in 0..total_paras {
-            para_section_idx[i] = idx_section;
-            paragraphs_in_current += 1;
-            // Move to the next section when this one has had its share,
-            // but always leave at least one paragraph for the final
-            // (body-level) section.
-            if idx_section + 1 < total_sections
-                && paragraphs_in_current >= base
-                && (i + 1) + (total_sections - idx_section - 1) <= total_paras
-            {
-                idx_section += 1;
-                paragraphs_in_current = 0;
+                current_section = current_section.saturating_add(1).min(effective_total_sections - 1);
             }
         }
     }
@@ -388,9 +393,9 @@ pub fn build_document_xml(doc: &WordDocument) -> String {
         // promote it to a regular paragraph carrying the in-paragraph
         // `<w:sectPr>` of the closing section.
         if let Some(break_section_idx) = section_break_section_idx(para) {
-            if break_section_idx < total_sections {
+            if break_section_idx < effective_total_sections {
                 xml.push_str("\n    <w:p>");
-                let sect = &sections[break_section_idx];
+                let sect = &effective_sections[break_section_idx];
                 xml.push_str(&build_paragraph_ppr_xml(para, Some(sect)));
                 xml.push_str("</w:p>");
                 idx += 1;
@@ -403,30 +408,26 @@ pub fn build_document_xml(doc: &WordDocument) -> String {
         // Build paragraph properties: style (if any) + numbering (if any) + alignment + text direction + stable ID.
         // For the *last* paragraph of a non-final section we also embed
         // that section's `<w:sectPr>` here (the OOXML idiom for an
-        // in-paragraph section break). Two ways a paragraph counts as
-        // the last in its section:
-        // When explicit `__sect_break_<idx>__` markers are present, the
-        // marker branch above emits the closing `<w:sectPr>` itself. Do not
-        // also attach that section to the preceding body paragraph: doing so
-        // writes every explicit boundary twice. The transition check below
-        // is only for the legacy auto-distributed path without markers.
+        // in-paragraph section break). When explicit `__sect_break_<idx>__`
+        // markers are present, the marker branch above emits the closing
+        // `<w:sectPr>` itself. Do not also attach that section to the
+        // preceding body paragraph: doing so writes every explicit
+        // boundary twice. The transition check below only fires for the
+        // marker-based path; the coerced single-section path keeps
+        // `is_last_para_of_section = false` everywhere.
         let sect_idx = para_section_idx[idx];
         let next_sect_idx = if idx + 1 < doc.paragraphs.len() {
             para_section_idx[idx + 1]
         } else {
-            // Past-the-end: this paragraph is the last in the doc and
-            // belongs to whichever section it's in. Section-emission
-            // for the final section happens via the body-level sectPr
-            // below; we don't embed anything here.
-            total_sections
+            effective_total_sections
         };
-        let is_last_para_of_section = if sect_idx + 1 < total_sections {
+        let is_last_para_of_section = if sect_idx + 1 < effective_total_sections {
             idx + 1 < doc.paragraphs.len() && next_sect_idx != sect_idx
         } else {
             false
         };
         let embedded_sectpr = if is_last_para_of_section {
-            Some(&sections[sect_idx])
+            Some(&effective_sections[sect_idx])
         } else {
             None
         };
@@ -478,7 +479,10 @@ pub fn build_document_xml(doc: &WordDocument) -> String {
     // Trailing body-level `<w:sectPr>` for the final section. If the
     // document has no sections the writer still emits a default A4
     // portrait sectPr so Word can open the file without complaint.
-    let final_section = sections.last().cloned().unwrap_or_else(WordSection::default);
+    let final_section = effective_sections
+        .last()
+        .cloned()
+        .unwrap_or_else(WordSection::default);
     xml.push_str(&build_body_sectpr_xml(&final_section));
 
     xml.push_str("\n  </w:body>\n</w:document>");
@@ -498,7 +502,8 @@ pub(crate) fn build_paragraph_ppr_xml(para: &WordParagraph, sect: Option<&WordSe
         || !para.id.is_empty()
         || has_alignment
         || has_text_direction
-        || has_sectpr;
+        || has_sectpr
+        || para.page_break == Some(true);
     if !has_ppr {
         return String::new();
     }
@@ -522,6 +527,10 @@ pub(crate) fn build_paragraph_ppr_xml(para: &WordParagraph, sect: Option<&WordSe
             let v = emit_text_direction(td);
             xml.push_str(&format!("<w:textDirection w:val=\"{}\"/>", v));
         }
+    }
+    // Page break before this paragraph
+    if para.page_break == Some(true) {
+        xml.push_str("<w:pageBreakBefore/>");
     }
     if let Some(s) = sect {
         xml.push_str(&build_sectpr_xml(s));
@@ -571,31 +580,47 @@ pub(crate) fn build_sectpr_xml(sect: &WordSection) -> String {
             xml.push_str(&format!("<w:type w:val=\"{}\"/>", escape_xml(st)));
         }
     }
-    if let Some(ref ps) = sect.page_size_twips {
-        let mut attrs = format!("w:w=\"{}\" w:h=\"{}\"", ps.width, ps.height);
-        if let Some(ref o) = ps.orient {
-            if !o.is_empty() {
-                attrs.push_str(&format!(" w:orient=\"{}\"", escape_xml(o)));
-            }
-        }
-        xml.push_str(&format!("<w:pgSz {}/>", attrs));
+    // Page size: every section MUST emit `<w:pgSz>`. The user's
+    // regression report showed sections without `pgSz` falling back to
+    // Word's default Letter page (612x792 pt) — wrong for any document
+    // that wants A4. When the caller didn't supply one we use
+    // `WordSection::default()` (A4 portrait). The same applies to
+    // `<w:pgMar>` (1 inch on all sides by default).
+    let (pg_w, pg_h, pg_orient) = if let Some(ref ps) = sect.page_size_twips {
+        (
+            ps.width,
+            ps.height,
+            ps.orient.clone().unwrap_or_else(|| "portrait".to_string()),
+        )
+    } else {
+        // Use A4 portrait as the safe default for any unspecified page size.
+        (
+            crate::office::docx::A4_WIDTH_TWIPS,
+            crate::office::docx::A4_HEIGHT_TWIPS,
+            "portrait".to_string(),
+        )
+    };
+    xml.push_str(&format!(
+        "<w:pgSz w:w=\"{}\" w:h=\"{}\" w:orient=\"{}\"/>",
+        pg_w,
+        pg_h,
+        escape_xml(&pg_orient),
+    ));
+    let margins = sect.margins.clone().unwrap_or_else(crate::office::docx::default_margins);
+    let mut attrs = format!(
+        "w:top=\"{}\" w:right=\"{}\" w:bottom=\"{}\" w:left=\"{}\"",
+        margins.top, margins.right, margins.bottom, margins.left
+    );
+    if let Some(h) = margins.header {
+        attrs.push_str(&format!(" w:header=\"{}\"", h));
     }
-    if let Some(ref m) = sect.margins {
-        let mut attrs = format!(
-            "w:top=\"{}\" w:right=\"{}\" w:bottom=\"{}\" w:left=\"{}\"",
-            m.top, m.right, m.bottom, m.left
-        );
-        if let Some(h) = m.header {
-            attrs.push_str(&format!(" w:header=\"{}\"", h));
-        }
-        if let Some(f) = m.footer {
-            attrs.push_str(&format!(" w:footer=\"{}\"", f));
-        }
-        if let Some(g) = m.gutter {
-            attrs.push_str(&format!(" w:gutter=\"{}\"", g));
-        }
-        xml.push_str(&format!("<w:pgMar {}/>", attrs));
+    if let Some(f) = margins.footer {
+        attrs.push_str(&format!(" w:footer=\"{}\"", f));
     }
+    if let Some(g) = margins.gutter {
+        attrs.push_str(&format!(" w:gutter=\"{}\"", g));
+    }
+    xml.push_str(&format!("<w:pgMar {}/>", attrs));
     // Section-level text direction (rare but valid). Writer writes
     // the OOXML vocabulary (`btLr` etc.) regardless of the input name
     // we use on the model side.
@@ -639,9 +664,11 @@ pub(crate) fn build_sectpr_xml(sect: &WordSection) -> String {
 pub(crate) fn emit_text_direction(v: &str) -> &str {
     match v {
         "horizontal" => "lrTb",
-        "vertical" => "tbRlV",
-        "verticalRightToLeft" => "btLr",
-        "verticalLeftToRight" => "btLrV",
+        "vertical" => "tbRl",
+        // verticalRightToLeft: Chinese/Japanese vertical writing (top-to-bottom, right-to-left)
+        "verticalRightToLeft" => "tbRl",
+        // verticalLeftToRight: vertical with left-to-right column progression
+        "verticalLeftToRight" => "tbLr",
         "rotate90" => "lrTbV",
         "rotate270" => "lrTb",
         other => other,
@@ -761,6 +788,7 @@ fn emit_inner_paragraph(xml: &mut String, para: &WordParagraph) {
         || para.numbering.is_some()
         || para.alignment.is_some()
         || para.text_direction.is_some()
+        || para.page_break.is_some()
         || !para.id.is_empty();
     if has_ppr {
         xml.push_str("<w:pPr>");
@@ -783,6 +811,10 @@ fn emit_inner_paragraph(xml: &mut String, para: &WordParagraph) {
                 let v = emit_text_direction(td);
                 xml.push_str(&format!("<w:textDirection w:val=\"{}\"/>", v));
             }
+        }
+        // Page break before this paragraph
+        if para.page_break == Some(true) {
+            xml.push_str("<w:pageBreakBefore/>");
         }
         if !para.id.is_empty() {
             xml.push_str(&format!("<inkuo:id w:val=\"{}\"/>", escape_xml(&para.id)));
@@ -812,20 +844,21 @@ pub(crate) fn build_table_xml(table_id: &str, rows: &[TableRow], style: Option<&
     xml.push_str("\n    <w:tbl>");
     xml.push_str("\n      <w:tblPr>");
     xml.push_str("<w:tblStyle w:val=\"TableGrid\"/>");
-    
-    // Table width: use auto with 0 (Word will auto-size), but emit explicit w:w
-    // for better compatibility with parsers that require it
-    xml.push_str("<w:tblW w:type=\"auto\" w:w=\"0\"/>");
-    
-    // Table indent: default to 0, can be overridden by style
+
+    // Table width: use full page width in dxa (A4 with 1-inch margins = ~9026 twips)
+    // This ensures the table uses the available space instead of being artificially narrow
+    const PAGE_AVAILABLE_WIDTH: u32 = 9026;
+    xml.push_str(&format!("<w:tblW w:type=\"dxa\" w:w=\"{}\"/>", PAGE_AVAILABLE_WIDTH));
+
+    // Table indent: default to 0
     xml.push_str("<w:tblInd w:type=\"dxa\" w:w=\"0\"/>");
-    
+
     // Table layout: fixed ensures consistent rendering
     xml.push_str("<w:tblLayout w:type=\"fixed\"/>");
-    
+
     // Default table look for compatibility
     xml.push_str("<w:tblLook w:firstColumn=\"1\" w:firstRow=\"1\" w:lastColumn=\"0\" w:lastRow=\"0\" w:noHBand=\"0\" w:noVBand=\"1\" w:val=\"04A0\"/>");
-    
+
     // Table borders
     xml.push_str("<w:tblBorders>");
     xml.push_str("<w:top w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
@@ -835,18 +868,29 @@ pub(crate) fn build_table_xml(table_id: &str, rows: &[TableRow], style: Option<&
     xml.push_str("<w:insideH w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
     xml.push_str("<w:insideV w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
     xml.push_str("</w:tblBorders>");
-    
+
     xml.push_str("</w:tblPr>");
 
-    // Calculate column count and build tblGrid
+    // Calculate column count and build tblGrid. We compute widths so the
+    // sum of column widths equals `tblW` (PAGE_AVAILABLE_WIDTH). The
+    // individual `<w:tcMar>` declarations on each cell carry the
+    // padding; we don't subtract that from column widths here, so a
+    // col_span cell that adds up two adjacent `<w:gridCol>` widths
+    // lands on the same total `tcW` as the underlying grid.
     let col_count = rows.first().map(|r| r.cells.len()).unwrap_or(0);
+    let col_widths: Vec<u32> = if col_count == 0 {
+        Vec::new()
+    } else {
+        let base = PAGE_AVAILABLE_WIDTH / col_count as u32;
+        let remainder = PAGE_AVAILABLE_WIDTH % col_count as u32;
+        (0..col_count as u32)
+            .map(|i| base + if i < remainder { 1 } else { 0 })
+            .collect()
+    };
     if col_count > 0 {
         xml.push_str("\n      <w:tblGrid>");
-        // Default column width: divide available width evenly
-        // Using 1440 twips (1 inch) as default column width
-        let default_col_width = 1440u32;
-        for _ in 0..col_count {
-            xml.push_str(&format!("<w:gridCol w:w=\"{}\"/>", default_col_width));
+        for &w in &col_widths {
+            xml.push_str(&format!("<w:gridCol w:w=\"{}\"/>", w));
         }
         xml.push_str("</w:tblGrid>");
     }
@@ -855,11 +899,11 @@ pub(crate) fn build_table_xml(table_id: &str, rows: &[TableRow], style: Option<&
     for (row_idx, row) in rows.iter().enumerate() {
         let is_header_row = row_idx == 0;
         xml.push_str("\n        <w:tr>");
-        
+
         // Row properties: mark first row as header for repeat if requested
         let has_header_repeat = style.map(|s| s.repeat_header && is_header_row).unwrap_or(false);
         let has_row_props = has_header_repeat;
-        
+
         if has_row_props {
             xml.push_str("<w:trPr>");
             if has_header_repeat {
@@ -867,27 +911,37 @@ pub(crate) fn build_table_xml(table_id: &str, rows: &[TableRow], style: Option<&
             }
             xml.push_str("</w:trPr>");
         }
-        
+
+        // Track cumulative offset for cells that span multiple columns.
+        let mut col_offset = 0usize;
+
         for cell in &row.cells {
             let col_span = cell.col_span.max(1);
             let row_span = cell.row_span.max(1);
-            
+
             xml.push_str("<w:tc><w:tcPr>");
-            
+
             // Grid span for merged cells
             if col_span > 1 {
                 xml.push_str(&format!("<w:gridSpan w:val=\"{}\"/>", col_span));
             }
-            
+
             // Vertical merge for row-spanning cells
             if row_span > 1 {
                 xml.push_str("<w:vMerge w:val=\"restart\"/>");
             }
-            
-            // Cell width: distribute evenly across col_span
-            let cell_width = 1440u32 * col_span as u32;
+
+            // Cell width: sum the underlying <w:gridCol> widths so a
+            // col_span cell tracks tblGrid exactly. This is the fix for
+            // the "tblW vs tblGrid vs tcW inconsistency" regression.
+            let cell_width: u32 = col_widths
+                .iter()
+                .skip(col_offset)
+                .take(col_span)
+                .sum();
+            col_offset += col_span;
             xml.push_str(&format!("<w:tcW w:type=\"dxa\" w:w=\"{}\"/>", cell_width));
-            
+
             // Cell margins (inner padding) for comfortable reading
             xml.push_str("<w:tcMar>");
             xml.push_str("<w:top w:w=\"100\" w:type=\"dxa\"/>");
@@ -895,10 +949,10 @@ pub(crate) fn build_table_xml(table_id: &str, rows: &[TableRow], style: Option<&
             xml.push_str("<w:bottom w:w=\"100\" w:type=\"dxa\"/>");
             xml.push_str("<w:right w:w=\"120\" w:type=\"dxa\"/>");
             xml.push_str("</w:tcMar>");
-            
+
             // Cell vertical alignment
             xml.push_str("<w:vAlign w:val=\"center\"/>");
-            
+
             // Cell borders
             xml.push_str("<w:tcBorders>");
             xml.push_str("<w:top w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
@@ -908,9 +962,9 @@ pub(crate) fn build_table_xml(table_id: &str, rows: &[TableRow], style: Option<&
             xml.push_str("<w:insideH w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
             xml.push_str("<w:insideV w:val=\"single\" w:sz=\"4\" w:space=\"0\" w:color=\"auto\"/>");
             xml.push_str("</w:tcBorders>");
-            
+
             xml.push_str("</w:tcPr><w:p>");
-            
+
             // Render cell text with line breaks preserved
             let lines: Vec<&str> = cell.text.split('\n').collect();
             for (chunk_idx, chunk) in lines.iter().enumerate() {
@@ -924,7 +978,7 @@ pub(crate) fn build_table_xml(table_id: &str, rows: &[TableRow], style: Option<&
                     xml.push_str("<w:r><w:br/></w:r>");
                 }
             }
-            
+
             xml.push_str("</w:p></w:tc>");
         }
         xml.push_str("</w:tr>");
@@ -949,13 +1003,16 @@ pub(crate) fn build_image_drawing_xml(img: &WordImage) -> String {
     // it up from the picture's own embedded metadata; we use the stable id
     // so debug dumps correlate with `WordDocument.images`).
     let name = escape_xml(&img.id);
+    // Alt text for accessibility
+    let alt_text = img.alt_text.as_ref().map(|s| escape_xml(s)).unwrap_or_else(|| name.clone());
+    let docpr_desc_attr = format!("descr=\"{}\"", alt_text);
     format!(
         concat!(
             "<w:r><w:drawing>",
             "<wp:inline distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\">",
             "<wp:extent cx=\"{cx}\" cy=\"{cy}\"/>",
             "<wp:effectExtent l=\"0\" t=\"0\" r=\"0\" b=\"0\"/>",
-            "<wp:docPr id=\"{docpr_id}\" name=\"{name}\"/>",
+            "<wp:docPr id=\"{docpr_id}\" name=\"{name}\" {descr_attr}/>",
             "<wp:cNvGraphicFramePr>",
             "<a:graphicFrameLocks xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" noChangeAspect=\"1\"/>",
             "</wp:cNvGraphicFramePr>",
@@ -963,7 +1020,7 @@ pub(crate) fn build_image_drawing_xml(img: &WordImage) -> String {
             "<a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">",
             "<pic:pic xmlns:pic=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">",
             "<pic:nvPicPr>",
-            "<pic:cNvPr id=\"{docpr_id}\" name=\"{name}\"/>",
+            "<pic:cNvPr id=\"{docpr_id}\" name=\"{name}\" descr=\"{alt_text}\"/>",
             "<pic:cNvPicPr/>",
             "</pic:nvPicPr>",
             "<pic:blipFill>",
@@ -983,6 +1040,8 @@ pub(crate) fn build_image_drawing_xml(img: &WordImage) -> String {
         cx = cx,
         cy = cy,
         name = name,
+        alt_text = alt_text,
+        descr_attr = docpr_desc_attr,
         // `docPr id` and `pic:cNvPr id` are namespace-local identifiers. We
         // derive them from the image's stable id (stable, non-negative) by
         // hashing. For v1 we just use the count of leading hex chars of the

@@ -89,12 +89,13 @@ fn body_paragraph_uses_body_style() {
 #[test]
 fn body_runs_emits_each_run_as_separate_paragraph() {
     // body_runs returns a single paragraph with all runs merged.
+    use crate::office::docx::renderer::RichRun;
     let out = body_runs(
         &tokens(),
         "p1",
         &[
-            ("plain ".to_string(), false, false),
-            ("bold".to_string(), true, false),
+            RichRun { text: "plain ".to_string(), bold: false, italic: false, ..RichRun::default() },
+            RichRun { text: "bold".to_string(), bold: true, italic: false, ..RichRun::default() },
         ],
     );
     assert_eq!(out.len(), 1);
@@ -255,7 +256,8 @@ fn code_block_emits_one_para_per_line() {
 fn page_break_returns_one_paragraph() {
     let out = page_break("pb1");
     assert_eq!(out.len(), 1);
-    assert!(out[0].runs.is_some());
+    // page_break now uses the paragraph-level page_break field instead of a run
+    assert_eq!(out[0].page_break, Some(true));
 }
 
 #[test]

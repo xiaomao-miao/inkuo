@@ -70,6 +70,7 @@ pub(crate) fn run(
         vert_align: None,
         field: None,
         page_break: false,
+        column_break: false,
     }
 }
 
@@ -98,6 +99,7 @@ pub(crate) fn run_owned_color(
         vert_align: None,
         field: None,
         page_break: false,
+        column_break: false,
     }
 }
 
@@ -111,6 +113,7 @@ pub(crate) fn para_with_run(id: &str, r: FontRun, style: Option<&str>) -> WordPa
         numbering: None,
         alignment: None,
         text_direction: None,
+        page_break: None,
     }
 }
 
@@ -124,6 +127,7 @@ pub(crate) fn para_with_text(id: &str, text: &str, style: Option<&str>) -> WordP
         numbering: None,
         alignment: None,
         text_direction: None,
+        page_break: None,
     }
 }
 
@@ -138,6 +142,7 @@ pub(crate) fn blank_paragraph(id: &str) -> WordParagraph {
         numbering: None,
         alignment: None,
         text_direction: None,
+        page_break: None,
     }
 }
 
@@ -180,6 +185,20 @@ pub fn cover_title(tokens: &DesignTokens, title: &str, subtitle: Option<&str>) -
     // paragraph hiding here").
     out.push(blank_paragraph("cover-spacer-1"));
     out.push(blank_paragraph("cover-spacer-2"));
+
+    // Add a page break paragraph to ensure the cover page is independent
+    // from the main content page.
+    out.push(WordParagraph {
+        id: "cover-page-break".to_string(),
+        text: String::new(),
+        style: None,
+        runs: None,
+        numbering: None,
+        alignment: None,
+        text_direction: None,
+        page_break: Some(true),
+    });
+
     out
 }
 
@@ -242,32 +261,34 @@ pub fn body_paragraph(tokens: &DesignTokens, id: &str, text: &str) -> Vec<WordPa
     vec![para_with_run(id, r, Some("BodyParagraph"))]
 }
 
-/// Build a body paragraph with rich runs. Each tuple is
-/// `(text, bold, italic)`. Colour and size come from the design
-/// tokens.
+/// Build a body paragraph with rich runs. Each run carries its own
+/// formatting (bold, italic, underline, color, etc.). Unspecified
+/// formatting falls back to the design tokens defaults.
 pub fn body_runs(
     tokens: &DesignTokens,
     id: &str,
-    runs: &[(String, bool, bool)],
+    runs: &[crate::office::RichRun],
 ) -> Vec<WordParagraph> {
-    let text_color = tokens.palette.text.clone();
-    let font_size = tokens.fonts.body_pt;
+    let default_font_size = tokens.fonts.body_pt;
+    let default_color = tokens.palette.text.clone();
+
     let runs: Vec<FontRun> = runs
         .iter()
-        .map(|(t, b, i)| {
+        .map(|r| {
             FontRun {
-                text: t.clone(),
-                bold: *b,
-                italic: *i,
-                underline: false,
-                strikethrough: false,
-                font_size: Some(font_size),
-                color: Some(text_color.clone()),
-                font_name: None,
-                highlight: None,
-                vert_align: None,
-                field: None,
+                text: r.text.clone(),
+                bold: r.bold,
+                italic: r.italic,
+                underline: r.underline,
+                strikethrough: r.strikethrough,
+                font_size: r.font_size.or(Some(default_font_size)),
+                color: r.color.clone().or_else(|| Some(default_color.clone())),
+                font_name: r.font_name.clone(),
+                highlight: r.highlight.clone(),
+                vert_align: r.vert_align.clone(),
+                field: r.field.clone(),
                 page_break: false,
+                column_break: false,
             }
         })
         .collect();
@@ -279,6 +300,7 @@ pub fn body_runs(
         numbering: None,
         alignment: None,
         text_direction: None,
+        page_break: None,
     }]
 }
 
@@ -309,6 +331,7 @@ pub fn bulleted_list(tokens: &DesignTokens, id_prefix: &str, items: &[&str]) -> 
                 vert_align: None,
                 field: None,
                 page_break: false,
+                column_break: false,
             };
             WordParagraph {
                 id: format!("{}-{}", id_prefix, i),
@@ -318,6 +341,7 @@ pub fn bulleted_list(tokens: &DesignTokens, id_prefix: &str, items: &[&str]) -> 
                 numbering: Some(NumberingRef { num_id: 1, level: 0 }),
                 alignment: None,
                 text_direction: None,
+                page_break: None,
             }
         })
         .collect();
@@ -346,6 +370,7 @@ pub fn ordered_list(tokens: &DesignTokens, id_prefix: &str, items: &[&str]) -> V
                 vert_align: None,
                 field: None,
                 page_break: false,
+                column_break: false,
             };
             WordParagraph {
                 id: format!("{}-{}", id_prefix, i),
@@ -355,6 +380,7 @@ pub fn ordered_list(tokens: &DesignTokens, id_prefix: &str, items: &[&str]) -> V
                 numbering: Some(NumberingRef { num_id: 2, level: 0 }),
                 alignment: None,
                 text_direction: None,
+                page_break: None,
             }
         })
         .collect();
@@ -364,8 +390,12 @@ pub fn ordered_list(tokens: &DesignTokens, id_prefix: &str, items: &[&str]) -> V
 // ─── Tables ───────────────────────────────────────────────────────────────────
 
 /// Visual style for a [`styled_table`]. All options default to "off"
-/// so the caller only opts in to the features they want.
-#[derive(Debug, Clone, Default)]
+/// so the caller only opts in to the features they want, except for
+/// `repeat_header` which defaults to `true` so the styled table's
+/// header row repeats across page breaks (this matches the behaviour
+/// of `TableGrid` headers in Word and what most users expect when
+/// they reach for a styled table).
+#[derive(Debug, Clone)]
 pub struct TableStyle {
     /// Hex colour (no `#`) for the header-row background. `None`
     /// leaves the row with the style's default fill.
@@ -382,11 +412,24 @@ pub struct TableStyle {
     /// When `true`, the header row repeats at the top of every page
     /// the table spans. Critical for multi-page tables — without it
     /// readers have to flip back to page 1 to remember what each
-    /// column means.
+    /// column means. Defaults to `true`.
     pub repeat_header: bool,
     /// When `true`, body rows use zebra striping. Composes with
     /// `zebra_fill`; ignored if `zebra_fill` is `None`.
     pub zebra: bool,
+}
+
+impl Default for TableStyle {
+    fn default() -> Self {
+        Self {
+            header_fill: None,
+            zebra_fill: None,
+            border_color: None,
+            header_text_color: None,
+            repeat_header: true,
+            zebra: false,
+        }
+    }
 }
 
 /// Build a styled table. The signature differs from the existing
@@ -544,6 +587,7 @@ pub fn callout_block(
         numbering: None,
         alignment: None,
         text_direction: None,
+        page_break: None,
     };
     let p_body = WordParagraph {
         id: format!("{}-body", id),
@@ -553,6 +597,7 @@ pub fn callout_block(
         numbering: None,
         alignment: None,
         text_direction: None,
+        page_break: None,
     };
     CalloutRender {
         paragraphs: vec![p_title, p_body],
@@ -591,6 +636,7 @@ pub fn callout_multiline(
         numbering: None,
         alignment: None,
         text_direction: None,
+        page_break: None,
     };
     let mut paragraphs = vec![p_title];
     for (i, line) in body_lines.iter().enumerate() {
@@ -610,6 +656,7 @@ pub fn callout_multiline(
             numbering: None,
             alignment: None,
             text_direction: None,
+            page_break: None,
         });
     }
     CalloutRender {
@@ -698,6 +745,7 @@ pub fn code_block(
                 vert_align: None,
                 field: None,
                 page_break: false,
+                column_break: false,
             };
             WordParagraph {
                 id: format!("{}-{}", id, i),
@@ -707,6 +755,7 @@ pub fn code_block(
                 numbering: None,
                 alignment: None,
                 text_direction: None,
+                page_break: None,
             }
         })
         .collect();
@@ -735,23 +784,11 @@ pub fn page_break(id: &str) -> Vec<WordParagraph> {
         id: id.to_string(),
         text: String::new(),
         style: None,
-        runs: Some(vec![FontRun {
-            text: String::new(),
-            bold: false,
-            italic: false,
-            underline: false,
-            strikethrough: false,
-            font_size: None,
-            color: None,
-            font_name: None,
-            highlight: None,
-            vert_align: None,
-            field: None,
-            page_break: true,
-        }]),
+        runs: None,
         numbering: None,
         alignment: None,
         text_direction: None,
+        page_break: Some(true),
     }]
 }
 

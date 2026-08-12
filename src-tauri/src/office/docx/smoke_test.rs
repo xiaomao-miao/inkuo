@@ -5,7 +5,7 @@
 
 use crate::office::docx::{
     build_dynamic_numbering_body, collect_referenced_num_ids, read_word_document, WordDocument,
-    write_word_document_to_path,
+    WordDocumentMeta, write_word_document_to_path,
 };
 use std::io::Read;
 
@@ -59,6 +59,7 @@ fn user_scenario_all_three_fixes_together() {
         numbering: None,
         alignment: None,
         text_direction: None,
+        page_break: None,
     });
     // Body paragraphs (these would be in section 0 with cols=2).
     for i in 0..6 {
@@ -70,8 +71,22 @@ fn user_scenario_all_three_fixes_together() {
             numbering: None,
             alignment: None,
             text_direction: None,
+            page_break: None,
         });
     }
+    // Image marker paragraph: the writer expands `<__img_pos_<id>__>`
+    // markers into `<w:drawing>` paragraphs at this position. We use the
+    // same id as the `WordImage` entry below.
+    paragraphs.push(WordParagraph {
+        id: "__img_pos_img1__".to_string(),
+        text: "<__img_pos_img1__>".to_string(),
+        style: None,
+        runs: None,
+        numbering: None,
+        alignment: None,
+        text_direction: None,
+        page_break: None,
+    });
     // A bulleted list using numId 1 (built-in).
     for i in 0..3 {
         paragraphs.push(WordParagraph {
@@ -91,10 +106,12 @@ fn user_scenario_all_three_fixes_together() {
                 vert_align: None,
                 field: None,
                 page_break: false,
+                column_break: false,
             }]),
             numbering: Some(NumberingRef { num_id: 1, level: 0 }),
             alignment: None,
             text_direction: None,
+            page_break: None,
         });
     }
     // An ordered list using numId 11 (NOT built-in — exercises dynamic registration).
@@ -116,24 +133,67 @@ fn user_scenario_all_three_fixes_together() {
                 vert_align: None,
                 field: None,
                 page_break: false,
+                column_break: false,
             }]),
             numbering: Some(NumberingRef { num_id: 11, level: 0 }),
             alignment: None,
             text_direction: None,
+            page_break: None,
         });
     }
-    // Body paragraphs for section 1 (cols=1).
-    for i in 0..4 {
-        paragraphs.push(WordParagraph {
-            id: format!("body-s1-{}", i),
-            text: format!("Section 1 body {}", i),
-            style: Some("BodyParagraph".to_string()),
-            runs: None,
-            numbering: None,
-            alignment: None,
-            text_direction: None,
-        });
-    }
+// Body paragraphs for section 1 (cols=1). The first body carries a
+        // `column_break` run so we exercise `<w:br w:type="column"/>` on
+        // round-trip; the second body carries a `HYPERLINK` field run
+        // for the same reason.
+        for i in 0..4 {
+            let runs = if i == 0 {
+                Some(vec![FontRun {
+                    text: String::new(),
+                    bold: false,
+                    italic: false,
+                    underline: false,
+                    strikethrough: false,
+                    font_size: None,
+                    color: None,
+                    font_name: None,
+                    highlight: None,
+                    vert_align: None,
+                    field: None,
+                    page_break: false,
+                    column_break: true,
+                }])
+            } else if i == 1 {
+                Some(vec![FontRun {
+                    text: "https://example.com".to_string(),
+                    bold: false,
+                    italic: false,
+                    underline: true,
+                    strikethrough: false,
+                    font_size: None,
+                    color: Some("1F6FEB".to_string()),
+                    font_name: None,
+                    highlight: None,
+                    vert_align: None,
+                    field: Some(crate::office::FieldRef::Custom {
+                        instr: "HYPERLINK \"https://example.com\"".to_string(),
+                    }),
+                    page_break: false,
+                    column_break: false,
+                }])
+            } else {
+                None
+            };
+            paragraphs.push(WordParagraph {
+                id: format!("body-s1-{}", i),
+                text: format!("Section 1 body {}", i),
+                style: Some("BodyParagraph".to_string()),
+                runs,
+                numbering: None,
+                alignment: None,
+                text_direction: None,
+                page_break: None,
+            });
+        }
 
     let doc = WordDocument {
         paragraphs,
@@ -143,6 +203,7 @@ fn user_scenario_all_three_fixes_together() {
             path: png_path_str.clone(),
             width_emu: 914400,
             height_emu: 914400,
+            alt_text: Some("Test image".to_string()),
             internal_path: None,
         }],
         sections: vec![
@@ -177,7 +238,17 @@ fn user_scenario_all_three_fixes_together() {
         ],
         headers: vec![],
         footers: vec![],
+        meta: WordDocumentMeta::default(),
     };
+
+    // Inject explicit section-break markers so the writer treats the two
+    // `WordSection`s as distinct physical sections. Without markers, the
+    // writer now (correctly) coerces multi-section docs without explicit
+    // markers down to a single trailing section — see the regression
+    // report and the `sections_without_markers_coerce_to_one_section`
+    // test in bug_fixes_tests.rs. The smoke test exercises the
+    // marker-driven path so it needs the markers to actually be there.
+    let doc = inject_section_break_markers(doc);
 
     // Verify dynamic numbering picks up numId 11.
     let referenced = collect_referenced_num_ids(&doc);
@@ -232,6 +303,61 @@ fn user_scenario_all_three_fixes_together() {
         "numbering.xml must register numId 11"
     );
 
+    // ── Feature regressions ──────────────────────────────────────────────
+    //
+    // Each iteration of the regression report added one of these
+    // surfaces; re-asserting them on every smoke test run catches any
+    // drift in the writer / reader before a user hits it.
+    let mut document_xml = String::new();
+    zip.by_name("word/document.xml")
+        .expect("document.xml present")
+        .read_to_string(&mut document_xml)
+        .expect("read");
+    assert!(
+        document_xml.contains("<w:drawing>"),
+        "image must produce a <w:drawing> element"
+    );
+    assert!(
+        document_xml.contains("HYPERLINK"),
+        "HYPERLINK field must be emitted as an instrText payload"
+    );
+    assert!(
+        document_xml.contains(r#"<w:br w:type="column"/>"#),
+        "column_break run must emit <w:br w:type=\"column\"/>"
+    );
+
     let _ = std::fs::remove_file(&path);
     let _ = std::fs::remove_file(&png_path);
+}
+
+/// Insert a `__sect_break_<idx>__` marker paragraph right after the last
+/// body paragraph of each non-final `WordSection`. The new marker-driven
+/// writer requires `markers + 1 == sections.len()`; this helper bridges
+/// smoke tests that build `WordDocument` by hand without going through
+/// `paragraph_columns.rs::expand_paragraph_columns`.
+fn inject_section_break_markers(mut doc: WordDocument) -> WordDocument {
+    use crate::office::docx::types::WordParagraph;
+    if doc.sections.len() <= 1 {
+        return doc;
+    }
+    let mut new_paragraphs: Vec<WordParagraph> = Vec::with_capacity(doc.paragraphs.len() + doc.sections.len() - 1);
+    let total = doc.sections.len();
+    let paragraphs_per_section = doc.paragraphs.len() / total;
+    for (section_index, chunk) in doc.paragraphs.chunks(paragraphs_per_section.max(1)).enumerate() {
+        new_paragraphs.extend_from_slice(chunk);
+        if section_index + 1 < total {
+            new_paragraphs.push(WordParagraph {
+                id: format!("__sect_break_{}__", section_index),
+                text: String::new(),
+                style: None,
+                runs: None,
+                numbering: None,
+                alignment: None,
+                text_direction: None,
+                page_break: None,
+            });
+        }
+    }
+    doc.paragraphs = new_paragraphs;
+    doc
 }

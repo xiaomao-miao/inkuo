@@ -14,7 +14,7 @@
 
 pub use crate::office::docx::{
     DocElement, FieldRef, FontRun, InsertElement, NumberingRef, WordDocument,
-    WordImage, WordParagraph, WordSection, WordTable,
+    WordDocumentMeta, WordImage, WordParagraph, WordSection, WordTable,
     HeaderPart, HeaderPartRef, FooterPart, FooterPartRef,
     PageSize, PageSizeMm, PageMargins,
 };

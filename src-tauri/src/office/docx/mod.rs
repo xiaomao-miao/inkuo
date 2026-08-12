@@ -54,6 +54,11 @@ mod bug_fixes_tests;
 #[cfg(test)]
 mod smoke_test;
 
+#[cfg(test)]
+mod section_audit;
+#[cfg(test)]
+mod acceptance_test;
+
 // Re-export the OOXML document-tree builders so existing
 // `crate::office::docx::build_run_xml` / `build_document_xml` /
 // `escape_xml` etc. import paths continue to resolve. The orchestrator
@@ -89,8 +94,10 @@ pub use zip_reader::read_word_document;
 // callers (notably the in-app template picker) pull these directly so
 // the writer's public surface stays a thin wrapper.
 pub use ooxml_boilerplate::{
-    build_dynamic_numbering_body, collect_referenced_num_ids, CONTENT_TYPES_XML,
-    FONT_TABLE_XML, NUMBERING_XML, RELS_XML, SETTINGS_XML, STYLES_XML, THEME_XML, WORD_RELS_XML,
+    append_numbering_override, append_numbering_relationship,
+    build_core_xml, build_dynamic_numbering_body, collect_referenced_num_ids,
+    CONTENT_TYPES_XML, FONT_TABLE_XML, NUMBERING_XML, RELS_XML, SETTINGS_XML, STYLES_XML,
+    THEME_XML, WORD_RELS_XML,
 };
 
 use serde::{Deserialize, Serialize};
@@ -146,6 +153,11 @@ pub struct FontRun {
     /// to force a page break in OOXML.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub page_break: bool,
+    /// When `true`, this run emits a column break. Forces the text flow
+    /// to continue from the top of the next column. Only meaningful in
+    /// multi-column sections (cols > 1).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub column_break: bool,
 }
 
 /// Word field code (域代码). When a `FontRun` carries one of these, the
@@ -224,6 +236,9 @@ pub struct WordParagraph {
     /// - `"rotate90"` / `"rotate270"` — text rotated for landscape layout
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_direction: Option<String>,
+    /// Force a page break before this paragraph.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_break: Option<bool>,
 }
 
 impl Default for WordParagraph {
@@ -236,6 +251,7 @@ impl Default for WordParagraph {
             numbering: None,
             alignment: None,
             text_direction: None,
+            page_break: None,
         }
     }
 }
@@ -301,6 +317,9 @@ pub enum DocElement {
         /// Paragraph text direction override. See `WordParagraph::text_direction`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         text_direction: Option<String>,
+        /// Force a page break before this paragraph.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        page_break: Option<bool>,
     },
     #[serde(rename = "table")]
     Table {
@@ -327,6 +346,9 @@ pub enum DocElement {
         path: String,
         width_emu: u32,
         height_emu: u32,
+        /// Alternative text for accessibility.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        alt_text: Option<String>,
     },
 }
 
@@ -403,6 +425,7 @@ impl WordDocument {
                             path: img.path.clone(),
                             width_emu: img.width_emu,
                             height_emu: img.height_emu,
+                            alt_text: img.alt_text.clone(),
                         });
                         images_emitted.insert(img.id.clone());
                         continue;
@@ -424,6 +447,7 @@ impl WordDocument {
                 numbering: p.numbering.clone(),
                 alignment: p.alignment.clone(),
                 text_direction: p.text_direction.clone(),
+                page_break: p.page_break.clone(),
             });
         }
         // Tables without preceding markers (e.g. freshly parsed documents
@@ -452,6 +476,7 @@ impl WordDocument {
                     path: img.path.clone(),
                     width_emu: img.width_emu,
                     height_emu: img.height_emu,
+                    alt_text: img.alt_text.clone(),
                 });
             }
         }
@@ -505,8 +530,8 @@ impl WordDocument {
 
         for elem in elements {
             match elem {
-                DocElement::Paragraph { id, text, style, runs, numbering, alignment, text_direction, .. } => {
-                    out_paras.push(WordParagraph { id, text, style, runs, numbering, alignment, text_direction });
+                DocElement::Paragraph { id, text, style, runs, numbering, alignment, text_direction, page_break, .. } => {
+                    out_paras.push(WordParagraph { id, text, style, runs, numbering, alignment, text_direction, page_break });
                 }
                 DocElement::Table { id, position: _, header, rows } => {
                     // Emit a position marker whose ID matches the table's ID.
@@ -519,6 +544,7 @@ impl WordDocument {
                         numbering: None,
                         alignment: None,
                         text_direction: None,
+                        page_break: None,
                     });
 
                     let mut table_rows = vec![];
@@ -532,7 +558,7 @@ impl WordDocument {
                     }
                     tables.push(WordTable { id, rows: table_rows, cell_paragraphs: Vec::new() });
                 }
-                DocElement::Image { id, position: _, path, width_emu, height_emu } => {
+                DocElement::Image { id, position: _, path, width_emu, height_emu, alt_text } => {
                     // Mirror the table-marker trick: a placeholder paragraph
                     // carrying `<__img_pos_<id>__>` text lets `build_document_xml`
                     // splice in the `<w:drawing>` run at the right spot, while
@@ -545,6 +571,7 @@ impl WordDocument {
                         numbering: None,
                         alignment: None,
                         text_direction: None,
+                        page_break: None,
                     });
                     // The `path` here is the *source* path on disk; the writer
                     // overwrites this with the rewritten `word/media/imageN.ext`
@@ -555,6 +582,7 @@ impl WordDocument {
                         path,
                         width_emu,
                         height_emu,
+                        alt_text,
                         internal_path: None,
                     });
                 }
@@ -568,6 +596,7 @@ impl WordDocument {
             sections: Vec::new(),
             headers: Vec::new(),
             footers: Vec::new(),
+        meta: WordDocumentMeta::default(),
         }
     }
 
@@ -589,7 +618,12 @@ impl WordDocument {
         modifies: Vec<DocElement>,
         deletes: Vec<String>,
         insert_elements: Vec<InsertElement>,
-    ) {
+    ) -> Vec<String> {
+        // Returns a list of human-readable warnings (e.g. invalid anchor_ids
+        // that fell back to end-of-doc). Callers should surface these to the
+        // user / tool output rather than relying on stderr logs.
+        let mut warnings: Vec<String> = Vec::new();
+
         // When a table is deleted, also delete its marker paragraph (if any).
         // Build the marker map before consuming `deletes`.
         let marker_map = self.marker_to_table_map();
@@ -624,20 +658,21 @@ impl WordDocument {
                 // unless the replacement explicitly provides them. AI callers
                 // can omit fields to mean "keep what's already there".
                 let to_push = match (elem, replacement.clone()) {
-                    (DocElement::Paragraph { id: _oi, text: ot, style: os, runs: ors, numbering: onum, alignment: oalign, text_direction: otdir, .. },
-                     DocElement::Paragraph { id: ri, text: rt, style: rs, runs: rr, numbering: rnum, omit_text, alignment: ralign, text_direction: rtdir }) => {
+                    (DocElement::Paragraph { id: _oi, text: ot, style: os, runs: ors, numbering: onum, alignment: oalign, text_direction: otdir, page_break: opb, .. },
+                     DocElement::Paragraph { id: ri, text: rt, style: rs, runs: rr, numbering: rnum, omit_text, alignment: ralign, text_direction: rtdir, page_break: rpb }) => {
                         // Merge strategy:
                         // 1. If runs provided in replacement -> use replacement runs (full override)
                         // 2. If text provided (omit_text=false) but no runs -> use text, clear runs
                         // 3. If nothing provided (omit_text=true, no runs) -> keep originals
-                        
+
                         let merged_style = rs.or(os);
                         let merged_numbering = rnum.or(onum);
                         // `None` on the replacement side means "keep original" for
-                        // alignment / text_direction (same omit-semantics as text).
+                        // alignment / text_direction / page_break (same omit-semantics as text).
                         let merged_alignment = ralign.or(oalign);
                         let merged_text_direction = rtdir.or(otdir);
-                        
+                        let merged_page_break = rpb.or(opb);
+
                         let (out_text, out_runs) = if rr.is_some() {
                             // User provided runs -> use runs, ignore text field
                             (String::new(), rr)
@@ -648,7 +683,7 @@ impl WordDocument {
                             // User provided neither -> keep originals
                             (ot, ors)
                         };
-                        
+
                         DocElement::Paragraph {
                             id: ri,
                             text: out_text,
@@ -658,6 +693,7 @@ impl WordDocument {
                             numbering: merged_numbering,
                             alignment: merged_alignment,
                             text_direction: merged_text_direction,
+                            page_break: merged_page_break,
                         }
                     }
                     // Table replace: pass through. `modify` is only called with
@@ -677,7 +713,7 @@ impl WordDocument {
             if modify_map.contains_key(insert_elem.element.id()) {
                 continue;
             }
-            
+
             if let Some(ref aid) = insert_elem.anchor_id {
                 // Find anchor position in current result
                 let pos = result.iter().position(|e| e.id() == aid);
@@ -689,7 +725,23 @@ impl WordDocument {
                     };
                     result.insert(insert_idx, insert_elem.element);
                 } else {
-                    // Anchor not found, append to end
+                    // Anchor not found: warn and fall back to appending at end.
+                    // This is a silent data-loss footgun for callers who expect
+                    // the table/image to appear at a specific location.
+                    let elem_kind = match insert_elem.element {
+                        DocElement::Table { .. } => "table",
+                        DocElement::Image { .. } => "image",
+                        DocElement::Paragraph { .. } => "paragraph",
+                    };
+                    let msg = format!(
+                        "anchor_id '{}' not found for inserted {} (id='{}'); \
+                         appending to end. Check that the anchor paragraph id is correct.",
+                        aid,
+                        elem_kind,
+                        insert_elem.element.id()
+                    );
+                    eprintln!("[WordDocument::modify] WARNING: {}", msg);
+                    warnings.push(msg);
                     result.push(insert_elem.element);
                 }
             } else {
@@ -719,22 +771,63 @@ impl WordDocument {
         let originals_by_id: std::collections::HashMap<&str, &WordImage> =
             self.images.iter().map(|i| (i.id.as_str(), i)).collect();
 
+        // Snapshot the original table/image IDs so we can distinguish inserted vs
+        // pre-existing elements. An element is "inserted" if it wasn't in the
+        // original document (not in self.tables/self.images).
+        let original_table_ids: std::collections::HashSet<&str> =
+            self.tables.iter().map(|t| t.id.as_str()).collect();
+        let original_image_ids: std::collections::HashSet<&str> =
+            self.images.iter().map(|i| i.id.as_str()).collect();
+
+        // Count of prepended markers for inserted elements. When we prepend a
+        // marker for an inserted table/image, it shifts subsequent content
+        // by one position. We track this so that future prepended markers
+        // land at the correct absolute position in out_paras.
+        let mut inserted_markers_prepended: usize = 0;
+
         for elem in result {
             match elem {
-                DocElement::Paragraph { id, text, style, runs, numbering, alignment, text_direction, .. } => {
-                    out_paras.push(WordParagraph { id, text, style, runs, numbering, alignment, text_direction });
+                DocElement::Paragraph { id, text, style, runs, numbering, alignment, text_direction, page_break, .. } => {
+                    out_paras.push(WordParagraph { id, text, style, runs, numbering, alignment, text_direction, page_break });
                 }
                 DocElement::Table { id, position: _, header, rows } => {
-                    // Emit a position marker whose text matches the table's ID.
-                    out_paras.push(WordParagraph {
-                        id: format!("__tbl_pos_{}__", id),
-                        text: format!("<__tbl_pos_{}__>", id),
-                        style: None,
-                        runs: None,
-                        numbering: None,
-                        alignment: None,
-                        text_direction: None,
-                    });
+                    // Distinguish pre-existing/replaced tables from inserted ones.
+                    // A table is "inserted" if it wasn't in the original document.
+                    let is_inserted = !original_table_ids.contains(id.as_str())
+                        && !modify_map.contains_key(&id);
+
+                    if is_inserted {
+                        // Inserted table: prepend its marker at the current position
+                        // in out_paras. Using `insert at (len - prepended)` ensures that
+                        // multiple inserted markers (in anchor order) end up in the
+                        // correct relative order.
+                        out_paras.insert(
+                            out_paras.len().saturating_sub(inserted_markers_prepended),
+                            WordParagraph {
+                                id: format!("__tbl_pos_{}__", id),
+                                text: format!("<__tbl_pos_{}__>", id),
+                                style: None,
+                                runs: None,
+                                numbering: None,
+                                alignment: None,
+                                text_direction: None,
+                                page_break: None,
+                            },
+                        );
+                        inserted_markers_prepended += 1;
+                    } else {
+                        // Pre-existing or replaced table: emit marker at current end.
+                        out_paras.push(WordParagraph {
+                            id: format!("__tbl_pos_{}__", id),
+                            text: format!("<__tbl_pos_{}__>", id),
+                            style: None,
+                            runs: None,
+                            numbering: None,
+                            alignment: None,
+                            text_direction: None,
+                            page_break: None,
+                        });
+                    }
 
                     let mut table_rows = vec![];
                     if !header.is_empty() {
@@ -747,37 +840,64 @@ impl WordDocument {
                     }
                     tables.push(WordTable { id, rows: table_rows, cell_paragraphs: Vec::new() });
                 }
-                DocElement::Image { id, position: _, path, width_emu, height_emu } => {
-                    // Mirror the table-marker trick so the writer can splice
-                    // the inline `<w:drawing>` run into the right paragraph.
-                    out_paras.push(WordParagraph {
-                        id: format!("__img_pos_{}__", id),
-                        text: format!("<__img_pos_{}__>", id),
-                        style: None,
-                        runs: None,
-                        numbering: None,
-                        alignment: None,
-                        text_direction: None,
-                    });
+                DocElement::Image { id, position: _, path, width_emu, height_emu, alt_text } => {
+                    // Distinguish pre-existing/replaced images from inserted ones.
+                    let is_inserted = !original_image_ids.contains(id.as_str())
+                        && !modify_map.contains_key(&id);
+
+                    if is_inserted {
+                        // Inserted image: prepend its marker at the current position
+                        // in out_paras (same strategy as tables above).
+                        out_paras.insert(
+                            out_paras.len().saturating_sub(inserted_markers_prepended),
+                            WordParagraph {
+                                id: format!("__img_pos_{}__", id),
+                                text: format!("<__img_pos_{}__>", id),
+                                style: None,
+                                runs: None,
+                                numbering: None,
+                                alignment: None,
+                                text_direction: None,
+                                page_break: None,
+                            },
+                        );
+                        inserted_markers_prepended += 1;
+                    } else {
+                        // Pre-existing or replaced image: emit marker at current end.
+                        out_paras.push(WordParagraph {
+                            id: format!("__img_pos_{}__", id),
+                            text: format!("<__img_pos_{}__>", id),
+                            style: None,
+                            runs: None,
+                            numbering: None,
+                            alignment: None,
+                            text_direction: None,
+                            page_break: None,
+                        });
+                    }
                     // Preserve `internal_path` for unchanged pre-existing
-                    // images so the writer can reuse the bytes already
+                    // images so the writer reuses the bytes already
                     // embedded in the docx (and keep the original rId).
                     // Anything in `modify_map` is a replacement; anything
                     // not found in `originals_by_id` is a brand new image
                     // the user just appended — both reset `internal_path`
                     // so the writer allocates a fresh `imageN.ext`.
-                    let internal_path = if modify_map.contains_key(&id) {
-                        None
+                    // Also preserve alt_text from original when not replacing.
+                    let (internal_path, preserved_alt_text) = if modify_map.contains_key(&id) {
+                        (None, alt_text)
                     } else {
-                        originals_by_id
-                            .get(id.as_str())
-                            .and_then(|orig| orig.internal_path.clone())
+                        let orig = originals_by_id.get(id.as_str());
+                        (
+                            orig.and_then(|o| o.internal_path.clone()),
+                            alt_text.or_else(|| orig.and_then(|o| o.alt_text.clone())),
+                        )
                     };
                     images.push(WordImage {
                         id,
                         path,
                         width_emu,
                         height_emu,
+                        alt_text: preserved_alt_text,
                         internal_path,
                     });
                 }
@@ -787,6 +907,8 @@ impl WordDocument {
         self.paragraphs = out_paras;
         self.tables = tables;
         self.images = images;
+
+        warnings
     }
 }
 
@@ -832,6 +954,40 @@ pub struct WordDocument {
     /// Each part maps to one `word/footerN.xml` zip entry on write.
     #[serde(default)]
     pub footers: Vec<FooterPart>,
+    /// Document metadata rendered into `docProps/core.xml`. Empty strings
+    /// mean "leave the field unset" — `build_core_xml` will skip them so
+    /// the resulting XML still parses, but `<dc:title></dc:title>` and
+    /// similar remain empty in the output.
+    #[serde(default, skip_serializing_if = "WordDocumentMeta::is_empty")]
+    pub meta: WordDocumentMeta,
+}
+
+/// Core document metadata carried alongside the body. Rendered into
+/// `docProps/core.xml` on write; read back by `parse_core_xml` so the
+/// values round-trip across save / reload cycles. Empty strings are
+/// treated as "unset" and the writer emits an empty element for them
+/// (rather than omitting the element entirely), matching the behaviour
+/// `build_core_xml` always had.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WordDocumentMeta {
+    pub title: String,
+    pub author: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub subject: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub keywords: String,
+}
+
+impl WordDocumentMeta {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.title.is_empty()
+            && self.author.is_empty()
+            && self.subject.is_empty()
+            && self.description.is_empty()
+            && self.keywords.is_empty()
+    }
 }
 
 impl Default for WordDocument {
@@ -843,6 +999,7 @@ impl Default for WordDocument {
             sections: Vec::new(),
             headers: Vec::new(),
             footers: Vec::new(),
+        meta: WordDocumentMeta::default(),
         }
     }
 }
@@ -998,6 +1155,30 @@ pub struct FooterPartRef {
     pub kind: Option<String>,
 }
 
+/// A4 page size in twips (1 inch = 1440 twips, A4 = 210mm × 297mm).
+/// Exposed as a `pub(crate)` constant so the writer can fall back to
+/// these values when a `WordSection` doesn't specify its own page size
+/// — the user's regression report showed uninitialised sections using
+/// Word's default Letter size (612x792 pt), which silently squashed the
+/// layout.
+pub(crate) const A4_WIDTH_TWIPS: u32 = 11906;
+pub(crate) const A4_HEIGHT_TWIPS: u32 = 16838;
+
+/// Build a `PageMargins` with the safe default the writer falls back to
+/// when the model didn't supply one: 1 inch on every side, with 0.5 inch
+/// header/footer offsets (the values Word uses for new documents).
+pub(crate) fn default_margins() -> PageMargins {
+    PageMargins {
+        top: 1440,
+        right: 1440,
+        bottom: 1440,
+        left: 1440,
+        header: Some(720),
+        footer: Some(720),
+        gutter: Some(0),
+    }
+}
+
 /// A header part. Renders as a standalone `word/headerN.xml` file and
 /// contains its own paragraphs, tables, and inline images (which become
 /// the header's body — headers can carry small logos, chapter names,
@@ -1080,6 +1261,10 @@ pub struct WordImage {
     pub path: String,
     pub width_emu: u32,
     pub height_emu: u32,
+    /// Alternative text (alt text) for accessibility. Rendered as the
+    /// `descr` attribute on `wp:docPr` element.
+    #[serde(default)]
+    pub alt_text: Option<String>,
     /// `Some("word/media/imageN.ext")` when this `WordImage` was
     /// recovered from an existing .docx (rather than built fresh from a
     /// `DocElement::Image`). Writer uses this to (a) skip re-reading the
@@ -1204,14 +1389,19 @@ pub(crate) fn maybe_inject_default_footer(doc: &mut WordDocument) {
             numbering: None,
             alignment: Some("center".to_string()),
             text_direction: None,
+            page_break: None,
         }],
         tables: Vec::new(),
         images: Vec::new(),
     };
     doc.footers.push(default_footer);
-    // Ensure every section carries a footer ref pointing at the
-    // default. Sections with their own explicit footers are left
-    // alone — they presumably wanted something different.
+    // Ensure every non-cover section carries a footer ref pointing at the
+    // default. The first section (the cover) is left without a footer ref
+    // when `title_pg` is set on it — Word will then use `<w:titlePg/>`
+    // to keep that page free of headers / footers, and the body section
+    // picks up the default page-number footer on page 2. Sections with
+    // their own explicit footers are left alone — they presumably wanted
+    // something different.
     if doc.sections.is_empty() {
         let mut s = WordSection::default();
         s.footer_refs.push(FooterPartRef {
@@ -1220,7 +1410,11 @@ pub(crate) fn maybe_inject_default_footer(doc: &mut WordDocument) {
         });
         doc.sections.push(s);
     } else {
-        for s in doc.sections.iter_mut() {
+        let cover_section_idx = if doc.sections[0].title_pg { Some(0usize) } else { None };
+        for (idx, s) in doc.sections.iter_mut().enumerate() {
+            if Some(idx) == cover_section_idx {
+                continue;
+            }
             if s.footer_refs.is_empty() {
                 s.footer_refs.push(FooterPartRef {
                     footer_id: footer_id.clone(),
@@ -1228,6 +1422,99 @@ pub(crate) fn maybe_inject_default_footer(doc: &mut WordDocument) {
                 });
             }
         }
+    }
+}
+
+/// Drop any header / footer reference whose part id isn't present in
+/// `doc.headers` / `doc.footers`. Without this, the writer would emit
+/// `<w:headerReference r:id="rIdHeaderPlaceholder_<id>"/>` for a part
+/// the model forgot to define, leaving a dangling relationship in
+/// `word/_rels/document.xml.rels` that Word silently ignores — the
+/// visible failure was the regression report's "页眉页脚好像没有生效".
+pub(crate) fn drop_unresolved_header_footer_refs(doc: &mut WordDocument) {
+    let header_ids: std::collections::HashSet<&str> =
+        doc.headers.iter().map(|h| h.id.as_str()).collect();
+    let footer_ids: std::collections::HashSet<&str> =
+        doc.footers.iter().map(|f| f.id.as_str()).collect();
+    for s in doc.sections.iter_mut() {
+        let before_headers = s.header_refs.len();
+        s.header_refs.retain(|r| header_ids.contains(r.header_id.as_str()));
+        let dropped = before_headers - s.header_refs.len();
+        if dropped > 0 {
+            eprintln!(
+                "[write_word_document] WARNING: dropped {} unresolved header reference(s) \
+                 (header ids not found in doc.headers).",
+                dropped
+            );
+        }
+        let before_footers = s.footer_refs.len();
+        s.footer_refs.retain(|r| footer_ids.contains(r.footer_id.as_str()));
+        let dropped = before_footers - s.footer_refs.len();
+        if dropped > 0 {
+            eprintln!(
+                "[write_word_document] WARNING: dropped {} unresolved footer reference(s) \
+                 (footer ids not found in doc.footers).",
+                dropped
+            );
+        }
+    }
+}
+
+/// Return `true` when any paragraph in `doc` (body, headers, or
+/// footers) carries a Word field code. The writer uses this signal to
+/// decide whether to inject `<w:updateFields/>` into `settings.xml` so
+/// Word refreshes PAGE / NUMPAGES / DATE / AUTHOR on first open.
+pub(crate) fn doc_has_any_field(doc: &WordDocument) -> bool {
+    fn para_has_field(p: &crate::office::WordParagraph) -> bool {
+        if let Some(ref runs) = p.runs {
+            for r in runs {
+                if r.field.is_some() {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+    for p in &doc.paragraphs {
+        if para_has_field(p) {
+            return true;
+        }
+    }
+    for h in &doc.headers {
+        for p in &h.paragraphs {
+            if para_has_field(p) {
+                return true;
+            }
+        }
+    }
+    for f in &doc.footers {
+        for p in &f.paragraphs {
+            if para_has_field(p) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Inject `<w:updateFields w:val="true"/>` into a `settings.xml` payload
+/// so Word refreshes all fields (PAGE, NUMPAGES, DATE, …) the first time
+/// the user opens the document. Idempotent: returns the input unchanged
+/// when the payload already contains the element.
+pub(crate) fn inject_update_fields(settings_xml: &str) -> String {
+    if settings_xml.contains("<w:updateFields") {
+        return settings_xml.to_string();
+    }
+    // Insert the new element right after the opening `<w:settings ...>`
+    // tag, which is where Word expects most settings elements to appear.
+    if let Some(pos) = settings_xml.find("</w:settings>") {
+        let (head, tail) = settings_xml.split_at(pos);
+        format!(
+            "{}<w:updateFields w:val=\"true\"/>{}",
+            head, tail
+        )
+    } else {
+        settings_xml.to_string()
     }
 }
 
@@ -1239,6 +1526,7 @@ const GENERATED_FILES: &[&str] = &[
     "_rels/.rels",
     "word/_rels/document.xml.rels",
     "word/document.xml",
+    "docProps/core.xml",
     // NOTE: word/styles.xml, word/settings.xml, word/fontTable.xml and
     // word/theme/theme1.xml are intentionally NOT here — they are copied from
     // the original file so custom styles and formatting are preserved.
@@ -1256,10 +1544,16 @@ pub fn write_word_document<W: std::io::Write + std::io::Seek>(
     preserve_from: Option<&[u8]>,
 ) -> Result<(), OfficeError> {
     // Clone so we can patch the model locally without mutating the
-    // caller's copy. The only patch today is the brand-default
-    // page-number footer (see `maybe_inject_default_footer`).
+    // caller's copy. Patches:
+    //   - brand-default page-number footer (see `maybe_inject_default_footer`)
+    //   - dropping unresolved header / footer references so we never
+    //     leave a `rIdHeaderPlaceholder_<id>` in the rels file that
+    //     points at a part the model forgot to define
+    //   - settings.xml payload gets `<w:updateFields/>` appended when
+    //     the document has any field in body / footer
     let mut doc = doc.clone();
     maybe_inject_default_footer(&mut doc);
+    drop_unresolved_header_footer_refs(&mut doc);
     let doc = &doc;
     let mut zip = zip::ZipWriter::new(output);
     let opts = zip::write::SimpleFileOptions::default()
@@ -1534,7 +1828,11 @@ pub fn write_word_document<W: std::io::Write + std::io::Seek>(
     } else {
         STYLES_XML
     };
-    let settings = SETTINGS_XML;
+    let settings = if doc_has_any_field(doc) {
+        inject_update_fields(SETTINGS_XML)
+    } else {
+        SETTINGS_XML.to_string()
+    };
     let font_table = FONT_TABLE_XML;
     let theme = THEME_XML;
 
@@ -1610,7 +1908,7 @@ pub fn write_word_document<W: std::io::Write + std::io::Seek>(
         }
         if !has_settings {
             zip.start_file("word/settings.xml", opts)?;
-            zip.write_all(SETTINGS_XML.as_bytes())?;
+            zip.write_all(settings.as_bytes())?;
         }
         if !has_font_table {
             zip.start_file("word/fontTable.xml", opts)?;
@@ -1620,11 +1918,11 @@ pub fn write_word_document<W: std::io::Write + std::io::Seek>(
             zip.start_file("word/theme/theme1.xml", opts)?;
             zip.write_all(THEME_XML.as_bytes())?;
         }
-        // Numbering: only backfill when the doc actually references lists. Without
-        // this, references to `numId` would resolve to nothing. The minimum we
-        // provide is one bullet list and one decimal list (numId 1 and 2) so
-        // that AI-generated `numbering: { num_id: 1, level: 0 }` works out of
-        // the box on freshly-created docs.
+        // Numbering: only backfill when the doc actually references lists.
+        // When preserve_from is set, the original's numbering.xml (if any) was
+        // already copied through the GENERIC_FILES loop above. When has_numbering
+        // is false in preserve mode, the original didn't have one — generate it
+        // only if the current doc uses lists.
         if !has_numbering && doc_has_numbering(doc) {
             zip.start_file("word/numbering.xml", opts)?;
             zip.write_all(NUMBERING_XML.as_bytes())?;
@@ -1651,12 +1949,29 @@ pub fn write_word_document<W: std::io::Write + std::io::Seek>(
     let doc_xml = substitute_image_placeholders(&doc_xml_raw, &image_writes);
     let doc_xml = substitute_hf_placeholders(&doc_xml, &hf_writes);
 
+    // Determine if we need numbering (only when document has list items)
+    let needs_numbering = doc_has_numbering(doc);
+    let mut next_rid_for_numbering: u32 = next_rid_u32;
+    if needs_numbering {
+        next_rid_for_numbering += 1;
+    }
+
     // Compose the final `[Content_Types].xml` and `word/_rels/document.xml.rels`
-    // with image + header/footer Overrides / Relationships appended.
+    // with image + header/footer + numbering Overrides / Relationships appended.
     let content_types = append_image_overrides(content_types_base, &image_writes);
     let content_types = append_hf_overrides(&content_types, &hf_writes);
+    let content_types = if needs_numbering {
+        append_numbering_override(&content_types)
+    } else {
+        content_types
+    };
     let word_rels = append_image_relationships(word_rels_base, &image_writes);
     let word_rels = append_hf_relationships(&word_rels, &hf_writes);
+    let word_rels = if needs_numbering {
+        append_numbering_relationship(&word_rels, next_rid_for_numbering)
+    } else {
+        word_rels
+    };
 
     // Always write the generated (up-to-date) entries last so they take precedence
     zip.start_file("[Content_Types].xml", opts)?;
@@ -1664,6 +1979,17 @@ pub fn write_word_document<W: std::io::Write + std::io::Seek>(
 
     zip.start_file("_rels/.rels", opts)?;
     zip.write_all(rels.as_bytes())?;
+
+    // Write docProps/core.xml with document properties
+    let core_xml = build_core_xml(
+        Some(&doc.meta.title),
+        Some(&doc.meta.author),
+        Some(&doc.meta.subject),
+        Some(&doc.meta.description),
+        Some(&doc.meta.keywords),
+    );
+    zip.start_file("docProps/core.xml", opts)?;
+    zip.write_all(core_xml.as_bytes())?;
 
     zip.start_file("word/_rels/document.xml.rels", opts)?;
     zip.write_all(word_rels.as_bytes())?;

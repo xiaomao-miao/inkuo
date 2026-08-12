@@ -93,18 +93,16 @@ pub fn build_styled_table_xml(table_id: &str, rows: &[TableRow], style: &TableSt
     xml.push_str("\n      <w:tblPr>");
     xml.push_str("<w:tblStyle w:val=\"BrandTable\"/>");
 
-    // Table width: calculate based on content or use full width
-    // For styled tables, we use dxa type with explicit width (twips)
-    // A4 page width minus margins: (210mm - 50mm) * 56.7 twips/mm ≈ 9072 twips
-    let table_width = 9360u32;
-    xml.push_str(&format!("<w:tblW w:type=\"dxa\" w:w=\"{}\"/>", table_width));
+    // Table width: A4 page with 1-inch margins = ~9026 twips available
+    const TABLE_WIDTH: u32 = 9026;
+    xml.push_str(&format!("<w:tblW w:type=\"dxa\" w:w=\"{}\"/>", TABLE_WIDTH));
 
     // Table indent (left margin)
-    xml.push_str("<w:tblInd w:type=\"dxa\" w:w=\"120\"/>");
-    
+    xml.push_str("<w:tblInd w:type=\"dxa\" w:w=\"0\"/>");
+
     // Table layout: fixed ensures consistent rendering
     xml.push_str("<w:tblLayout w:type=\"fixed\"/>");
-    
+
     // Table look for row banding and header styling
     let has_zebra = style.zebra && style.zebra_fill.is_some();
     xml.push_str(&format!(
@@ -153,24 +151,22 @@ pub fn build_styled_table_xml(table_id: &str, rows: &[TableRow], style: &TableSt
 
     xml.push_str("</w:tblPr>");
 
-    // Build tblGrid: calculate column widths based on first row
-    // For styled tables, we divide the table width among columns
+    // Build tblGrid: calculate column widths based on column count
+    // Use fixed proportional widths that sum to TABLE_WIDTH
     let col_count = rows.first().map(|r| r.cells.len()).unwrap_or(0);
+    let col_widths: Vec<u32> = match col_count {
+        1 => vec![TABLE_WIDTH],
+        2 => vec![TABLE_WIDTH / 3, TABLE_WIDTH - TABLE_WIDTH / 3],  // 1/3, 2/3
+        3 => vec![TABLE_WIDTH / 4, TABLE_WIDTH / 4, TABLE_WIDTH / 2],  // 25%, 25%, 50%
+        _ => {
+            let base = TABLE_WIDTH / col_count as u32;
+            let remainder = TABLE_WIDTH % col_count as u32;
+            (0..col_count as u32).map(|i| base + if i < remainder { 1 } else { 0 }).collect()
+        }
+    };
     if col_count > 0 {
         xml.push_str("\n      <w:tblGrid>");
-        // Distribute width evenly among columns
-        // Use different ratios based on typical content needs
-        let col_widths: Vec<u32> = if col_count == 2 {
-            vec![2304, 7056]  // 25% / 75%
-        } else if col_count == 3 {
-            vec![2304, 3024, 4032]  // 25% / 32% / 43%
-        } else {
-            // Default: divide evenly
-            let base = table_width / col_count as u32;
-            (0..col_count).map(|_| base).collect()
-        };
-        for (i, width) in col_widths.iter().enumerate() {
-            let w = if i < col_count { *width } else { table_width / col_count as u32 };
+        for &w in &col_widths {
             xml.push_str(&format!("<w:gridCol w:w=\"{}\"/>", w));
         }
         xml.push_str("</w:tblGrid>");
@@ -196,38 +192,22 @@ pub fn build_styled_table_xml(table_id: &str, rows: &[TableRow], style: &TableSt
             if header_repeat {
                 xml.push_str("<w:tblHeader/>");
             }
-            if has_zebra && !is_header {
-                // Don't split rows for zebra styling
-                // xml.push_str("<w:cantSplit/>");  // Optional: prevent row splitting
-            }
             xml.push_str("</w:trPr>");
         }
         
-        // Calculate cell widths based on tblGrid
-        let cell_widths: Vec<u32> = if col_count == 2 {
-            vec![2304, 7056]
-        } else if col_count == 3 {
-            vec![2304, 3024, 4032]
-        } else {
-            let base = table_width / col_count.max(1) as u32;
-            (0..row.cells.len()).map(|_| base).collect()
-        };
+        // Track cumulative offset for cell positioning
+        let mut col_offset = 0usize;
         
-        for (cell_idx, cell) in row.cells.iter().enumerate() {
+        for cell in &row.cells {
             let col_span = cell.col_span.max(1);
             let row_span = cell.row_span.max(1);
             
             // Calculate cell width based on col_span
-            let cell_width: u32 = if col_count == 2 {
-                if cell_idx == 0 { 2304 } else { 7056 }
-            } else if col_count == 3 {
-                if cell_idx == 0 { 2304 } 
-                else if cell_idx == 1 { 3024 } 
-                else { 4032 }
-            } else {
-                table_width / col_count.max(1) as u32
-            };
-            let total_cell_width = cell_width * col_span as u32;
+            let cell_width: u32 = col_widths.iter()
+                .skip(col_offset)
+                .take(col_span)
+                .sum();
+            col_offset += col_span;
             
             xml.push_str("<w:tc><w:tcPr>");
             
@@ -242,7 +222,7 @@ pub fn build_styled_table_xml(table_id: &str, rows: &[TableRow], style: &TableSt
             }
             
             // Cell width in twips
-            xml.push_str(&format!("<w:tcW w:type=\"dxa\" w:w=\"{}\"/>", total_cell_width));
+            xml.push_str(&format!("<w:tcW w:type=\"dxa\" w:w=\"{}\"/>", cell_width));
             
             // Cell margins
             xml.push_str("<w:tcMar>");
@@ -362,11 +342,12 @@ fn render_cell_text(xml: &mut String, text: &str, is_header: bool, style: &Table
 /// we instead emit just the wrapper `<w:tbl>…</w:tbl>` and rely on
 /// the caller (the orchestrator) to splice in the inner content.
 pub fn build_callout_container_xml(bg: &str, accent: &str) -> String {
-    // Use pct type for full-width (5000 = 100%)
+    // Use dxa type for full page width (A4 ~9026 twips with 1-inch margins)
+    const FULL_WIDTH: u32 = 9026;
     let mut xml = String::new();
     xml.push_str("<w:tbl>");
     xml.push_str("<w:tblPr>");
-    xml.push_str("<w:tblW w:type=\"pct\" w:w=\"5000\"/>");
+    xml.push_str(&format!("<w:tblW w:type=\"dxa\" w:w=\"{}\"/>", FULL_WIDTH));
     xml.push_str("<w:tblInd w:type=\"dxa\" w:w=\"0\"/>");
     xml.push_str("<w:tblLayout w:type=\"fixed\"/>");
     xml.push_str("<w:tblBorders>");
@@ -382,11 +363,11 @@ pub fn build_callout_container_xml(bg: &str, accent: &str) -> String {
     xml.push_str("<w:right w:w=\"240\" w:type=\"dxa\"/>");
     xml.push_str("</w:tblCellMar>");
     xml.push_str("</w:tblPr>");
-    xml.push_str("<w:tblGrid><w:gridCol w:w=\"9360\"/></w:tblGrid>");
+    xml.push_str(&format!("<w:tblGrid><w:gridCol w:w=\"{}\"/></w:tblGrid>", FULL_WIDTH));
     xml.push_str("<w:tr>");
     xml.push_str("<w:tc>");
     xml.push_str("<w:tcPr>");
-    xml.push_str("<w:tcW w:type=\"dxa\" w:w=\"9360\"/>");
+    xml.push_str(&format!("<w:tcW w:type=\"dxa\" w:w=\"{}\"/>", FULL_WIDTH));
     xml.push_str("<w:tcMar>");
     xml.push_str("<w:top w:w=\"200\" w:type=\"dxa\"/>");
     xml.push_str("<w:left w:w=\"280\" w:type=\"dxa\"/>");
@@ -399,6 +380,8 @@ pub fn build_callout_container_xml(bg: &str, accent: &str) -> String {
 }
 
 /// Emit the closing tags of a callout / code-block container cell.
+/// The inner paragraphs are emitted with <w:p>...</w:p> by emit_inner_paragraph,
+/// so we only need to close the cell, row, and table here.
 pub fn build_callout_close_xml() -> String {
     "</w:tc></w:tr></w:tbl>".to_string()
 }
@@ -406,10 +389,12 @@ pub fn build_callout_close_xml() -> String {
 /// Render a code-block container — same shape as a callout but
 /// uniformly shaded and with no accent border.
 pub fn build_code_block_container_xml(bg: &str) -> String {
+    // Use dxa type for full page width (A4 ~9026 twips with 1-inch margins)
+    const FULL_WIDTH: u32 = 9026;
     let mut xml = String::new();
     xml.push_str("<w:tbl>");
     xml.push_str("<w:tblPr>");
-    xml.push_str("<w:tblW w:type=\"pct\" w:w=\"5000\"/>");
+    xml.push_str(&format!("<w:tblW w:type=\"dxa\" w:w=\"{}\"/>", FULL_WIDTH));
     xml.push_str("<w:tblInd w:type=\"dxa\" w:w=\"0\"/>");
     xml.push_str("<w:tblLayout w:type=\"fixed\"/>");
     xml.push_str("<w:tblBorders>");
@@ -425,11 +410,11 @@ pub fn build_code_block_container_xml(bg: &str) -> String {
     xml.push_str("<w:right w:w=\"280\" w:type=\"dxa\"/>");
     xml.push_str("</w:tblCellMar>");
     xml.push_str("</w:tblPr>");
-    xml.push_str("<w:tblGrid><w:gridCol w:w=\"9360\"/></w:tblGrid>");
+    xml.push_str(&format!("<w:tblGrid><w:gridCol w:w=\"{}\"/></w:tblGrid>", FULL_WIDTH));
     xml.push_str("<w:tr>");
     xml.push_str("<w:tc>");
     xml.push_str("<w:tcPr>");
-    xml.push_str("<w:tcW w:type=\"dxa\" w:w=\"9360\"/>");
+    xml.push_str(&format!("<w:tcW w:type=\"dxa\" w:w=\"{}\"/>", FULL_WIDTH));
     xml.push_str("<w:tcMar>");
     xml.push_str("<w:top w:w=\"240\" w:type=\"dxa\"/>");
     xml.push_str("<w:left w:w=\"280\" w:type=\"dxa\"/>");

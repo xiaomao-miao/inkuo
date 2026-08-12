@@ -423,6 +423,7 @@ fn walk_container_paragraphs(
                                             numbering: cur_numbering.clone(),
                                             alignment: cur_alignment.clone(),
                                             text_direction: cur_text_direction.clone(),
+                                            page_break: None,
                                         });
                                     }
                                 }
@@ -456,6 +457,7 @@ fn walk_container_paragraphs(
                                     vert_align: cur_run_vert_align.take(),
                                     field: cur_run_field.take(),
                                     page_break: false,
+                                    column_break: false,
                                 });
                             } else {
                                 cur_run_vert_align = None;

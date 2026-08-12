@@ -42,7 +42,8 @@ pub(crate) fn doc_has_numbering(doc: &WordDocument) -> bool {
 ///      rId → relative-path (e.g. `media/image3.png`) lookup.
 ///   2. Walk `word/document.xml` for every `<a:blip
 ///      r:embed="rIdN"/>` element. For each, also pick up the
-///      neighbouring `<wp:extent cx="..." cy="..."/>` for the EMU size
+///      neighbouring `<wp:extent cx="..." cy="..."/>` for the EMU size,
+///      `<wp:docPr descr="..."/>` for accessibility alt text,
 ///      and scan the same enclosing paragraph for an `<inkuo:id
 ///      w:val="__img_pos_<img_id>__"/>` marker. The marker id is the
 ///      stable id the writer uses to pair this drawing with its
@@ -73,6 +74,7 @@ pub(crate) fn parse_image_xml(
     let mut blip_rid: Option<String> = None;
     let mut cx: u32 = 0;
     let mut cy: u32 = 0;
+    let mut current_descr: Option<String> = None;
 
     // Per-paragraph state. The writer decorates every image-bearing
     // paragraph with a `<inkuo:id w:val="__img_pos_<img_id>__"/>`; we
@@ -106,6 +108,7 @@ pub(crate) fn parse_image_xml(
                     blip_rid = None;
                     cx = 0;
                     cy = 0;
+                    current_descr = None;
                 } else if in_drawing && name.as_ref() == b"extent" {
                     if let Some(v) = attr_value_str(e, b"cx") {
                         if let Ok(n) = v.parse::<u32>() {
@@ -117,6 +120,13 @@ pub(crate) fn parse_image_xml(
                             cy = n;
                         }
                     }
+                } else if in_drawing && name.as_ref() == b"docPr" {
+                    // wp:docPr has the descr (alt text) attribute
+                    if let Some(v) = attr_value_str(e, b"descr") {
+                        if !v.is_empty() {
+                            current_descr = Some(v);
+                        }
+                    }
                 } else if in_drawing && name.as_ref() == b"blip" {
                     if let Some(v) = attr_value_str(e, b"embed") {
                         blip_rid = Some(v);
@@ -124,7 +134,7 @@ pub(crate) fn parse_image_xml(
                     if is_empty {
                         // `<a:blip ... />` is usually self-closing — flush
                         // the recovery record now.
-                        flush_image(&mut images, &blip_rid, cx, cy, current_para_id.as_deref(), &rid_to_target);
+                        flush_image(&mut images, &blip_rid, cx, cy, current_para_id.as_deref(), &rid_to_target, current_descr.as_deref());
                         in_drawing = false;
                         blip_rid = None;
                     }
@@ -135,7 +145,7 @@ pub(crate) fn parse_image_xml(
                 if name.as_ref() == b"drawing" {
                     // Empty / non-self-closing blip flush. `<a:blip />`
                     // cases were flushed inside the Start handler.
-                    flush_image(&mut images, &blip_rid, cx, cy, current_para_id.as_deref(), &rid_to_target);
+                    flush_image(&mut images, &blip_rid, cx, cy, current_para_id.as_deref(), &rid_to_target, current_descr.as_deref());
                     in_drawing = false;
                     blip_rid = None;
                 } else if name.as_ref() == b"p" && current_para_depth > 0 {
@@ -165,6 +175,7 @@ pub(crate) fn flush_image(
     cy: u32,
     para_id: Option<&str>,
     rid_to_target: &std::collections::HashMap<String, String>,
+    alt_text: Option<&str>,
 ) {
     let Some(rid) = blip_rid.as_deref() else {
         return;
@@ -183,6 +194,7 @@ pub(crate) fn flush_image(
         path: internal_path.clone(),
         width_emu: cx,
         height_emu: cy,
+        alt_text: alt_text.map(String::from),
         internal_path: Some(internal_path),
     });
 }

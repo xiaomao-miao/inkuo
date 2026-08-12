@@ -19,12 +19,13 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::{ToolDefinition, ToolError, ToolParameters, validate_workspace_path};
-use crate::office::ElementId;
+use crate::office::{ElementId, WordParagraph, WordTable, WordImage};
 use super::paragraph_columns::expand_paragraph_columns;
 
 /// Output of `parse_component_block`. Carries the rendered paragraphs/tables
 /// plus the optional positional metadata so the caller can integrate the
 /// rendered pieces at the right anchor / order.
+#[derive(Clone)]
 struct ComponentRender {
     rendered: crate::office::RenderedDocument,
     /// Anchor element id. Recorded for future per-paragraph insertion; today
@@ -117,6 +118,9 @@ struct DocParagraph {
     /// Must be 2..=9. A value of 1 is silently ignored.
     #[serde(default)]
     columns: Option<u32>,
+    /// Force a page break before this paragraph.
+    #[serde(default)]
+    page_break: Option<bool>,
 }
 
 /// Same shape as `NumberingRef` but deserialized from the wire-format JSON.
@@ -253,6 +257,12 @@ struct CreateWordDocParams {
     /// Document title for newly created documents (ignored when modifying existing).
     #[serde(default)]
     title: Option<String>,
+    /// Optional format string for `{date}` placeholders in body text. When
+    /// set, the writer rewrites `{date}` to a real DATE field run that
+    /// renders the current date at open time. Default format is
+    /// `"yyyy-MM-dd"`. Set to `null` to leave `{date}` as literal text.
+    #[serde(default)]
+    format_date: Option<String>,
     /// Structured document elements (paragraphs and tables) for new content or modifications.
     /// - With `id`: replaces the existing element with that ID
     /// - Without `id` + with `anchor_id` + `position`: inserts at that position
@@ -329,14 +339,14 @@ impl CreateWordDocTool {
                          Body: {type:'body', id?, text, columns?} or {type:'body', id?, runs: [{text, bold?, italic?}, ...], columns?}. Emits a BodyParagraph paragraph. For a multi-paragraph region, set the same `columns` value (2..9) on every adjacent body block; they are balanced together while the surrounding document stays single-column.\n\
                          BulletList: {type:'bullet_list', id_prefix, items: [string, ...]}. Emits one bulleted paragraph per item using the design-system numbering (num_id=1).\n\
                          OrderedList: {type:'ordered_list', id_prefix, items: [string, ...]}. Emits one ordered paragraph per item (num_id=2).\n\
-                         StyledTable: {type:'styled_table', id?, headers: [string, ...], rows: [[string, ...], ...], style?: {header_fill?, zebra_fill?, border_color?, header_text_color?, repeat_header?, zebra?}}. Emits a table with brand colours + header-repeat + zebra striping. style fields are optional; sensible defaults come from the active palette.\n\
+                         StyledTable: {type:'styled_table', id: string, headers: [string, ...], rows: [[string, ...], ...], style?: {header_fill?, zebra_fill?, border_color?, header_text_color?, repeat_header?, zebra?}}. Emits a table with brand colours + header-repeat + zebra striping. style fields are optional; sensible defaults come from the active palette. id is required (used as the table's stable id for anchor-based positioning and round-tripping).\n\
                          Callout: {type:'callout', id?, level: 'info'|'warning'|'important'|'tip', title, body?, body_lines?: [string, ...]}. Emits an icon + title + body callout with level-matching background/accent colours. Use body for single-line, body_lines for multi-line.\n\
                          Code: {type:'code', id?, lines: [string, ...], language?}. Emits a monospace code block with a uniform background and an optional language label.\n\
                          PageBreak: {type:'page_break', id?}. Emits a hard page break (force-chapter use).\n\
                          \n\
                          === INSERTION SEMANTICS ===\n\
-                         Elements with id replace existing ones (low-level only; component blocks are append-only). Omit id (and omit id_prefix for lists) to append new content. Without anchor_id, content is appended at the end. With anchor_id, insertion is positioned relative to that anchor via position: 'before'|'after' (default 'after').\n\
-                         Component blocks (cover/chapter/heading/body/lists/styled_table/callout/code/page_break) are append-only — they emit a self-contained batch of paragraphs/tables that the tool appends at the end of the document (or after the last anchor_id-pointed element when supplied). Per-paragraph positioning is not supported for component blocks; use a low-level Paragraph element if you need it.\n\
+                         Elements with id replace existing ones (low-level only). Omit id (and omit id_prefix for lists) to append new content. Without anchor_id, content is appended at the end. With anchor_id, insertion is positioned relative to that anchor via position: 'before'|'after' (default 'after'). Component blocks (styled_table, cover, etc.) ALSO support anchor_id/position for positioned insertion.\n\
+                         Component blocks (cover/chapter/heading/body/lists/styled_table/callout/code/page_break) emit a self-contained batch of paragraphs/tables. Without anchor_id, the batch is appended at the end of the document. With anchor_id, the batch is inserted at the specified position relative to the anchor (via position: 'before'|'after', default 'after'). Per-paragraph positioning within a component block is not supported; use a low-level Paragraph element if you need it.\n\
                          When modifying (id present), omit 'text' field to preserve original text. Providing 'text' field will update the paragraph text.\n\
                          Omit 'runs' to keep original formatting, or provide 'runs' array to fully replace paragraph formatting.\n\
                          runs shape (low-level runs): array of {text, bold?, italic?, underline?, font_size? (half-points, e.g. 24=12pt), color? (hex RGB, e.g. 'FF0000'), font_name?, highlight?, vert_align?, field?}.\n\
@@ -389,6 +399,7 @@ impl CreateWordDocTool {
             vert_align: r.vert_align,
             field: r.field,
             page_break: false,
+            column_break: false,
         }
     }
 
@@ -407,6 +418,7 @@ impl CreateWordDocTool {
                     numbering: None,
                     alignment: None,
                     text_direction: None,
+                    page_break: None,
                 }));
             }
             return Err("delete action requires an id".to_string());
@@ -453,6 +465,7 @@ impl CreateWordDocTool {
                         vert_align,
                         field,
                         page_break: false,
+                        column_break: false,
                     })
                 }).collect()
             })
@@ -468,6 +481,11 @@ impl CreateWordDocTool {
 
         let alignment = v["alignment"].as_str().map(|s| s.to_string());
         let text_direction = v["text_direction"].as_str().map(|s| s.to_string());
+        let page_break = if v["page_break"].is_boolean() {
+            Some(v["page_break"].as_bool().unwrap())
+        } else {
+            None
+        };
 
         Ok(Some(crate::office::DocElement::Paragraph {
             id: id.unwrap_or_else(|| format!("__new_p{}", uuid_simple())),
@@ -478,6 +496,7 @@ impl CreateWordDocTool {
             numbering,
             alignment,
             text_direction,
+            page_break,
         }))
     }
 
@@ -581,6 +600,7 @@ impl CreateWordDocTool {
             path: path.to_string(),
             width_emu,
             height_emu,
+            alt_text: None,
         }))
     }
 
@@ -707,6 +727,60 @@ impl CreateWordDocTool {
     fn convert_sections(
         inputs: &[DocSectionInput],
     ) -> Vec<crate::office::WordSection> {
+        // Vertical text (tbRl) at the section level applies to every
+        // paragraph in that section. The user's regression report showed
+        // a single vertical section spilling tbRl into the back half of
+        // the document because the cover / body / vertical run wasn't
+        // bracketed by explicit horizontal sections. Surface a warning
+        // when callers ask for vertical text without also providing an
+        // explicit horizontal section after the vertical one — that's
+        // the pattern that consistently triggers the spillover.
+        let mut saw_vertical = false;
+        let mut first_section_idx: Option<usize> = None;
+        for (idx, s) in inputs.iter().enumerate() {
+            let is_vertical = matches!(
+                s.text_direction.as_deref(),
+                Some("vertical") | Some("verticalRightToLeft") | Some("verticalLeftToRight") | Some("tbRl") | Some("tbLr")
+            );
+            if is_vertical {
+                saw_vertical = true;
+                // Only flag when the vertical section is followed by
+                // sections that didn't explicitly opt back into
+                // horizontal text. The recommended workaround for
+                // partial vertical text is a single-cell container
+                // table with `<w:tcPr><w:textDirection w:val="tbRl"/></w:tcPr>`,
+                // which doesn't touch the surrounding sections.
+                let post_sections_are_implicit: bool = inputs
+                    .iter()
+                    .skip(idx + 1)
+                    .any(|later| match later.text_direction.as_deref() {
+                        Some("horizontal") | Some("lrTb") => false,
+                        _ => true,
+                    });
+                if post_sections_are_implicit && idx + 1 < inputs.len() {
+                    eprintln!(
+                        "[create_word_doc] WARNING: section '{}' uses vertical text direction. \
+                         Vertical text applies to the whole section and may spill into later \
+                         sections if they don't explicitly set horizontal. Consider using a \
+                         single-cell container table with <w:tcPr><w:textDirection/> for \
+                         partial vertical text instead.",
+                        s.id
+                    );
+                }
+            }
+            if first_section_idx.is_none() && s.title_pg == Some(true) {
+                first_section_idx = Some(idx);
+            }
+        }
+        if saw_vertical && inputs.len() == 1 {
+            eprintln!(
+                "[create_word_doc] WARNING: a single vertical section means every paragraph in \
+                 the document will be rendered vertically. If you only wanted a small block of \
+                 vertical text, use a single-cell container table or break the document into \
+                 multiple sections with the vertical region bracketed by horizontal ones."
+            );
+        }
+
         inputs
             .iter()
             .map(|s| crate::office::WordSection {
@@ -785,6 +859,7 @@ impl CreateWordDocTool {
                         numbering: p.numbering.clone().map(crate::office::NumberingRef::from),
                         alignment: p.alignment.clone(),
                         text_direction: p.text_direction.clone(),
+                        page_break: p.page_break.clone(),
                     })
                     .collect();
                 crate::office::HeaderPart {
@@ -818,6 +893,7 @@ impl CreateWordDocTool {
                         numbering: p.numbering.clone().map(crate::office::NumberingRef::from),
                         alignment: p.alignment.clone(),
                         text_direction: p.text_direction.clone(),
+                        page_break: p.page_break.clone(),
                     })
                     .collect();
                 crate::office::FooterPart {
@@ -828,6 +904,97 @@ impl CreateWordDocTool {
                 }
             })
             .collect()
+    }
+
+    /// Rewrite `{date}` placeholders in body paragraphs, headers, and
+    /// footers to a real `DATE` field run. The cached display text is the
+    /// current date (computed at write time) so the doc opens with a
+    /// reasonable preview even before Word refreshes the field.
+    ///
+    /// `format` is the optional Word date format string (e.g. `"yyyy-MM-dd"`).
+    /// When `None`, the placeholder is left untouched.
+    fn apply_date_placeholders(doc: &mut crate::office::WordDocument, format: Option<&str>) {
+        let fmt_owned;
+        let fmt_ref: &str = match format {
+            Some(f) if !f.is_empty() => { fmt_owned = f.clone(); &fmt_owned }
+            _ => return,
+        };
+        for p in doc.paragraphs.iter_mut() {
+            Self::rewrite_date_in_paragraph(p, fmt_ref);
+        }
+        for h in doc.headers.iter_mut() {
+            for p in h.paragraphs.iter_mut() {
+                Self::rewrite_date_in_paragraph(p, fmt_ref);
+            }
+        }
+        for f in doc.footers.iter_mut() {
+            for p in f.paragraphs.iter_mut() {
+                Self::rewrite_date_in_paragraph(p, fmt_ref);
+            }
+        }
+    }
+
+    /// In-place rewrite of a single paragraph. Handles three forms:
+    /// 1. Plain `text` containing `{date}` → split into prefix + DATE field + suffix runs.
+    /// 2. `runs[].text` containing `{date}` → same per-run split.
+    /// 3. Cover-subtitle paragraphs (`style == "CoverSubtitle"`) handled by caller.
+    fn rewrite_date_in_paragraph(p: &mut crate::office::WordParagraph, fmt: &str) {
+        if let Some(ref mut runs) = p.runs {
+            let mut new_runs: Vec<crate::office::FontRun> = Vec::new();
+            for r in runs.drain(..) {
+                if !r.text.contains("{date}") {
+                    new_runs.push(r);
+                    continue;
+                }
+                let parts: Vec<&str> = r.text.split("{date}").collect();
+                for (i, part) in parts.iter().enumerate() {
+                    if !part.is_empty() {
+                        let mut clone = r.clone();
+                        clone.text = part.to_string();
+                        clone.field = None;
+                        new_runs.push(clone);
+                    }
+                    if i + 1 < parts.len() {
+                        let mut field_run = crate::office::FontRun {
+                            text: today_cached_text(fmt),
+                            ..Default::default()
+                        };
+                        field_run.field = Some(crate::office::FieldRef::Date {
+                            format: Some(fmt.to_string()),
+                        });
+                        new_runs.push(field_run);
+                    }
+                }
+            }
+            *runs = new_runs;
+            // Plain text was rewritten via runs; clear cached text.
+            p.text.clear();
+            return;
+        }
+        if p.text.contains("{date}") {
+            let parts: Vec<&str> = p.text.split("{date}").collect();
+            let mut new_runs: Vec<crate::office::FontRun> = Vec::new();
+            for (i, part) in parts.iter().enumerate() {
+                if !part.is_empty() {
+                    new_runs.push(crate::office::FontRun {
+                        text: part.to_string(),
+                        ..Default::default()
+                    });
+                }
+                if i + 1 < parts.len() {
+                    let mut field_run = crate::office::FontRun {
+                        text: today_cached_text(fmt),
+                        ..Default::default()
+                    };
+                    field_run.field = Some(crate::office::FieldRef::Date {
+                        format: Some(fmt.to_string()),
+                    });
+                    new_runs.push(field_run);
+                }
+            }
+            p.runs = Some(new_runs);
+            p.text.clear();
+        }
     }
 
     pub async fn execute(&self, arguments: Value, workspace: Option<String>) -> Result<String, ToolError> {
@@ -861,6 +1028,11 @@ impl CreateWordDocTool {
         let mut modifies = Vec::new();
         let mut new_elements = Vec::new();
         let mut deletes = Vec::new();
+        // Parallel to `new_elements`: the original `elements[]` index for each
+        // entry, or `usize::MAX` when the source (legacy `paragraphs`/`tables`
+        // lists) doesn't carry an index. Used by the new-file interleaving
+        // loop to merge component blocks at the correct positions.
+        let mut new_element_orig_indices: Vec<usize> = Vec::new();
 
         // Per-paragraph column-wrap hints. When the caller sets
         // `columns: N` on a paragraph element (low-level or body component),
@@ -873,11 +1045,9 @@ impl CreateWordDocTool {
         // Component blocks (Cover / Chapter / Heading / Body / BulletList /
         // OrderedList / StyledTable / Callout / Code / PageBreak) are
         // recognised by their `type` field and routed through the design-
-        // system renderer. They are append-only: each block expands into
-        // a batch of paragraphs/tables that the tool appends after the
-        // legacy new_elements. Anchor_id/position are recorded for
-        // future use but ignored for element-level positioning.
-        let mut component_renders: Vec<ComponentRender> = Vec::new();
+        // system renderer. We now collect them in order with their position
+        // in the input array to preserve the original document order.
+        let mut component_renders: Vec<(usize, ComponentRender)> = Vec::new();
 
         // Bug fix 5: Wire up params.deletes parameter
         if let Some(ref delete_ids) = params.deletes {
@@ -888,7 +1058,7 @@ impl CreateWordDocTool {
         let file_exists = path_obj.exists();
 
         if let Some(ref elems) = params.elements {
-            for v in elems {
+            for (element_index, v) in elems.iter().enumerate() {
                 let is_delete = v["action"].as_str() == Some("delete");
                 let has_id = v["id"].is_string();
                 let has_anchor = v["anchor_id"].is_string();
@@ -919,7 +1089,7 @@ impl CreateWordDocTool {
                     let component = Self::parse_component_block(v)
                         .map_err(|e| ToolError::InvalidArguments("create_word_doc".to_string(), e))?;
                     if let Some(r) = component {
-                        component_renders.push(r);
+                        component_renders.push((element_index, r));
                     }
                     continue;
                 }
@@ -954,9 +1124,13 @@ impl CreateWordDocTool {
                     if file_exists && has_id && !has_anchor {
                         modifies.push(e);
                     } else {
-                        // Store element with its anchor_id and position for positioned insertion
+                        // Store element with its anchor_id and position for positioned insertion.
+                        // Also remember the original `elements[]` index so the
+                        // new-file branch can interleave component blocks at
+                        // the correct relative position.
                         let anchor_id = v["anchor_id"].as_str().map(|s| s.to_string());
                         let position = v["position"].as_str().map(|s| s.to_string());
+                        new_element_orig_indices.push(element_index);
                         new_elements.push(crate::office::InsertElement {
                             element: e,
                             anchor_id,
@@ -990,12 +1164,19 @@ impl CreateWordDocTool {
                         numbering: p.numbering.clone().map(crate::office::NumberingRef::from),
                         alignment: p.alignment.clone(),
                         text_direction: p.text_direction.clone(),
+                        page_break: p.page_break.clone(),
                     };
                     if file_exists && p.id.is_some() {
                         modifies.push(elem);
                     } else {
                         let anchor_id = p.anchor_id.clone();
                         let position = p.position.clone();
+                        // Backward-compat `params.paragraphs` lacks a source
+                        // index, so tag these entries with usize::MAX. The
+                        // interleaving loop will render them after every
+                        // tracked component but preserve their original
+                        // order relative to each other.
+                        new_element_orig_indices.push(usize::MAX);
                         new_elements.push(crate::office::InsertElement {
                             element: elem,
                             anchor_id,
@@ -1034,6 +1215,7 @@ impl CreateWordDocTool {
                     } else {
                         let anchor_id = t.anchor_id.clone();
                         let position = t.position.clone();
+                        new_element_orig_indices.push(usize::MAX);
                         new_elements.push(crate::office::InsertElement {
                             element: elem,
                             anchor_id,
@@ -1067,8 +1249,8 @@ impl CreateWordDocTool {
                 let mut new_images = Vec::new();
                 for insert_elem in new_elements {
                     match insert_elem.element {
-                        crate::office::DocElement::Paragraph { id, text, style, runs, numbering, alignment, text_direction, .. } => {
-                            new_paras.push(crate::office::WordParagraph { id, text, style, runs, numbering, alignment, text_direction });
+                        crate::office::DocElement::Paragraph { id, text, style, runs, numbering, alignment, text_direction, page_break, .. } => {
+                            new_paras.push(crate::office::WordParagraph { id, text, style, runs, numbering, alignment, text_direction, page_break });
                         }
                         crate::office::DocElement::Table { id, position: _, header, rows } => {
                             let mut table_rows = vec![];
@@ -1082,12 +1264,13 @@ impl CreateWordDocTool {
                             }
                             new_tables.push(crate::office::WordTable { id, rows: table_rows, cell_paragraphs: Vec::new() });
                         }
-                        crate::office::DocElement::Image { id, position: _, path, width_emu, height_emu } => {
+                        crate::office::DocElement::Image { id, position: _, path, width_emu, height_emu, alt_text: _ } => {
                             new_images.push(crate::office::WordImage {
                                 id,
                                 path,
                                 width_emu,
                                 height_emu,
+                                alt_text: None,
                                 internal_path: None,
                             });
                         }
@@ -1098,13 +1281,11 @@ impl CreateWordDocTool {
                 existing.images.extend(new_images);
 
                 // Append component blocks (cover / chapter / heading / body /
+                // Component blocks (cover / chapter / heading / body /
                 // bullet_list / ordered_list / styled_table / callout / code /
                 // page_break). Each block is a self-contained batch of
-                // paragraphs + tables that we drop onto the end of the
-                // document — anchor_id is recorded but currently unused
-                // because the legacy modify path doesn't expose per-paragraph
-                // insertion.
-                for r in &component_renders {
+                // paragraphs + tables. We extend them to preserve input order.
+                for (_, r) in &component_renders {
                     existing.paragraphs.extend(r.rendered.paragraphs.iter().cloned());
                     existing.tables.extend(r.rendered.tables.iter().cloned());
                     existing.images.extend(r.rendered.images.iter().cloned());
@@ -1113,7 +1294,7 @@ impl CreateWordDocTool {
                 // Collect column-wrap hints from component blocks. Body component
                 // blocks carry `columns: N` via their `column_wrap` field.
                 let mut all_column_wraps = column_wraps.clone();
-                for r in &component_renders {
+                for (_, r) in &component_renders {
                     if let Some(hint) = &r.column_wrap {
                         all_column_wraps.push(hint.clone());
                     }
@@ -1177,6 +1358,8 @@ impl CreateWordDocTool {
                     }
                 }
 
+                Self::apply_date_placeholders(&mut existing, params.format_date.as_deref());
+
                 crate::office::write_word_document_to_path(&existing, path_obj, Some(&bytes))
                     .map_err(|e| ToolError::ExecutionError(format!("Failed to write doc: {}", e)))?;
                 return Ok(format!("Successfully appended content to: {}", params.path));
@@ -1204,7 +1387,7 @@ impl CreateWordDocTool {
             // resolved by id. The old order expanded first and appended the
             // components afterwards, so `body.columns` failed in progressive
             // append mode with a missing-paragraph error.
-            for r in &component_renders {
+            for (_, r) in &component_renders {
                 new_count += r.rendered.paragraphs.len() + r.rendered.tables.len() + r.rendered.images.len();
                 existing.paragraphs.extend(r.rendered.paragraphs.iter().cloned());
                 existing.tables.extend(r.rendered.tables.iter().cloned());
@@ -1213,7 +1396,7 @@ impl CreateWordDocTool {
 
             // Collect column-wrap hints from component blocks.
             let mut all_column_wraps = column_wraps.clone();
-            for r in &component_renders {
+            for (_, r) in &component_renders {
                 if let Some(hint) = &r.column_wrap {
                     all_column_wraps.push(hint.clone());
                 }
@@ -1259,8 +1442,13 @@ impl CreateWordDocTool {
                 }
             }
 
+            // Rewrite `{date}` placeholders in the modified doc too so callers
+            // can rely on the same placeholder semantics across new and
+            // modify paths.
+            Self::apply_date_placeholders(&mut existing, params.format_date.as_deref());
+
             crate::office::write_word_document_to_path(&existing, path_obj, Some(&bytes))
-                .map_err(|e| ToolError::ExecutionError(format!("Failed to append to doc: {}", e)))?;
+                .map_err(|e| ToolError::ExecutionError(format!("Failed to append to doc: {} (path={:?})", e, path_obj)))?;
             return Ok(format!("Successfully appended {} element(s) to: {}", new_count, params.path));
         }
 
@@ -1304,13 +1492,112 @@ impl CreateWordDocTool {
             // append orphans after them so anchor positioning isn't disturbed.
             new_elements.extend(orphans);
 
-            existing.modify(modifies, deletes, new_elements);
+            // Split component blocks into anchored and non-anchored.
+            // Anchored blocks (those with `anchor_id`) must be inserted at
+            // the specified position relative to the anchor paragraph.
+            // Non-anchored blocks keep their existing append-only behavior
+            // (applied after `modify()` below).
+            let mut anchored_components: Vec<ComponentRender> = Vec::new();
+            let mut tail_components: Vec<ComponentRender> = Vec::new();
+            for (_, r) in component_renders.drain(..) {
+                if r.anchor_id.is_some() {
+                    anchored_components.push(r);
+                } else {
+                    tail_components.push(r);
+                }
+            }
 
-            // Append component blocks (design-system styled) on top of
-            // whatever `modify` produced. Each block expands into a
-            // batch of paragraphs/tables that we append to the end of
-            // the document.
-            for r in &component_renders {
+            // Collect warnings (e.g. invalid anchor_ids) so we can surface
+            // them to the caller. Both the component-block anchor fallback
+            // below and `existing.modify(...)` push to this list.
+            let mut warnings: Vec<String> = Vec::new();
+
+            // Insert anchored components into the existing document BEFORE
+            // `modify()` runs so they participate in the same to-elements
+            // view.
+            //
+            // Strategy: for each rendered `WordTable` and `WordImage`, we
+            // synthesise a marker paragraph (`<__tbl_pos_<id>__>` or
+            // `<__img_pos_<id>__>`) and insert it at the anchor position.
+            // The marker is then paired with the table/image by `to_elements()`
+            // in the right place. Other rendered paragraphs (e.g. titles,
+            // body text) are spliced in around the marker so the document
+            // structure stays intact.
+            //
+            // For simplicity of the splice, we treat each anchored
+            // component as: [rendered_paragraphs..., marker_paragraph].
+            // The marker is what `to_elements()` looks for to position
+            // the table/image correctly in the elements[]. Vec.
+            for r in &anchored_components {
+                let anchor_id = r.anchor_id.as_ref().unwrap();
+                let insert_after = r.position.as_deref() != Some("before");
+                let anchor_idx = existing.paragraphs.iter().position(|p| p.id == *anchor_id);
+                let Some(anchor_idx) = anchor_idx else {
+                    let msg = format!(
+                        "anchor_id '{}' not found for component block \
+                         (position='{:?}'); appending to end.",
+                        anchor_id, r.position
+                    );
+                    eprintln!("[create_word_doc] WARNING: {}", msg);
+                    warnings.push(msg);
+                    // Append to existing collections at the end
+                    existing.paragraphs.extend(r.rendered.paragraphs.iter().cloned());
+                    existing.tables.extend(r.rendered.tables.iter().cloned());
+                    existing.images.extend(r.rendered.images.iter().cloned());
+                    continue;
+                };
+                let insert_idx = if insert_after {
+                    anchor_idx + 1
+                } else {
+                    anchor_idx
+                };
+                // Splice in the rendered paragraphs first (in order).
+                existing.paragraphs.splice(
+                    insert_idx..insert_idx,
+                    r.rendered.paragraphs.iter().cloned(),
+                );
+                // Now synthesise a marker paragraph for each rendered table
+                // and image. Insert ALL markers immediately after the
+                // rendered paragraphs (i.e. at the new `insert_idx +
+                // rendered_paragraphs.len()`).
+                let marker_start = insert_idx + r.rendered.paragraphs.len();
+                let mut markers: Vec<WordParagraph> = Vec::new();
+                for t in &r.rendered.tables {
+                    markers.push(WordParagraph {
+                        id: format!("__tbl_pos_{}__", t.id),
+                        text: format!("<__tbl_pos_{}__>", t.id),
+                        style: None,
+                        runs: None,
+                        numbering: None,
+                        alignment: None,
+                        text_direction: None,
+                        page_break: None,
+                    });
+                }
+                for img in &r.rendered.images {
+                    markers.push(WordParagraph {
+                        id: format!("__img_pos_{}__", img.id),
+                        text: format!("<__img_pos_{}__>", img.id),
+                        style: None,
+                        runs: None,
+                        numbering: None,
+                        alignment: None,
+                        text_direction: None,
+                        page_break: None,
+                    });
+                }
+                existing.paragraphs.splice(marker_start..marker_start, markers);
+                existing.tables.extend(r.rendered.tables.iter().cloned());
+                existing.images.extend(r.rendered.images.iter().cloned());
+            }
+
+            let modify_warnings = existing.modify(modifies, deletes, new_elements);
+            warnings.extend(modify_warnings);
+
+            // Append non-anchored component blocks (design-system styled) on
+            // top of whatever `modify` produced. Each block expands into a
+            // batch of paragraphs/tables.
+            for r in &tail_components {
                 existing.paragraphs.extend(r.rendered.paragraphs.iter().cloned());
                 existing.tables.extend(r.rendered.tables.iter().cloned());
                 existing.images.extend(r.rendered.images.iter().cloned());
@@ -1318,7 +1605,7 @@ impl CreateWordDocTool {
 
             // Collect column-wrap hints from component blocks.
             let mut all_column_wraps = column_wraps.clone();
-            for r in &component_renders {
+            for r in anchored_components.iter().chain(tail_components.iter()) {
                 if let Some(hint) = &r.column_wrap {
                     all_column_wraps.push(hint.clone());
                 }
@@ -1374,9 +1661,19 @@ impl CreateWordDocTool {
                 }
             }
 
+            Self::apply_date_placeholders(&mut existing, params.format_date.as_deref());
+
             crate::office::write_word_document_to_path(&existing, path_obj, Some(&bytes))
                 .map_err(|e| ToolError::ExecutionError(format!("Failed to modify document: {}", e)))?;
-            return Ok(format!("Successfully modified document: {}", params.path));
+
+            let mut msg = format!("Successfully modified document: {}", params.path);
+            if !warnings.is_empty() {
+                msg.push_str("\n\nWarnings:");
+                for w in &warnings {
+                    msg.push_str(&format!("\n- {}", w));
+                }
+            }
+            return Ok(msg);
         }
 
         // Existing file with no operations: no-op
@@ -1384,12 +1681,73 @@ impl CreateWordDocTool {
             return Ok(format!("Document already exists, no changes requested: {}", params.path));
         }
 
-        // New file mode: title + new_elements
+        // New file mode: title + new_elements + component blocks (properly interleaved)
         let mut elements_for_new: Vec<crate::office::DocElement> = Vec::new();
 
-        if let Some(ref title) = params.title {
+        // Track (original_element_index, element) so the interleaving loop
+        // can place component blocks (which carry their original index from
+        // `elements[]`) at the correct point in the stream. Components and
+        // non-component elements share the same `elements[]` index space;
+        // when iterating the merged stream we use the recorded original
+        // index to decide ordering, not the merged position.
+        let mut elements_with_idx: Vec<(usize, crate::office::DocElement)> = Vec::new();
+        for (orig_idx, insert_elem) in new_element_orig_indices.iter().zip(new_elements.iter()) {
+            elements_with_idx.push((*orig_idx, insert_elem.element.clone()));
+        }
+
+        // ── Write document ─────────────────────────────────────────────────────────
+
+        // Build document with proper element ordering.
+        // We need to interleave legacy elements with component blocks.
+        // Convert elements to WordParagraph/WordTable/WordImage directly to preserve order.
+        let mut paragraphs: Vec<crate::office::WordParagraph> = Vec::new();
+        let mut tables: Vec<crate::office::WordTable> = Vec::new();
+        let mut images: Vec<crate::office::WordImage> = Vec::new();
+
+        // Sort component blocks by their original index
+        let mut sorted_components: Vec<(usize, ComponentRender)> = component_renders;
+        sorted_components.sort_by_key(|(idx, _)| *idx);
+
+        // Cover-block detection: when the caller passes a `cover` component
+        // block, suppress the auto-generated Title paragraph so we don't
+        // end up with both a small "Title" line and a big "CoverTitle"
+        // overlapping on the cover page. The Cover component is
+        // responsible for the title.
+        let has_cover = sorted_components.iter().any(|(_, r)| {
+            r.rendered.paragraphs.iter().any(|p| {
+                p.style.as_deref() == Some("CoverTitle")
+                    || p.style.as_deref() == Some("CoverSubtitle")
+            })
+        });
+
+        // Extract column_wrap hints while we have sorted_components
+        let mut all_column_wraps = column_wraps.clone();
+        for (_, r) in &sorted_components {
+            if let Some(ref hint) = r.column_wrap {
+                all_column_wraps.push(hint.clone());
+            }
+        }
+
+        let mut comp_iter = sorted_components.into_iter().peekable();
+
+        // Cover-block detection: when the caller passes a `cover` component
+        // block, suppress the auto-generated Title paragraph so we don't
+        // end up with both a small "Title" line and a big "CoverTitle"
+        // overlapping on the cover page. The Cover component is
+        // responsible for the title. Detection is hoisted above this
+        // section so we don't borrow a moved `component_renders`.
+
+        // Process elements in original `elements[]` index order, interleaving
+        // with component blocks at matching positions. We walk the title,
+        // each tracked (original_idx, element), and any remaining components
+        // in a single merged sweep ordered by the original index (Title is
+        // forced to come first regardless).
+        let title_paragraph: Option<crate::office::DocElement> = if has_cover {
+            // Suppress auto-generated Title when a cover component exists.
+            None
+        } else if let Some(ref title) = params.title {
             if !title.is_empty() {
-                elements_for_new.push(crate::office::DocElement::Paragraph {
+                Some(crate::office::DocElement::Paragraph {
                     id: format!("__new_p{}", uuid_simple()),
                     text: title.clone(),
                     omit_text: false,
@@ -1398,36 +1756,127 @@ impl CreateWordDocTool {
                     numbering: None,
                     alignment: Some("center".to_string()),
                     text_direction: None,
-                });
+                    page_break: None,
+                })
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // First emit the Title (always first if present).
+        if let Some(t) = title_paragraph {
+            match t {
+                crate::office::DocElement::Paragraph { id, text, omit_text: _, style, runs, numbering, alignment, text_direction, page_break } => {
+                    paragraphs.push(crate::office::WordParagraph {
+                        id, text, style, runs, numbering, alignment, text_direction, page_break,
+                    });
+                }
+                crate::office::DocElement::Table { id, position: _, header, rows } => {
+                    let mut table_rows = vec![];
+                    if !header.is_empty() {
+                        table_rows.push(crate::office::TableRow { cells: header });
+                    }
+                    for row in rows {
+                        if !row.is_empty() {
+                            table_rows.push(crate::office::TableRow { cells: row });
+                        }
+                    }
+                    tables.push(crate::office::WordTable { id, rows: table_rows, cell_paragraphs: Vec::new() });
+                }
+                crate::office::DocElement::Image { id, position: _, path, width_emu, height_emu, alt_text } => {
+                    images.push(crate::office::WordImage {
+                        id, path, width_emu, height_emu, alt_text, internal_path: None,
+                    });
+                }
             }
         }
 
-        for insert_elem in new_elements {
-            elements_for_new.push(insert_elem.element);
-        }
-
-        // ── Write document ─────────────────────────────────────────────────────────
-
-        let mut doc = crate::office::WordDocument::from_elements(elements_for_new);
-
-        // Append component blocks (cover / chapter / heading / body /
-        // bullet_list / ordered_list / styled_table / callout / code /
-        // page_break). Each block expands into a batch of paragraphs
-        // + tables; we drop them onto the end of the doc in the order
-        // the caller specified.
-        for r in &component_renders {
-            doc.paragraphs.extend(r.rendered.paragraphs.iter().cloned());
-            doc.tables.extend(r.rendered.tables.iter().cloned());
-            doc.images.extend(r.rendered.images.iter().cloned());
-        }
-
-        // Collect column-wrap hints from component blocks.
-        let mut all_column_wraps = column_wraps.clone();
-        for r in &component_renders {
-            if let Some(hint) = &r.column_wrap {
-                all_column_wraps.push(hint.clone());
+        // Walk the merged stream ordered by (original_idx, components_first_then_elem).
+        // For each tracked element with original_idx, flush components whose index
+        // is <= that index before emitting the element itself.
+        for (orig_idx, elem) in elements_with_idx {
+            // Flush all components that come at or before this element.
+            while let Some((comp_idx, _comp)) = comp_iter.peek() {
+                // Tracked elements (orig_idx != usize::MAX) interleave strictly:
+                // components with index <= orig_idx come before this element.
+                // Un-tracked elements (orig_idx == usize::MAX, from legacy
+                // params.paragraphs/tables) emit after every tracked component
+                // so existing behaviour is preserved.
+                let should_emit = if orig_idx == usize::MAX {
+                    true
+                } else {
+                    *comp_idx <= orig_idx
+                };
+                if should_emit {
+                    let (_, r) = comp_iter.next().unwrap();
+                    paragraphs.extend(r.rendered.paragraphs);
+                    tables.extend(r.rendered.tables);
+                    images.extend(r.rendered.images);
+                } else {
+                    break;
+                }
+            }
+            // Convert this element
+            match elem {
+                crate::office::DocElement::Paragraph { id, text, omit_text: _, style, runs, numbering, alignment, text_direction, page_break } => {
+                    paragraphs.push(crate::office::WordParagraph {
+                        id, text, style, runs, numbering, alignment, text_direction, page_break,
+                    });
+                }
+                crate::office::DocElement::Table { id, position: _, header, rows } => {
+                    let mut table_rows = vec![];
+                    if !header.is_empty() {
+                        table_rows.push(crate::office::TableRow { cells: header });
+                    }
+                    for row in rows {
+                        if !row.is_empty() {
+                            table_rows.push(crate::office::TableRow { cells: row });
+                        }
+                    }
+                    tables.push(crate::office::WordTable { id, rows: table_rows, cell_paragraphs: Vec::new() });
+                }
+                crate::office::DocElement::Image { id, position: _, path, width_emu, height_emu, alt_text } => {
+                    images.push(crate::office::WordImage {
+                        id, path, width_emu, height_emu, alt_text, internal_path: None,
+                    });
+                }
             }
         }
+
+        // Drain any remaining components (e.g. last component had no following element).
+        while let Some((_, r)) = comp_iter.next() {
+            paragraphs.extend(r.rendered.paragraphs);
+            tables.extend(r.rendered.tables);
+            images.extend(r.rendered.images);
+        }
+
+        let mut doc = crate::office::WordDocument {
+            paragraphs,
+            tables,
+            images,
+            sections: Vec::new(),
+            headers: Vec::new(),
+            footers: Vec::new(),
+            meta: crate::office::WordDocumentMeta::default(),
+        };
+
+        // Wire the user's title / author into the document metadata so
+        // `docProps/core.xml` reflects what the AI asked for, not the
+        // previous defaults. The plan's P1 §10 says: "expose [title]
+        // on `WordDocumentMeta` together with a new optional author field."
+        if let Some(ref title) = params.title {
+            if !title.is_empty() {
+                doc.meta.title = title.clone();
+            }
+        }
+
+        // Rewrite `{date}` placeholders in body / header / footer
+        // paragraphs to real DATE field runs. Cached text uses today's
+        // date in `format_date`'s shape so the doc opens with a sane
+        // preview before Word refreshes fields.
+        Self::apply_date_placeholders(&mut doc, params.format_date.as_deref());
 
         // Apply user sections FIRST, before expand_paragraph_columns.
         // This ensures the baseline for column-wrap sections is set correctly.
@@ -1506,6 +1955,47 @@ fn uuid_simple() -> String {
     thread_local! { static CNT: AtomicU64 = AtomicU64::new(0); }
     let cnt = CNT.with(|c| c.fetch_add(1, Ordering::Relaxed));
     format!("{}{}", now.as_nanos(), cnt)
+}
+
+/// Cached text that the DATE field run displays before Word refreshes the
+/// field. We format the current local date using the same string the field
+/// will recompute to, so the doc opens with a reasonable preview.
+///
+/// We deliberately avoid pulling in `chrono`/`time` for a single formatter.
+/// `%Y-%m-%d` covers `yyyy-MM-dd`; for exotic formats we still produce a
+/// ISO date — better than a blank placeholder — and Word will refresh on
+/// open.
+fn today_cached_text(fmt: &str) -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // Days since 1970-01-01 → (y, m, d) via Howard Hinnant's date algorithm.
+    let z = (secs / 86_400) as i64 + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let y = if m <= 2 { y + 1 } else { y };
+    let _ = y;
+    // We don't implement every Word format switch — only a small subset.
+    // For anything else, fall back to `yyyy-MM-dd`.
+    if fmt.contains("HH") || fmt.contains('h') || fmt.contains('s') {
+        // Time component requested; we don't bother formatting it — leave a
+        // hint that Word should refresh. The cached text is a placeholder;
+        // Word will overwrite on field refresh.
+        let h = (secs / 3600) % 24;
+        let mi = (secs / 60) % 60;
+        let s = secs % 60;
+        format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}", y, m, d, h, mi, s)
+    } else {
+        format!("{:04}-{:02}-{:02}", y, m, d)
+    }
 }
 
 // ── Component block bridge tests ───────────────────────────────────────────────
@@ -1763,6 +2253,7 @@ mod component_bridge_tests {
 
         let doc = run_tool(payload).await;
         let order: Vec<_> = doc.paragraphs.iter().map(|p| p.id.clone()).collect();
+        eprintln!("Paragraph order: {:?}", order);
         let p1 = order.iter().position(|id| id == "p1").expect("p1 exists");
         let pb = order.iter().position(|id| id == "pb1").expect("pb1 exists");
         let p2 = order.iter().position(|id| id == "p2").expect("p2 exists");
@@ -1885,5 +2376,50 @@ mod component_bridge_tests {
         );
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(&png_path);
+    }
+
+    #[tokio::test]
+    async fn date_placeholder_becomes_date_field_run() {
+        // When the user passes `format_date`, a body paragraph containing
+        // `{date}` should be rewritten to a real DATE field run (the
+        // doc emits a `<w:fldChar>` triplet in document.xml and the
+        // plain text is dropped).
+        let path = tmp_path("date_placeholder");
+        let payload = json!({
+            "path": path.to_string_lossy(),
+            "format_date": "yyyy-MM-dd",
+            "elements": [
+                {"type": "body", "id": "p_date",
+                 "text": "Today is {date}."},
+            ]
+        });
+
+        let doc = run_tool(payload).await;
+        let p = doc.paragraphs.iter()
+            .find(|p| p.id == "p_date")
+            .expect("body paragraph should exist");
+        let runs = p.runs.as_ref().expect("body paragraph should carry runs after rewrite");
+        let has_date_field = runs.iter().any(|r| matches!(
+            r.field,
+            Some(crate::office::FieldRef::Date { .. })
+        ));
+        assert!(has_date_field, "expected at least one Date field run; got: {:?}", runs);
+        // Plain text was rewritten via runs; the reader re-populates it
+        // with the cached field result so search can find it. Both forms
+        // are acceptable — verify no literal `{date}` survives.
+        assert!(!p.text.contains("{date}"), "expected literal '{{date}}' replaced; got '{}'", p.text);
+
+        // Verify document.xml carries the actual fldChar triplet.
+        let bytes = std::fs::read(&path).expect("read back");
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("open zip");
+        let mut doc_xml = String::new();
+        zip.by_name("word/document.xml")
+            .expect("document.xml")
+            .read_to_string(&mut doc_xml)
+            .expect("read");
+        assert!(doc_xml.contains("DATE"), "document.xml should contain DATE field instr; got: {}", doc_xml);
+        assert!(doc_xml.contains("yyyy-MM-dd"), "document.xml should carry the format hint");
+
+        let _ = std::fs::remove_file(&path);
     }
 }

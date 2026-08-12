@@ -13,6 +13,9 @@ pub use inspect_office::InspectOfficeTool;
 
 mod paragraph_columns;
 
+#[cfg(test)]
+mod anchor_e2e_tests;
+
 pub struct ReadOfficeFileTool;
 
 impl ReadOfficeFileTool {
