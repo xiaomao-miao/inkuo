@@ -21,6 +21,7 @@ interface DelegateToCardProps {
 
 /**
  * Renders a `delegate_to` tool call as a specialized card.
+ * Memoized to prevent re-renders when subagentActivities content hasn't changed.
  */
 export const DelegateToCard: React.FC<DelegateToCardProps> = React.memo(function DelegateToCard({
   id,
@@ -135,6 +136,33 @@ export const DelegateToCard: React.FC<DelegateToCardProps> = React.memo(function
       )}
     </div>
   );
+}, (prevProps, nextProps) => {
+  // Only re-render if the status, result, or subagentActivities actually changed.
+  // This prevents cascading re-renders when parent passes a new array reference
+  // for subagentActivities but the content hasn't changed.
+  if (prevProps.status !== nextProps.status) return false;
+  if (prevProps.result !== nextProps.result) return false;
+  if (prevProps.error !== nextProps.error) return false;
+  if (prevProps.duration !== nextProps.duration) return false;
+
+  // For arrays, check length and key elements instead of reference equality
+  const prevActivities = prevProps.subagentActivities;
+  const nextActivities = nextProps.subagentActivities;
+  if (prevActivities === nextActivities) return true;
+  if (!prevActivities || !nextActivities) return false;
+  if (prevActivities.length !== nextActivities.length) return false;
+
+  // Check if any activity content changed
+  for (let i = 0; i < prevActivities.length; i++) {
+    const prev = prevActivities[i];
+    const next = nextActivities[i];
+    if (prev.id !== next.id) return false;
+    if (prev.status !== next.status) return false;
+    if (prev.expanded !== next.expanded) return false;
+    if (prev.summary !== next.summary) return false;
+  }
+
+  return true;
 });
 
 // 任务（提示词）区域 - 默认折叠
@@ -205,7 +233,7 @@ const SubagentActivityItem: React.FC<SubagentActivityItemProps> = React.memo(fun
 
           {/* 输出项 */}
           {activity.outputItems.map((item, idx) => (
-            <SubagentOutputItem key={idx} item={item} />
+            <SubagentOutputItem key={`sub-out-${idx}`} item={item} />
           ))}
 
           {/* 总结 */}

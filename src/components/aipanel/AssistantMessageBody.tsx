@@ -13,6 +13,7 @@ import type {
   ChatMessage,
   OutputItem,
 } from '../../store';
+import type { SubagentActivity } from '../../types/aipanel';
 import styles from './AIPanelMessage.module.css';
 
 interface AssistantMessageBodyProps {
@@ -63,9 +64,9 @@ export const AssistantMessageBody: React.FC<AssistantMessageBodyProps> = ({
     <>
       {hasOutputItems && message.outputItems.map((item, idx) => (
         <OutputItemView
-          key={idx}
+          key={`output-${idx}`}
           item={item}
-          message={message}
+          messageId={message.id}
           sessionId={sessionId}
           isThisStreaming={isThisStreaming}
           isLastItem={idx === message.outputItems.length - 1}
@@ -73,7 +74,7 @@ export const AssistantMessageBody: React.FC<AssistantMessageBodyProps> = ({
           workspacePath={workspacePath ?? undefined}
           onSubagentToggle={handleSubagentToggle}
           toolCallMap={toolCallMap}
-          trailingItems={message.outputItems}
+          subagentActivities={message.subagentActivities}
         />
       ))}
       {/* Legacy content path */}
@@ -94,33 +95,20 @@ export const AssistantMessageBody: React.FC<AssistantMessageBodyProps> = ({
 
 interface OutputItemViewProps {
   item: OutputItem;
-  message: ChatMessage;
+  messageId: string;
   sessionId: string;
   isThisStreaming: boolean;
   isLastItem: boolean;
   onFileClick?: (filePath: string) => void;
   workspacePath?: string;
   onSubagentToggle?: (subagentId: string) => void;
-  /**
-   * Precomputed toolCallId → toolCall map. Passing it down (instead of
-   * doing a per-item `find`) keeps tool-result rendering O(1) instead of
-   * O(n) per item, which matters because `OutputItemView` re-renders
-   * on every streaming token.
-   */
   toolCallMap?: Map<string, NonNullable<ChatMessage['toolCalls']>[number]> | null;
-  /**
-   * All OutputItems of the same message, in order. InlineCompactTool uses
-   * this to find the matching tool_result by toolCallId so it can flip
-   * out of the executing state and show the user's expand affordance.
-   * Cheap to pass: the parent already has the array in scope and shallow
-   * references to it don't change between re-renders of sibling items.
-   */
-  trailingItems?: OutputItem[];
+  subagentActivities?: SubagentActivity[];
 }
 
-const OutputItemView: React.FC<OutputItemViewProps> = ({
+const OutputItemView: React.FC<OutputItemViewProps> = React.memo(({
   item,
-  message,
+  messageId,
   sessionId,
   isThisStreaming,
   isLastItem,
@@ -128,13 +116,13 @@ const OutputItemView: React.FC<OutputItemViewProps> = ({
   workspacePath,
   onSubagentToggle,
   toolCallMap,
-  trailingItems,
+  subagentActivities,
 }) => {
   if (item.type === 'text') {
     return (
       <div className={styles.outputTextItem}>
         <LazyTextContent
-          messageId={message.id}
+          messageId={messageId}
           sessionId={sessionId}
           visibleContent={item.content}
           truncatedPrefixLength={item.truncatedPrefix?.length ?? 0}
@@ -147,7 +135,7 @@ const OutputItemView: React.FC<OutputItemViewProps> = ({
   }
 
   if (item.type === 'reasoning') {
-    return <ReasoningItemView item={item} messageId={message.id} sessionId={sessionId} />;
+    return <ReasoningItemView item={item} messageId={messageId} sessionId={sessionId} />;
   }
 
   if (item.type === 'tool_call_start') {
@@ -156,9 +144,9 @@ const OutputItemView: React.FC<OutputItemViewProps> = ({
     // Specialized renderers for sub-agent meta tools.
     if (item.toolName === 'delegate_to') {
       const args = item.arguments || {};
-      // Find subagent activities for this delegate_to call
-      const subagentActivities = message.subagentActivities?.filter(
-        a => a.expert === (args.expert as string)
+      // Memoized filter — subagentActivities is already a stable reference
+      const relevantSubagentActivities = subagentActivities?.filter(
+        (a) => a.expert === (args.expert as string),
       );
       return (
         <ToolOutputItem
@@ -173,8 +161,8 @@ const OutputItemView: React.FC<OutputItemViewProps> = ({
               status={status}
               result={item.result}
               duration={item.duration}
-              subagentActivities={subagentActivities}
-              onToggleSubagentActivity={subagentActivities?.length ? onSubagentToggle : undefined}
+              subagentActivities={relevantSubagentActivities}
+              onToggleSubagentActivity={relevantSubagentActivities?.length ? onSubagentToggle : undefined}
             />
           }
         />
@@ -214,7 +202,6 @@ const OutputItemView: React.FC<OutputItemViewProps> = ({
           content={
             <InlineCompactTool
               item={item}
-              trailingItems={trailingItems}
             />
           }
         />
@@ -255,9 +242,6 @@ const OutputItemView: React.FC<OutputItemViewProps> = ({
   }
 
   if (item.type === 'tool_result') {
-    // O(1) lookup via the map computed once per message in
-    // AssistantMessageBody. Falls back to undefined (same semantics as
-    // the old `find()` returning undefined) when no map was passed.
     const toolCall = toolCallMap?.get(item.toolCallId);
     const toolName = toolCall?.name || 'unknown';
 
@@ -324,7 +308,23 @@ const OutputItemView: React.FC<OutputItemViewProps> = ({
   }
 
   return null;
-};
+}, (prevProps, nextProps) => {
+  // Custom comparison: only re-render if the item itself changed or critical
+  // context props changed. This prevents unnecessary re-renders when the parent
+  // message object gets a new reference but the specific item didn't change.
+  return (
+    prevProps.item === nextProps.item &&
+    prevProps.messageId === nextProps.messageId &&
+    prevProps.sessionId === nextProps.sessionId &&
+    prevProps.isThisStreaming === nextProps.isThisStreaming &&
+    prevProps.isLastItem === nextProps.isLastItem &&
+    prevProps.onFileClick === nextProps.onFileClick &&
+    prevProps.workspacePath === nextProps.workspacePath &&
+    prevProps.onSubagentToggle === nextProps.onSubagentToggle &&
+    prevProps.toolCallMap === nextProps.toolCallMap &&
+    prevProps.subagentActivities === nextProps.subagentActivities
+  );
+});
 
 interface ToolOutputItemProps {
   isCompact: boolean;
@@ -470,7 +470,7 @@ const LegacyMessageContent: React.FC<LegacyMessageContentProps> = ({
         if (toolName === 'delegate_to') {
           const args = toolCall?.arguments || {};
           const subagentActivities = message.subagentActivities?.filter(
-            a => a.expert === (args.expert as string)
+            (a) => a.expert === (args.expert as string),
           );
           return (
             <div key={`tool-${result.toolCallId}`} className={styles.toolResultItem}>

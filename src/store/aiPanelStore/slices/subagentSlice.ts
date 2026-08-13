@@ -5,49 +5,69 @@
 //! sub-agent activity is read by the message renderer, not directly by
 //! the user — so it never crosses the persistence boundary.
 
+import type { AIPanelState } from '../../aiPanelStore.types';
 import type { AIPanelStateCreator, SubagentActivitySlice } from '../../aiPanelStore.types';
-import { updateSessions } from '../../aiPanelReducers';
+import { TIMING } from '../../../constants/timing';
+
+/**
+ * Targeted slice updater: mutates only the subagentActivities array of
+ * a specific message inside a specific session, without copying the
+ * entire session chain.
+ *
+ * The key optimization is incremental copying:
+ *   - Only copies `subagentActivities` array when items change
+ *   - Only copies `messages` array when the target message changes
+ *   - Only copies `sessions` array when the target session changes
+ *
+ * This matters because sub-agent streams can generate thousands of delta
+ * events per second. The old implementation always copied the full
+ * session chain, leading to O(n×m) object allocations and GC pressure
+ * where n = delta count and m = session/message tree depth.
+ */
+function updateSubagentActivitiesInState(
+  state: AIPanelState,
+  sessionId: string,
+  parentMessageId: string,
+  mutator: (activities: unknown[]) => unknown[],
+): AIPanelState {
+  const sessions = state.sessions;
+  const sessionIdx = sessions.findIndex((s) => s.id === sessionId);
+  if (sessionIdx < 0) return state;
+  const session = sessions[sessionIdx];
+  const msgIdx = session.messages.findIndex((m) => m.id === parentMessageId);
+  if (msgIdx < 0) return state;
+
+  const message = session.messages[msgIdx];
+  const prevActivities = message.subagentActivities ?? [];
+  const nextActivities = mutator(prevActivities);
+
+  // Only copy arrays that actually changed
+  if (nextActivities === prevActivities) return state;
+
+  const nextMessage = { ...message, subagentActivities: nextActivities as typeof message.subagentActivities };
+  const nextMessages = [...session.messages.slice(0, msgIdx), nextMessage, ...session.messages.slice(msgIdx + 1)];
+  const nextSession = { ...session, messages: nextMessages };
+  const nextSessions = [...sessions.slice(0, sessionIdx), nextSession, ...sessions.slice(sessionIdx + 1)];
+  return { ...state, sessions: nextSessions };
+}
 
 export const createSubagentSlice: AIPanelStateCreator<SubagentActivitySlice> = (set) => ({
   addSubagentActivity: (sessionId, messageId, activity) =>
-    set((state) => ({
-      sessions: updateSessions(state.sessions, sessionId, (session) => ({
-        ...session,
-        messages: session.messages.map((msg) =>
-          msg.id === messageId
-            ? {
-                ...msg,
-                subagentActivities: [
-                  ...(msg.subagentActivities ?? []),
-                  activity,
-                ],
-              }
-            : msg,
-        ),
-      })),
-    })),
+    set((state) => updateSubagentActivitiesInState(
+      state, sessionId, messageId,
+      (activities) => [...activities, activity],
+    )),
 
   addOutputToSubagentActivity: (sessionId, parentMessageId, subagentId, outputItem) =>
-    set((state) => ({
-      sessions: updateSessions(state.sessions, sessionId, (session) => ({
-        ...session,
-        messages: session.messages.map((msg) =>
-          msg.id === parentMessageId
-            ? {
-                ...msg,
-                subagentActivities: msg.subagentActivities?.map((activity) =>
-                  activity.id === subagentId
-                    ? {
-                        ...activity,
-                        outputItems: [...activity.outputItems, outputItem],
-                      }
-                    : activity,
-                ),
-              }
-            : msg,
-        ),
-      })),
-    })),
+    set((state) => updateSubagentActivitiesInState(
+      state, sessionId, parentMessageId,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (activities) => (activities as any[]).map((a: any) =>
+        a.id === subagentId
+          ? { ...a, outputItems: [...a.outputItems, outputItem] }
+          : a,
+      ),
+    )),
 
   appendOutputDeltaToSubagentActivity: (
     sessionId: string,
@@ -55,83 +75,87 @@ export const createSubagentSlice: AIPanelStateCreator<SubagentActivitySlice> = (
     subagentId: string,
     delta: { content: string; type: 'text' | 'reasoning' },
   ) =>
-    set((state) => ({
-      sessions: updateSessions(state.sessions, sessionId, (session) => ({
-        ...session,
-        messages: session.messages.map((msg) => {
-          if (msg.id !== parentMessageId) return msg;
-          return {
-            ...msg,
-            subagentActivities: msg.subagentActivities?.map((activity) => {
-              if (activity.id !== subagentId) return activity;
-              const items = activity.outputItems;
-              const last = items[items.length - 1];
-              if (last && last.type === delta.type && (last.type === 'text' || last.type === 'reasoning')) {
-                const merged = {
-                  ...last,
-                  content: last.content + delta.content,
-                };
-                return {
-                  ...activity,
-                  outputItems: [...items.slice(0, -1), merged],
-                };
-              }
-              const fresh =
-                delta.type === 'text'
-                  ? { type: 'text' as const, content: delta.content, isPendingMarkdown: false }
-                  : { type: 'reasoning' as const, content: delta.content, isPendingMarkdown: false };
-              return {
-                ...activity,
-                outputItems: [...items, fresh],
-              };
-            }),
+    set((state) => {
+      const sessions = state.sessions;
+      const sessionIdx = sessions.findIndex((s) => s.id === sessionId);
+      if (sessionIdx < 0) return state;
+      const session = sessions[sessionIdx];
+      const msgIdx = session.messages.findIndex((m) => m.id === parentMessageId);
+      if (msgIdx < 0) return state;
+
+      const message = session.messages[msgIdx];
+      const prevActivities = message.subagentActivities ?? [];
+      const activityIdx = prevActivities.findIndex((a: unknown) => (a as { id?: string }).id === subagentId);
+      if (activityIdx < 0) return state;
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const activity = prevActivities[activityIdx] as any;
+      const items = activity.outputItems;
+      const last = items[items.length - 1];
+
+      // Apply truncation if content exceeds threshold — keeps the DOM bounded
+      // for long-running sub-agents without discarding data (the full content
+      // stays in memory for export/debugging purposes).
+      const threshold = TIMING.MESSAGE_TRUNCATE_THRESHOLD_CHARS;
+      const keep = TIMING.MESSAGE_TRUNCATE_KEEP_TAIL_CHARS;
+
+      if (last && last.type === delta.type) {
+        const mergedContent = last.content + delta.content;
+        let finalItem: typeof last;
+
+        if (mergedContent.length <= threshold) {
+          finalItem = { ...last, content: mergedContent };
+        } else {
+          const trim = mergedContent.length - keep;
+          finalItem = {
+            ...last,
+            content: mergedContent.slice(trim),
+            truncatedPrefix: (last.truncatedPrefix ?? '') + mergedContent.slice(0, trim),
           };
-        }),
-      })),
-    })),
+        }
+
+        const nextItems = [...items.slice(0, -1), finalItem];
+        if (nextItems === items) return state;
+        const nextActivity = { ...activity, outputItems: nextItems };
+        const nextActivities = [...prevActivities.slice(0, activityIdx), nextActivity, ...prevActivities.slice(activityIdx + 1)];
+        const nextMessage = { ...message, subagentActivities: nextActivities as typeof message.subagentActivities };
+        const nextMessages = [...session.messages.slice(0, msgIdx), nextMessage, ...session.messages.slice(msgIdx + 1)];
+        const nextSession = { ...session, messages: nextMessages };
+        const nextSessions = [...sessions.slice(0, sessionIdx), nextSession, ...sessions.slice(sessionIdx + 1)];
+        return { ...state, sessions: nextSessions };
+      }
+
+      // No matching trailing item — append a fresh one
+      const fresh = delta.type === 'text'
+        ? { type: 'text' as const, content: delta.content, isPendingMarkdown: false }
+        : { type: 'reasoning' as const, content: delta.content, isPendingMarkdown: false };
+      const nextItems = [...items, fresh];
+      const nextActivity = { ...activity, outputItems: nextItems };
+      const nextActivities = [...prevActivities.slice(0, activityIdx), nextActivity, ...prevActivities.slice(activityIdx + 1)];
+      const nextMessage = { ...message, subagentActivities: nextActivities as typeof message.subagentActivities };
+      const nextMessages = [...session.messages.slice(0, msgIdx), nextMessage, ...session.messages.slice(msgIdx + 1)];
+      const nextSession = { ...session, messages: nextMessages };
+      const nextSessions = [...sessions.slice(0, sessionIdx), nextSession, ...sessions.slice(sessionIdx + 1)];
+      return { ...state, sessions: nextSessions };
+    }),
 
   completeSubagentActivity: (sessionId, parentMessageId, subagentId, status, summary, error) =>
-    set((state) => ({
-      sessions: updateSessions(state.sessions, sessionId, (session) => ({
-        ...session,
-        messages: session.messages.map((msg) =>
-          msg.id === parentMessageId
-            ? {
-                ...msg,
-                subagentActivities: msg.subagentActivities?.map((activity) =>
-                  activity.id === subagentId
-                    ? {
-                        ...activity,
-                        status,
-                        summary,
-                        error,
-                        // Auto-collapse on completion
-                        expanded: false,
-                      }
-                    : activity,
-                ),
-              }
-            : msg,
-        ),
-      })),
-    })),
+    set((state) => updateSubagentActivitiesInState(
+      state, sessionId, parentMessageId,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (activities) => (activities as any[]).map((a: any) =>
+        a.id === subagentId
+          ? { ...a, status, summary, error, expanded: false }
+          : a,
+      ),
+    )),
 
   toggleSubagentActivityExpanded: (sessionId, parentMessageId, subagentId) =>
-    set((state) => ({
-      sessions: updateSessions(state.sessions, sessionId, (session) => ({
-        ...session,
-        messages: session.messages.map((msg) =>
-          msg.id === parentMessageId
-            ? {
-                ...msg,
-                subagentActivities: msg.subagentActivities?.map((activity) =>
-                  activity.id === subagentId
-                    ? { ...activity, expanded: !activity.expanded }
-                    : activity,
-                ),
-              }
-            : msg,
-        ),
-      })),
-    })),
+    set((state) => updateSubagentActivitiesInState(
+      state, sessionId, parentMessageId,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (activities) => (activities as any[]).map((a: any) =>
+        a.id === subagentId ? { ...a, expanded: !a.expanded } : a,
+      ),
+    )),
 });
