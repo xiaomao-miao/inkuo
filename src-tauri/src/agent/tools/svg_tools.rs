@@ -238,7 +238,7 @@ impl CreateSvgTool {
         // traverse the conversation history. Resolution failures are loud
         // errors (the LLM gets a clear "asset expired" / "unknown id" message
         // and can re-call `read_image`).
-        let resolved_source = resolve_asset_references(&args.svg_source)?;
+        let resolved_source = resolve_asset_references(&args.svg_source, workspace.as_deref())?;
 
         // ── 4. Write the file ────────────────────────────────────────────
         if let Some(parent) = output_path.parent() {
@@ -347,7 +347,7 @@ fn parse_aspect_ratio(s: &str) -> Option<(f64, f64)> {
 /// whitespace, single vs. double quotes, and `xlink:href` aliases. If the
 /// LLM emits malformed XML the higher-level SVG validator (or the browser)
 /// will catch it; this pass only deals with the asset substitution.
-fn resolve_asset_references(svg: &str) -> Result<String, ToolError> {
+fn resolve_asset_references(svg: &str, workspace: Option<&str>) -> Result<String, ToolError> {
     let prefix = "asset://";
     let mut out = String::with_capacity(svg.len());
     let mut cursor = 0;
@@ -372,7 +372,7 @@ fn resolve_asset_references(svg: &str) -> Result<String, ToolError> {
             return Err(ToolError::InvalidArguments(
                 "create_svg".to_string(),
                 format!(
-                    "asset reference `{}{}` is malformed (expected `asset://asset-XXXXXXXX`); \
+                    "asset reference `{}{}` is malformed (expected the `asset://asset-<uuid>` returned by read_image); \
                      re-issue with the `asset_id` returned by `read_image`",
                     prefix, id
                 ),
@@ -381,12 +381,12 @@ fn resolve_asset_references(svg: &str) -> Result<String, ToolError> {
 
         // Pull the bytes from the registry. Missing or expired entries
         // surface as a clear error so the LLM can re-call `read_image`.
-        let entry = asset_registry::lookup(id).ok_or_else(|| {
+        let entry = asset_registry::lookup_for_workspace(id, workspace).ok_or_else(|| {
             ToolError::InvalidArguments(
                 "create_svg".to_string(),
                 format!(
-                    "asset `{}` is unknown or expired (>1 hour old). Call `read_image` again \
-                     on the source image and use the fresh `asset_id`.",
+                    "asset `{}` is unknown, expired, or belongs to another workspace. Call \
+                     `read_image` again in the current workspace and use the fresh `asset_id`.",
                     id
                 ),
             )
@@ -420,7 +420,10 @@ fn is_asset_id(s: &str) -> bool {
         Some(r) => r,
         None => return false,
     };
-    !rest.is_empty() && rest.len() <= 32 && rest.chars().all(|c| c.is_ascii_hexdigit())
+    // Accept UUID v4 ids emitted by current builds and short hexadecimal ids
+    // from already-running pre-migration sessions.
+    uuid::Uuid::parse_str(rest).is_ok()
+        || (!rest.is_empty() && rest.len() <= 32 && rest.chars().all(|c| c.is_ascii_hexdigit()))
 }
 
 // `Serialize` is implemented so the outcome can be round-tripped through
@@ -439,4 +442,3 @@ impl Serialize for CreateSvgOutcome {
         st.end()
     }
 }
-

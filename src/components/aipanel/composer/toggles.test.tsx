@@ -1,6 +1,6 @@
 // Unit tests for the toggle registry helpers.
 //
-// The `TOGGLES` constant itself is small (currently two entries) so
+// The `TOGGLES` constant itself is small (currently three entries) so
 // we lean on a smoke-test rather than exhaustive enumeration — the
 // rule helper (`isToggleDisabled`) is the part that benefits most
 // from explicit coverage because it encodes the disabled-state logic
@@ -26,6 +26,7 @@ describe('TOGGLES', () => {
     const ids = TOGGLES.map((t) => t.id);
     expect(ids).toContain('kb_strict');
     expect(ids).toContain('web_search');
+    expect(ids).toContain('sandbox');
   });
 
   it('every entry has an icon, a label, and a hint', () => {

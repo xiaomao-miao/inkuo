@@ -1,30 +1,84 @@
 import {
-  BookMarked,
-  FileText,
-  Layers,
-  Clock3,
-  Brain,
-  Trash2,
-  RefreshCw,
-  FolderOpen,
-  Files,
-  Sparkles,
-  ChevronRight,
+  AlertCircle,
+  BookOpenCheck,
+  CheckCircle2,
+  Database,
   FileCode2,
   FileSpreadsheet,
+  FileText,
   FileType2,
+  FolderInput,
+  Plus,
+  RefreshCw,
+  RotateCw,
+  Search,
+  Trash2,
+  Upload,
+  X,
 } from 'lucide-react';
-import { useSidebarStore } from '../../store';
-import { useNotificationStore } from '../../store';
+import { open } from '@tauri-apps/plugin-dialog';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { useCallback, useMemo } from 'react';
-import type { BuildProgress } from '../../types';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useNotificationStore, useSidebarStore } from '../../store';
+import type {
+  BuildProgress,
+  KnowledgeBase,
+  KnowledgeDocumentStatus,
+  KnowledgeUpdateResult,
+} from '../../types';
 import styles from './Sidebar.module.css';
 
-function formatTime(ts: number) {
-  const d = new Date(ts);
-  return d.toLocaleString('zh-CN', {
+interface KnowledgeStatusPayload {
+  workspace_id: string;
+  document_count: number;
+  chunk_count: number;
+  last_updated: string;
+  members: string[];
+  collections?: Record<string, string[]>;
+  documents?: Array<{
+    path: string;
+    collection: string;
+    status: 'indexed' | 'pending' | 'error';
+    chunk_count: number;
+    source_type: string;
+    size_bytes: number;
+    indexed_at?: string | null;
+    error?: string | null;
+  }>;
+  supported_extensions?: string[];
+}
+
+const DEFAULT_EXTENSIONS = [
+  'txt', 'md', 'mdx', 'pdf', 'docx', 'pptx', 'xlsx', 'csv', 'tsv', 'html',
+  'htm', 'json', 'yaml', 'yml', 'toml', 'xml', 'js', 'jsx', 'ts', 'tsx', 'py',
+  'rs', 'go', 'java', 'cpp', 'c', 'h', 'sql', 'css', 'scss', 'vue', 'svelte',
+];
+
+function fromStatus(status: KnowledgeStatusPayload): KnowledgeBase {
+  return {
+    workspaceId: status.workspace_id,
+    documentCount: status.document_count,
+    chunkCount: status.chunk_count,
+    lastUpdated: new Date(status.last_updated).getTime() || Date.now(),
+    members: status.members ?? [],
+    collections: status.collections ?? { default: status.members ?? [] },
+    documents: (status.documents ?? []).map((document) => ({
+      path: document.path,
+      collection: document.collection,
+      status: document.status,
+      chunkCount: document.chunk_count,
+      sourceType: document.source_type,
+      sizeBytes: document.size_bytes,
+      indexedAt: document.indexed_at ? new Date(document.indexed_at).getTime() : undefined,
+      error: document.error ?? undefined,
+    })),
+    supportedExtensions: status.supported_extensions ?? DEFAULT_EXTENSIONS,
+  };
+}
+
+function formatTime(timestamp: number) {
+  return new Date(timestamp).toLocaleString('zh-CN', {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
@@ -32,367 +86,416 @@ function formatTime(ts: number) {
   });
 }
 
-function formatRelativeTime(ts: number) {
-  const diff = Date.now() - ts;
-  const minutes = Math.floor(diff / 60000);
-  if (minutes < 1) return '刚刚更新';
-  if (minutes < 60) return `${minutes} 分钟前`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} 小时前`;
-  const days = Math.floor(hours / 24);
-  return `${days} 天前`;
+function formatBytes(bytes: number) {
+  if (!bytes) return '—';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function formatAverageChunks(documentCount: number, chunkCount: number) {
-  if (documentCount === 0) return '0';
-  return (chunkCount / documentCount).toFixed(chunkCount / documentCount >= 10 ? 0 : 1);
+function fileKind(path: string, sourceType: string) {
+  if (sourceType) return sourceType;
+  return path.split('.').pop()?.toLowerCase() || 'file';
 }
 
-function getFileKindLabel(path: string) {
-  const extension = path.split('.').pop()?.toLowerCase() ?? '';
-  if (['md', 'mdx'].includes(extension)) return 'Markdown';
-  if (['ts', 'tsx', 'js', 'jsx', 'json', 'rs', 'py', 'go', 'java', 'c', 'cpp'].includes(extension)) return '代码';
-  if (['xlsx', 'xls', 'csv'].includes(extension)) return '表格';
-  if (['doc', 'docx', 'txt'].includes(extension)) return '文档';
-  return extension ? extension.toUpperCase() : '文件';
-}
-
-function getFileIcon(path: string) {
-  const extension = path.split('.').pop()?.toLowerCase() ?? '';
-  if (['md', 'mdx'].includes(extension)) return <FileText size={14} />;
-  if (['ts', 'tsx', 'js', 'jsx', 'json', 'rs', 'py', 'go', 'java', 'c', 'cpp'].includes(extension)) {
-    return <FileCode2 size={14} />;
-  }
-  if (['xlsx', 'xls', 'csv'].includes(extension)) return <FileSpreadsheet size={14} />;
-  return <FileType2 size={14} />;
+function fileIcon(document: KnowledgeDocumentStatus) {
+  const kind = fileKind(document.path, document.sourceType);
+  if (['spreadsheet', 'xlsx', 'csv', 'tsv'].includes(kind)) return <FileSpreadsheet size={15} />;
+  if (['code', 'rs', 'js', 'ts', 'tsx', 'jsx', 'py'].includes(kind)) return <FileCode2 size={15} />;
+  if (['markdown', 'text', 'txt', 'md'].includes(kind)) return <FileText size={15} />;
+  return <FileType2 size={15} />;
 }
 
 export const KnowledgeView = () => {
-  const workspacePath = useSidebarStore((s) => s.workspacePath);
-  const knowledgeBase = useSidebarStore((s) => s.knowledgeBase);
-  const buildProgress = useSidebarStore((s) => s.buildProgress);
-  const setKnowledgeBase = useSidebarStore((s) => s.setKnowledgeBase);
-  const setBuildProgress = useSidebarStore((s) => s.setBuildProgress);
-  const setKnowledgeToolCall = useSidebarStore((s) => s.setKnowledgeToolCall);
-  const pushNotification = useNotificationStore((s) => s.pushNotification);
+  const workspacePath = useSidebarStore((state) => state.workspacePath);
+  const knowledgeBase = useSidebarStore((state) => state.knowledgeBase);
+  const buildProgress = useSidebarStore((state) => state.buildProgress);
+  const setKnowledgeBase = useSidebarStore((state) => state.setKnowledgeBase);
+  const setBuildProgress = useSidebarStore((state) => state.setBuildProgress);
+  const setKnowledgeToolCall = useSidebarStore((state) => state.setKnowledgeToolCall);
+  const pushNotification = useNotificationStore((state) => state.pushNotification);
 
-  const fileInsights = useMemo(() => {
-    const members = knowledgeBase?.members ?? [];
-    const folders = new Map<string, number>();
+  const [selectedCollection, setSelectedCollection] = useState('default');
+  const [newCollection, setNewCollection] = useState('');
+  const [showNewCollection, setShowNewCollection] = useState(false);
+  const [query, setQuery] = useState('');
+  const [busy, setBusy] = useState<string | null>(null);
 
-    for (const path of members) {
-      const folder = path.includes('/') ? path.split('/').slice(0, -1).join('/') : '工作区根目录';
-      folders.set(folder || '工作区根目录', (folders.get(folder || '工作区根目录') ?? 0) + 1);
-    }
-
-    const folderList = Array.from(folders.entries())
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5)
-      .map(([path, count]) => ({ path, count }));
-
-    return {
-      folderCount: folders.size,
-      topFolders: folderList,
-      longestPath: members.reduce((current, path) => (path.length > current.length ? path : current), ''),
-    };
-  }, [knowledgeBase]);
-
-  const handleBuild = useCallback(async () => {
+  const refreshStatus = useCallback(async () => {
     if (!workspacePath) return;
-    const toolCallId = `kb-build-${Date.now()}`;
-    const startedAt = Date.now();
+    const status = await invoke<KnowledgeStatusPayload | null>('knowledge_status', { workspacePath });
+    setKnowledgeBase(status ? fromStatus(status) : undefined);
+  }, [workspacePath, setKnowledgeBase]);
 
+  useEffect(() => {
+    if (!workspacePath) return;
+    void refreshStatus().catch((error) => {
+      pushNotification({ kind: 'error', title: '读取知识库失败', message: String(error) });
+    });
+  }, [workspacePath, refreshStatus, pushNotification]);
+
+  const collections = useMemo(() => {
+    const names = Object.keys(knowledgeBase?.collections ?? { default: [] });
+    if (!names.includes('default')) names.unshift('default');
+    if (!names.includes(selectedCollection)) names.push(selectedCollection);
+    return names.sort((left, right) => (left === 'default' ? -1 : right === 'default' ? 1 : left.localeCompare(right)));
+  }, [knowledgeBase, selectedCollection]);
+
+  const documents = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    return (knowledgeBase?.documents ?? [])
+      .filter((document) => document.collection === selectedCollection)
+      .filter((document) => !normalizedQuery || document.path.toLowerCase().includes(normalizedQuery))
+      .sort((left, right) => {
+        if (left.status !== right.status) return left.status === 'error' ? -1 : right.status === 'error' ? 1 : 0;
+        return left.path.localeCompare(right.path);
+      });
+  }, [knowledgeBase, query, selectedCollection]);
+
+  const runWithProgress = useCallback(async <T,>(
+    label: string,
+    operation: (sessionId: string) => Promise<T>,
+  ): Promise<T | undefined> => {
+    if (!workspacePath || busy) return undefined;
+    const sessionId = `kb-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const startedAt = Date.now();
+    setBusy(label);
     setKnowledgeToolCall({
-      id: toolCallId,
-      name: 'knowledge_build',
-      arguments: { workspacePath },
+      id: sessionId,
+      name: label,
+      arguments: { workspacePath, collection: selectedCollection },
       status: 'executing',
       startTime: startedAt,
     });
-
     let unlisten: (() => void) | undefined;
     try {
       unlisten = await listen<{
         session_id: string;
-        phase: string;
+        phase: BuildProgress['phase'];
         current: number;
         total: number;
         message: string;
       }>('kb://build-progress', (event) => {
+        if (event.payload.session_id !== sessionId) return;
         if (event.payload.phase === 'done') {
           setBuildProgress(undefined);
-        } else {
-          setBuildProgress({
-            phase: event.payload.phase as BuildProgress['phase'],
-            current: event.payload.current,
-            total: event.payload.total,
-            currentFile: event.payload.message,
-          });
+          return;
         }
+        setBuildProgress({
+          phase: event.payload.phase,
+          current: event.payload.current,
+          total: event.payload.total,
+          currentFile: event.payload.message,
+        });
       });
-    } catch (err) {
-      console.error('Failed to listen for build progress:', err);
-    }
-
-    try {
-      const result = await invoke<{
-        total_documents: number;
-        total_chunks: number;
-        workspace_id: string;
-      }>('knowledge_build', {
-        workspacePath,
-        sessionId: toolCallId,
+      const result = await operation(sessionId);
+      await refreshStatus();
+      setKnowledgeToolCall({
+        id: sessionId,
+        name: label,
+        arguments: { workspacePath, collection: selectedCollection },
+        status: 'success',
+        startTime: startedAt,
+        duration: Date.now() - startedAt,
       });
-
-      const currentMembers = knowledgeBase?.members ?? [];
-      setKnowledgeBase({
-        workspaceId: result.workspace_id,
-        documentCount: result.total_documents,
-        chunkCount: result.total_chunks,
-        lastUpdated: Date.now(),
-        members: currentMembers,
+      return result;
+    } catch (error) {
+      setKnowledgeToolCall({
+        id: sessionId,
+        name: label,
+        arguments: { workspacePath, collection: selectedCollection },
+        status: 'error',
+        error: String(error),
+        startTime: startedAt,
+        duration: Date.now() - startedAt,
       });
-      pushNotification({
-        kind: 'success',
-        title: '知识库构建完成',
-        message: `已构建 ${result.total_documents} 个文档，生成 ${result.total_chunks} 个分块。`,
-      });
-    } catch (err) {
-      pushNotification({
-        kind: 'error',
-        title: '知识库构建失败',
-        message: String(err),
-      });
+      pushNotification({ kind: 'error', title: '知识库操作失败', message: String(error) });
+      return undefined;
     } finally {
       unlisten?.();
+      setBuildProgress(undefined);
+      setBusy(null);
     }
-  }, [workspacePath, knowledgeBase, setKnowledgeBase, setBuildProgress, setKnowledgeToolCall, pushNotification]);
+  }, [busy, pushNotification, refreshStatus, selectedCollection, setBuildProgress, setKnowledgeToolCall, workspacePath]);
+
+  const handleImport = useCallback(async () => {
+    const selected = await open({
+      multiple: true,
+      directory: false,
+      title: `导入到知识集合「${selectedCollection}」`,
+      filters: [{
+        name: '可索引文档',
+        extensions: knowledgeBase?.supportedExtensions?.length
+          ? knowledgeBase.supportedExtensions
+          : DEFAULT_EXTENSIONS,
+      }],
+    });
+    const memberPaths = Array.isArray(selected) ? selected : selected ? [selected] : [];
+    if (!memberPaths.length || !workspacePath) return;
+
+    const result = await runWithProgress<KnowledgeUpdateResult>('knowledge_add_members', (sessionId) =>
+      invoke('knowledge_add_members', {
+        workspacePath,
+        memberPaths,
+        sessionId,
+        collection: selectedCollection,
+      }),
+    );
+    if (!result) return;
+    pushNotification({
+      kind: result.failed ? 'info' : 'success',
+      title: result.failed ? '批量导入已完成，但有文件跳过' : '批量导入完成',
+      message: `新增 ${result.added}，更新 ${result.updated}，未变化 ${result.unchanged}，失败 ${result.failed}。`,
+    });
+  }, [knowledgeBase, pushNotification, runWithProgress, selectedCollection, workspacePath]);
+
+  const handleSync = useCallback(async () => {
+    if (!workspacePath) return;
+    const result = await runWithProgress<KnowledgeUpdateResult>('knowledge_update', (sessionId) =>
+      invoke('knowledge_update', { workspacePath, sessionId, collection: selectedCollection }),
+    );
+    if (result) {
+      pushNotification({
+        kind: result.failed ? 'info' : 'success',
+        title: '知识集合已同步',
+        message: `新增 ${result.added}，更新 ${result.updated}，移除过期索引 ${result.removed}，失败 ${result.failed}。`,
+      });
+    }
+  }, [pushNotification, runWithProgress, selectedCollection, workspacePath]);
+
+  const handleIndexWorkspace = useCallback(async () => {
+    if (!workspacePath) return;
+    const result = await runWithProgress<{ total_documents: number; total_chunks: number }>(
+      'knowledge_build',
+      (sessionId) => invoke('knowledge_build', {
+        workspacePath,
+        sessionId,
+        collection: selectedCollection,
+      }),
+    );
+    if (result) {
+      pushNotification({
+        kind: 'success',
+        title: '工作区文件已追加',
+        message: `已索引 ${result.total_documents} 个工作区文件，共 ${result.total_chunks} 个语义分块；当前集合原有文件已保留。`,
+      });
+    }
+  }, [pushNotification, runWithProgress, selectedCollection, workspacePath]);
+
+  const handleRemove = useCallback(async (path: string) => {
+    if (!workspacePath || busy) return;
+    setBusy(`remove:${path}`);
+    try {
+      await invoke<KnowledgeUpdateResult>('knowledge_remove_members', {
+        workspacePath,
+        memberPaths: [path],
+        collection: selectedCollection,
+      });
+      await refreshStatus();
+    } catch (error) {
+      pushNotification({ kind: 'error', title: '移除失败', message: String(error) });
+    } finally {
+      setBusy(null);
+    }
+  }, [busy, pushNotification, refreshStatus, selectedCollection, workspacePath]);
+
+  const handleRetry = useCallback(async (path: string) => {
+    if (!workspacePath) return;
+    await runWithProgress('knowledge_add_members', (sessionId) => invoke('knowledge_add_members', {
+      workspacePath,
+      memberPaths: [path],
+      sessionId,
+      collection: selectedCollection,
+    }));
+  }, [runWithProgress, selectedCollection, workspacePath]);
 
   const handleClear = useCallback(async () => {
-    if (!workspacePath) return;
+    if (!workspacePath || busy) return;
+    setBusy('knowledge_clear');
     try {
       await invoke('knowledge_clear', { workspacePath });
       setKnowledgeBase(undefined);
-      setBuildProgress(undefined);
-      setKnowledgeToolCall(undefined);
-      pushNotification({
-        kind: 'info',
-        title: '知识库已清空',
-        message: '所有知识库文件已移除。',
-      });
-    } catch (err) {
+      setSelectedCollection('default');
+      pushNotification({ kind: 'info', title: '知识库已清空', message: '索引和集合元数据已移除。' });
+    } catch (error) {
+      pushNotification({ kind: 'error', title: '清空失败', message: String(error) });
+    } finally {
+      setBusy(null);
+    }
+  }, [busy, pushNotification, setKnowledgeBase, workspacePath]);
+
+  const createCollection = () => {
+    const hasControlCharacter = Array.from(newCollection).some((character) => {
+      const codePoint = character.codePointAt(0) ?? 0;
+      return codePoint <= 0x1f || codePoint === 0x7f;
+    });
+    if (hasControlCharacter) {
       pushNotification({
         kind: 'error',
-        title: '清空知识库失败',
-        message: String(err),
+        title: '集合名称无效',
+        message: '集合名称不能包含换行、制表符或其他控制字符。',
       });
+      return;
     }
-  }, [workspacePath, setKnowledgeBase, setBuildProgress, setKnowledgeToolCall, pushNotification]);
+    const name = newCollection.trim().replace(/\s+/g, ' ');
+    if (!name) return;
+    if (Array.from(name).length > 80) {
+      pushNotification({ kind: 'error', title: '集合名称过长', message: '集合名称最多 80 个字符。' });
+      return;
+    }
+    setSelectedCollection(name);
+    setNewCollection('');
+    setShowNewCollection(false);
+  };
 
   if (!workspacePath) {
     return (
       <div className={styles.knowledgeViewEmpty}>
-        <Brain size={40} className={styles.knowledgeViewIcon} />
-        <p className={styles.knowledgeViewTitle}>未打开工作区</p>
-        <p className={styles.knowledgeViewHint}>请先打开一个文件夹作为工作区</p>
-      </div>
-    );
-  }
-
-  if (buildProgress) {
-    const progressPercent = buildProgress.total > 0
-      ? Math.min(100, Math.round((buildProgress.current / buildProgress.total) * 100))
-      : 0;
-
-    return (
-      <div className={styles.knowledgeViewEmpty}>
-        <RefreshCw size={40} className={`${styles.knowledgeViewIcon} ${styles.spinning}`} />
-        <p className={styles.knowledgeViewTitle}>正在构建知识库…</p>
-        <p className={styles.knowledgeViewHint}>
-          {buildProgress.current} / {buildProgress.total} · {buildProgress.currentFile || '处理中'}
-        </p>
-        <div className={styles.knowledgeBuildMeter}>
-          <div className={styles.knowledgeBuildMeterBar} style={{ width: `${progressPercent}%` }} />
-        </div>
-        <span className={styles.knowledgeBuildMeterLabel}>{progressPercent}%</span>
-      </div>
-    );
-  }
-
-  if (!knowledgeBase) {
-    return (
-      <div className={styles.knowledgeViewEmpty}>
-        <Brain size={40} className={styles.knowledgeViewIcon} />
-        <p className={styles.knowledgeViewTitle}>知识库未初始化</p>
-        <p className={styles.knowledgeViewHint}>构建后即可查看文件覆盖范围、分块数量和目录分布</p>
-        <button className={styles.knowledgeViewActionPrimary} onClick={handleBuild}>
-          <RefreshCw size={14} />
-          <span>构建知识库</span>
-        </button>
+        <Database size={38} className={styles.knowledgeViewIcon} />
+        <p className={styles.knowledgeViewTitle}>先打开一个工作区</p>
+        <p className={styles.knowledgeViewHint}>知识库会按工作区隔离保存。</p>
       </div>
     );
   }
 
   return (
-    <div className={styles.knowledgeView}>
-      <div className={styles.knowledgeHero}>
-        <div className={styles.knowledgeHeroMain}>
-          <div className={styles.knowledgeHeroBadge}>
-            <Brain size={14} />
-            <span>Workspace Knowledge</span>
+    <div className={styles.knowledgeManager}>
+      <header className={styles.knowledgeManagerHeader}>
+        <div>
+          <div className={styles.knowledgeManagerTitleRow}>
+            <BookOpenCheck size={18} />
+            <h2>知识库</h2>
           </div>
-          <h2 className={styles.knowledgeHeroTitle}>知识库总览</h2>
-          <p className={styles.knowledgeHeroSubtitle}>
-            已收录 {knowledgeBase.members.length} 个文件，覆盖 {fileInsights.folderCount} 个目录，
-            最近一次更新于 {formatRelativeTime(knowledgeBase.lastUpdated)}。
-          </p>
+          <p>批量导入多种文档，按集合检索，并清楚看到每个文件的索引状态。</p>
         </div>
-        <div className={styles.knowledgeHeroMeta}>
-          <span className={styles.knowledgeHeroMetaLabel}>最后构建</span>
-          <span className={styles.knowledgeHeroMetaValue}>{formatTime(knowledgeBase.lastUpdated)}</span>
-        </div>
+        <button className={styles.knowledgeIconAction} onClick={() => void refreshStatus()} title="刷新状态">
+          <RefreshCw size={14} />
+        </button>
+      </header>
+
+      <div className={styles.knowledgeCollectionBar}>
+        <select
+          className={styles.knowledgeCollectionSelect}
+          value={selectedCollection}
+          onChange={(event) => setSelectedCollection(event.target.value)}
+          aria-label="知识集合"
+        >
+          {collections.map((collection) => (
+            <option key={collection} value={collection}>
+              {collection === 'default' ? '默认集合' : collection}
+              {' · '}{knowledgeBase?.collections[collection]?.length ?? 0}
+            </option>
+          ))}
+        </select>
+        {showNewCollection ? (
+          <div className={styles.knowledgeNewCollection}>
+            <input
+              autoFocus
+              value={newCollection}
+              onChange={(event) => setNewCollection(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') createCollection();
+                if (event.key === 'Escape') setShowNewCollection(false);
+              }}
+              placeholder="集合名称"
+            />
+            <button onClick={createCollection} disabled={!newCollection.trim()}>创建</button>
+            <button onClick={() => setShowNewCollection(false)} aria-label="取消"><X size={13} /></button>
+          </div>
+        ) : (
+          <button className={styles.knowledgeIconAction} onClick={() => setShowNewCollection(true)} title="新建集合">
+            <Plus size={14} />
+          </button>
+        )}
       </div>
 
-      <div className={styles.knowledgeViewStatsGrid}>
-        <div className={styles.knowledgeViewCard}>
-          <div className={styles.knowledgeViewCardIcon}><BookMarked size={16} /></div>
-          <div>
-            <div className={styles.knowledgeViewCardValue}>{knowledgeBase.members.length}</div>
-            <div className={styles.knowledgeViewCardLabel}>已纳入文件</div>
-          </div>
-        </div>
-        <div className={styles.knowledgeViewCard}>
-          <div className={styles.knowledgeViewCardIcon}><FileText size={16} /></div>
-          <div>
-            <div className={styles.knowledgeViewCardValue}>{knowledgeBase.documentCount}</div>
-            <div className={styles.knowledgeViewCardLabel}>文档数</div>
-          </div>
-        </div>
-        <div className={styles.knowledgeViewCard}>
-          <div className={styles.knowledgeViewCardIcon}><Layers size={16} /></div>
-          <div>
-            <div className={styles.knowledgeViewCardValue}>{knowledgeBase.chunkCount}</div>
-            <div className={styles.knowledgeViewCardLabel}>语义分块</div>
-          </div>
-        </div>
-        <div className={styles.knowledgeViewCard}>
-          <div className={styles.knowledgeViewCardIcon}><Sparkles size={16} /></div>
-          <div>
-            <div className={styles.knowledgeViewCardValue}>
-              {formatAverageChunks(knowledgeBase.documentCount, knowledgeBase.chunkCount)}
-            </div>
-            <div className={styles.knowledgeViewCardLabel}>平均每文档分块</div>
-          </div>
-        </div>
+      <div className={styles.knowledgeCommandRow}>
+        <button className={styles.knowledgePrimaryCommand} onClick={() => void handleImport()} disabled={!!busy}>
+          <Upload size={14} />
+          批量导入文件
+        </button>
+        <button onClick={() => void handleSync()} disabled={!!busy}>
+          <RotateCw size={14} />
+          同步变化
+        </button>
+        <button onClick={() => void handleIndexWorkspace()} disabled={!!busy} title="将工作区内所有支持的文件追加到当前集合；保留已导入的外部文件">
+          <FolderInput size={14} />
+          追加工作区
+        </button>
       </div>
 
-      <div className={styles.knowledgeViewOverviewGrid}>
-        <div className={styles.knowledgeViewPanel}>
-          <div className={styles.knowledgeViewPanelHeader}>
-            <div>
-              <span className={styles.knowledgeViewPanelEyebrow}>Coverage</span>
-              <h3 className={styles.knowledgeViewPanelTitle}>知识库健康度</h3>
-            </div>
-            <Clock3 size={16} />
-          </div>
-          <div className={styles.knowledgeViewChecklist}>
-            <div className={styles.knowledgeViewChecklistItem}>
-              <span className={styles.knowledgeViewChecklistDot} />
-              <span>已覆盖 {fileInsights.folderCount} 个目录</span>
-            </div>
-            <div className={styles.knowledgeViewChecklistItem}>
-              <span className={styles.knowledgeViewChecklistDot} />
-              <span>最长路径：{fileInsights.longestPath || '—'}</span>
-            </div>
-            <div className={styles.knowledgeViewChecklistItem}>
-              <span className={styles.knowledgeViewChecklistDot} />
-              <span>工作区 ID：{knowledgeBase.workspaceId}</span>
-            </div>
-          </div>
+      {buildProgress && (
+        <div className={styles.knowledgeProgressInline}>
+          <RefreshCw size={13} className={styles.spinning} />
+          <span>{buildProgress.currentFile || '处理中'}</span>
+          <span>{buildProgress.current}/{buildProgress.total}</span>
         </div>
+      )}
 
-        <div className={styles.knowledgeViewPanel}>
-          <div className={styles.knowledgeViewPanelHeader}>
-            <div>
-              <span className={styles.knowledgeViewPanelEyebrow}>Actions</span>
-              <h3 className={styles.knowledgeViewPanelTitle}>知识库操作</h3>
-            </div>
-            <RefreshCw size={16} />
-          </div>
-          <div className={styles.knowledgeViewActionsColumn}>
-            <button className={styles.knowledgeViewActionPrimary} onClick={handleBuild} title="完整重建知识库">
-              <RefreshCw size={14} />
-              <span>重新构建索引</span>
-            </button>
-            <button className={styles.knowledgeViewAction} onClick={handleClear} title="清空知识库">
-              <Trash2 size={14} />
-              <span>清空当前知识库</span>
-            </button>
-          </div>
-        </div>
+      <div className={styles.knowledgeSummaryLine}>
+        <span>{documents.filter((document) => document.status === 'indexed').length} 个已索引</span>
+        <span>{documents.reduce((sum, document) => sum + document.chunkCount, 0)} 个分块</span>
+        <span>{documents.filter((document) => document.status === 'error').length} 个异常</span>
+        {knowledgeBase && <span>更新于 {formatTime(knowledgeBase.lastUpdated)}</span>}
       </div>
 
-      <div className={styles.knowledgeViewPanel}>
-        <div className={styles.knowledgeViewPanelHeader}>
-          <div>
-            <span className={styles.knowledgeViewPanelEyebrow}>Folders</span>
-            <h3 className={styles.knowledgeViewPanelTitle}>目录分布</h3>
+      <div className={styles.knowledgeSearchRow}>
+        <Search size={13} />
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="筛选当前集合的文件" />
+        {query && <button onClick={() => setQuery('')} aria-label="清除筛选"><X size={12} /></button>}
+      </div>
+
+      <div className={styles.knowledgeDocumentList}>
+        {documents.length === 0 ? (
+          <div className={styles.knowledgeDocumentEmpty}>
+            <Database size={28} />
+            <strong>当前集合还没有文件</strong>
+            <span>可以一次选择多个 DOCX、PDF、PPTX、XLSX、Markdown、代码等文件。</span>
           </div>
-          <Files size={16} />
-        </div>
-        <div className={styles.knowledgeViewFolderList}>
-          {fileInsights.topFolders.length === 0 ? (
-            <div className={styles.knowledgeViewEmptyHint}>暂无目录数据</div>
-          ) : (
-            fileInsights.topFolders.map((folder) => (
-              <div key={folder.path} className={styles.knowledgeViewFolderItem}>
-                <div className={styles.knowledgeViewFolderPathWrap}>
-                  <FolderOpen size={14} />
-                  <span className={styles.knowledgeViewFolderPath}>{folder.path}</span>
+        ) : documents.map((document) => {
+          const name = document.path.split(/[\\/]/).pop() || document.path;
+          const isRemoving = busy === `remove:${document.path}`;
+          return (
+            <article key={`${document.collection}:${document.path}`} className={styles.knowledgeDocumentRow} data-status={document.status}>
+              <div className={styles.knowledgeDocumentIcon}>{fileIcon(document)}</div>
+              <div className={styles.knowledgeDocumentBody}>
+                <div className={styles.knowledgeDocumentTopline}>
+                  <strong title={document.path}>{name}</strong>
+                  <span className={styles.knowledgeDocumentStatus}>
+                    {document.status === 'indexed' ? <CheckCircle2 size={12} /> : <AlertCircle size={12} />}
+                    {document.status === 'indexed' ? '已索引' : document.status === 'error' ? '异常' : '等待中'}
+                  </span>
                 </div>
-                <span className={styles.knowledgeViewFolderCount}>{folder.count} 个文件</span>
+                <div className={styles.knowledgeDocumentMeta} title={document.path}>
+                  <span>{fileKind(document.path, document.sourceType)}</span>
+                  <span>{formatBytes(document.sizeBytes)}</span>
+                  <span>{document.chunkCount} 分块</span>
+                  <span className={styles.knowledgeDocumentPath}>{document.path}</span>
+                </div>
+                {document.error && <p className={styles.knowledgeDocumentError}>{document.error}</p>}
               </div>
-            ))
-          )}
-        </div>
+              <div className={styles.knowledgeDocumentActions}>
+                {document.status === 'error' && (
+                  <button onClick={() => void handleRetry(document.path)} disabled={!!busy} title="重新解析">
+                    <RotateCw size={13} />
+                  </button>
+                )}
+                <button onClick={() => void handleRemove(document.path)} disabled={!!busy} title="从当前集合移除">
+                  {isRemoving ? <RefreshCw size={13} className={styles.spinning} /> : <Trash2 size={13} />}
+                </button>
+              </div>
+            </article>
+          );
+        })}
       </div>
 
-      <div className={styles.knowledgeViewPanel}>
-        <div className={styles.knowledgeViewPanelHeader}>
-          <div>
-            <span className={styles.knowledgeViewPanelEyebrow}>Files</span>
-            <h3 className={styles.knowledgeViewPanelTitle}>知识库文件列表</h3>
-          </div>
-          <span className={styles.knowledgeViewSectionCount}>{knowledgeBase.members.length}</span>
-        </div>
-        <div className={styles.knowledgeViewListEnhanced}>
-          {knowledgeBase.members.length === 0 ? (
-            <div className={styles.knowledgeViewEmptyHint}>暂无文件</div>
-          ) : (
-            knowledgeBase.members.map((path, index) => {
-              const name = path.split('/').pop() ?? path;
-              const directory = path.includes('/') ? path.split('/').slice(0, -1).join('/') : '工作区根目录';
-              const kind = getFileKindLabel(path);
-              return (
-                <div key={path} className={styles.knowledgeViewListRow}>
-                  <div className={styles.knowledgeViewListIndex}>{String(index + 1).padStart(2, '0')}</div>
-                  <div className={styles.knowledgeViewListIcon}>{getFileIcon(path)}</div>
-                  <div className={styles.knowledgeViewListMain}>
-                    <div className={styles.knowledgeViewListTop}>
-                      <span className={styles.knowledgeViewMemberName}>{name}</span>
-                      <span className={styles.knowledgeViewKindBadge}>{kind}</span>
-                    </div>
-                    <div className={styles.knowledgeViewListBottom}>
-                      <span className={styles.knowledgeViewMemberPath}>{directory}</span>
-                    </div>
-                  </div>
-                  <ChevronRight size={14} className={styles.knowledgeViewListArrow} />
-                </div>
-              );
-            })
-          )}
-        </div>
-      </div>
+      <footer className={styles.knowledgeManagerFooter}>
+        <span>支持 {knowledgeBase?.supportedExtensions.length || DEFAULT_EXTENSIONS.length} 种扩展名；失败文件不会进入索引。</span>
+        <button onClick={() => void handleClear()} disabled={!!busy}>
+          <Trash2 size={12} />
+          清空全部
+        </button>
+      </footer>
     </div>
   );
 };

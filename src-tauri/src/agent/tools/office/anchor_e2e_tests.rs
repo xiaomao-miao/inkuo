@@ -27,6 +27,10 @@ fn temp_path(suffix: &str) -> std::path::PathBuf {
     p
 }
 
+fn temp_workspace() -> Option<String> {
+    Some(std::env::temp_dir().to_string_lossy().into_owned())
+}
+
 async fn run_anchor_repro(scenario: &str, table_json: serde_json::Value) {
     let path = temp_path(scenario);
     let tool = CreateWordDocTool::new();
@@ -45,7 +49,7 @@ async fn run_anchor_repro(scenario: &str, table_json: serde_json::Value) {
                 {"type": "paragraph", "id": "after_para", "text": "After paragraph."},
             ]
         }),
-        None,
+        temp_workspace(),
     )
     .await
     .expect("create base doc");
@@ -58,7 +62,7 @@ async fn run_anchor_repro(scenario: &str, table_json: serde_json::Value) {
     payload["elements"][0]["anchor_id"] = serde_json::json!("tbl_title");
     payload["elements"][0]["position"] = serde_json::json!("after");
 
-    tool.execute(payload, None)
+    tool.execute(payload, temp_workspace())
         .await
         .expect("insert with anchor");
 
@@ -164,7 +168,7 @@ async fn e2e_image_with_anchor() {
                 {"type": "paragraph", "id": "after_para", "text": "After."},
             ]
         }),
-        None,
+        temp_workspace(),
     )
     .await
     .expect("create base doc");
@@ -181,7 +185,7 @@ async fn e2e_image_with_anchor() {
                 "position": "after"
             }]
         }),
-        None,
+        temp_workspace(),
     )
     .await
     .expect("insert image with anchor");
@@ -227,7 +231,7 @@ async fn e2e_control_no_anchor_table_appends_to_end() {
                 {"type": "paragraph", "id": "after_para", "text": "After."},
             ]
         }),
-        None,
+        temp_workspace(),
     )
     .await
     .expect("create base doc");
@@ -241,7 +245,7 @@ async fn e2e_control_no_anchor_table_appends_to_end() {
                 "rows": [["1", "2"]]
             }]
         }),
-        None,
+        temp_workspace(),
     )
     .await
     .expect("insert without anchor");
@@ -304,7 +308,7 @@ async fn e2e_full_repro_lowlevel_table() {
                 {"type": "paragraph", "id": "after_para", "text": "After paragraph."},
             ]
         }),
-        None,
+        temp_workspace(),
     )
     .await
     .expect("create base doc");
@@ -325,7 +329,7 @@ async fn e2e_full_repro_lowlevel_table() {
                 "position": "after"
             }]
         }),
-        None,
+        temp_workspace(),
     )
     .await
     .expect("insert with anchor");
@@ -384,7 +388,7 @@ async fn e2e_full_repro_styled_table() {
                 {"type": "paragraph", "id": "after_para", "text": "After paragraph."},
             ]
         }),
-        None,
+        temp_workspace(),
     )
     .await
     .expect("create base doc");
@@ -401,7 +405,7 @@ async fn e2e_full_repro_styled_table() {
                 "position": "after"
             }]
         }),
-        None,
+        temp_workspace(),
     )
     .await
     .expect("insert styled_table with anchor");
@@ -455,7 +459,7 @@ async fn e2e_bogus_anchor_falls_back_to_end() {
                 {"type": "paragraph", "id": "after_para", "text": "After."},
             ]
         }),
-        None,
+        temp_workspace(),
     )
     .await
     .expect("create base doc");
@@ -471,7 +475,7 @@ async fn e2e_bogus_anchor_falls_back_to_end() {
                 "position": "after"
             }]
         }),
-        None,
+        temp_workspace(),
     )
     .await
     .expect("insert with bogus anchor");
@@ -519,7 +523,7 @@ async fn e2e_bogus_anchor_emits_visible_warning_in_output() {
                 {"type": "paragraph", "id": "after_para", "text": "After."},
             ]
         }),
-        None,
+        temp_workspace(),
     )
     .await
     .expect("create base doc");
@@ -536,7 +540,7 @@ async fn e2e_bogus_anchor_emits_visible_warning_in_output() {
                     "position": "after"
                 }]
             }),
-            None,
+            temp_workspace(),
         )
         .await
         .expect("insert with bogus anchor");

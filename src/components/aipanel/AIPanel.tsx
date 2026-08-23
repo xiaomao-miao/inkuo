@@ -4,13 +4,15 @@ import { ChatInput } from './ChatInput';
 import { ChatView } from './ChatView';
 import { HistorySidebar } from './HistorySidebar';
 import { TodoPanel } from './TodoPanel';
-import { useAgentStream } from './useAgentStream';
 import { useChatComposer } from './useChatComposer';
 import { useAIPanelController } from './useAIPanelController';
 import layoutStyles from './AIPanelLayout.module.css';
+import { useAIPanelStore } from '../../store';
 
 export const AIPanel: React.FC = () => {
   const [historyOpen, setHistoryOpen] = useState(false);
+  const panelDisplayMode = useAIPanelStore((state) => state.panelDisplayMode);
+  const togglePanelDisplayMode = useAIPanelStore((state) => state.togglePanelDisplayMode);
 
   const {
     sessions,
@@ -36,6 +38,8 @@ export const AIPanel: React.FC = () => {
     editingMessageId,
     editingContent,
     setEditingContent,
+    imageAttachments,
+    setImageAttachments,
     handleSend,
     sendWithPrompt,
     handleStop,
@@ -48,8 +52,6 @@ export const AIPanel: React.FC = () => {
     messages,
     isStreaming,
   });
-
-  useAgentStream({ mode });
 
   const handleHistoryActivate = (sessionId: string) => {
     // Clicking a session in the history panel should both restore it
@@ -81,6 +83,8 @@ export const AIPanel: React.FC = () => {
         onClose={closePanel}
         onToggleHistory={() => setHistoryOpen((v) => !v)}
         historyOpen={historyOpen}
+        displayMode={panelDisplayMode}
+        onToggleDisplayMode={togglePanelDisplayMode}
       />
 
       <div className={layoutStyles.panelBody}>
@@ -112,6 +116,7 @@ export const AIPanel: React.FC = () => {
               onSetInput={setInput}
               onRunPrompt={sendWithPrompt}
               selectionToolbarDisabled={isStreaming}
+              displayMode={panelDisplayMode}
             />
           </div>
         </div>
@@ -127,6 +132,8 @@ export const AIPanel: React.FC = () => {
         isStreaming={isStreaming}
         sessionId={activeSessionId}
         featureToggles={activeSession?.featureToggles}
+        imageAttachments={imageAttachments}
+        onImageAttachmentsChange={setImageAttachments}
         onSend={handleSend}
         onStop={handleStop}
       />

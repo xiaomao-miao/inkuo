@@ -34,12 +34,13 @@ function pickPersistedUiBits(
 ): AIPanelState {
   const persisted = (persistedState ?? {}) as Partial<Pick<
     AIPanelState,
-    'isOpen' | 'activeTab'
+    'isOpen' | 'activeTab' | 'panelDisplayMode'
   >>;
   return {
     ...currentState,
     isOpen: persisted.isOpen ?? currentState.isOpen,
     activeTab: persisted.activeTab ?? currentState.activeTab,
+    panelDisplayMode: persisted.panelDisplayMode ?? currentState.panelDisplayMode,
   };
 }
 
@@ -59,6 +60,7 @@ export const useAIPanelStore = create<AIPanelState>()(
       partialize: (state) => ({
         isOpen: state.isOpen,
         activeTab: state.activeTab,
+        panelDisplayMode: state.panelDisplayMode,
       }),
       merge: pickPersistedUiBits,
     }

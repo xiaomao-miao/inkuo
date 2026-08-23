@@ -5,6 +5,9 @@ import type { WorkbookInstance } from '@fortune-sheet/react';
 import type { Sheet as FortuneSheetCoreSheet } from '@fortune-sheet/core';
 import { Save, Table2 } from 'lucide-react';
 import { useKeyboardSave } from './useKeyboardSave';
+import { useExternalFileSync } from './useExternalFileSync';
+import { ExternalFileConflictBanner } from './ExternalFileConflictBanner';
+import { decideExternalRefresh } from './externalFileConflict';
 import { useSidebarStore, useEditorStore, useNotificationStore } from '../../store';
 import {
   rustWorkbookToFortuneSheets,
@@ -147,6 +150,7 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isDirty, setIsDirty] = useState(false);
+  const [hasExternalConflict, setHasExternalConflict] = useState(false);
 
   // ── Store actions (stable selectors, no re-render on other state) ─────────
   const setOpenTabDirty = useSidebarStore((s) => s.setOpenTabDirty);
@@ -179,6 +183,7 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
   // fire for file open). We only flip isDirty when onOp fires with an op
   // that touches a user-visible field.
   const userEditSeenRef = useRef(false);
+  const dirtyStateRef = useRef(false);
 
   // ── Hooks — empty. Formula recalculation is handled by FortuneSheet internally.
   const hooks = useMemo((): import('@fortune-sheet/core').Hooks => ({}), []);
@@ -229,9 +234,14 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
       // Workbook rebuilds don't re-flip the dirty state.
       lastLoadedSheetsRef.current = changedSheets;
       lastLoadedFingerprintRef.current = fingerprintSheets(changedSheets);
+      dirtyStateRef.current = true;
       setIsDirty(true);
+      // Publish the retention signal in the same callback as the edit. Waiting
+      // for a passive effect leaves a small window where a fast tab switch can
+      // still classify this editor as clean and unmount it.
+      setOpenTabDirty(filePath, true);
     },
-    [],
+    [filePath, setOpenTabDirty],
   );
 
   // ── onOp handler: tracks genuine user-driven operations. Workbook's
@@ -264,6 +274,7 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
   // effect against firing during the initial paint (where the parent
   // already passed us the right data).
   const hasInitializedRef = useRef(false);
+  const explicitReloadInProgressRef = useRef(false);
 
   // Load bytes from disk and push them through every surface that
   // displays the workbook:
@@ -274,10 +285,17 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
   // load); the caller uses the return value to know whether to clear
   // the loading flag.
   const readAndApplySheets = useCallback(
-    async (token: number): Promise<boolean> => {
+    async (token: number, discardLocalChanges: boolean): Promise<boolean> => {
       try {
         const rustWorkbook = await invoke<RustXlsxWorkbook>('read_xlsx_structured', { path: filePath });
         if (loadTokenRef.current !== token) return false;
+        // A clean tab can become dirty while the async read is in flight.
+        // Re-check at commit time so a late disk result never erases those
+        // new edits unless the user explicitly approved the reload.
+        if (dirtyStateRef.current && !discardLocalChanges) {
+          setHasExternalConflict(true);
+          return false;
+        }
         const sheets = rustWorkbookToFortuneSheets(rustWorkbook);
         loadedSheetsRef.current = sheets;
         setFortuneSheets(sheets);
@@ -288,6 +306,8 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
         lastLoadedSheetsRef.current = sheets;
         lastLoadedFingerprintRef.current = fingerprintSheets(sheets);
         userEditSeenRef.current = false;
+        formulaInitDoneRef.current = false;
+        dirtyStateRef.current = false;
         setIsDirty(false);
         setOpenTabDirty(filePath, false);
         return loadTokenRef.current === token;
@@ -309,34 +329,65 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
   // Bump the load token and re-read the workbook. Used by every code
   // path that wants the editor to repaint with fresh bytes — including
   // the initial disk load and the AI-driven version watcher.
-  const loadFromDisk = useCallback(async () => {
+  const loadFromDisk = useCallback(async (discardLocalChanges = false): Promise<boolean> => {
     const token = ++loadTokenRef.current;
+    if (discardLocalChanges) explicitReloadInProgressRef.current = true;
     setLoading(true);
     setError(null);
+    let applied = false;
     try {
-      await readAndApplySheets(token);
+      applied = await readAndApplySheets(token, discardLocalChanges);
+      return applied;
     } finally {
       if (loadTokenRef.current === token) {
         setLoading(false);
       }
+      if (discardLocalChanges) {
+        explicitReloadInProgressRef.current = false;
+        if (!applied && dirtyStateRef.current) setHasExternalConflict(true);
+      }
     }
   }, [readAndApplySheets]);
 
-  // Persist the load function (kept for any legacy callers that grab
-  // the ref instead of going through the version-watcher).
-  const loadFromDiskRef = useRef(loadFromDisk);
-  loadFromDiskRef.current = loadFromDisk;
+  const reloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingReloadBeforeInitRef = useRef(false);
+  const requestExternalReload = useCallback(() => {
+    if (!hasInitializedRef.current) {
+      pendingReloadBeforeInitRef.current = true;
+      return;
+    }
+    if (reloadTimerRef.current !== null) clearTimeout(reloadTimerRef.current);
+    reloadTimerRef.current = setTimeout(() => {
+      reloadTimerRef.current = null;
+      const decision = decideExternalRefresh(
+        dirtyStateRef.current,
+        explicitReloadInProgressRef.current,
+      );
+      if (decision === 'show-conflict') {
+        setHasExternalConflict(true);
+      } else if (decision === 'reload') {
+        void loadFromDisk(false);
+      }
+    }, 160);
+  }, [loadFromDisk]);
+
+  useExternalFileSync(filePath, requestExternalReload);
 
   // Initial load: only run once per mounted editor instance. Re-runs
   // when `filePath` changes (tab switching), which is the only case we
   // actually want to reload from disk.
   useEffect(() => {
     hasInitializedRef.current = false;
+    pendingReloadBeforeInitRef.current = false;
     loadTokenRef.current++; // invalidate any in-flight load from the previous path
     void loadFromDisk().then(() => {
       hasInitializedRef.current = true;
+      if (pendingReloadBeforeInitRef.current) {
+        pendingReloadBeforeInitRef.current = false;
+        requestExternalReload();
+      }
     });
-  }, [filePath, loadFromDisk]);
+  }, [filePath, loadFromDisk, requestExternalReload]);
 
   // Re-read when external file version changes. Driven by the AI
   // pipeline (`invalidateOfficeBuffer` from streamEventHandlers.ts).
@@ -355,9 +406,16 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
     // (driven by `invalidateOfficeBuffer` from the AI pipeline) is a
     // signal to re-read the file.
     if (officeBufferVersion === 0) return;
-    if (!hasInitializedRef.current) return;
-    void loadFromDisk();
-  }, [officeBufferVersion, loadFromDisk]);
+    requestExternalReload();
+  }, [officeBufferVersion, requestExternalReload]);
+
+  useEffect(() => () => {
+    loadTokenRef.current += 1;
+    if (reloadTimerRef.current !== null) {
+      clearTimeout(reloadTimerRef.current);
+      reloadTimerRef.current = null;
+    }
+  }, []);
 
   // Sync dirty state to sidebar tab
   useEffect(() => {
@@ -393,7 +451,9 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
       lastLoadedSheetsRef.current = latestSheets;
       lastLoadedFingerprintRef.current = fingerprintSheets(latestSheets);
       userEditSeenRef.current = false;
+      dirtyStateRef.current = false;
       setIsDirty(false);
+      setHasExternalConflict(false);
       setOpenTabDirty(filePath, false);
     } catch (err) {
       const message = reportError('office-excel-save', err);
@@ -402,6 +462,19 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
   }, [filePath, setFortuneSheetsToStore, setOpenTabDirty, pushNotification]);
 
   useKeyboardSave({ onSave: handleSave, enabled: isDirty && isActive });
+
+  const handleKeepLocalVersion = useCallback(() => {
+    setHasExternalConflict(false);
+  }, []);
+
+  const handleReloadExternalVersion = useCallback(() => {
+    if (reloadTimerRef.current !== null) {
+      clearTimeout(reloadTimerRef.current);
+      reloadTimerRef.current = null;
+    }
+    setHasExternalConflict(false);
+    void loadFromDisk(true);
+  }, [loadFromDisk]);
 
   // ── Render ───────────────────────────────────────────────────────────────
   return (
@@ -414,6 +487,13 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
         formatIcon={<Table2 size={16} />}
         editLabel={loading ? '加载中...' : error ? '加载失败' : '可编辑'}
       />
+      {hasExternalConflict && (
+        <ExternalFileConflictBanner
+          fileName={fileName}
+          onKeepLocal={handleKeepLocalVersion}
+          onReloadFromDisk={handleReloadExternalVersion}
+        />
+      )}
       <div className={styles.excelContainer}>
         {(loading || error) ? (
           <div className={styles.editorOverlay} role="status" aria-live="polite">

@@ -1,10 +1,10 @@
 import React from 'react';
+import { CheckCircle2, Loader2 } from 'lucide-react';
 import { InlineDiffPreview } from './InlineDiffPreview';
 import { AssistantMessageBody } from './AssistantMessageBody';
 import { UserMessageBubble } from './UserMessageBubble';
 import {
   type ChatMessage,
-  type ChatSession,
   type ActiveToolCall,
 } from '../../store';
 import styles from './AIPanelMessage.module.css';
@@ -13,7 +13,9 @@ interface MessageItemProps {
   message: ChatMessage;
   isStreaming: boolean;
   activeToolCalls: ActiveToolCall[];
-  activeSession: ChatSession | undefined;
+  sessionId: string | undefined;
+  streamingMessageId: string | undefined;
+  displayMode: 'minimal' | 'detailed';
   editingMessageId: string | null;
   editingContent: string;
   onStartEdit: (id: string, content: string) => void;
@@ -33,7 +35,9 @@ const MessageItemImpl: React.FC<MessageItemProps> = ({
   message,
   isStreaming,
   activeToolCalls,
-  activeSession,
+  sessionId,
+  streamingMessageId,
+  displayMode,
   editingMessageId,
   editingContent,
   onStartEdit,
@@ -47,6 +51,7 @@ const MessageItemImpl: React.FC<MessageItemProps> = ({
     return (
       <UserMessageBubble
         content={message.content || ''}
+        imageAttachments={message.imageAttachments}
         isEditing={editingMessageId === message.id}
         editingContent={editingContent}
         isStreaming={isStreaming}
@@ -64,12 +69,11 @@ const MessageItemImpl: React.FC<MessageItemProps> = ({
   }
 
   if (message.role === 'assistant') {
-    const streamingMessageId = activeSession?.messages
-      .slice()
-      .reverse()
-      .find((m) => m.role === 'assistant')?.id;
     const isThisStreaming = isStreaming && message.id === streamingMessageId;
     const hasOutputItems = message.outputItems && message.outputItems.length > 0;
+    const hasVisibleAnswer = Boolean(message.content?.trim()) || message.outputItems.some(
+      (item) => item.type === 'text' && item.content.trim().length > 0,
+    );
 
     return (
       <div
@@ -77,20 +81,37 @@ const MessageItemImpl: React.FC<MessageItemProps> = ({
         style={entryDelayMs ? { animationDelay: `${entryDelayMs}ms` } : undefined}
       >
         <div className={styles.messageContent}>
-          {activeSession && (
+          {sessionId && (
             <AssistantMessageBody
               message={message}
               isThisStreaming={isThisStreaming}
               activeToolCalls={activeToolCalls}
-              sessionId={activeSession.id}
+              sessionId={sessionId}
+              minimal={displayMode === 'minimal'}
             />
           )}
 
-          {message.diff && !isThisStreaming && activeSession && (
+          {displayMode === 'minimal' && !hasVisibleAnswer && (
+            <div className={styles.minimalProgress} role="status">
+              {isThisStreaming ? (
+                <>
+                  <Loader2 size={13} className={styles.spinning} />
+                  <span>正在处理任务…</span>
+                </>
+              ) : (
+                <>
+                  <CheckCircle2 size={13} />
+                  <span>任务已完成</span>
+                </>
+              )}
+            </div>
+          )}
+
+          {message.diff && !isThisStreaming && sessionId && (
             <InlineDiffPreview
               originalText={message.diff.originalText}
               newText={message.diff.newText}
-              sessionId={activeSession.id}
+              sessionId={sessionId}
             />
           )}
 

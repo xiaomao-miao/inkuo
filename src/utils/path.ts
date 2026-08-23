@@ -19,7 +19,17 @@
 const SEPARATOR_REGEX = /[\\/]+/g;
 
 /**
- * Collapse all `\` and `/` separators to `/` and trim trailing separators.
+ * Drive-letter and UNC paths use Windows' case-insensitive comparison
+ * semantics. Callers pass normalized paths so this helper does not need to
+ * allocate another normalized copy.
+ */
+function usesWindowsPathSemantics(...paths: string[]): boolean {
+  return paths.some((path) => /^[A-Za-z]:\//.test(path) || path.startsWith('//'));
+}
+
+/**
+ * Collapse all `\` and `/` separators to `/` and trim trailing separators,
+ * while preserving POSIX, drive, and UNC roots.
  * Returns the empty string for falsy input.
  *
  *   normalizeDirPath('E:\\文档\\sub') === 'E:/文档/sub'
@@ -28,7 +38,58 @@ const SEPARATOR_REGEX = /[\\/]+/g;
  */
 export function normalizeDirPath(path: string): string {
   if (!path) return '';
-  return path.replace(SEPARATOR_REGEX, '/').replace(/\/+$/, '');
+  const isUnc = /^[\\/]{2}/.test(path);
+  let normalized = path.replace(SEPARATOR_REGEX, '/');
+  if (isUnc) normalized = `//${normalized.replace(/^\/+/, '')}`;
+  if (normalized === '/' || normalized === '//' || /^[A-Za-z]:\/$/.test(normalized)) {
+    return normalized;
+  }
+  return normalized.replace(/\/+$/, '');
+}
+
+/**
+ * Whether `path` is absolute on one of the desktop platforms supported by
+ * Tauri. `URL`-style paths are intentionally excluded: file events and drop
+ * events give us native filesystem paths, never `file://` URLs.
+ */
+export function isAbsoluteFilePath(path: string): boolean {
+  const normalized = normalizeDirPath(path);
+  return (
+    normalized.startsWith('/') ||
+    normalized.startsWith('//') ||
+    /^[A-Za-z]:\//.test(normalized)
+  );
+}
+
+/**
+ * Resolve a path emitted by an AI tool against the active workspace.
+ *
+ * Tool executors accept absolute paths, but older prompts and a few delegated
+ * experts can still return a workspace-relative `file_path`. Tabs, meanwhile,
+ * always hold the absolute path returned by `list_directory`. Comparing the
+ * two strings directly is therefore unreliable and was the reason an Office
+ * file could be updated on disk while its open editor kept showing old bytes.
+ */
+export function resolveWorkspaceFilePath(
+  path: string,
+  workspaceRoot: string | null | undefined,
+): string {
+  const normalized = normalizeDirPath(path);
+  if (!normalized || isAbsoluteFilePath(normalized) || !workspaceRoot) {
+    return normalized;
+  }
+  return joinPath(workspaceRoot, normalized);
+}
+
+/**
+ * Cross-platform equality for filesystem paths. Windows drive and UNC paths
+ * are case-insensitive; POSIX paths retain their case-sensitive semantics.
+ */
+export function areFilePathsEqual(left: string, right: string): boolean {
+  const a = normalizeDirPath(left);
+  const b = normalizeDirPath(right);
+  const windowsLike = usesWindowsPathSemantics(a, b);
+  return windowsLike ? a.toLowerCase() === b.toLowerCase() : a === b;
 }
 
 /**
@@ -44,8 +105,14 @@ export function isPathInside(parent: string, child: string): boolean {
   const normalizedParent = normalizeDirPath(parent);
   const normalizedChild = normalizeDirPath(child);
   if (!normalizedParent || !normalizedChild) return false;
-  if (normalizedChild === normalizedParent) return true;
-  return normalizedChild.startsWith(`${normalizedParent}/`);
+  if (areFilePathsEqual(normalizedChild, normalizedParent)) return true;
+  const windowsLike = usesWindowsPathSemantics(normalizedParent, normalizedChild);
+  const comparableParent = windowsLike ? normalizedParent.toLowerCase() : normalizedParent;
+  const comparableChild = windowsLike ? normalizedChild.toLowerCase() : normalizedChild;
+  const descendantPrefix = comparableParent.endsWith('/')
+    ? comparableParent
+    : `${comparableParent}/`;
+  return comparableChild.startsWith(descendantPrefix);
 }
 
 /**
@@ -58,9 +125,17 @@ export function getRelativePath(parent: string, child: string): string {
   const normalizedParent = normalizeDirPath(parent);
   const normalizedChild = normalizeDirPath(child);
   if (!normalizedParent) return normalizedChild;
-  if (normalizedChild === normalizedParent) return '';
-  if (normalizedChild.startsWith(`${normalizedParent}/`)) {
-    return normalizedChild.slice(normalizedParent.length + 1);
+  const windowsLike = usesWindowsPathSemantics(normalizedParent, normalizedChild);
+  const comparableParent = windowsLike ? normalizedParent.toLowerCase() : normalizedParent;
+  const comparableChild = windowsLike ? normalizedChild.toLowerCase() : normalizedChild;
+  if (comparableChild === comparableParent) return '';
+  const comparablePrefix = comparableParent.endsWith('/')
+    ? comparableParent
+    : `${comparableParent}/`;
+  if (comparableChild.startsWith(comparablePrefix)) {
+    // Slice the normalized original rather than the lower-cased comparison
+    // string so the relative result retains the filesystem's display casing.
+    return normalizedChild.slice(comparablePrefix.length);
   }
   return normalizedChild;
 }
@@ -84,7 +159,10 @@ export function getBaseName(path: string): string {
 export function getDirName(path: string): string {
   const normalized = normalizeDirPath(path);
   if (!normalized) return '';
+  if (normalized === '/' || normalized === '//' || /^[A-Za-z]:\/$/.test(normalized)) return '';
   const lastSlash = normalized.lastIndexOf('/');
+  if (lastSlash === 0) return '/';
+  if (lastSlash === 2 && /^[A-Za-z]:\//.test(normalized)) return normalized.slice(0, 3);
   return lastSlash === -1 ? '' : normalized.slice(0, lastSlash);
 }
 
@@ -111,9 +189,7 @@ export function getParentDirPath(filePath: string, workspaceRoot: string): strin
   const segments = relativePath.split('/').filter(Boolean);
   if (segments.length <= 1) return normalizedRoot;
 
-  return segments
-    .slice(0, -1)
-    .reduce((acc, segment) => `${acc}/${segment}`, normalizedRoot);
+  return joinPath(normalizedRoot, ...segments.slice(0, -1));
 }
 
 /**
@@ -123,7 +199,13 @@ export function getParentDirPath(filePath: string, workspaceRoot: string): strin
  *   joinPath('E:\\文档', 'sub', 'nested') === 'E:/文档/sub/nested'
  */
 export function joinPath(parent: string, ...segments: Array<string | null | undefined>): string {
-  const parts = [parent, ...segments]
-    .filter((segment): segment is string => typeof segment === 'string' && segment.length > 0);
-  return normalizeDirPath(parts.join('/'));
+  let result = normalizeDirPath(parent);
+  for (const segment of segments) {
+    if (!segment) continue;
+    const cleanSegment = normalizeDirPath(segment).replace(/^\/+/, '');
+    if (!cleanSegment) continue;
+    if (!result) result = cleanSegment;
+    else result = `${result}${result.endsWith('/') ? '' : '/'}${cleanSegment}`;
+  }
+  return normalizeDirPath(result);
 }

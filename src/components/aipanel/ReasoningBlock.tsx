@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Brain, ChevronRight } from 'lucide-react';
 import { TIMING } from '../../constants/timing';
 import styles from './AIPanelMessage.module.css';
@@ -26,6 +26,9 @@ interface ReasoningBlockProps {
    * the user clicks the header.
    */
   onToggleExpansion: () => void;
+  /** Stable timing metadata owned by the streamed output item. */
+  startedAt?: number;
+  durationMs?: number;
 }
 
 /**
@@ -46,6 +49,8 @@ export const ReasoningBlock: React.FC<ReasoningBlockProps> = ({
   completed,
   userExpanded,
   onToggleExpansion,
+  startedAt,
+  durationMs,
 }) => {
   // While the assistant is still streaming reasoning, the block is
   // forced open regardless of `userExpanded`. Once streaming ends the
@@ -53,16 +58,14 @@ export const ReasoningBlock: React.FC<ReasoningBlockProps> = ({
   // the header.
   const isOpen = !completed || userExpanded;
 
-  const startRef = useRef<number | null>(null);
-  const [, force] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (completed) return;
-    if (startRef.current === null) startRef.current = Date.now();
-    const id = setInterval(() => force((n) => n + 1), TIMING.REASONING_ELAPSED_TICK_MS);
+    const id = setInterval(() => setNow(Date.now()), TIMING.REASONING_ELAPSED_TICK_MS);
     return () => clearInterval(id);
   }, [completed]);
 
-  const elapsedMs = startRef.current ? Date.now() - startRef.current : 0;
+  const elapsedMs = durationMs ?? (startedAt ? Math.max(0, now - startedAt) : 0);
 
   const handleHeaderClick = () => {
     if (!completed) return; // ignore clicks while still streaming
@@ -75,7 +78,7 @@ export const ReasoningBlock: React.FC<ReasoningBlockProps> = ({
       : '已思考完成（点击展开）'
     : '正在思考…';
 
-  const durationLabel = !completed && elapsedMs > 0
+  const durationLabel = elapsedMs > 0
     ? `${(elapsedMs / 1000).toFixed(1)}s`
     : null;
 

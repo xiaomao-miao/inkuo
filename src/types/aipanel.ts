@@ -24,7 +24,7 @@ export type ChatMode = 'agent';
  *   3. Register an entry in `ChatInput.tsx`'s `TOGGLES` list — it owns
  *      the composer's inline toggle rows.
  */
-export type FeatureToggleId = 'kb_strict' | 'web_search';
+export type FeatureToggleId = 'kb_strict' | 'web_search' | 'sandbox';
 
 export interface FeatureToggleDescriptor {
   id: FeatureToggleId;
@@ -36,6 +36,18 @@ export interface FeatureToggleDescriptor {
    * out and prevents enabling it. */
   unavailable?: boolean;
   unavailableReason?: string;
+}
+
+/** Image input accepted by the Rust multimodal adapter. Exactly one of
+ * `path` and `dataBase64` should be supplied. Workspace-relative paths are
+ * preferred for document preview screenshots because the backend resolves
+ * and validates them against the active workspace. */
+export interface ImageAttachmentInput {
+  path?: string;
+  dataBase64?: string;
+  mimeType?: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif';
+  detail?: 'auto' | 'low' | 'high';
+  name?: string;
 }
 
 /** Per-turn feature flags. Missing key == off. */
@@ -119,6 +131,10 @@ export type OutputItem =
        * array index in that case.
        */
       reasoningId?: string;
+      /** Wall-clock start used to keep elapsed time stable across remounts. */
+      startedAt?: number;
+      /** Frozen elapsed time once the block reaches a terminal state. */
+      durationMs?: number;
       /**
        * `true` once the assistant has begun emitting final-answer content,
        * marking the reasoning block as complete and eligible for auto-collapse.
@@ -137,6 +153,8 @@ export type OutputItem =
       status?: 'success' | 'error';
       duration?: number;
       diffSummary?: StreamDiffSummary;
+      /** Wall-clock start for terminal reconciliation if a result is lost. */
+      startedAt?: number;
     }
   | {
       type: 'tool_result';
@@ -193,6 +211,11 @@ export interface ChatMessage {
   role: MessageRole;
   timestamp: number;
   content?: string;
+  /** Provider-neutral images attached to this user turn. Keeping them on the
+   * message lets prior visual context survive history rebuilds and ensures an
+   * edited/re-sent turn uses the same source pixels instead of silently
+   * becoming text-only. */
+  imageAttachments?: ImageAttachmentInput[];
   /**
    * Overflow characters removed from `content` (or from the trailing text
    * OutputItem) to keep the rendered DOM small. Empty string means no

@@ -62,22 +62,32 @@ pub struct ParsedSvg {
 #[derive(Debug, Clone)]
 pub enum SvgShape {
     Rect {
-        x: f64, y: f64, width: f64, height: f64,
-        rx: Option<f64>, ry: Option<f64>,
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+        rx: Option<f64>,
+        ry: Option<f64>,
         fill: Option<Paint>,
         stroke: Option<Paint>,
         stroke_width: Option<f64>,
         opacity: Option<f64>,
     },
     Ellipse {
-        cx: f64, cy: f64, rx: f64, ry: f64,
+        cx: f64,
+        cy: f64,
+        rx: f64,
+        ry: f64,
         fill: Option<Paint>,
         stroke: Option<Paint>,
         stroke_width: Option<f64>,
         opacity: Option<f64>,
     },
     Line {
-        x1: f64, y1: f64, x2: f64, y2: f64,
+        x1: f64,
+        y1: f64,
+        x2: f64,
+        y2: f64,
         stroke: Option<Paint>,
         stroke_width: Option<f64>,
         opacity: Option<f64>,
@@ -92,7 +102,8 @@ pub enum SvgShape {
         opacity: Option<f64>,
     },
     Text {
-        x: f64, y: f64,
+        x: f64,
+        y: f64,
         /// `<text>` body — child text + nested `<tspan>` runs, flattened.
         runs: Vec<TextRun>,
         font_size: Option<f64>,
@@ -144,11 +155,17 @@ pub struct TextRun {
 #[derive(Clone, Debug)]
 pub enum Paint {
     None,
-    Color { rgb: String, opacity: Option<f64> },
+    Color {
+        rgb: String,
+        opacity: Option<f64>,
+    },
     /// `url(#id)` resolved to the first stop of the matching gradient
     /// inside this slide's `<defs>`. We carry the resolved colour so the
     /// OOXML writer doesn't need to thread the gradient map through.
-    GradientRef { rgb: String, opacity: Option<f64> },
+    GradientRef {
+        rgb: String,
+        opacity: Option<f64>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -196,25 +213,28 @@ pub fn parse_svg(svg: &str) -> Result<ParsedSvg, String> {
                 match tag.as_str() {
                     "svg" => {
                         if let Some(vb) = attrs.get("viewBox") {
-                            let parts: Vec<&str> =
-                                vb.split(|c: char| c.is_whitespace() || c == ',')
-                                    .filter(|s| !s.is_empty())
-                                    .collect();
+                            let parts: Vec<&str> = vb
+                                .split(|c: char| c.is_whitespace() || c == ',')
+                                .filter(|s| !s.is_empty())
+                                .collect();
                             if parts.len() == 4 {
                                 parsed.vb_x = parts[0].parse().unwrap_or(0.0);
                                 parsed.vb_y = parts[1].parse().unwrap_or(0.0);
                                 parsed.vb_w = parts[2].parse().unwrap_or(100.0);
                                 parsed.vb_h = parts[3].parse().unwrap_or(100.0);
                             }
-                        } else if let (Some(w), Some(h)) =
-                            (attrs.get("width"), attrs.get("height"))
+                        } else if let (Some(w), Some(h)) = (attrs.get("width"), attrs.get("height"))
                         {
                             // Best-effort fallback when viewBox is missing.
                             parsed.vb_w = w.parse().unwrap_or(100.0);
                             parsed.vb_h = h.parse().unwrap_or(100.0);
                         }
-                        if parsed.vb_w == 0.0 { parsed.vb_w = 100.0; }
-                        if parsed.vb_h == 0.0 { parsed.vb_h = 100.0; }
+                        if parsed.vb_w == 0.0 {
+                            parsed.vb_w = 100.0;
+                        }
+                        if parsed.vb_h == 0.0 {
+                            parsed.vb_h = 100.0;
+                        }
                     }
                     "g" => {
                         if let Some(t) = attrs.get("transform") {
@@ -253,27 +273,37 @@ pub fn parse_svg(svg: &str) -> Result<ParsedSvg, String> {
                         }
                     }
                     "rect" => {
-                        if let Some(shape) = build_rect(&attrs, current_transform(&transforms), &parsed.defs) {
+                        if let Some(shape) =
+                            build_rect(&attrs, current_transform(&transforms), &parsed.defs)
+                        {
                             parsed.shapes.push(shape);
                         }
                     }
                     "circle" => {
-                        if let Some(shape) = build_circle(&attrs, current_transform(&transforms), &parsed.defs) {
+                        if let Some(shape) =
+                            build_circle(&attrs, current_transform(&transforms), &parsed.defs)
+                        {
                             parsed.shapes.push(shape);
                         }
                     }
                     "ellipse" => {
-                        if let Some(shape) = build_ellipse(&attrs, current_transform(&transforms), &parsed.defs) {
+                        if let Some(shape) =
+                            build_ellipse(&attrs, current_transform(&transforms), &parsed.defs)
+                        {
                             parsed.shapes.push(shape);
                         }
                     }
                     "line" => {
-                        if let Some(shape) = build_line(&attrs, current_transform(&transforms), &parsed.defs) {
+                        if let Some(shape) =
+                            build_line(&attrs, current_transform(&transforms), &parsed.defs)
+                        {
                             parsed.shapes.push(shape);
                         }
                     }
                     "path" => {
-                        if let Some(shape) = build_path(&attrs, current_transform(&transforms), &parsed.defs) {
+                        if let Some(shape) =
+                            build_path(&attrs, current_transform(&transforms), &parsed.defs)
+                        {
                             parsed.shapes.push(shape);
                         }
                     }
@@ -287,23 +317,13 @@ pub fn parse_svg(svg: &str) -> Result<ParsedSvg, String> {
                     "text" => {
                         if text_acc.is_none() {
                             text_acc = Some(TextAcc {
-                                x: attrs
-                                    .get("x")
-                                    .and_then(|v| v.parse().ok())
-                                    .unwrap_or(0.0),
-                                y: attrs
-                                    .get("y")
-                                    .and_then(|v| v.parse().ok())
-                                    .unwrap_or(0.0),
-                                font_size: attrs
-                                    .get("font-size")
-                                    .and_then(|v| parse_len(v)),
+                                x: attrs.get("x").and_then(|v| v.parse().ok()).unwrap_or(0.0),
+                                y: attrs.get("y").and_then(|v| v.parse().ok()).unwrap_or(0.0),
+                                font_size: attrs.get("font-size").and_then(|v| parse_len(v)),
                                 fill: attrs
                                     .get("fill")
                                     .and_then(|v| parse_paint(v, &attrs, &parsed.defs)),
-                                opacity: attrs
-                                    .get("opacity")
-                                    .and_then(|v| v.parse().ok()),
+                                opacity: attrs.get("opacity").and_then(|v| v.parse().ok()),
                                 transform: *current_transform(&transforms),
                                 text_anchor: attrs
                                     .get("text-anchor")
@@ -355,15 +375,16 @@ pub fn parse_svg(svg: &str) -> Result<ParsedSvg, String> {
                         }
                     }
                     // Unsupported — record and skip.
-                    "use" | "foreignObject" | "filter" | "mask"
-                    | "clipPath" | "pattern" | "switch" => {
+                    "use" | "foreignObject" | "filter" | "mask" | "clipPath" | "pattern"
+                    | "switch" => {
                         if !parsed.skipped.contains(&tag) {
                             parsed.skipped.push(tag);
                         }
                     }
                     "image" => {
                         // Try to parse inline data: URL; skip only if it fails.
-                        if let Some(href) = attrs.get("href")
+                        if let Some(href) = attrs
+                            .get("href")
                             .or_else(|| attrs.get("{http://www.w3.org/1999/xlink}href"))
                         {
                             let x = attrs.get("x").and_then(|v| v.parse().ok()).unwrap_or(0.0);
@@ -389,27 +410,37 @@ pub fn parse_svg(svg: &str) -> Result<ParsedSvg, String> {
 
                 match tag.as_str() {
                     "rect" => {
-                        if let Some(shape) = build_rect(&attrs, current_transform(&transforms), &parsed.defs) {
+                        if let Some(shape) =
+                            build_rect(&attrs, current_transform(&transforms), &parsed.defs)
+                        {
                             parsed.shapes.push(shape);
                         }
                     }
                     "circle" => {
-                        if let Some(shape) = build_circle(&attrs, current_transform(&transforms), &parsed.defs) {
+                        if let Some(shape) =
+                            build_circle(&attrs, current_transform(&transforms), &parsed.defs)
+                        {
                             parsed.shapes.push(shape);
                         }
                     }
                     "ellipse" => {
-                        if let Some(shape) = build_ellipse(&attrs, current_transform(&transforms), &parsed.defs) {
+                        if let Some(shape) =
+                            build_ellipse(&attrs, current_transform(&transforms), &parsed.defs)
+                        {
                             parsed.shapes.push(shape);
                         }
                     }
                     "line" => {
-                        if let Some(shape) = build_line(&attrs, current_transform(&transforms), &parsed.defs) {
+                        if let Some(shape) =
+                            build_line(&attrs, current_transform(&transforms), &parsed.defs)
+                        {
                             parsed.shapes.push(shape);
                         }
                     }
                     "path" => {
-                        if let Some(shape) = build_path(&attrs, current_transform(&transforms), &parsed.defs) {
+                        if let Some(shape) =
+                            build_path(&attrs, current_transform(&transforms), &parsed.defs)
+                        {
                             parsed.shapes.push(shape);
                         }
                     }
@@ -431,14 +462,15 @@ pub fn parse_svg(svg: &str) -> Result<ParsedSvg, String> {
                             try_capture_gradient_stop(&mut parsed.defs, parent_id, &attrs);
                         }
                     }
-                    "use" | "foreignObject" | "filter" | "mask"
-                    | "clipPath" | "pattern" | "switch" => {
+                    "use" | "foreignObject" | "filter" | "mask" | "clipPath" | "pattern"
+                    | "switch" => {
                         if !parsed.skipped.contains(&tag) {
                             parsed.skipped.push(tag);
                         }
                     }
                     "image" => {
-                        if let Some(href) = attrs.get("href")
+                        if let Some(href) = attrs
+                            .get("href")
                             .or_else(|| attrs.get("{http://www.w3.org/1999/xlink}href"))
                         {
                             let x = attrs.get("x").and_then(|v| v.parse().ok()).unwrap_or(0.0);
@@ -526,7 +558,13 @@ pub fn parse_svg(svg: &str) -> Result<ParsedSvg, String> {
                 }
             }
             Ok(Event::Eof) => break,
-            Err(e) => return Err(format!("quick-xml error at position {}: {}", reader.buffer_position(), e)),
+            Err(e) => {
+                return Err(format!(
+                    "quick-xml error at position {}: {}",
+                    reader.buffer_position(),
+                    e
+                ))
+            }
             _ => {}
         }
         buf.clear();
@@ -553,7 +591,10 @@ fn read_attrs(e: &BytesStart) -> BTreeMap<String, String> {
         let key = std::str::from_utf8(attr.key.as_ref())
             .unwrap_or("")
             .to_string();
-        let val = attr.unescape_value().map(|v| v.into_owned()).unwrap_or_default();
+        let val = attr
+            .unescape_value()
+            .map(|v| v.into_owned())
+            .unwrap_or_default();
         map.insert(key, val);
     }
     map
@@ -637,7 +678,10 @@ fn parse_color_with_alpha(s: &str) -> Option<(String, Option<f64>)> {
                 let r = &hex[0..1];
                 let g = &hex[1..2];
                 let b = &hex[2..3];
-                Some((format!("{}{}{}{}{}{}", r, r, g, g, b, b).to_uppercase(), None))
+                Some((
+                    format!("{}{}{}{}{}{}", r, r, g, g, b, b).to_uppercase(),
+                    None,
+                ))
             }
             6 => Some((hex.to_uppercase(), None)),
             // `#RRGGBBAA` — keep the alpha so semi-transparent fills
@@ -816,11 +860,21 @@ fn build_rect(
     let fill = a.get("fill").and_then(|v| parse_paint(v, a, defs));
     let stroke = a.get("stroke").and_then(|v| parse_paint(v, a, defs));
     let stroke_width = a.get("stroke-width").and_then(|v| v.parse().ok());
-    let opacity = a.get("opacity").and_then(|v| v.parse().ok())
+    let opacity = a
+        .get("opacity")
+        .and_then(|v| v.parse().ok())
         .or_else(|| a.get("fill-opacity").and_then(|v| v.parse().ok()));
     Some(SvgShape::Rect {
-        x, y, width: w, height: h, rx, ry,
-        fill, stroke, stroke_width, opacity,
+        x,
+        y,
+        width: w,
+        height: h,
+        rx,
+        ry,
+        fill,
+        stroke,
+        stroke_width,
+        opacity,
     })
 }
 
@@ -832,17 +886,27 @@ fn build_circle(
     let cx: f64 = a.get("cx").and_then(|v| v.parse().ok()).unwrap_or(0.0);
     let cy: f64 = a.get("cy").and_then(|v| v.parse().ok()).unwrap_or(0.0);
     let r: f64 = a.get("r").and_then(|v| v.parse().ok()).unwrap_or(0.0);
-    if r <= 0.0 { return None; }
+    if r <= 0.0 {
+        return None;
+    }
     let (cx, cy) = t.apply_point(cx, cy);
     let r = (r * t.uniform_scale()).max(0.0);
     let fill = a.get("fill").and_then(|v| parse_paint(v, a, defs));
     let stroke = a.get("stroke").and_then(|v| parse_paint(v, a, defs));
     let stroke_width = a.get("stroke-width").and_then(|v| v.parse().ok());
-    let opacity = a.get("opacity").and_then(|v| v.parse().ok())
+    let opacity = a
+        .get("opacity")
+        .and_then(|v| v.parse().ok())
         .or_else(|| a.get("fill-opacity").and_then(|v| v.parse().ok()));
     Some(SvgShape::Ellipse {
-        cx, cy, rx: r, ry: r,
-        fill, stroke, stroke_width, opacity,
+        cx,
+        cy,
+        rx: r,
+        ry: r,
+        fill,
+        stroke,
+        stroke_width,
+        opacity,
     })
 }
 
@@ -855,7 +919,9 @@ fn build_ellipse(
     let cy: f64 = a.get("cy").and_then(|v| v.parse().ok()).unwrap_or(0.0);
     let rx: f64 = a.get("rx").and_then(|v| v.parse().ok()).unwrap_or(0.0);
     let ry: f64 = a.get("ry").and_then(|v| v.parse().ok()).unwrap_or(0.0);
-    if rx <= 0.0 || ry <= 0.0 { return None; }
+    if rx <= 0.0 || ry <= 0.0 {
+        return None;
+    }
     let (cx, cy) = t.apply_point(cx, cy);
     let scale = t.uniform_scale();
     let rx = (rx * scale).max(0.0);
@@ -863,11 +929,19 @@ fn build_ellipse(
     let fill = a.get("fill").and_then(|v| parse_paint(v, a, defs));
     let stroke = a.get("stroke").and_then(|v| parse_paint(v, a, defs));
     let stroke_width = a.get("stroke-width").and_then(|v| v.parse().ok());
-    let opacity = a.get("opacity").and_then(|v| v.parse().ok())
+    let opacity = a
+        .get("opacity")
+        .and_then(|v| v.parse().ok())
         .or_else(|| a.get("fill-opacity").and_then(|v| v.parse().ok()));
     Some(SvgShape::Ellipse {
-        cx, cy, rx, ry,
-        fill, stroke, stroke_width, opacity,
+        cx,
+        cy,
+        rx,
+        ry,
+        fill,
+        stroke,
+        stroke_width,
+        opacity,
     })
 }
 
@@ -882,14 +956,28 @@ fn build_line(
     let y2: f64 = a.get("y2").and_then(|v| v.parse().ok()).unwrap_or(0.0);
     let (x1, y1) = t.apply_point(x1, y1);
     let (x2, y2) = t.apply_point(x2, y2);
-    let stroke = a.get("stroke").and_then(|v| parse_paint(v, a, defs))
-        .or_else(|| Some(Paint::Color { rgb: "000000".into(), opacity: None }));
-    let stroke_width = a.get("stroke-width").and_then(|v| v.parse().ok())
+    let stroke = a
+        .get("stroke")
+        .and_then(|v| parse_paint(v, a, defs))
+        .or_else(|| {
+            Some(Paint::Color {
+                rgb: "000000".into(),
+                opacity: None,
+            })
+        });
+    let stroke_width = a
+        .get("stroke-width")
+        .and_then(|v| v.parse().ok())
         .or(Some(1.0));
     let opacity = a.get("opacity").and_then(|v| v.parse().ok());
     Some(SvgShape::Line {
-        x1, y1, x2, y2,
-        stroke, stroke_width, opacity,
+        x1,
+        y1,
+        x2,
+        y2,
+        stroke,
+        stroke_width,
+        opacity,
     })
 }
 
@@ -902,7 +990,9 @@ fn build_path(
     let fill = a.get("fill").and_then(|v| parse_paint(v, a, defs));
     let stroke = a.get("stroke").and_then(|v| parse_paint(v, a, defs));
     let stroke_width = a.get("stroke-width").and_then(|v| v.parse().ok());
-    let opacity = a.get("opacity").and_then(|v| v.parse().ok())
+    let opacity = a
+        .get("opacity")
+        .and_then(|v| v.parse().ok())
         .or_else(|| a.get("fill-opacity").and_then(|v| v.parse().ok()));
     // Pre-bake the active transform into the path by re-emitting each
     // command with the parent group's translation/scale applied. This
@@ -911,7 +1001,11 @@ fn build_path(
     // writer for how that viewport is chosen.
     let d = apply_transform_to_path(&d, t);
     Some(SvgShape::Path {
-        d, fill, stroke, stroke_width, opacity,
+        d,
+        fill,
+        stroke,
+        stroke_width,
+        opacity,
     })
 }
 
@@ -925,7 +1019,9 @@ fn build_poly(
     let mut d = String::new();
     let mut first = true;
     for token in points.split(|c: char| c.is_whitespace() || c == ',') {
-        if token.is_empty() { continue; }
+        if token.is_empty() {
+            continue;
+        }
         let mut nums = token.split(|c: char| c == ',' || c == 'x' || c == 'X');
         let x: f64 = nums.next()?.parse().ok()?;
         let y: f64 = nums.next()?.parse().ok()?;
@@ -940,13 +1036,24 @@ fn build_poly(
     if tag == "polygon" {
         d.push_str(" Z");
     }
-    let fill = a.get("fill").and_then(|v| parse_paint(v, a, defs))
-        .or_else(|| Some(Paint::Color { rgb: "000000".into(), opacity: None }));
+    let fill = a
+        .get("fill")
+        .and_then(|v| parse_paint(v, a, defs))
+        .or_else(|| {
+            Some(Paint::Color {
+                rgb: "000000".into(),
+                opacity: None,
+            })
+        });
     let stroke = a.get("stroke").and_then(|v| parse_paint(v, a, defs));
     let stroke_width = a.get("stroke-width").and_then(|v| v.parse().ok());
     let opacity = a.get("opacity").and_then(|v| v.parse().ok());
     Some(SvgShape::Path {
-        d, fill, stroke, stroke_width, opacity,
+        d,
+        fill,
+        stroke,
+        stroke_width,
+        opacity,
     })
 }
 
@@ -982,7 +1089,8 @@ fn build_image(
         _ => return None, // only PNG/JPEG supported
     };
     Some(SvgShape::Image {
-        x, y,
+        x,
+        y,
         width: width.unwrap_or(100.0),
         height: height.unwrap_or(100.0),
         data: decoded,
@@ -996,7 +1104,11 @@ fn format_decimal(v: f64) -> String {
     // ship "12.000000" through the zip.
     let s = format!("{:.4}", v);
     let s = s.trim_end_matches('0').trim_end_matches('.').to_string();
-    if s.is_empty() { "0".to_string() } else { s }
+    if s.is_empty() {
+        "0".to_string()
+    } else {
+        s
+    }
 }
 
 /// Decode base64 from a slice of ASCII bytes. Returns `None` on invalid input.
@@ -1004,36 +1116,80 @@ pub(crate) fn base64_decode(input: &[u8]) -> Option<Vec<u8>> {
     const DECODE_TABLE: [i8; 256] = {
         let mut t = [-1i8; 256];
         // A-Z
-        t[b'A' as usize] = 0; t[b'B' as usize] = 1; t[b'C' as usize] = 2;
-        t[b'D' as usize] = 3; t[b'E' as usize] = 4; t[b'F' as usize] = 5;
-        t[b'G' as usize] = 6; t[b'H' as usize] = 7; t[b'I' as usize] = 8;
-        t[b'J' as usize] = 9; t[b'K' as usize] = 10; t[b'L' as usize] = 11;
-        t[b'M' as usize] = 12; t[b'N' as usize] = 13; t[b'O' as usize] = 14;
-        t[b'P' as usize] = 15; t[b'Q' as usize] = 16; t[b'R' as usize] = 17;
-        t[b'S' as usize] = 18; t[b'T' as usize] = 19; t[b'U' as usize] = 20;
-        t[b'V' as usize] = 21; t[b'W' as usize] = 22; t[b'X' as usize] = 23;
-        t[b'Y' as usize] = 24; t[b'Z' as usize] = 25;
+        t[b'A' as usize] = 0;
+        t[b'B' as usize] = 1;
+        t[b'C' as usize] = 2;
+        t[b'D' as usize] = 3;
+        t[b'E' as usize] = 4;
+        t[b'F' as usize] = 5;
+        t[b'G' as usize] = 6;
+        t[b'H' as usize] = 7;
+        t[b'I' as usize] = 8;
+        t[b'J' as usize] = 9;
+        t[b'K' as usize] = 10;
+        t[b'L' as usize] = 11;
+        t[b'M' as usize] = 12;
+        t[b'N' as usize] = 13;
+        t[b'O' as usize] = 14;
+        t[b'P' as usize] = 15;
+        t[b'Q' as usize] = 16;
+        t[b'R' as usize] = 17;
+        t[b'S' as usize] = 18;
+        t[b'T' as usize] = 19;
+        t[b'U' as usize] = 20;
+        t[b'V' as usize] = 21;
+        t[b'W' as usize] = 22;
+        t[b'X' as usize] = 23;
+        t[b'Y' as usize] = 24;
+        t[b'Z' as usize] = 25;
         // a-z
-        t[b'a' as usize] = 26; t[b'b' as usize] = 27; t[b'c' as usize] = 28;
-        t[b'd' as usize] = 29; t[b'e' as usize] = 30; t[b'f' as usize] = 31;
-        t[b'g' as usize] = 32; t[b'h' as usize] = 33; t[b'i' as usize] = 34;
-        t[b'j' as usize] = 35; t[b'k' as usize] = 36; t[b'l' as usize] = 37;
-        t[b'm' as usize] = 38; t[b'n' as usize] = 39; t[b'o' as usize] = 40;
-        t[b'p' as usize] = 41; t[b'q' as usize] = 42; t[b'r' as usize] = 43;
-        t[b's' as usize] = 44; t[b't' as usize] = 45; t[b'u' as usize] = 46;
-        t[b'v' as usize] = 47; t[b'w' as usize] = 48; t[b'x' as usize] = 49;
-        t[b'y' as usize] = 50; t[b'z' as usize] = 51;
+        t[b'a' as usize] = 26;
+        t[b'b' as usize] = 27;
+        t[b'c' as usize] = 28;
+        t[b'd' as usize] = 29;
+        t[b'e' as usize] = 30;
+        t[b'f' as usize] = 31;
+        t[b'g' as usize] = 32;
+        t[b'h' as usize] = 33;
+        t[b'i' as usize] = 34;
+        t[b'j' as usize] = 35;
+        t[b'k' as usize] = 36;
+        t[b'l' as usize] = 37;
+        t[b'm' as usize] = 38;
+        t[b'n' as usize] = 39;
+        t[b'o' as usize] = 40;
+        t[b'p' as usize] = 41;
+        t[b'q' as usize] = 42;
+        t[b'r' as usize] = 43;
+        t[b's' as usize] = 44;
+        t[b't' as usize] = 45;
+        t[b'u' as usize] = 46;
+        t[b'v' as usize] = 47;
+        t[b'w' as usize] = 48;
+        t[b'x' as usize] = 49;
+        t[b'y' as usize] = 50;
+        t[b'z' as usize] = 51;
         // 0-9
-        t[b'0' as usize] = 52; t[b'1' as usize] = 53; t[b'2' as usize] = 54;
-        t[b'3' as usize] = 55; t[b'4' as usize] = 56; t[b'5' as usize] = 57;
-        t[b'6' as usize] = 58; t[b'7' as usize] = 59; t[b'8' as usize] = 60;
+        t[b'0' as usize] = 52;
+        t[b'1' as usize] = 53;
+        t[b'2' as usize] = 54;
+        t[b'3' as usize] = 55;
+        t[b'4' as usize] = 56;
+        t[b'5' as usize] = 57;
+        t[b'6' as usize] = 58;
+        t[b'7' as usize] = 59;
+        t[b'8' as usize] = 60;
         t[b'9' as usize] = 61;
-        t[b'+' as usize] = 62; t[b'/' as usize] = 63; t[b'=' as usize] = 64;
+        t[b'+' as usize] = 62;
+        t[b'/' as usize] = 63;
+        t[b'=' as usize] = 64;
         t
     };
 
     let input = input.trim_ascii();
-    if input.is_empty() { return Some(Vec::new()); }
+    if input.is_empty() {
+        return Some(Vec::new());
+    }
 
     // Pad to multiple of 4
     let padding = (4 - (input.len() % 4)) % 4;
@@ -1043,11 +1199,18 @@ pub(crate) fn base64_decode(input: &[u8]) -> Option<Vec<u8>> {
     let mut i = 0;
     while i < len {
         let get = |idx: usize| -> i8 {
-            if idx >= input.len() { return -1 }
+            if idx >= input.len() {
+                return -1;
+            }
             DECODE_TABLE[input[idx] as usize]
         };
-        let a = get(i); let b = get(i+1); let c = get(i+2); let d = get(i+3);
-        if a < 0 || b < 0 { return None; }
+        let a = get(i);
+        let b = get(i + 1);
+        let c = get(i + 2);
+        let d = get(i + 3);
+        if a < 0 || b < 0 {
+            return None;
+        }
         buf.push(((a as u8) << 2) | ((b as u8) >> 4));
         if c >= 0 {
             buf.push(((b as u8) & 0x0F) << 4 | ((c as u8) >> 2));
@@ -1298,7 +1461,13 @@ pub struct Transform {
 }
 
 impl Transform {
-    fn identity() -> Self { Self { tx: 0.0, ty: 0.0, scale: 1.0 } }
+    fn identity() -> Self {
+        Self {
+            tx: 0.0,
+            ty: 0.0,
+            scale: 1.0,
+        }
+    }
 
     fn apply_point(&self, x: f64, y: f64) -> (f64, f64) {
         (self.tx + x * self.scale, self.ty + y * self.scale)
@@ -1327,10 +1496,14 @@ impl Transform {
                     .filter(|s| !s.is_empty())
                     .collect();
                 if parts.len() >= 1 {
-                    if let Ok(x) = parts[0].parse::<f64>() { out.tx += x * out.scale; }
+                    if let Ok(x) = parts[0].parse::<f64>() {
+                        out.tx += x * out.scale;
+                    }
                 }
                 if parts.len() >= 2 {
-                    if let Ok(y) = parts[1].parse::<f64>() { out.ty += y * out.scale; }
+                    if let Ok(y) = parts[1].parse::<f64>() {
+                        out.ty += y * out.scale;
+                    }
                 }
             } else if let Some(rest) = body.strip_prefix("scale(") {
                 let body = rest.trim_end_matches(')');

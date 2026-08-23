@@ -59,7 +59,13 @@ export function applyStreamingTextDeltas(
           if (lastItem && lastItem.type === 'reasoning' && !lastItem.completed) {
             workingItems = [
               ...items.slice(0, -1),
-              { ...lastItem, completed: true },
+              {
+                ...lastItem,
+                completed: true,
+                durationMs: lastItem.durationMs ?? (
+                  lastItem.startedAt ? Math.max(0, Date.now() - lastItem.startedAt) : undefined
+                ),
+              },
             ];
           }
 

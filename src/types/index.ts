@@ -57,6 +57,9 @@ export type {
   SearchResult,
   KnowledgeSearchResult,
   KnowledgeBase,
+  KnowledgeDocumentStatus,
+  KnowledgeIndexStatus,
+  KnowledgeUpdateResult,
   BuildProgress,
 } from './knowledge';
 
@@ -65,6 +68,7 @@ export type {
   FeatureToggleId,
   FeatureToggleDescriptor,
   FeatureToggleMap,
+  ImageAttachmentInput,
   MessageToolCall,
   MessageToolResult,
   TodoStatus,
@@ -78,6 +82,13 @@ export type {
   SubagentActivity,
   ChatSession,
 } from './aipanel';
+
+export type {
+  PluginManifest,
+  InstalledPlugin,
+  PluginCreateInput,
+  PluginPackageResult,
+} from './plugins';
 
 export type {
   FileKind,

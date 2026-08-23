@@ -1,5 +1,5 @@
 import React, { useRef } from 'react';
-import { PlusCircle, MessageSquare, X, History } from 'lucide-react';
+import { PlusCircle, MessageSquare, X, History, ListTree, Minimize2 } from 'lucide-react';
 import type { ChatSession } from '../../store';
 import styles from './AIPanelHeader.module.css';
 
@@ -18,6 +18,8 @@ interface ChatHeaderProps {
   onClose: () => void;
   onToggleHistory: () => void;
   historyOpen: boolean;
+  displayMode: 'minimal' | 'detailed';
+  onToggleDisplayMode: () => void;
 }
 
 export const ChatHeader: React.FC<ChatHeaderProps> = ({
@@ -29,6 +31,8 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
   onClose,
   onToggleHistory,
   historyOpen,
+  displayMode,
+  onToggleDisplayMode,
 }) => {
   const sessionListRef = useRef<HTMLDivElement>(null);
 
@@ -90,6 +94,16 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
           ))}
         </div>
       </div>
+      <button
+        className={styles.closeButton}
+        title={displayMode === 'minimal' ? '显示工具与思考详情' : '切换到极简模式'}
+        aria-label={displayMode === 'minimal' ? '显示详细过程' : '切换到极简模式'}
+        onClick={onToggleDisplayMode}
+        type="button"
+        data-active={displayMode === 'detailed' ? true : undefined}
+      >
+        {displayMode === 'minimal' ? <ListTree size={16} /> : <Minimize2 size={16} />}
+      </button>
       <button className={styles.closeButton} title="关闭面板" onClick={onClose} type="button">
         <PanelRightCloseIcon />
       </button>

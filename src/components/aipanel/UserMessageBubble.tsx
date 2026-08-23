@@ -1,9 +1,11 @@
 import React from 'react';
 import { Pencil, RotateCcw, X } from 'lucide-react';
+import type { ImageAttachmentInput } from '../../types';
 import styles from './AIPanelMessage.module.css';
 
 interface UserMessageBubbleProps {
   content: string;
+  imageAttachments?: ImageAttachmentInput[];
   isEditing: boolean;
   editingContent: string;
   isStreaming: boolean;
@@ -16,6 +18,7 @@ interface UserMessageBubbleProps {
 
 export const UserMessageBubble: React.FC<UserMessageBubbleProps> = ({
   content,
+  imageAttachments,
   isEditing,
   editingContent,
   isStreaming,
@@ -63,6 +66,15 @@ export const UserMessageBubble: React.FC<UserMessageBubbleProps> = ({
           </div>
         ) : (
           <>
+            {imageAttachments && imageAttachments.length > 0 && (
+              <div className={styles.userImageAttachments} aria-label="已附加图片">
+                {imageAttachments.map((attachment, index) => (
+                  <span key={attachment.path ?? attachment.name ?? index}>
+                    {attachment.name ?? `图片 ${index + 1}`}
+                  </span>
+                ))}
+              </div>
+            )}
             <div className={styles.messageText}>{content}</div>
             {!isStreaming && (
               <button

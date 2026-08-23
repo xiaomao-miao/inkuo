@@ -10,8 +10,8 @@ use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use thiserror::Error;
+use tokio::sync::RwLock;
 
 #[derive(Error, Debug)]
 pub enum ToolError {
@@ -85,7 +85,11 @@ impl ToolParameters {
                     default: None,
                 },
             );
-            assert!(previous.is_none(), "Duplicate tool parameter name: {}", name);
+            assert!(
+                previous.is_none(),
+                "Duplicate tool parameter name: {}",
+                name
+            );
         }
 
         let required: Vec<String> = required.iter().map(|s| s.to_string()).collect();
@@ -132,7 +136,12 @@ impl ToolDefinition {
         }
     }
 
-    pub fn new_with_label(name: &str, label_zh: &str, description: &str, parameters: ToolParameters) -> Self {
+    pub fn new_with_label(
+        name: &str,
+        label_zh: &str,
+        description: &str,
+        parameters: ToolParameters,
+    ) -> Self {
         Self {
             tool_type: "function".to_string(),
             function: ToolFunction {
@@ -216,41 +225,45 @@ impl ToolResult {
 }
 
 // Re-export tool structs and their enum variants for the unified ToolExecutor
-mod file_tools;
-mod search_tools;
-mod office;
+pub mod asset_registry;
+mod convert_tools; // svg_to_png / md_to_word / word_to_pdf  (document_converter sub-agent)
 mod database_tools;
-mod meta_tools; // get_tool_help + delegate_to
-mod todo_tools; // update_todo (read-only meta-tool; see agent_loop::try_handle_meta_tool)
+mod file_tools;
+pub mod image_gen_tools; // generate_image (AI image generation)
+mod media_tools; // read_image / read_pdf  (binary workspace files for multimodal LLMs)
 mod mermaid_tools; // render_mermaid  (in-process merman renderer, mermaid.js 11.15 parity)
-mod svg_tools;  // create_svg  (AI-authored standalone .svg files)
+mod meta_tools; // get_tool_help + delegate_to
+mod office;
 mod pptx; // create_pptx (packs SVGs into editable .pptx; see office_pptx_expert)
 mod pptx_anim; // create_pptx_animation + add_pptx_animation
-mod web_search_tool; // web_search (external encyclopedia lookup; today Baike)
-mod media_tools; // read_image / read_pdf  (binary workspace files for multimodal LLMs)
-mod convert_tools; // svg_to_png / md_to_word / word_to_pdf  (document_converter sub-agent)
-pub mod image_gen_tools; // generate_image (AI image generation)
-pub mod asset_registry; // binary side-channel: stores asset://<id> entries so LLM context never sees base64
+mod sandbox_tools; // dependency-free, allowlisted diagnostics (feature-gated)
+mod search_tools;
+mod svg_tools; // create_svg  (AI-authored standalone .svg files)
+mod todo_tools; // update_todo (read-only meta-tool; see agent_loop::try_handle_meta_tool)
+mod visual_inspection_tools; // Office/PPT render -> bounded multimodal page assets
+mod web_search_tool; // web_search (external encyclopedia lookup; today Baike) // binary side-channel: stores asset://<id> entries so LLM context never sees base64
 
 // ── Re-exports ─────────────────────────────────────────────────────────────────
 
-pub use file_tools::{ReadFileTool, WriteFileTool, EditFileTool, CreateDirTool, MoveFileTool};
-pub use search_tools::{ListDirTool, GlobTool, GrepTool};
-pub use office::{
-    ReadOfficeFileTool, CreateWordDocTool, CompareWordDocsTool, ModifyExcelTool,
-    CreateExcelTool, InspectOfficeTool,
-};
+pub use convert_tools::{MdToWordTool, SvgToPngTool, WordToPdfTool};
 pub use database_tools::DatabaseSearchTool;
-pub use meta_tools::{GetToolHelpTool, DelegateToTool};
-pub use todo_tools::{UpdateTodoTool, TodoItem};
-pub use mermaid_tools::RenderMermaidTool;
-pub use svg_tools::{CreateSvgTool, CreateSvgOutcome};
-pub use pptx::{CreatePptxTool, CreatePptxOutcome};
-pub use pptx_anim::{CreatePptxAnimationTool, AddAnimationTool};
-pub use web_search_tool::WebSearchTool;
+pub use file_tools::{CreateDirTool, EditFileTool, MoveFileTool, ReadFileTool, WriteFileTool};
+pub use image_gen_tools::{GenerateImageOutcome, GenerateImageTool};
 pub use media_tools::{ReadImageTool, ReadPdfTool};
-pub use convert_tools::{SvgToPngTool, MdToWordTool, WordToPdfTool};
-pub use image_gen_tools::{GenerateImageTool, GenerateImageOutcome};
+pub use mermaid_tools::RenderMermaidTool;
+pub use meta_tools::{DelegateToTool, GetToolHelpTool};
+pub use office::{
+    CompareWordDocsTool, CreateExcelTool, CreateWordDocTool, InspectOfficeTool, ModifyExcelTool,
+    ReadOfficeFileTool,
+};
+pub use pptx::{CreatePptxOutcome, CreatePptxTool};
+pub use pptx_anim::{AddAnimationTool, CreatePptxAnimationTool};
+pub use sandbox_tools::SandboxCommandTool;
+pub use search_tools::{GlobTool, GrepTool, ListDirTool};
+pub use svg_tools::{CreateSvgOutcome, CreateSvgTool};
+pub use todo_tools::{TodoItem, UpdateTodoTool};
+pub use visual_inspection_tools::RenderOfficePreviewTool;
+pub use web_search_tool::WebSearchTool;
 
 /// Unified executor enum combining all tool implementations
 pub enum ToolExecutor {
@@ -284,6 +297,8 @@ pub enum ToolExecutor {
     SvgToPng(convert_tools::SvgToPngTool),
     MdToWord(convert_tools::MdToWordTool),
     WordToPdf(convert_tools::WordToPdfTool),
+    SandboxCommand(sandbox_tools::SandboxCommandTool),
+    RenderOfficePreview(visual_inspection_tools::RenderOfficePreviewTool),
     // Meta tools (intercepted by the agent loop; execute() returns an error
     // if reached directly).
     GetToolHelp(meta_tools::GetToolHelpTool),
@@ -323,6 +338,8 @@ impl ToolExecutor {
             ToolExecutor::SvgToPng(_) => "svg_to_png",
             ToolExecutor::MdToWord(_) => "md_to_word",
             ToolExecutor::WordToPdf(_) => "word_to_pdf",
+            ToolExecutor::SandboxCommand(_) => "run_sandbox_command",
+            ToolExecutor::RenderOfficePreview(_) => "render_office_preview",
             ToolExecutor::GetToolHelp(_) => "get_tool_help",
             ToolExecutor::DelegateTo(_) => "delegate_to",
             ToolExecutor::UpdateTodo(_) => "update_todo",
@@ -347,7 +364,7 @@ impl ToolExecutor {
             ToolExecutor::InspectOffice(t) => t.definition(),
             ToolExecutor::RenderMermaid(t) => t.definition(),
             ToolExecutor::CreateSvg(t) => t.definition(),
-    ToolExecutor::CreatePptx(t) => t.definition(),
+            ToolExecutor::CreatePptx(t) => t.definition(),
             ToolExecutor::CreatePptxAnimation(t) => t.definition(),
             ToolExecutor::AddPptxAnimation(t) => t.definition(),
             ToolExecutor::DatabaseSearch(t) => t.definition(),
@@ -358,13 +375,19 @@ impl ToolExecutor {
             ToolExecutor::SvgToPng(t) => t.definition(),
             ToolExecutor::MdToWord(t) => t.definition(),
             ToolExecutor::WordToPdf(t) => t.definition(),
+            ToolExecutor::SandboxCommand(t) => t.definition(),
+            ToolExecutor::RenderOfficePreview(t) => t.definition(),
             ToolExecutor::GetToolHelp(t) => t.definition(),
             ToolExecutor::DelegateTo(t) => t.definition(),
             ToolExecutor::UpdateTodo(t) => t.definition(),
         }
     }
 
-    pub async fn execute(&self, arguments: Value, workspace: Option<String>) -> Result<String, ToolError> {
+    pub async fn execute(
+        &self,
+        arguments: Value,
+        workspace: Option<String>,
+    ) -> Result<String, ToolError> {
         match self {
             ToolExecutor::ReadFile(t) => t.execute(arguments, workspace).await,
             ToolExecutor::WriteFile(t) => t.execute(arguments, workspace).await,
@@ -416,9 +439,7 @@ impl ToolExecutor {
                 let outcome = t.execute(arguments, workspace).await?;
                 Ok(serde_json::to_string(&outcome).unwrap_or(outcome.output))
             }
-            ToolExecutor::AddPptxAnimation(t) => {
-                t.execute(arguments, workspace).await
-            }
+            ToolExecutor::AddPptxAnimation(t) => t.execute(arguments, workspace).await,
             ToolExecutor::DatabaseSearch(t) => t.execute(arguments, workspace).await,
             ToolExecutor::WebSearch(t) => t.execute(arguments, workspace).await,
             ToolExecutor::ReadImage(t) => t.execute(arguments, workspace).await,
@@ -439,6 +460,8 @@ impl ToolExecutor {
                 let outcome = t.execute(arguments, workspace).await?;
                 Ok(outcome.output)
             }
+            ToolExecutor::SandboxCommand(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::RenderOfficePreview(t) => t.execute(arguments, workspace).await,
             ToolExecutor::GetToolHelp(t) => t.execute(arguments, workspace).await,
             ToolExecutor::DelegateTo(t) => t.execute(arguments, workspace).await,
             ToolExecutor::UpdateTodo(t) => t.execute(arguments, workspace).await,
@@ -449,7 +472,6 @@ impl ToolExecutor {
 pub struct ToolRegistry {
     definitions: HashMap<String, ToolDefinition>,
     executors: HashMap<String, ToolExecutor>,
-    workspace: Option<String>,
     /// AppHandle needed by tools like database_search; set once at call site.
     app_handle: Option<tauri::AppHandle>,
 }
@@ -461,7 +483,6 @@ impl ToolRegistry {
         let mut registry = Self {
             definitions: HashMap::new(),
             executors: HashMap::new(),
-            workspace: None,
             app_handle: None,
         };
         registry.register_builtin_tools();
@@ -472,7 +493,6 @@ impl ToolRegistry {
         let mut registry = Self {
             definitions: HashMap::new(),
             executors: HashMap::new(),
-            workspace: None,
             app_handle: None,
         };
         let tools: Vec<ToolExecutor> = vec![
@@ -491,8 +511,7 @@ impl ToolRegistry {
             // AppHandle is wired up via `set_app_handle`.
             ToolExecutor::WebSearch(WebSearchTool::placeholder()),
             // `update_todo` is a meta-tool — its registry stub always
-            // errors out, and the actual implementation lives in
-            // `agent_loop::try_handle_meta_tool`.
+            // errors out, while AgentExecutor owns the session-plan update.
             ToolExecutor::UpdateTodo(UpdateTodoTool),
         ];
 
@@ -503,14 +522,6 @@ impl ToolRegistry {
             registry.executors.insert(name, tool);
         }
         registry
-    }
-
-    pub fn set_workspace(&mut self, workspace: Option<String>) {
-        self.workspace = workspace;
-    }
-
-    pub fn get_workspace(&self) -> Option<&String> {
-        self.workspace.as_ref()
     }
 
     pub fn set_app_handle(&mut self, app: tauri::AppHandle) {
@@ -587,10 +598,17 @@ impl ToolRegistry {
             ToolExecutor::SvgToPng(convert_tools::SvgToPngTool::new()),
             ToolExecutor::MdToWord(convert_tools::MdToWordTool::new()),
             ToolExecutor::WordToPdf(convert_tools::WordToPdfTool::new()),
+            // Allowlisted, dependency-free diagnostics. Visibility is gated
+            // by the user-controlled `sandbox` feature toggle.
+            ToolExecutor::SandboxCommand(SandboxCommandTool),
+            // Rendered Word/PPT pages become private workspace-owned assets;
+            // the agent loop attaches their pixels on the following model turn.
+            ToolExecutor::RenderOfficePreview(RenderOfficePreviewTool),
             // Meta tools (intercepted in agent loop, but still registered so
             // they appear in tool catalogs and can be schema-validated).
             ToolExecutor::GetToolHelp(GetToolHelpTool),
             ToolExecutor::DelegateTo(DelegateToTool),
+            ToolExecutor::UpdateTodo(UpdateTodoTool),
         ];
 
         for tool in tools {
@@ -634,8 +652,9 @@ impl ToolRegistry {
     /// filter is a view, not a copy, so sub-agents automatically inherit
     /// any tools added later (e.g. lazy `database_search`).
     ///
-    /// Sub-agents that want to call an unfiltered tool name will still
-    /// resolve at runtime, but the LLM never *sees* it, so this is safe.
+    /// The AgentSession also enforces this allowlist before dispatch, so a
+    /// model-returned hidden tool name cannot bypass feature toggles or a
+    /// sub-agent profile.
     pub fn filtered_definitions(&self, allowed: &[String]) -> Vec<ToolDefinition> {
         self.definitions
             .iter()
@@ -644,18 +663,45 @@ impl ToolRegistry {
             .collect()
     }
 
-    pub async fn execute(&self, tool_call: &ToolCall) -> ToolResult {
+    /// Execute a tool within the workspace owned by the calling agent
+    /// session. The registry is process-shared, but workspace authority is
+    /// deliberately supplied per invocation so concurrent sessions can
+    /// never overwrite one another's filesystem boundary.
+    pub async fn execute_in_workspace(
+        &self,
+        tool_call: &ToolCall,
+        workspace: Option<&str>,
+    ) -> ToolResult {
         let executor = match self.executors.get(&tool_call.name) {
             Some(ex) => ex,
             None => {
                 return ToolResult::error(
                     &tool_call.id,
-                    format!("Tool '{}' not found. Available tools: {:?}", tool_call.name, self.definitions.keys().collect::<Vec<_>>()),
+                    format!(
+                        "Tool '{}' not found. Available tools: {:?}",
+                        tool_call.name,
+                        self.definitions.keys().collect::<Vec<_>>()
+                    ),
                 );
             }
         };
 
-        let workspace = self.workspace.clone();
+        let workspace = workspace.filter(|path| !path.trim().is_empty());
+        let may_run_without_workspace = matches!(
+            tool_call.name.as_str(),
+            "web_search" | "get_tool_help" | "delegate_to" | "update_todo"
+        );
+        if workspace.is_none() && !may_run_without_workspace {
+            return ToolResult::error(
+                &tool_call.id,
+                format!(
+                    "Tool '{}' requires a non-empty active workspace. Open or create a workspace before using file, Office, knowledge-base, image, conversion, or sandbox tools.",
+                    tool_call.name
+                ),
+            );
+        }
+
+        let workspace = workspace.map(str::to_owned);
 
         // `render_mermaid` and `create_svg` are both special cases among
         // file-modifying tools: their output path lives in `output_path`
@@ -664,7 +710,16 @@ impl ToolRegistry {
         // `ToolResult` for the frontend's `file-written` event. Branch on
         // the tool name first so we don't accidentally apply the generic
         // `path` lookup below to either of them.
-        if tool_call.name == "render_mermaid" || tool_call.name == "create_svg" || tool_call.name == "create_pptx" || tool_call.name == "create_pptx_animation" || tool_call.name == "add_pptx_animation" || tool_call.name == "generate_image" || tool_call.name == "svg_to_png" || tool_call.name == "md_to_word" || tool_call.name == "word_to_pdf" {
+        if tool_call.name == "render_mermaid"
+            || tool_call.name == "create_svg"
+            || tool_call.name == "create_pptx"
+            || tool_call.name == "create_pptx_animation"
+            || tool_call.name == "add_pptx_animation"
+            || tool_call.name == "generate_image"
+            || tool_call.name == "svg_to_png"
+            || tool_call.name == "md_to_word"
+            || tool_call.name == "word_to_pdf"
+        {
             let output_path = tool_call
                 .arguments
                 .get("output_path")
@@ -681,16 +736,27 @@ impl ToolRegistry {
                         use crate::file_watcher::{emit_file_change, FileChangeEvent};
                         let existed = std::path::Path::new(path).exists();
                         let event = if existed {
-                            FileChangeEvent::Modified { path: path.to_string() }
+                            FileChangeEvent::Modified {
+                                path: path.to_string(),
+                            }
                         } else {
-                            FileChangeEvent::Created { path: path.to_string() }
+                            FileChangeEvent::Created {
+                                path: path.to_string(),
+                            }
                         };
                         emit_file_change(app, event);
                     }
+                    // `create_pptx` writes a valid draft before static QA is
+                    // known. Keep the file path/event so the workspace can
+                    // display that draft, but surface hard QA failures as a
+                    // blocking tool result. This forces the specialist back
+                    // into its SVG revision loop instead of treating
+                    // `needs_revision` as ordinary success.
+                    let is_error = special_file_tool_output_is_error(&tool_call.name, &output);
                     ToolResult {
                         tool_call_id: tool_call.id.clone(),
                         output,
-                        is_error: false,
+                        is_error,
                         original_content: None,
                         new_content: None,
                         file_path: output_path,
@@ -702,8 +768,13 @@ impl ToolRegistry {
 
         let is_file_modification = matches!(
             tool_call.name.as_str(),
-            "write_file" | "edit_file" | "create_word_doc" | "create_dir"
-            | "modify_excel" | "create_excel" | "move_file"
+            "write_file"
+                | "edit_file"
+                | "create_word_doc"
+                | "create_dir"
+                | "modify_excel"
+                | "create_excel"
+                | "move_file"
         );
 
         let file_path = is_file_modification
@@ -729,7 +800,10 @@ impl ToolRegistry {
             None
         };
 
-        match executor.execute(tool_call.arguments.clone(), workspace).await {
+        match executor
+            .execute(tool_call.arguments.clone(), workspace)
+            .await
+        {
             Ok(output) => {
                 if is_file_modification {
                     // Emit file-change so the file tree refreshes even when the
@@ -738,9 +812,13 @@ impl ToolRegistry {
                         use crate::file_watcher::{emit_file_change, FileChangeEvent};
                         let existed = std::path::Path::new(path).exists();
                         let event = if existed {
-                            FileChangeEvent::Modified { path: path.to_string() }
+                            FileChangeEvent::Modified {
+                                path: path.to_string(),
+                            }
                         } else {
-                            FileChangeEvent::Created { path: path.to_string() }
+                            FileChangeEvent::Created {
+                                path: path.to_string(),
+                            }
                         };
                         emit_file_change(app, event);
                     }
@@ -763,13 +841,76 @@ impl ToolRegistry {
         }
     }
 
-    pub async fn execute_many(&self, tool_calls: &[ToolCall]) -> Vec<ToolResult> {
+    pub async fn execute_many_in_workspace(
+        &self,
+        tool_calls: &[ToolCall],
+        workspace: Option<&str>,
+    ) -> Vec<ToolResult> {
         let mut results = Vec::new();
         for tool_call in tool_calls {
-            results.push(self.execute(tool_call).await);
+            results.push(self.execute_in_workspace(tool_call, workspace).await);
         }
         results
     }
 }
 
 pub type SharedToolRegistry = Arc<RwLock<ToolRegistry>>;
+
+fn special_file_tool_output_is_error(tool_name: &str, output: &str) -> bool {
+    tool_name == "create_pptx" && pptx::output_requires_revision(output)
+}
+
+#[cfg(test)]
+mod revision_gate_tests {
+    use super::{special_file_tool_output_is_error, ToolCall, ToolRegistry};
+
+    #[test]
+    fn create_pptx_needs_revision_becomes_a_tool_error() {
+        let output = r#"{"status":"needs_revision","quality":{"passed":false}}"#;
+        assert!(special_file_tool_output_is_error("create_pptx", output));
+        assert!(!special_file_tool_output_is_error("create_svg", output));
+        assert!(!special_file_tool_output_is_error(
+            "create_pptx",
+            r#"{"status":"ok","quality":{"passed":true}}"#,
+        ));
+    }
+
+    #[tokio::test]
+    async fn registry_preserves_revision_draft_path_but_marks_result_as_error() {
+        let directory =
+            std::env::temp_dir().join(format!("inkuo-registry-pptx-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let svg_path = directory.join("slide.svg");
+        let output_path = directory.join("draft.pptx");
+        std::fs::write(
+            &svg_path,
+            r#"<svg viewBox="0 0 1280 720"><text x="80" y="100" font-size="20">Tiny title</text><text x="80" y="220" font-size="12">Tiny body</text></svg>"#,
+        )
+        .unwrap();
+        let tool_call = ToolCall {
+            id: "pptx-gate".to_string(),
+            name: "create_pptx".to_string(),
+            arguments: serde_json::json!({
+                "svg_paths": [svg_path.to_string_lossy()],
+                "output_path": output_path.to_string_lossy(),
+                "title": "Revision draft",
+            }),
+        };
+
+        let result = ToolRegistry::new()
+            .execute_in_workspace(&tool_call, directory.to_str())
+            .await;
+
+        assert!(result.is_error, "needs_revision must be a tool error");
+        assert_eq!(result.file_path.as_deref(), output_path.to_str());
+        assert!(
+            output_path.is_file(),
+            "valid draft package must be preserved"
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&result.output).unwrap()["status"],
+            "needs_revision"
+        );
+        std::fs::remove_dir_all(directory).ok();
+    }
+}

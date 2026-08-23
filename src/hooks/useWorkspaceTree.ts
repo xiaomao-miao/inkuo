@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSidebarStore } from '../store';
 import type { FileEntry } from '../types';
 import {
@@ -16,11 +16,14 @@ interface UseWorkspaceTreeResult {
   selectedFile: string | null;
   isLoading: boolean;
   loadingDirs: Set<string>;
+  directoryErrors: Map<string, string>;
   openTabs: ReturnType<typeof useSidebarStore.getState>['openTabs'];
 
   /** Synchronous read from the cache. Returns `[]` for unknown paths so the
    *  tree never has to special-case "no data yet". */
   getChildren: (dirPath: string) => FileEntry[];
+  /** Whether a directory has been read, including a known-empty directory. */
+  isDirectoryCached: (dirPath: string) => boolean;
 
   /**
    * Ensure `dirPath` has a cache entry. Cheap if it does; otherwise fetches
@@ -54,17 +57,22 @@ export function useWorkspaceTree(): UseWorkspaceTreeResult {
   const isLoading = useSidebarStore((state) => state.isLoading);
   const loadingDirs = useSidebarStore((state) => state.loadingDirs);
   const openTabs = useSidebarStore((state) => state.openTabs);
+  const [directoryErrors, setDirectoryErrors] = useState<Map<string, string>>(new Map());
 
   const toggleDir = useSidebarStore((state) => state.toggleDir);
   const setDirLoading = useSidebarStore((state) => state.setDirLoading);
   const setCachedChildren = useSidebarStore((state) => state.setCachedChildren);
   const getCachedChildren = useSidebarStore((state) => state.getCachedChildren);
   const hasCachedChildren = useSidebarStore((state) => state.hasCachedChildren);
-  const evictCachedChildren = useSidebarStore((state) => state.evictCachedChildren);
 
   const normalizedWorkspacePath = workspacePath
     ? normalizeDirPath(workspacePath)
     : null;
+
+  useEffect(() => {
+    // Errors are transient diagnostics for the currently displayed workspace.
+    setDirectoryErrors(new Map());
+  }, [normalizedWorkspacePath]);
 
   /**
    * Fetch the children of `dirPath` from the backend, store them, and
@@ -73,7 +81,7 @@ export function useWorkspaceTree(): UseWorkspaceTreeResult {
    * This is the **only** function in the file that talks to the backend.
    * Every cache update flows through here, which means there is exactly
    * one place to reason about ordering, error handling, and the
-   * "evict-on-error" fallback.
+   * stale-cache/error fallback.
    *
    * Normalisation is performed here (not at the callsite) so every cache
    * key is automatically consistent regardless of which OS-style path the
@@ -85,19 +93,26 @@ export function useWorkspaceTree(): UseWorkspaceTreeResult {
       if (!dirPath) return;
 
       setDirLoading(dirPath, true);
+      setDirectoryErrors((current) => {
+        if (!current.has(dirPath)) return current;
+        const next = new Map(current);
+        next.delete(dirPath);
+        return next;
+      });
       try {
         const children = await loadDirectoryChildren(dirPath);
         setCachedChildren(dirPath, children);
       } catch (err) {
-        reportError('workspace-tree-fetch', err);
-        // Drop the stale entry so the tree stops rendering an out-of-date
-        // list. The next click on the row will trigger another fetch.
-        evictCachedChildren(dirPath);
+        const message = reportError('workspace-tree-fetch', err);
+        // Preserve a previously loaded list. The UI labels it as stale and
+        // offers an explicit retry; an uncached directory renders a real
+        // error state instead of an idle spinner.
+        setDirectoryErrors((current) => new Map(current).set(dirPath, message));
       } finally {
         setDirLoading(dirPath, false);
       }
     },
-    [setDirLoading, setCachedChildren, evictCachedChildren],
+    [setDirLoading, setCachedChildren],
   );
 
   /**
@@ -230,14 +245,21 @@ export function useWorkspaceTree(): UseWorkspaceTreeResult {
     [getCachedChildren],
   );
 
+  const isDirectoryCached = useCallback(
+    (dirPath: string): boolean => hasCachedChildren(normalizeDirPath(dirPath)),
+    [hasCachedChildren],
+  );
+
   return {
     workspacePath,
     expandedDirs,
     selectedFile,
     isLoading,
     loadingDirs,
+    directoryErrors,
     openTabs,
     getChildren,
+    isDirectoryCached,
     ensureLoaded,
     onDirectoryClick,
     refreshDirectory,

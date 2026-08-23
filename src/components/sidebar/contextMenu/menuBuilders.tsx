@@ -559,18 +559,24 @@ function appendKnowledgeItems(
     checked: isKnowledgeMember,
     action: async () => {
       try {
+        const defaultMembers = useSidebarStore.getState().knowledgeBase?.collections.default
+          ?? knowledgeMembers;
         const members = isKnowledgeMember
-          ? knowledgeMembers.filter((p) => p !== relativePath)
-          : [...knowledgeMembers, relativePath];
+          ? defaultMembers.filter((p) => p !== relativePath)
+          : [...defaultMembers, relativePath];
         if (workspacePath) {
-          await invoke('knowledge_add_members', {
-            workspacePath,
-            members: isKnowledgeMember ? [] : [relativePath],
-          });
           if (isKnowledgeMember) {
             await invoke('knowledge_remove_members', {
               workspacePath,
-              members: [relativePath],
+              memberPaths: [relativePath],
+              collection: 'default',
+            });
+          } else {
+            await invoke('knowledge_add_members', {
+              workspacePath,
+              memberPaths: [relativePath],
+              sessionId: `kb-context-${Date.now()}`,
+              collection: 'default',
             });
           }
         }
@@ -580,16 +586,43 @@ function appendKnowledgeItems(
         try {
           const status = await invoke<{
             workspace_id: string;
-            total_documents: number;
-            total_chunks: number;
+            document_count: number;
+            chunk_count: number;
+            last_updated: string;
             members: string[];
+            collections?: Record<string, string[]>;
+            supported_extensions?: string[];
+            documents?: Array<{
+              path: string;
+              collection: string;
+              status: 'indexed' | 'pending' | 'error';
+              chunk_count: number;
+              source_type: string;
+              size_bytes: number;
+              indexed_at?: string | null;
+              error?: string | null;
+            }>;
           }>('knowledge_status', { workspacePath });
           useSidebarStore.getState().setKnowledgeBase({
             workspaceId: status.workspace_id,
-            documentCount: status.total_documents,
-            chunkCount: status.total_chunks,
-            lastUpdated: Date.now(),
+            documentCount: status.document_count,
+            chunkCount: status.chunk_count,
+            lastUpdated: new Date(status.last_updated).getTime() || Date.now(),
             members: status.members ?? members,
+            collections: status.collections ?? { default: status.members ?? members },
+            supportedExtensions: status.supported_extensions ?? [],
+            documents: (status.documents ?? []).map((document) => ({
+              path: document.path,
+              collection: document.collection,
+              status: document.status,
+              chunkCount: document.chunk_count,
+              sourceType: document.source_type,
+              sizeBytes: document.size_bytes,
+              indexedAt: document.indexed_at
+                ? new Date(document.indexed_at).getTime()
+                : undefined,
+              error: document.error ?? undefined,
+            })),
           });
         } catch {
           // Status may not be available; keep local optimistic update.
@@ -647,7 +680,13 @@ export function buildEntryMenu(
   const relativePath = workspacePath
     ? getRelativePath(workspacePath, entry.path)
     : entry.path;
-  const isKnowledgeMember = knowledgeMembers.includes(relativePath);
+  // The file-tree shortcut explicitly manages the backward-compatible
+  // default collection. `knowledgeBase.members` is a union of every named
+  // collection, so using that union here would show "remove" for a file that
+  // exists only in (for example) `research` and then remove nothing.
+  const defaultKnowledgeMembers = useSidebarStore.getState().knowledgeBase?.collections.default
+    ?? knowledgeMembers;
+  const isKnowledgeMember = defaultKnowledgeMembers.includes(relativePath);
 
   const items: MenuItem[] = [];
 

@@ -20,7 +20,7 @@
 //!     dependency surface small (pure-Rust, no native bindings).
 
 use serde_json::{Value, json};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Instant;
 
 use super::asset_registry::{self, AssetEntry};
@@ -64,8 +64,9 @@ impl ReadImageTool {
             "read_image",
             "读取图片",
             "Read an image file (PNG / JPG / GIF / WebP / BMP / SVG) into a private \
-             asset registry and return a short `asset_id`. The raw bytes NEVER enter \
-             your context window — only the id + filename + size + format do. To use \
+             asset registry and return a short `asset_id`. Raw bytes never appear in \
+             the textual tool result. With a vision-capable model, the pixels are queued \
+             automatically for the next model iteration so you can inspect them. To use \
              the image in a downstream tool, emit the reference `asset://<asset_id>` \
              wherever the tool expects an image source, e.g. inside the SVG's \
              `<image href=\"asset://<asset_id>\" x=\"...\" y=\"...\" width=\"...\" height=\"...\"/>` \
@@ -82,13 +83,28 @@ impl ReadImageTool {
         )
     }
     pub async fn execute(&self, arguments: Value, workspace: Option<String>) -> Result<String, ToolError> {
+        let workspace_root = workspace
+            .as_deref()
+            .filter(|path| !path.trim().is_empty())
+            .ok_or_else(|| {
+                ToolError::PathValidationError(
+                    "read_image requires a non-empty active workspace".to_string(),
+                )
+            })?;
+        let canonical_workspace = std::fs::canonicalize(workspace_root).map_err(|error| {
+            ToolError::PathValidationError(format!(
+                "Workspace path does not exist: {} ({})",
+                workspace_root, error
+            ))
+        })?;
         let path = arguments["path"]
             .as_str()
             .ok_or_else(|| ToolError::InvalidArguments("read_image".to_string(), "path must be a string".into()))?;
 
         validate_workspace_path(path, &workspace)?;
 
-        let path_buf = PathBuf::from(path);
+        let path_buf = std::fs::canonicalize(path)
+            .map_err(|error| ToolError::IoError(format!("Failed to resolve {}: {}", path, error)))?;
         let mime = image_mime_for(&path_buf).ok_or_else(|| {
             ToolError::InvalidArguments(
                 "read_image".to_string(),
@@ -96,7 +112,7 @@ impl ReadImageTool {
             )
         })?;
 
-        let metadata = std::fs::metadata(&path)
+        let metadata = std::fs::metadata(&path_buf)
             .map_err(|e| ToolError::IoError(format!("Failed to stat {}: {}", path, e)))?;
 
         if metadata.len() > MAX_IMAGE_BYTES {
@@ -107,7 +123,7 @@ impl ReadImageTool {
             )));
         }
 
-        let bytes = std::fs::read(&path)
+        let bytes = std::fs::read(&path_buf)
             .map_err(|e| ToolError::IoError(format!("Failed to read {}: {}", path, e)))?;
 
         let size_human = if bytes.len() < 1024 {
@@ -133,7 +149,8 @@ impl ReadImageTool {
                 ext: ext.clone(),
                 data: bytes,
                 inserted_at: Instant::now(),
-                source_path: path.to_string(),
+                source_path: path_buf.to_string_lossy().to_string(),
+                workspace_root: canonical_workspace.to_string_lossy().to_string(),
             },
         );
 
@@ -149,7 +166,7 @@ impl ReadImageTool {
             "size_human": size_human,
             "mime": mime,
             "ext": ext,
-            "usage": "Embed via `<image href=\"asset://<asset_id>\" .../>` in create_svg, or via the equivalent image_refs parameter of create_pptx. The bytes are NOT in your context."
+            "usage": "With a vision-capable model, inspect the queued pixels on the next iteration. Embed via `<image href=\"asset://<asset_id>\" .../>` in create_svg, or via the equivalent image_refs parameter of create_pptx."
         })
         .to_string())
     }

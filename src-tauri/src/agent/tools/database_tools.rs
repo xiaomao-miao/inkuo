@@ -26,7 +26,10 @@ impl DatabaseSearchTool {
             "Search the workspace knowledge base using semantic (vector) search. \
             Use this when the user asks questions about code, documents, or information \
             that may be answered from indexed files in the workspace. \
-            Returns the most relevant chunks ranked by semantic similarity. \
+            Returns the most relevant chunks ranked by semantic similarity. When \
+            `collection` is omitted, all indexed collections are searched and merged \
+            into one global top-k; each result identifies its source collection. Set \
+            `collection` only when the user explicitly wants one named collection. \
             Note: the knowledge base must be built first via the Knowledge tab in the UI. \
             The active workspace is determined by the registry, not by this tool's arguments, \
             so there is no `workspace_path` parameter to set.",
@@ -43,6 +46,11 @@ impl DatabaseSearchTool {
                         "integer",
                         Some("Maximum number of results to return. Default: 5. Range: 1-20."),
                     ),
+                    (
+                        "collection",
+                        "string",
+                        Some("Optional named knowledge collection. Omit to search every indexed collection and return the global top results."),
+                    ),
                 ],
             ),
         )
@@ -53,38 +61,45 @@ impl DatabaseSearchTool {
         arguments: Value,
         workspace: Option<String>,
     ) -> Result<String, ToolError> {
-        let query = arguments["query"]
-            .as_str()
-            .ok_or_else(|| {
-                ToolError::InvalidArguments(
-                    "database_search".to_string(),
-                    "query must be a string".into(),
-                )
-            })?;
+        let query = arguments["query"].as_str().ok_or_else(|| {
+            ToolError::InvalidArguments(
+                "database_search".to_string(),
+                "query must be a string".into(),
+            )
+        })?;
 
         // Always use the registry-provided workspace, not an AI-supplied one.
         // Allowing the LLM to override the workspace would defeat the security
-        // boundary established by ToolRegistry::set_workspace(). If the
-        // registry has no workspace, the tool simply isn't usable.
-        let workspace_path = workspace
-            .as_deref()
-            .ok_or_else(|| {
-                ToolError::ExecutionError(
-                    "database_search requires an active workspace; none is configured".into(),
-                )
-            })?;
+        // boundary established by the immutable AgentSession workspace. If
+        // the session has no workspace, the tool simply isn't usable.
+        let workspace_path = workspace.as_deref().ok_or_else(|| {
+            ToolError::ExecutionError(
+                "database_search requires an active workspace; none is configured".into(),
+            )
+        })?;
 
         let top_k = arguments["top_k"]
             .as_i64()
             .map(|v| v.clamp(1, 20) as usize)
             .unwrap_or(5);
+        let collection = arguments["collection"]
+            .as_str()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(crate::knowledge::validate_collection_name)
+            .transpose()
+            .map_err(|message| {
+                ToolError::InvalidArguments("database_search".to_string(), message)
+            })?;
 
-        // Search through the shared infrastructure (same cache as KB mode)
-        let results = crate::knowledge::search_knowledge_base(
+        // Search through the shared infrastructure (same cache as KB mode).
+        // None intentionally means every indexed collection, not "default".
+        let results = crate::knowledge::search_knowledge_base_in_collection(
             &self.app,
             workspace_path,
             query,
             top_k,
+            collection.as_deref(),
         )
         .await
         .map_err(|e| ToolError::ExecutionError(e.to_string()))?;
@@ -115,10 +130,12 @@ impl DatabaseSearchTool {
 
             output.push_str(&format!(
                 "--- Result {} [score: {:.4}] ---\n\
+                 Collection: {}\n\
                  File: {}{}\n\
                  Content:\n{}\n\n",
                 i + 1,
                 result.score,
+                result.collection,
                 result.file_path,
                 lines,
                 result.content.trim()

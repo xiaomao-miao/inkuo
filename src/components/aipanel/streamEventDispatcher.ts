@@ -139,6 +139,34 @@ function flushAllSubagentBuffers() {
   pendingFlushCallbacks.clear();
 }
 
+function stopSubagentTimerWhenIdle(): void {
+  if (pendingFlushCallbacks.size !== 0 || subagentFlushTimer === null) return;
+  clearTimeout(subagentFlushTimer);
+  subagentFlushTimer = null;
+}
+
+/** Flush and release every module-level entry owned by one parent stream. */
+function cleanupDispatcherMessage(messageId: string): void {
+  lastCategoryByMessage.delete(messageId);
+  for (const [subMessageId, info] of Array.from(subagentActivityMap.entries())) {
+    if (subMessageId !== messageId && info.parentMessageId !== messageId) continue;
+    const callback = pendingFlushCallbacks.get(info.subagentId);
+    if (callback) {
+      flushSubagentBuffer(
+        callback.sessionId,
+        callback.parentMessageId,
+        callback.subagentId,
+        callback.appendDelta,
+      );
+    }
+    pendingFlushCallbacks.delete(info.subagentId);
+    subagentBuffers.delete(info.subagentId);
+    lastCategoryByMessage.delete(subMessageId);
+    subagentActivityMap.delete(subMessageId);
+  }
+  stopSubagentTimerWhenIdle();
+}
+
 interface StreamEventDispatcherArgs {
   payload: StreamPayload;
   currentMode: ChatMode;
@@ -290,6 +318,8 @@ export async function dispatchStreamEvent({
       // Clean up
       subagentBuffers.delete(info.subagentId);
       subagentActivityMap.delete(subMessageId);
+      lastCategoryByMessage.delete(subMessageId);
+      stopSubagentTimerWhenIdle();
     }
     return;
   }
@@ -311,6 +341,20 @@ export async function dispatchStreamEvent({
 
     // Handle sub-agent stream events
     if (event_type === 'text' && typeof content === 'string' && content.length > 0) {
+      // Preserve wire order when providers alternate reasoning and final text.
+      // Both categories have separate buffers, so letting them coexist until
+      // the timer fires would always flush text first even when reasoning
+      // arrived first.
+      if (lastSubagentCategory !== null && lastSubagentCategory !== 'text') {
+        flushSubagentBuffer(
+          session_id,
+          subagentInfo.parentMessageId,
+          subagentInfo.subagentId,
+          appendOutputDeltaToSubagentActivity,
+        );
+        pendingFlushCallbacks.delete(subagentInfo.subagentId);
+        stopSubagentTimerWhenIdle();
+      }
       // Accumulate text into buffer and schedule an adaptive flush so
       // users see progressive updates instead of waiting for the first
       // tool-call boundary.
@@ -322,6 +366,16 @@ export async function dispatchStreamEvent({
     }
 
     if (event_type === 'reasoning' && typeof content === 'string' && content.length > 0) {
+      if (lastSubagentCategory !== null && lastSubagentCategory !== 'reasoning') {
+        flushSubagentBuffer(
+          session_id,
+          subagentInfo.parentMessageId,
+          subagentInfo.subagentId,
+          appendOutputDeltaToSubagentActivity,
+        );
+        pendingFlushCallbacks.delete(subagentInfo.subagentId);
+        stopSubagentTimerWhenIdle();
+      }
       // Accumulate reasoning into buffer and schedule an adaptive flush.
       const buf = getOrCreateBuffer(subagentInfo.subagentId);
       buf.reasoning += content;
@@ -347,6 +401,7 @@ export async function dispatchStreamEvent({
         arguments: {},
         rawArguments: payload.tool_args,
         isExecuting: true,
+        startedAt: Date.now(),
       };
       addOutputToSubagentActivity(session_id, subagentInfo.parentMessageId, subagentInfo.subagentId, outputItem);
       lastCategoryByMessage.set(message_id, 'tool');
@@ -377,6 +432,7 @@ export async function dispatchStreamEvent({
       subagentBuffers.delete(subagentInfo.subagentId);
       subagentActivityMap.delete(message_id);
       lastCategoryByMessage.delete(message_id);
+      stopSubagentTimerWhenIdle();
       return;
     }
 
@@ -387,7 +443,9 @@ export async function dispatchStreamEvent({
       completeSubagentActivity(session_id, subagentInfo.parentMessageId, subagentInfo.subagentId, 'completed', final_content);
       // Clean up
       subagentBuffers.delete(subagentInfo.subagentId);
+      subagentActivityMap.delete(message_id);
       lastCategoryByMessage.delete(message_id);
+      stopSubagentTimerWhenIdle();
       return;
     }
 
@@ -416,12 +474,12 @@ export async function dispatchStreamEvent({
   }
 
   if (event_type === 'error') {
+    cleanupDispatcherMessage(message_id);
     handleStreamError({
       payload,
       flushAllPending: () => flushAllPending(session_id),
       streamingContentRef,
     });
-    lastCategoryByMessage.set(message_id, 'text');
     return;
   }
 
@@ -465,7 +523,8 @@ export async function dispatchStreamEvent({
   }
   lastCategoryByMessage.set(message_id, 'text');
 
-  if (done) {
+  if (done || event_type === 'done') {
+    cleanupDispatcherMessage(message_id);
     await handleStreamDone({
       payload,
       currentMode,

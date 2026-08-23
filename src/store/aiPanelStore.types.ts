@@ -26,6 +26,8 @@ export interface TodoSnapshot {
 export interface AIPanelUiSlice {
   isOpen: boolean;
   activeTab: 'chat' | 'edit';
+  /** Minimal hides tool/reasoning traces; detailed exposes the full stream. */
+  panelDisplayMode: 'minimal' | 'detailed';
   /**
    * Whether the feature toolbar above the chat input is expanded.
    * Pure UI state — not persisted across restarts, default false.
@@ -34,6 +36,8 @@ export interface AIPanelUiSlice {
   setIsOpen: (open: boolean) => void;
   togglePanel: () => void;
   setActiveTab: (tab: 'chat' | 'edit') => void;
+  setPanelDisplayMode: (mode: 'minimal' | 'detailed') => void;
+  togglePanelDisplayMode: () => void;
   setFeatureToolbarExpanded: (open: boolean) => void;
   toggleFeatureToolbar: () => void;
 }

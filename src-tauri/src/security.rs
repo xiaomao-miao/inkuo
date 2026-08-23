@@ -8,10 +8,10 @@
 use std::path::Path;
 
 /// Validates that `path` (string form) lies within `workspace`. Returns
-/// `Ok(())` when no workspace is configured (e.g. during early startup
-/// or unit tests that don't pin the workspace). All path comparisons
-/// happen on canonicalised absolute paths so a relative request or a
-/// symlink cannot bypass the sandbox.
+/// All path comparisons happen on canonicalised absolute paths so a relative
+/// request or a symlink cannot bypass the sandbox. A missing or blank
+/// workspace is rejected: callers that are genuinely workspace-independent
+/// must not invoke this filesystem-bound validator at all.
 ///
 /// **This does NOT check whether `path` exists** — callers should pair it
 /// with a separate existence check for read paths. For write paths the
@@ -30,9 +30,14 @@ use std::path::Path;
 ///    The legacy implementation bailed out with `return Ok(())` here,
 ///    which is a CVE-tier path-traversal bug.
 pub fn validate_workspace_path(path: &str, workspace: &Option<String>) -> Result<(), SecurityError> {
-    let Some(workspace_root) = workspace else {
-        return Ok(());
-    };
+    let workspace_root = workspace
+        .as_deref()
+        .filter(|root| !root.trim().is_empty())
+        .ok_or_else(|| {
+            SecurityError::PathValidation(
+                "A non-empty active workspace is required for filesystem access".to_string(),
+            )
+        })?;
 
     let canonical_workspace = match std::fs::canonicalize(workspace_root) {
         Ok(p) => p,
@@ -146,9 +151,10 @@ mod tests {
     }
 
     #[test]
-    fn no_workspace_is_permissive() {
-        // Without a workspace boundary, all paths are accepted (used by
-        // tests + the early-startup path).
-        validate_workspace_path("/anything/at/all.txt", &None).unwrap();
+    fn missing_or_blank_workspace_is_rejected() {
+        for workspace in [None, Some(String::new()), Some("   ".to_string())] {
+            let error = validate_workspace_path("/anything/at/all.txt", &workspace).unwrap_err();
+            assert!(error.to_string().contains("non-empty active workspace"));
+        }
     }
 }

@@ -53,5 +53,7 @@ fn main() {
     let manifest_path = std::path::Path::new(&out_dir).join("app.manifest");
     std::fs::write(&manifest_path, manifest).expect("failed to write app.manifest");
 
-    embed_resource::compile(&manifest_path, embed_resource::NONE);
+    embed_resource::compile(&manifest_path, embed_resource::NONE)
+        .manifest_required()
+        .expect("failed to embed Windows application manifest");
 }

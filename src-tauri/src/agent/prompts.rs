@@ -38,11 +38,16 @@ pub const PROFILES: &[ProfileDescriptor] = &[
         tools: &[
             "read_file", "write_file", "edit_file",
             "list_dir", "glob", "grep",
+            "create_dir", "move_file",
             "database_search",
             // `create_svg` lets the agent author a self-contained .svg
             // file. No Office equivalent — SVG is portable to docx, the
             // web, and the in-app viewer without going through Office.
             "create_svg",
+            "read_image", "read_pdf", "generate_image",
+            // Registered in the base profile but removed by
+            // feature_toggles unless the user enables Sandbox.
+            "run_sandbox_command",
             "get_tool_help", "delegate_to",
             "update_todo",
         ],
@@ -56,6 +61,7 @@ pub const PROFILES: &[ProfileDescriptor] = &[
             "read_file", "write_file",
             "list_dir", "glob", "grep",
             "read_office_file", "create_word_doc", "inspect_office", "compare_word_docs",
+            "render_office_preview",
         ],
         max_iterations: 50,
     },
@@ -63,13 +69,16 @@ pub const PROFILES: &[ProfileDescriptor] = &[
         name: "office_pptx_expert",
         label: "PowerPoint Expert",
         system_prompt: include_str!("../../prompts/subagents/office_pptx_expert.md"),
-        // Packs pre-existing SVGs into an editable .pptx. One tool — no
-        // incremental edit API in v1; users re-author the source SVGs and
-        // re-call.
+        // Owns the complete presentation workflow: grounded source intake,
+        // slide SVG authoring, visual assets, speaker-note provenance and
+        // create_pptx's structured QA/revision loop.
         tools: &[
             "read_file", "write_file",
             "list_dir", "glob", "grep",
+            "read_office_file", "read_pdf", "database_search",
+            "create_svg", "read_image", "generate_image",
             "create_pptx",
+            "render_office_preview", "get_tool_help",
         ],
         max_iterations: 50,
     },

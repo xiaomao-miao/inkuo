@@ -236,6 +236,56 @@ pub struct FileEntry {
     pub is_markdown: bool,
 }
 
+/// Metadata for a native window drop path. Errors are returned per item so one
+/// inaccessible path does not discard the rest of a multi-file drop.
+#[derive(Debug, Serialize)]
+pub struct DroppedPathInspection {
+    pub path: String,
+    pub is_directory: Option<bool>,
+    pub error: Option<String>,
+}
+
+/// Inspect paths explicitly supplied by the OS drag/drop event. This avoids
+/// granting the webview a wildcard filesystem scope merely to distinguish a
+/// file from a directory.
+#[tauri::command]
+pub async fn inspect_dropped_paths(
+    paths: Vec<String>,
+) -> Result<Vec<DroppedPathInspection>, String> {
+    const MAX_DROP_PATHS: usize = 64;
+    if paths.is_empty() {
+        return Err("No drop paths were provided".to_string());
+    }
+    if paths.len() > MAX_DROP_PATHS {
+        return Err(format!("Too many drop paths (maximum {MAX_DROP_PATHS})"));
+    }
+
+    Ok(paths
+        .into_iter()
+        .map(|path| {
+            if path.trim().is_empty() {
+                return DroppedPathInspection {
+                    path,
+                    is_directory: None,
+                    error: Some("Drop path is empty".to_string()),
+                };
+            }
+            match std::fs::metadata(&path) {
+                Ok(metadata) => DroppedPathInspection {
+                    path,
+                    is_directory: Some(metadata.is_dir()),
+                    error: None,
+                },
+                Err(error) => DroppedPathInspection {
+                    path,
+                    is_directory: None,
+                    error: Some(error.to_string()),
+                },
+            }
+        })
+        .collect())
+}
+
 /// Classify a file by extension into a coarse-grained `file_kind` string.
 ///
 /// Mirrors the TypeScript `detectFileKind` in `src/types/index.ts` so the
@@ -1122,4 +1172,3 @@ fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
 // =====================================================================
 // Frontend diagnostic bridge lives in `commands/logging.rs`.
 // =====================================================================
-

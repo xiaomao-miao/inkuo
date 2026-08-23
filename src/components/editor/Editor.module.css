@@ -43,6 +43,13 @@
   background-color: var(--bg-primary);
 }
 
+/* Keep a dirty Office component mounted without letting its canvas/grid run
+   layout or receive input while another tab is active. Restoring display on
+   activation preserves the editor engine's unsaved in-memory document. */
+.officeStackItemParked {
+  display: none;
+}
+
 .editorHeader {
   display: flex;
   align-items: center;

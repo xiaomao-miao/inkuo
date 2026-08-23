@@ -1,117 +1,151 @@
 # Tool spec: `create_pptx`
 
-The `create_pptx` tool packs a list of `.svg` files into a single `.pptx` presentation in which **every shape remains editable** in PowerPoint / Keynote / WPS. SVG geometry is converted to native OOXML shapes (`<p:sp>` / `<p:cxnSp>` / `<a:custGeom>`) rather than rasterised to a bitmap inside an `<p:pic>`. Load this spec via `get_tool_help(category="pptx")` whenever the user asks for a slide deck, a PowerPoint, a `.pptx` file, a 演示, 幻灯片, deck, presentation, or "把这几张图做成 PPT".
+`create_pptx` packages ordered, self-contained SVG slides into a PowerPoint file and runs structured static presentation-quality inspection. Supported text/basic geometry remains editable; raster media and complex geometry follow the limits below. Use it only after the deck's audience, purpose, intended outcome, narrative, visual tokens, and slide claims have been decided.
 
----
+## Contract
 
-## 1. Output contract
+- One SVG becomes one slide; `svg_paths` order is preserved.
+- The first SVG defines the presentation canvas. Use the same `viewBox` on every page; default to `0 0 1280 720` (16:9).
+- Supported text and basic geometry become native DrawingML. Raster media remains a picture object; gradients are flattened and complex-path editing may vary by host application.
+- The complete package is written to a unique sibling temp file, flushed and synced, then safely activated at `output_path`; if activation fails, the previous deck is preserved/restored. Parent directories are created.
+- POSIX activation uses an atomic rename. Windows uses a backup-and-restore fallback because standard rename cannot replace an existing file; it is recoverable on reported errors but is not a strict single-system-call atomic replacement across a process/power crash.
+- Speaker notes are real PPT notes parts, not visible slide text.
+- The return value contains deck-level and per-slide **static source QA**. It does not render PowerPoint, assess every claim's provenance, or guarantee identical host-app rendering. A file can be written with `status: "needs_revision"`; this is a preserved draft and its tool result is marked as an error so it cannot be mistaken for successful completion.
 
-The tool writes a single file at `output_path` (must end in `.pptx`). After a successful call:
+## Arguments
 
-- The file is on disk and PowerPoint / Keynote / WPS will open it without conversion.
-- Every shape on every slide is a native `<p:sp>` (rect / ellipse / connector / custom path / text box), so the user can recolour, resize, edit text, or re-arrange layers inside PowerPoint.
-- The tool returns a JSON blob describing the write (`file_path`, `slide_count`, per-slide `shape_count`, per-slide `skipped_elements`).
-- The frontend can open the file directly via the OS file association.
+| Argument | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `svg_paths` | `string[]` | yes | 1–200 absolute workspace `.svg` paths. Each file ≤12 MiB; combined input ≤96 MiB. |
+| `output_path` | `string` | yes | Absolute workspace path ending in `.pptx`. |
+| `title` | `string` | no | Core-properties title. |
+| `speaker_notes` | `string[]` | no | Empty, or exactly one note per slide. External claims and assets go under `[Sources]`. |
 
----
-
-## 2. Arguments reference
-
-| Argument      | Type           | Required | Notes                                                                                            |
-| ------------- | -------------- | -------- | ------------------------------------------------------------------------------------------------ |
-| `svg_paths`   | string[]       | ✓        | Absolute paths to `.svg` files. **Order is preserved** — n-th SVG becomes the n-th slide. At least one entry. |
-| `output_path` | string         | ✓        | Absolute workspace path ending in `.pptx`. Parent directories auto-created.                       |
-| `title`       | string         | ✗        | Deck title, stamped into `docProps/core.xml` and shown in PowerPoint's "Title" field.              |
-
----
-
-## 3. Mandatory scaffolding (per input SVG)
-
-Each input SVG becomes one slide. To look its best in the deck, the SVG should:
-
-- Declare `xmlns="http://www.w3.org/2000/svg"` so PowerPoint's XML parser accepts it.
-- Declare a `viewBox="0 0 W H"` (or at least `width` + `height`). **The slide size is derived from the SVG's viewBox** — e.g. `viewBox="0 0 1280 720"` becomes a 12.333" × 6.858" slide (the standard 16:9 PowerPoint canvas). SVG coordinates are projected 1:1 onto the slide, so a `<rect width="1280" height="720">` background paints the entire slide. **Without a `viewBox` we fall back to a 1280×720 default**, which is usually fine for the 16:9 case but will look off for square or portrait artwork.
-- Use the supported SVG subset listed in §4.
-
-OOXML allows only ONE slide size per presentation, so the deck uses the **first** slide's viewBox for `<p:sldSz>`. If a later slide has a different aspect ratio, its shapes still project 1:1 into the same canvas — they just may letterbox or overflow. In practice every slide in a deck shares the same viewBox (the recommended authoring style), so this is rarely an issue.
-
----
-
-## 4. Supported SVG subset
-
-Every element below becomes a native PowerPoint shape — fully editable:
-
-| SVG element                  | OOXML target                                  | Editable in PPT?                                                            |
-| ---------------------------- | --------------------------------------------- | --------------------------------------------------------------------------- |
-| `<rect>`                     | `<p:sp>` preset geometry `rect` / `roundRect` | ✓ (resize, recolour, edit corner radius)                                    |
-| `<circle>` / `<ellipse>`     | `<p:sp>` preset geometry `ellipse`            | ✓                                                                           |
-| `<line>`                     | `<p:cxnSp>` connector                         | ✓ (re-stroke, change line style)                                            |
-| `<polyline>` / `<polygon>`   | `<p:sp>` with `<a:custGeom>` path             | ✓ (geometry locked at the original vertex count; user can recolour + move) |
-| `<path>`                     | `<p:sp>` with `<a:custGeom>` custom path      | ✓ (PowerPoint preserves the path; recolour + edit vertex handles)           |
-| `<text>`                     | `<p:sp>` with `<p:txBody>`                    | ✓ (fully editable text; per-run bold / italic / underline preserved)        |
-| `<g transform="translate(x y) scale(s)">` | applied to children coordinates    | ✓ (the children render in their new position on the slide)                  |
-
-### Forbidden / unsupported (silently dropped)
-
-| Element                          | Why                                                            |
-| -------------------------------- | -------------------------------------------------------------- |
-| `<image>` / `<use>` / `<foreignObject>` | These embed other documents / raster images; we can't keep them editable in v1. |
-| `<filter>` / `<mask>` / `<clipPath>`     | DrawingML filter stacks are not portable; we'd need per-renderer fallbacks. |
-| `<pattern>`                      | Pattern fills require a separate theme part.                   |
-| `<switch>`                       | SVG runtime content-negotiation; not meaningful in PPT.        |
-
-### `<linearGradient>` / `<radialGradient>` — first-stop fallback
-
-Shapes filled with `url(#id)` references **are** supported: the parser walks the `<defs>` block, captures the first `<stop>`'s colour (and `stop-opacity`), and emits that as the shape's `<a:solidFill>`. Subsequent stops in the same gradient are intentionally ignored — we don't try to recreate the colour ramp in DrawingML because the ramp doesn't render portably across PowerPoint / Keynote / WPS. Practical consequences:
-
-- A 2-stop `bg: #1a1a2e → #0f3460` gradient resolves to `#1a1a2e` everywhere the SVG uses `fill="url(#bg)"`. The deck looks slightly less rich than the source SVG; that's the trade-off for portability.
-- If the gradient lives in a different SVG (no matching `<linearGradient id="…">` block in the source file), the reference degrades to `<a:noFill/>` and the shape becomes invisible. The `skipped_elements` field doesn't list this case, so always tell the user to expect solid-colour fills when they ask for gradients.
-- Both the standalone `stop-color="…"` attribute and the inline `style="stop-color:…"` form are honoured.
-
-If the user actually wants the full gradient ramp to land in PPT, **do not attempt to rasterise yourself** — there is no rasterisation tool in your registry. Suggest the user re-author the SVG without a gradient (use a solid fill chosen from the first stop), or that they export the slide manually after the deck is generated.
-
-CSS-style presentation attributes are honoured (`fill="..."`, `stroke="..."`, `stroke-width="..."`, `fill-opacity="..."`, `opacity="..."`). Inline `style="…"` declarations on shape elements are NOT parsed in v1 — the source SVG should prefer presentation attributes. (Inline `style="…"` IS parsed for `<stop>` because that's where `create_svg` and friends put gradient colours.)
-
----
-
-## 5. Common recipes
-
-### 5.1 Two-slide deck from two icons
+Example:
 
 ```json
 {
-  "svg_paths": ["/workspace/slide1.svg", "/workspace/slide2.svg"],
-  "output_path": "/workspace/deck.pptx",
-  "title": "Product Pitch"
+  "svg_paths": [
+    "/workspace/deck/01-title.svg",
+    "/workspace/deck/02-evidence.svg"
+  ],
+  "output_path": "/workspace/launch-plan.pptx",
+  "title": "Launch Plan",
+  "speaker_notes": [
+    "[Sources]\n- User-provided brief; no external source.",
+    "[Sources]\n- https://example.com/report — metric and chart data"
+  ]
 }
 ```
 
-### 5.3 SVG uses `<g transform="translate(x, y) scale(s)">`
+## Authoring requirements
 
-No special handling needed — `create_pptx` walks the SVG, applies the parent transform to every child coordinate (including `<path>` `d` attributes), and emits the result as a native OOXML shape. So `<g transform="translate(100, 50)"><path d="M 10 20 L 30 40 Z"/></g>` becomes a path with points `(110, 70) → (130, 90)` on the slide.
+Use a consistent authoring-token system but vary adjacent layout silhouettes. The generated package uses one shared blank PowerPoint master/layout; `create_pptx` does not synthesize reusable custom master variants from the SVGs. Each slide still needs one primary claim and a takeaway-style title. Avoid card grids, dashboards, pills, fake buttons, navigation chrome, and repeated component-library patterns.
 
-Only `translate` + uniform `scale` are honoured. `rotate`, `skewX/Y`, and `matrix(...)` are silently ignored — the shape will still draw, just untransformed.
+SVG fonts are converted at `0.75 PowerPoint pt per SVG px`. Unless a supplied template explicitly overrides them, use at least:
 
----
+| Role | SVG size | PowerPoint size |
+| --- | ---: | ---: |
+| Deck title | 67 px | 50 pt |
+| Slide title | 47 px | 35 pt |
+| Subheading/callout | 32 px | 24 pt |
+| Body | 22 px | 16 pt |
 
-## 6. Failure modes & recovery
+Keep title text on one line. Shorten copy or change the layout before reducing type. Use equal safe margins, normally 72–96 px on a 1280×720 canvas.
 
-| Failure                                              | Recovery                                                                                  |
-| ---------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Tool rejects: `output_path` doesn't end in `.pptx`   | Change the extension.                                                                     |
-| Tool rejects: empty `svg_paths`                      | Add at least one SVG path.                                                                |
-| Tool rejects: a `svg_paths` entry doesn't end in `.svg` | Fix the path.                                                                            |
-| Tool returns: per-slide `skipped_elements` non-empty | Tell the user which elements were dropped (e.g. "slide 1 lost 1 `<image>` element"). Suggest re-authoring if the dropped elements matter. |
-| PowerPoint opens the deck but a shape is invisible   | The source SVG explicitly used `fill="none"` for that shape — re-author with a solid fill, OR the SVG referenced a gradient whose `<defs>` block is in a different file (we degrade to noFill in that case — re-author or merge the gradients into the SVG itself). |
-| User wanted rasterised images for fidelity           | This tool does NOT do that, and there is no general-purpose rasterisation tool available. If the artwork is a Mermaid diagram, `render_mermaid` can produce PNG; for everything else, ask the user to export manually. |
+## Supported SVG
 
----
+| SVG | PowerPoint result |
+| --- | --- |
+| `rect`, `circle`, `ellipse` | Editable preset shape |
+| `line` | Editable connector |
+| `polyline`, `polygon`, `path` | Native custom geometry; editing fidelity varies for complex paths |
+| `text`, `tspan` | Editable text runs |
+| simple `g` translate/uniform-scale | Coordinates baked into children |
+| inline PNG/JPEG `image` | Embedded editable picture object |
+| linear/radial gradient | Portable solid fill using the first stop |
 
-## 7. Workflow
+`create_svg` can resolve an `asset://...` image reference into an inline data URL before this tool reads the SVG. Images are currently placed into their declared frame, so pre-crop the source to the frame aspect ratio; QA reports `media_stretched` when intrinsic and frame ratios differ.
 
-1. **Confirm the user wants an editable deck, not a flat image sequence.** The single biggest reason for rework is the user expecting raster fidelity and getting editable shapes instead.
-2. **Verify every input SVG exists** (`list_dir` / `glob`).
-3. **Check the SVGs are compatible** with §4's supported subset. If unsure, peek at the source with `read_file` — `<image>` / `<use>` / `<foreignObject>` are the common surprises. Gradients are supported but resolve to the first stop's colour, so manage user expectations accordingly.
-4. **Call `create_pptx`** with the full `svg_paths[]` in the order the user wants.
-5. **Tell the user what was made** — file path, slide count, any skipped elements.
-6. **If the user wants tweaks**, re-author the source SVG and re-call `create_pptx` with the same `output_path` (the tool overwrites).
+Unsupported or risky elements such as `use`, `foreignObject`, filter, mask, clip path, pattern, and switch are skipped and reported in `skipped_elements`; scripts are never an authoring mechanism. Use presentation attributes (`fill`, `stroke`, `stroke-width`) instead of CSS-dependent effects. Keep all gradient definitions inside the SVG that references them.
+
+## Speaker-note sources
+
+Every externally sourced non-trivial claim and every external/generated media asset requires a literal block in that slide's note:
+
+```text
+[Sources]
+- <direct URL or local file> — what was used
+- Generated: <model/tool and brief> — asset provenance
+```
+
+For a page with no external source, use `[Sources]\n- User-provided content; no external source.` Do not put private production notes on the visible canvas.
+
+The inspector can mechanically require `[Sources]` only when it detects embedded media. It cannot determine whether arbitrary visible prose is an externally sourced claim; claim-level provenance remains the author's responsibility even when static QA passes.
+
+## QA result
+
+The result includes:
+
+```json
+{
+  "status": "ok | needs_revision",
+  "completion_gate": {
+    "blocking": false,
+    "next_action": "Run render_office_preview and inspect actual slide pixels before final handoff."
+  },
+  "visual_verification": {
+    "status": "not_run"
+  },
+  "quality": {
+    "passed": true,
+    "error_count": 0,
+    "warning_count": 0,
+    "issues": [
+      {
+        "severity": "error | warning",
+        "code": "title_too_small",
+        "message": "...",
+        "slide": 2
+      }
+    ]
+  },
+  "slides": [
+    {
+      "index": 1,
+      "shape_count": 8,
+      "skipped_elements": [],
+      "quality_issues": []
+    }
+  ]
+}
+```
+
+The static inspector checks or heuristically predicts:
+
+- 16:9/default and cross-slide canvas consistency;
+- deck/slide title and body minimum sizes;
+- predicted one-line title fit;
+- text/shape overflow and probable text overlap;
+- unresolved placeholders;
+- media aspect distortion/crop review and media source notes;
+- skipped SVG elements;
+- three consecutive pages with the same layout silhouette.
+
+QA is conservative and complements, rather than replaces, rendered full-slide visual review. A zero-error result means only that these static checks passed. Fix every error. Inspect each warning and either revise it or keep it for a concrete reason. Then overwrite only the affected SVGs and call `create_pptx` again with the same full list and output path until `quality.error_count` is zero.
+
+Once `status` is `ok`, call `render_office_preview` with the generated `.pptx`. It produces at most 8 real slide PNGs per call and queues them into the next multimodal model iteration; continue from `next_start_page` until all slides have been viewed. Inspect clipping, overlap, title wrapping, placeholder text, font substitution, legibility, hierarchy, alignment, spacing, contrast, and media crop. Revise source SVGs, rebuild, and rerender when any issue appears. If the renderer reports that it is unavailable, never ask the user to install dependencies and never claim visual verification; report the static-only result and residual host-rendering risk.
+
+## Recovery
+
+| Problem | Action |
+| --- | --- |
+| Wrong extension or empty SVG list | Correct the arguments; never use `write_file` for PPTX. |
+| More than 200 slides / oversized SVG input | Split the deck or optimize embedded raster assets; do not bypass the 12 MiB-per-slide / 96 MiB-total safety limits. |
+| Note count differs from slide count | Supply exactly one note per slide or omit notes entirely. |
+| `title_may_wrap` | Shorten the takeaway title or change layout; do not shrink below 35 pt. |
+| `text_overlap` / overflow | Reposition or reduce copy, regenerate that SVG, and rerun. |
+| `media_stretched` | Crop/export the image to the intended frame ratio before embedding. |
+| `missing_media_sources` | Add a `[Sources]` block to that slide's speaker note. |
+| Repeated silhouette | Switch one page to a content-appropriate layout family. |
+| Skipped element | Re-author it with supported primitives or a pre-cropped PNG/JPEG. |

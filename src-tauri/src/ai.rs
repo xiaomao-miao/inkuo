@@ -104,6 +104,11 @@ pub struct AIConfig {
     pub model: String,
     pub temperature: f32,
     pub max_tokens: Option<u32>,
+    /// Visual input capability when known. `None` means a custom endpoint
+    /// whose capability has not been declared; the standard multimodal wire
+    /// format may still be attempted.
+    #[serde(default)]
+    pub supports_vision: Option<bool>,
 }
 
 impl Default for AIConfig {
@@ -117,6 +122,7 @@ impl Default for AIConfig {
             model: "llama3".to_string(),
             temperature: 0.7,
             max_tokens: Some(16384),
+            supports_vision: None,
         }
     }
 }

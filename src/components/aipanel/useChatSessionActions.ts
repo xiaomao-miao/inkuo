@@ -1,5 +1,4 @@
 import { invoke } from '@tauri-apps/api/core';
-import { listen, UnlistenFn } from '@tauri-apps/api/event';
 import { useCallback } from 'react';
 import {
   useAIPanelStore,
@@ -10,10 +9,7 @@ import {
   type ChatMode,
   type ChatSession,
 } from '../../store';
-import {
-  buildConversationHistory,
-  buildConversationHistoryBefore,
-} from './messageTransform';
+import { buildConversationHistoryBefore } from './messageTransform';
 import { extractErrorMessage } from '../../utils/errors';
 import {
   collectWorkspaceFiles,
@@ -22,7 +18,8 @@ import {
   restoreSnapshot,
 } from '../../services/snapshots';
 import { useNotificationStore } from '../../store';
-import type { AIProviderType } from '../../types';
+import type { AIProviderType, FeatureToggleId, ImageAttachmentInput } from '../../types';
+import { streamAgent } from '../../services/agent';
 
 interface UseChatSessionActionsArgs {
   activeSession: ChatSession | undefined;
@@ -33,16 +30,9 @@ interface UseChatSessionActionsArgs {
   setInput: (value: string) => void;
   editingMessageId: string | null;
   editingContent: string;
+  imageAttachments: ImageAttachmentInput[];
+  setImageAttachments: (attachments: ImageAttachmentInput[]) => void;
   clearEditingState: () => void;
-}
-
-interface AgentStreamEvent {
-  session_id: string;
-  message_id: string;
-  event_type: string;
-  done?: boolean;
-  error?: string;
-  final_content?: string;
 }
 
 export function useChatSessionActions({
@@ -60,6 +50,8 @@ export function useChatSessionActions({
   setInput,
   editingMessageId,
   editingContent,
+  imageAttachments,
+  setImageAttachments,
   clearEditingState,
 }: UseChatSessionActionsArgs) {
   const addMessage = useAIPanelStore((state) => state.addMessage);
@@ -119,7 +111,9 @@ export function useChatSessionActions({
   }, []);
 
   const sendMessage = useCallback(async (instructionOverride?: string) => {
-    const instruction = (instructionOverride ?? input).trim();
+    const outgoingImageAttachments = imageAttachments.map((attachment) => ({ ...attachment }));
+    const instruction = (instructionOverride ?? input).trim()
+      || (outgoingImageAttachments.length > 0 ? '请查看并分析我附加的图片。' : '');
     if (!activeSession || !instruction || isStreaming) return;
 
     const sessionId = activeSession.id;
@@ -133,6 +127,7 @@ export function useChatSessionActions({
       content: instruction,
       timestamp: Date.now(),
       outputItems: [],
+      imageAttachments: outgoingImageAttachments,
     };
 
     const assistantPlaceholder: ChatMessage = {
@@ -160,6 +155,7 @@ export function useChatSessionActions({
       clearEditingState();
     }
     setInput('');
+    setImageAttachments([]);
     setIsStreaming(sessionId, true);
     clearToolCalls(sessionId);
 
@@ -204,13 +200,10 @@ export function useChatSessionActions({
       return;
     }
 
-    // For the editing branch we deliberately EXCLUDE the edited user
-    // message from the history payload: the same text is sent as the
-    // `instruction` field on this turn, so duplicating it would teach
-    // the model to treat the question as a follow-up to itself.
-    const conversationHistory = isEditing
-      ? buildConversationHistoryBefore(liveMessages, userMessageId) ?? []
-      : buildConversationHistory(liveMessages);
+    // Always exclude this turn's user message. Its text is sent separately as
+    // `instruction`; including it in history duplicated every request and
+    // made the model treat a fresh question as a follow-up to itself.
+    const conversationHistory = buildConversationHistoryBefore(liveMessages, userMessageId) ?? [];
 
     // Auto-baseline: when sending a brand-new (not re-edited) agent-mode
     // instruction, capture a snapshot so re-editing the user message can
@@ -243,33 +236,6 @@ export function useChatSessionActions({
       }
     }
 
-    // Subscribe to the agent stream's terminal events. The baseline is
-    // intentionally NOT consumed on success — leaving it in place lets
-    // the user re-edit the same question later and see the model
-    // re-approach it from the original pre-instruction state. It is
-    // dropped only when the message/session is deleted or the snapshot
-    // is evicted by the LRU pass.
-    let unlistenAgent: UnlistenFn | null = null;
-    listen<AgentStreamEvent>('ai://stream', (event) => {
-      const payload = event.payload;
-      if (!payload) return;
-      if (payload.session_id !== sessionId) return;
-      if (payload.message_id !== assistantMessageId) return;
-      if (payload.event_type === 'done') {
-        if (unlistenAgent) {
-          unlistenAgent();
-          unlistenAgent = null;
-        }
-      } else if (payload.event_type === 'error') {
-        if (unlistenAgent) {
-          unlistenAgent();
-          unlistenAgent = null;
-        }
-      }
-    }).then((fn) => {
-      unlistenAgent = fn;
-    });
-
     try {
       const featureToggles = activeSession.featureToggles ?? {};
       // Strict KB toggles are NOT silently consumed — every prompt layer
@@ -277,9 +243,9 @@ export function useChatSessionActions({
       // future toggles can be added without touching the send path.
       const enabledToggles = Object.entries(featureToggles)
         .filter(([, on]) => Boolean(on))
-        .map(([id]) => id);
+        .map(([id]) => id as FeatureToggleId);
 
-      invoke('ai_agent_stream', {
+      void streamAgent({
         sessionId,
         messageId: assistantMessageId,
         instruction,
@@ -296,6 +262,7 @@ export function useChatSessionActions({
         // the compile-time default in `prompts.rs`.
         expertMaxIterations: expert_max_iterations,
         history: conversationHistory,
+        imageAttachments: outgoingImageAttachments,
         // Feature toggles that constrain the prompt and tool set on the
         // Rust side. The Rust handler is responsible for translating each
         // id into the appropriate fragment + tool gate; see
@@ -310,7 +277,7 @@ export function useChatSessionActions({
       updateMessage(sessionId, assistantMessageId, `抱歉，发生了错误：${extractErrorMessage(err)}`);
       setIsStreaming(sessionId, false);
     }
-  }, [activeSession, input, isStreaming, editingMessageId, updateMessage, addMessage, clearEditingState, setInput, setIsStreaming, clearToolCalls, hardCollapseHistory, collapseOldMessages, mode, resolveConfigInput]);
+  }, [activeSession, input, imageAttachments, isStreaming, editingMessageId, updateMessage, addMessage, clearEditingState, setInput, setImageAttachments, setIsStreaming, clearToolCalls, hardCollapseHistory, collapseOldMessages, mode, resolveConfigInput]);
 
   const handleSend = useCallback(async () => {
     await sendMessage();
@@ -388,6 +355,8 @@ export function useChatSessionActions({
 
       const targetMessage = session.messages.find((m) => m.id === targetUserMessageId);
       if (!targetMessage || targetMessage.role !== 'user') return null;
+      const resendImageAttachments = (targetMessage.imageAttachments ?? [])
+        .map((attachment) => ({ ...attachment }));
 
       const sessionMode = session.mode;
       const workspacePath = useSidebarStore.getState().workspacePath || undefined;
@@ -498,29 +467,10 @@ export function useChatSessionActions({
       const featureToggles = session.featureToggles ?? {};
       const enabledToggles = Object.entries(featureToggles)
         .filter(([, on]) => Boolean(on))
-        .map(([id]) => id);
-
-      // Same listener as `sendMessage` — we do NOT consume the baseline
-      // on success so a future re-edit still rolls back to the original
-      // pre-instruction state.
-      let unlistenAgent: UnlistenFn | null = null;
-      listen<AgentStreamEvent>('ai://stream', (event) => {
-        const payload = event.payload;
-        if (!payload) return;
-        if (payload.session_id !== targetSessionId) return;
-        if (payload.message_id !== assistantMessageId) return;
-        if (payload.event_type === 'done' || payload.event_type === 'error') {
-          if (unlistenAgent) {
-            unlistenAgent();
-            unlistenAgent = null;
-          }
-        }
-      }).then((fn) => {
-        unlistenAgent = fn;
-      });
+        .map(([id]) => id as FeatureToggleId);
 
       try {
-        await invoke('ai_agent_stream', {
+        await streamAgent({
           sessionId: targetSessionId,
           messageId: assistantMessageId,
           instruction,
@@ -529,6 +479,7 @@ export function useChatSessionActions({
           maxIterations: agent_max_iterations,
           expertMaxIterations: expert_max_iterations,
           history: conversationHistory,
+          imageAttachments: resendImageAttachments,
           enabledToggles,
           configInput,
         });

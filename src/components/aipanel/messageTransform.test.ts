@@ -49,6 +49,31 @@ describe('buildConversationHistoryBefore', () => {
     expect(history.map((m) => m.id)).toEqual(['u1', 'a1']);
   });
 
+  it('excludes the just-appended normal-send user turn and assistant placeholder', () => {
+    const messages = [
+      makeUser('u1', 'first'),
+      makeAssistant('a1', 'first reply'),
+      makeUser('current-user', 'new instruction'),
+      { id: 'placeholder', role: 'assistant', timestamp: 0, outputItems: [] } as ChatMessage,
+    ];
+    const history = buildConversationHistoryBefore(messages, 'current-user') ?? [];
+    expect(history.map((message) => message.id)).toEqual(['u1', 'a1']);
+    expect(history.some((message) => message.content === 'new instruction')).toBe(false);
+  });
+
+  it('preserves image attachments on historical user messages', () => {
+    const first = makeUser('u1', 'inspect this');
+    first.imageAttachments = [{
+      path: '/workspace/page.png',
+      detail: 'high',
+      name: 'page.png',
+    }];
+    const messages = [first, makeAssistant('a1', 'looks good'), makeUser('u2', 'continue')];
+    const history = buildConversationHistoryBefore(messages, 'u2') ?? [];
+
+    expect(history[0].imageAttachments).toEqual(first.imageAttachments);
+  });
+
   it('preserves complete tool-call / tool-result pairs from earlier turns', () => {
     const messages = [
       makeUser('u1', 'read a.txt'),

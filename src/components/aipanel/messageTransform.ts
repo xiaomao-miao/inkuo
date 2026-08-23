@@ -1,4 +1,11 @@
-import type { ChatMessage, MessageRole, MessageToolCall, SearchResult, KnowledgeSearchResult } from '../../store';
+import type {
+  ChatMessage,
+  KnowledgeSearchResult,
+  MessageRole,
+  MessageToolCall,
+  SearchResult,
+} from '../../store';
+import type { ImageAttachmentInput } from '../../types';
 
 /**
  * OpenAI-compatible tool history requires that an assistant message containing
@@ -112,6 +119,7 @@ export interface AgentMessagePayload {
   content: string;
   tool_calls?: MessageToolCall[];
   tool_call_id?: string;
+  imageAttachments?: ImageAttachmentInput[];
 }
 
 /**
@@ -142,6 +150,7 @@ export function toAgentPayload(message: ChatMessage): AgentMessagePayload {
     content: extractTextContent(message),
     tool_calls: message.toolCalls,
     tool_call_id: message.toolCallId,
+    imageAttachments: message.imageAttachments,
   };
 }
 

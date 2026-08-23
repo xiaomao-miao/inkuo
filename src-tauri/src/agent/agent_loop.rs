@@ -7,27 +7,32 @@
 //! 4. Continue loop until final response or max iterations
 //!
 //! The loop follows this pattern:
-//! ```
+//! ```text
 //! request → AI → [tool_calls?] → execute → AI → [tool_calls?] → ... → final
 //! ```
 
+use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use futures_util::StreamExt;
 use std::collections::HashMap;
 
+use super::multimodal::{
+    push_visual_inspection_bounded, validate_image_request_budget,
+    visual_inspections_from_tool_output, ImageAttachment, VisualInspectionInput,
+};
 use super::profile::AgentProfile;
-use super::tools::{ToolCall, ToolResult, SharedToolRegistry};
+use super::tools::{SharedToolRegistry, ToolCall, ToolResult};
 // `find_tool_spec` is reached via the `pub use super::prompts::*` glob below
 // — don't re-import it explicitly or we'll trigger the hidden_glob_reexports
 // lint. Same goes for `list_profiles` and `resolve_profile`.
 use crate::ai::{AIConfig, AIProvider};
 use crate::diff;
-use crate::streaming::{StreamPayload, FileDiffSummary, StreamDiffHunk, StreamDiffChange, OfficeFileModified};
+use crate::streaming::{
+    FileDiffSummary, OfficeFileModified, StreamDiffChange, StreamDiffHunk, StreamPayload,
+};
 
 use crate::agent::agent_helpers::{
-    parse_tool_call_message,
-    DeltaFunction, DeltaResponse, DeltaToolCall,
+    parse_tool_call_message, DeltaFunction, DeltaResponse, DeltaToolCall,
 };
 
 /// Check if a session has been cancelled
@@ -68,7 +73,18 @@ pub enum Message {
     #[serde(rename = "system")]
     System { content: String },
     #[serde(rename = "user")]
-    User { content: String },
+    User {
+        content: String,
+        /// Provider-neutral image payloads. Empty for ordinary text turns.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<ImageAttachment>,
+        /// Images are deliberately sent for one API iteration only. The
+        /// textual message remains in history, but pixels are dropped after a
+        /// successful response to avoid repeatedly re-uploading 10-30 MiB on
+        /// every later tool loop.
+        #[serde(default)]
+        images_once: bool,
+    },
     #[serde(rename = "assistant")]
     Assistant {
         content: Option<String>,
@@ -86,15 +102,37 @@ pub enum Message {
 
 impl Message {
     pub fn user(content: impl Into<String>) -> Self {
-        Self::User { content: content.into() }
+        Self::User {
+            content: content.into(),
+            images: Vec::new(),
+            images_once: false,
+        }
+    }
+
+    pub fn user_with_images(content: impl Into<String>, images: Vec<ImageAttachment>) -> Self {
+        Self::User {
+            content: content.into(),
+            images,
+            images_once: true,
+        }
     }
 
     pub fn system(content: impl Into<String>) -> Self {
-        Self::System { content: content.into() }
+        Self::System {
+            content: content.into(),
+        }
     }
 
-    pub fn assistant(content: Option<String>, reasoning_content: Option<String>, tool_calls: Option<Vec<ToolCallMessage>>) -> Self {
-        Self::Assistant { content, reasoning_content, tool_calls }
+    pub fn assistant(
+        content: Option<String>,
+        reasoning_content: Option<String>,
+        tool_calls: Option<Vec<ToolCallMessage>>,
+    ) -> Self {
+        Self::Assistant {
+            content,
+            reasoning_content,
+            tool_calls,
+        }
     }
 
     pub fn tool_result(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
@@ -120,13 +158,40 @@ pub(crate) struct ToolCallFunction {
     pub arguments: String, // JSON string
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TodoPlanStatus {
+    Pending,
+    InProgress,
+    Completed,
+}
+
+impl TodoPlanStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::InProgress => "in_progress",
+            Self::Completed => "completed",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct TodoPlanItem {
+    content: String,
+    status: TodoPlanStatus,
+}
+
 /// Agent state for a single conversation
 pub struct AgentSession {
     pub messages: Vec<Message>,
     pub max_iterations: usize,
     pub tool_registry: SharedToolRegistry,
+    /// Filesystem authority for this session. This value is fixed when the
+    /// session is constructed and is passed explicitly to every normal tool
+    /// execution; it never lives in the process-global tool registry.
+    workspace: Option<String>,
     /// Optional tool whitelist. When `Some`, only tools whose name is in
-    /// this list are advertised to the LLM in `tool_definitions_for_api`.
+    /// this list are advertised to the LLM and accepted at execution time.
     /// `None` (the default) advertises the whole registry, matching the
     /// legacy behaviour of the main Agent session before feature toggles.
     /// See `feature_toggles::effective_tool_set` for how feature toggles
@@ -141,6 +206,12 @@ pub struct AgentSession {
     /// frontend; the Tauri command sanitises and clamps values to
     /// `[1, 200]`.
     pub expert_max_iterations: HashMap<String, usize>,
+    /// Operational execution plan created by `update_todo`.
+    ///
+    /// Unlike the old UI-only snapshot, this state is rendered into the
+    /// system prompt before every model iteration, so the active row really
+    /// constrains what the model should do next.
+    todo_plan: Vec<TodoPlanItem>,
 }
 
 impl AgentSession {
@@ -149,17 +220,49 @@ impl AgentSession {
             messages: Vec::new(),
             max_iterations: DEFAULT_MAX_ITERATIONS,
             tool_registry,
+            workspace: None,
             allowed_tools: None,
             expert_max_iterations: HashMap::new(),
+            todo_plan: Vec::new(),
         }
     }
 
-    /// Restrict the tools advertised to the LLM. Does not change which
-    /// tools the registry will *execute* — that's a separate concern.
-    /// Pass `None` (or use `new`) to advertise everything.
+    /// Restrict both the tools advertised to the LLM and the tool calls the
+    /// loop will execute. This runtime check is essential because a model can
+    /// return a hidden tool name despite it being absent from the schema.
+    /// Pass `None` (or use `new`) to allow everything.
     pub fn with_allowed_tools(mut self, allowed: Option<Vec<String>>) -> Self {
         self.allowed_tools = allowed;
         self
+    }
+
+    /// Bind this session to one workspace for its entire lifetime. Empty
+    /// frontend values are treated as no workspace instead of becoming a
+    /// permissive or invalid pseudo-root.
+    pub fn with_workspace(mut self, workspace: Option<String>) -> Self {
+        self.workspace = workspace.filter(|path| !path.trim().is_empty());
+        self
+    }
+
+    pub(crate) fn workspace(&self) -> Option<&str> {
+        self.workspace.as_deref()
+    }
+
+    fn tool_authorization_error(&self, tool_call: &ToolCall) -> Option<ToolResult> {
+        let allowed = self
+            .allowed_tools
+            .as_ref()
+            .map(|tools| tools.iter().any(|name| name == &tool_call.name))
+            .unwrap_or(true);
+        (!allowed).then(|| {
+            ToolResult::error(
+                &tool_call.id,
+                format!(
+                    "Tool '{}' is disabled for this session by the active mode, feature toggles, or sub-agent profile and was not executed.",
+                    tool_call.name
+                ),
+            )
+        })
     }
 
     /// Override per-expert iteration caps. The map is keyed by sub-agent
@@ -196,12 +299,14 @@ impl AgentSession {
             messages: vec![Message::system(profile.system_prompt)],
             max_iterations: max_iters,
             tool_registry,
+            workspace: None,
             allowed_tools: if profile.allowed_tools.is_empty() {
                 None
             } else {
                 Some(profile.allowed_tools)
             },
             expert_max_iterations: HashMap::new(),
+            todo_plan: Vec::new(),
         }
     }
 
@@ -211,8 +316,8 @@ impl AgentSession {
     pub async fn tool_definitions_for_api(&self, allowed_tools: Option<&[String]>) -> Vec<Value> {
         let registry = self.tool_registry.read().await;
         let defs = match allowed_tools {
-            Some(list) if !list.is_empty() => registry.filtered_definitions(list),
-            _ => registry.get_all_definitions(),
+            Some(list) => registry.filtered_definitions(list),
+            None => registry.get_all_definitions(),
         };
         defs.iter()
             .map(|t| serde_json::to_value(t).unwrap_or(Value::Null))
@@ -228,18 +333,302 @@ impl AgentSession {
         self.messages.push(message);
     }
 
-    pub fn get_messages_for_api(&self) -> Vec<serde_json::Value> {
-        self.messages
+    /// Enqueue tool-produced images as one user message after a complete
+    /// assistant tool-call batch. `read_image` and `render_office_preview`
+    /// both reach this live path through the standard visual-assets contract.
+    pub fn enqueue_visual_inspections(
+        &mut self,
+        inputs: Vec<VisualInspectionInput>,
+    ) -> Result<(), String> {
+        if inputs.is_empty() {
+            return Ok(());
+        }
+        let mut bounded = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            push_visual_inspection_bounded(&mut bounded, input)
+                .map_err(|error| error.to_string())?;
+        }
+        self.validate_pending_visual_inspections(&bounded)?;
+        let labels = Self::visual_inspection_labels(&bounded);
+        let images = bounded.into_iter().map(|input| input.attachment).collect();
+        self.add_message(Message::user_with_images(
+            format!(
+                "Visual inspection input generated by completed tools: {}. Inspect the actual pixels now. Report only what is visibly supported; do not claim a visual check merely from file metadata. If this is a document/deck preview, evaluate clipping, overlap, legibility, hierarchy, alignment, spacing, contrast, and page/slide consistency before deciding whether another edit is required.",
+                labels
+            ),
+            images,
+        ));
+        Ok(())
+    }
+
+    fn validate_pending_visual_inspections(
+        &self,
+        inputs: &[VisualInspectionInput],
+    ) -> Result<(), String> {
+        validate_image_request_budget(
+            self.messages
+                .iter()
+                .filter_map(|message| match message {
+                    Message::User { images, .. } => Some(images.as_slice()),
+                    _ => None,
+                })
+                .flatten()
+                .chain(inputs.iter().map(|input| &input.attachment)),
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    fn visual_inspection_labels(inputs: &[VisualInspectionInput]) -> String {
+        inputs
+            .iter()
+            .map(|input| {
+                format!(
+                    "asset {} from tool call {}{}",
+                    input.asset_id,
+                    input.source_tool_call_id,
+                    input
+                        .attachment
+                        .name
+                        .as_deref()
+                        .map(|name| format!(" ({})", name))
+                        .unwrap_or_default()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// Drop transient pixel payloads after they have been included in one
+    /// successful provider request. The textual provenance remains, so later
+    /// iterations know that a visual check occurred without paying the base64
+    /// cost again or pretending the pixels are still present.
+    fn consume_one_shot_images(&mut self) {
+        for message in &mut self.messages {
+            if let Message::User {
+                content,
+                images,
+                images_once,
+            } = message
+            {
+                if *images_once && !images.is_empty() {
+                    images.clear();
+                    *images_once = false;
+                    content.push_str(
+                        "\n\n[The attached pixels were supplied to an earlier model iteration. They are not being retransmitted in this iteration; call read_image again only if a fresh visual check is necessary.]",
+                    );
+                }
+            }
+        }
+    }
+
+    fn validate_active_image_budget(&self) -> Result<(), String> {
+        validate_image_request_budget(
+            self.messages
+                .iter()
+                .filter_map(|message| match message {
+                    Message::User { images, .. } => Some(images.as_slice()),
+                    _ => None,
+                })
+                .flatten(),
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    /// Apply an `update_todo` argument object to this turn's session-owned
+    /// plan. Historical calls are intentionally not replayed into a new turn.
+    pub(crate) fn apply_todo_arguments(&mut self, arguments: &Value) -> Result<String, String> {
+        const MAX_ITEMS: usize = 32;
+        const MAX_ITEM_CHARS: usize = 500;
+
+        let action = arguments
+            .get("action")
+            .and_then(Value::as_str)
+            .unwrap_or("set");
+        match action {
+            "set" => {
+                let raw_items = arguments
+                    .get("items")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                if raw_items.len() > MAX_ITEMS {
+                    return Err(format!(
+                        "Todo list has {} items; maximum is {}.",
+                        raw_items.len(),
+                        MAX_ITEMS
+                    ));
+                }
+
+                let mut next = Vec::with_capacity(raw_items.len());
+                for (index, raw) in raw_items.into_iter().enumerate() {
+                    // v2 uses strings. v1 snapshots used objects with
+                    // `content` + `status`; accepting both lets persisted
+                    // chats hydrate without losing their plan.
+                    let (content, requested_status) = match raw {
+                        Value::String(content) => (content, None),
+                        Value::Object(object) => {
+                            let content = object
+                                .get("content")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default()
+                                .to_string();
+                            let status = object
+                                .get("status")
+                                .and_then(Value::as_str)
+                                .map(str::to_string);
+                            (content, status)
+                        }
+                        _ => return Err(format!("Todo item {} must be a string.", index + 1)),
+                    };
+                    let content = content.trim().to_string();
+                    if content.is_empty() {
+                        return Err(format!("Todo item {} cannot be empty.", index + 1));
+                    }
+                    if content.chars().count() > MAX_ITEM_CHARS {
+                        return Err(format!(
+                            "Todo item {} is too long (maximum {} characters).",
+                            index + 1,
+                            MAX_ITEM_CHARS
+                        ));
+                    }
+                    let status = match requested_status.as_deref() {
+                        Some("completed") => TodoPlanStatus::Completed,
+                        Some("in_progress") => TodoPlanStatus::InProgress,
+                        _ => TodoPlanStatus::Pending,
+                    };
+                    next.push(TodoPlanItem { content, status });
+                }
+
+                // v2 sets the first row active. For replayed v1 state, keep
+                // only its first active row (the runtime contract requires a
+                // single current step); if none exists, promote the first
+                // pending row.
+                let mut saw_active = false;
+                for item in &mut next {
+                    if item.status == TodoPlanStatus::InProgress {
+                        if saw_active {
+                            item.status = TodoPlanStatus::Pending;
+                        } else {
+                            saw_active = true;
+                        }
+                    }
+                }
+                if !next.is_empty() && !saw_active {
+                    if let Some(item) = next
+                        .iter_mut()
+                        .find(|item| item.status == TodoPlanStatus::Pending)
+                    {
+                        item.status = TodoPlanStatus::InProgress;
+                    }
+                }
+                self.todo_plan = next;
+
+                if self.todo_plan.is_empty() {
+                    Ok("Todo list cleared; no execution plan is active.".to_string())
+                } else {
+                    Ok(format!(
+                        "Execution plan activated with {} items. The active step is injected into every following model request.",
+                        self.todo_plan.len()
+                    ))
+                }
+            }
+            "advance" => {
+                if let Some(current) = self
+                    .todo_plan
+                    .iter_mut()
+                    .find(|item| item.status == TodoPlanStatus::InProgress)
+                {
+                    current.status = TodoPlanStatus::Completed;
+                }
+                if let Some(next) = self
+                    .todo_plan
+                    .iter_mut()
+                    .find(|item| item.status == TodoPlanStatus::Pending)
+                {
+                    next.status = TodoPlanStatus::InProgress;
+                    Ok(format!(
+                        "Plan advanced. Current required step: {}",
+                        next.content
+                    ))
+                } else {
+                    Ok("Plan advanced. Every step is now completed.".to_string())
+                }
+            }
+            "complete_current" => {
+                if let Some(current) = self
+                    .todo_plan
+                    .iter_mut()
+                    .find(|item| item.status == TodoPlanStatus::InProgress)
+                {
+                    current.status = TodoPlanStatus::Completed;
+                    Ok("Current plan step completed; no next step was promoted.".to_string())
+                } else {
+                    Ok("No in-progress plan step exists.".to_string())
+                }
+            }
+            other => Err(format!(
+                "Unknown todo action '{}'. Expected set, advance, or complete_current.",
+                other
+            )),
+        }
+    }
+
+    fn todo_prompt_fragment(&self) -> Option<String> {
+        if self.todo_plan.is_empty() {
+            return None;
+        }
+
+        let mut lines = vec![
+            "## Live execution plan (authoritative for this iteration)".to_string(),
+            "This is operational state, not decorative UI. Work on the single in_progress row now. Do not skip pending rows, repeat completed rows, or claim completion before advancing the plan with update_todo.".to_string(),
+        ];
+        for (index, item) in self.todo_plan.iter().enumerate() {
+            lines.push(format!(
+                "{}. [{}] {}",
+                index + 1,
+                item.status.as_str(),
+                item.content
+            ));
+        }
+        Some(lines.join("\n"))
+    }
+
+    pub fn get_messages_for_api(&self, provider: &AIProvider) -> Vec<serde_json::Value> {
+        let mut messages: Vec<Value> = self.messages
             .iter()
             .map(|msg| match msg {
                 Message::System { content } => serde_json::json!({
                     "role": "system",
                     "content": content
                 }),
-                Message::User { content } => serde_json::json!({
+                Message::User { content, images, .. } if images.is_empty() => serde_json::json!({
                     "role": "user",
                     "content": content
                 }),
+                Message::User { content, images, .. } => match provider {
+                    AIProvider::Ollama { .. } => serde_json::json!({
+                        "role": "user",
+                        "content": content,
+                        "images": images.iter().map(|image| image.data_base64.clone()).collect::<Vec<_>>()
+                    }),
+                    AIProvider::OpenAI { .. } | AIProvider::Official { .. } => {
+                        let mut parts = vec![serde_json::json!({
+                            "type": "text",
+                            "text": content,
+                        })];
+                        parts.extend(images.iter().map(|image| serde_json::json!({
+                            "type": "image_url",
+                            "image_url": {
+                                "url": image.as_data_url(),
+                                "detail": image.detail.as_str(),
+                            }
+                        })));
+                        serde_json::json!({
+                            "role": "user",
+                            "content": parts,
+                        })
+                    }
+                },
                 Message::Assistant { content, reasoning_content, tool_calls } => {
                     let mut obj = serde_json::json!({
                         "role": "assistant",
@@ -261,7 +650,26 @@ impl AgentSession {
                     "content": content
                 }),
             })
-            .collect()
+            .collect();
+
+        // Merge the live plan into the first system message. A number of
+        // OpenAI-compatible providers only accept `system` at the beginning,
+        // so appending a late standalone system message is less portable.
+        if let Some(plan) = self.todo_prompt_fragment() {
+            if let Some(system) = messages
+                .iter_mut()
+                .find(|message| message.get("role").and_then(Value::as_str) == Some("system"))
+            {
+                if let Some(content) = system.get_mut("content") {
+                    let base = content.as_str().unwrap_or_default();
+                    *content = Value::String(format!("{}\n\n---\n\n{}", base, plan));
+                }
+            } else {
+                messages.insert(0, serde_json::json!({"role": "system", "content": plan}));
+            }
+        }
+
+        messages
     }
 }
 
@@ -304,18 +712,76 @@ impl AgentExecutor {
     where
         F: Fn(StreamPayload) + Clone + Send + Sync + 'static,
     {
-        tracing::debug!("AgentExecutor::run started - session_id: {}, message_id: {}", session_id, message_id);
+        self.run_with_user_message(
+            session,
+            Message::user(user_request),
+            session_id,
+            message_id,
+            on_event,
+        )
+        .await
+    }
 
-        // Add user message
-        session.add_message(Message::user(user_request));
+    /// Run an agent turn whose user message includes one or more images.
+    /// Images have already been bounded and MIME-validated by
+    /// `resolve_image_attachments`; provider-specific serialization happens
+    /// immediately before each API request.
+    pub async fn run_multimodal<F>(
+        &self,
+        session: &mut AgentSession,
+        user_request: &str,
+        images: Vec<ImageAttachment>,
+        session_id: &str,
+        message_id: &str,
+        on_event: F,
+    ) -> Result<String, AgentError>
+    where
+        F: Fn(StreamPayload) + Clone + Send + Sync + 'static,
+    {
+        self.run_with_user_message(
+            session,
+            Message::user_with_images(user_request, images),
+            session_id,
+            message_id,
+            on_event,
+        )
+        .await
+    }
+
+    async fn run_with_user_message<F>(
+        &self,
+        session: &mut AgentSession,
+        user_message: Message,
+        session_id: &str,
+        message_id: &str,
+        on_event: F,
+    ) -> Result<String, AgentError>
+    where
+        F: Fn(StreamPayload) + Clone + Send + Sync + 'static,
+    {
+        tracing::debug!(
+            "AgentExecutor::run started - session_id: {}, message_id: {}",
+            session_id,
+            message_id
+        );
+
+        // The executor is the single owner of current-turn insertion. The
+        // frontend history and commands_agent must contain prior messages
+        // only; centralising the write here prevents double/triple prompts.
+        session.add_message(user_message);
 
         // Get tool definitions for API call. When the session carries an
         // explicit `allowed_tools` whitelist (set by feature toggles like
         // strict-KB), use that; otherwise expose the whole registry.
-        let tools = session.tool_definitions_for_api(session.allowed_tools.as_deref()).await;
+        let tools = session
+            .tool_definitions_for_api(session.allowed_tools.as_deref())
+            .await;
         let tools_json: Vec<Value> = tools
             .into_iter()
-            .map(|t| serde_json::to_value(&t).map_err(|e| AgentError::AIError(format!("Tool serialization failed: {}", e))))
+            .map(|t| {
+                serde_json::to_value(&t)
+                    .map_err(|e| AgentError::AIError(format!("Tool serialization failed: {}", e)))
+            })
             .collect::<Result<Vec<_>, _>>()?;
 
         // Run the agent loop
@@ -334,18 +800,39 @@ impl AgentExecutor {
             }
 
             // Build request
-            let messages = session.get_messages_for_api();
+            session.validate_active_image_budget().map_err(|error| {
+                AgentError::AIError(format!(
+                    "Multimodal request exceeds the shared image budget: {}",
+                    error
+                ))
+            })?;
+            let messages = session.get_messages_for_api(&self.config.provider);
 
             // Make API call with tools
             let response = self
-                .call_ai_with_tools(&messages, &tools_json, session_id, message_id, on_event.clone())
+                .call_ai_with_tools(
+                    &messages,
+                    &tools_json,
+                    session_id,
+                    message_id,
+                    on_event.clone(),
+                )
                 .await?;
+
+            // The request succeeded, so any one-shot image payloads have now
+            // reached the model. Retain provenance text but release base64
+            // before parsing/executing the next tool iteration.
+            session.consume_one_shot_images();
 
             // Parse response
             let (content, reasoning_content, tool_calls) = self.parse_response(&response)?;
 
             // Add assistant message to history (with reasoning_content for DeepSeek)
-            session.add_message(Message::assistant(content.clone(), reasoning_content.clone(), tool_calls.clone()));
+            session.add_message(Message::assistant(
+                content.clone(),
+                reasoning_content.clone(),
+                tool_calls.clone(),
+            ));
 
             // If no tool calls, we're done
             let tool_calls = match tool_calls {
@@ -385,6 +872,7 @@ impl AgentExecutor {
                 .collect();
 
             // Execute each tool call
+            let mut pending_visual_inspections = Vec::new();
             for parsed in &parsed_calls {
                 let tool_call = ToolCall {
                     id: parsed.id.clone(),
@@ -392,96 +880,197 @@ impl AgentExecutor {
                     arguments: parsed.arguments.clone(),
                 };
 
-                // Meta-tool short-circuit: `get_tool_help`, `delegate_to`, and
-                // `update_todo` are handled by the executor itself, not the
-                // registry.
-                let mut result = match self
-                    .try_handle_meta_tool(
-                        &tool_call,
-                        session,
-                        session_id,
-                        message_id,
-                        on_event.clone(),
-                    )
-                    .await
+                // `update_todo` mutates session state synchronously. Keep it
+                // outside the async meta dispatch future so that future does
+                // not retain a mutable session borrow across `.await` and
+                // then contend with the normal registry fallback.
+                let mut result = if let Some(denied) = session.tool_authorization_error(&tool_call)
                 {
-                    Some(r) => r,
-                    None => session.tool_registry.read().await.execute(&tool_call).await,
+                    denied
+                } else if tool_call.name == "update_todo" {
+                    match session.apply_todo_arguments(&tool_call.arguments) {
+                        Ok(summary) => ToolResult::success(&tool_call.id, summary),
+                        Err(error) => ToolResult::error(&tool_call.id, error),
+                    }
+                } else {
+                    match self
+                        .try_handle_meta_tool(
+                            &tool_call,
+                            session,
+                            session_id,
+                            message_id,
+                            on_event.clone(),
+                        )
+                        .await
+                    {
+                        Some(result) => result,
+                        None => {
+                            session
+                                .tool_registry
+                                .read()
+                                .await
+                                .execute_in_workspace(&tool_call, session.workspace())
+                                .await
+                        }
+                    }
                 };
 
                 // Inject the correct tool_call_id from streamed data (not the placeholder)
                 result.tool_call_id = parsed.id.clone();
 
+                // Capability-bearing asset manifests are accepted only from
+                // the explicitly trusted producers in multimodal.rs:
+                // `read_image` (one asset) and `render_office_preview`
+                // (bounded page array). Pixels are queued for the next request
+                // only after every tool result in this assistant batch lands.
+                if !result.is_error
+                    && matches!(parsed.name.as_str(), "read_image" | "render_office_preview")
+                {
+                    let asset_metadata = result.output.clone();
+                    match visual_inspections_from_tool_output(
+                        &parsed.id,
+                        &parsed.name,
+                        &result.output,
+                        session.workspace(),
+                    ) {
+                        Ok(inputs) if !inputs.is_empty() => {
+                            if self.config.supports_vision == Some(false) {
+                                result = ToolResult::error(
+                                    &parsed.id,
+                                    format!(
+                                        "The selected model '{}' is configured as text-only, so it cannot visually inspect output from '{}'. Choose a vision-capable model; no visual verification was performed. Asset metadata: {}",
+                                        self.config.model, parsed.name, asset_metadata,
+                                    ),
+                                );
+                            } else {
+                                let batch_start = pending_visual_inspections.len();
+                                let mut queue_error = None;
+                                for input in inputs {
+                                    if let Err(error) = push_visual_inspection_bounded(
+                                        &mut pending_visual_inspections,
+                                        input,
+                                    ) {
+                                        queue_error = Some(error.to_string());
+                                        break;
+                                    }
+                                }
+                                if queue_error.is_none() {
+                                    queue_error = session
+                                        .validate_pending_visual_inspections(
+                                            &pending_visual_inspections,
+                                        )
+                                        .err();
+                                }
+                                if let Some(error) = queue_error {
+                                    pending_visual_inspections.truncate(batch_start);
+                                    result = ToolResult::error(
+                                        &parsed.id,
+                                        format!(
+                                            "Visual inspection batch limit reached: {}. Pixels from '{}' were not sent to the model; inspect fewer/smaller pages in one batch. Asset metadata: {}",
+                                            error, parsed.name, asset_metadata,
+                                        ),
+                                    );
+                                }
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            result = ToolResult::error(
+                                &parsed.id,
+                                format!(
+                                    "Output from '{}' could not be queued for visual inspection: {}. No visual verification was performed. Original tool output: {}",
+                                    parsed.name, error, asset_metadata,
+                                ),
+                            );
+                        }
+                    }
+                }
+
                 // Compute diff summary for file modification tools
                 // Only compute if we have original content; new content will be read lazily if needed
-                let diff_summary: Option<FileDiffSummary> = if let (Some(file_path), Some(original)) = (
-                    &result.file_path,
-                    &result.original_content,
-                ) {
-                    // Try to read new content for diff, but don't fail if it can't be read
-                    let new_content = std::path::Path::new(file_path)
-                        .exists()
-                        .then(|| std::fs::read_to_string(file_path).ok())
-                        .flatten();
+                let diff_summary: Option<FileDiffSummary> =
+                    if let (Some(file_path), Some(original)) =
+                        (&result.file_path, &result.original_content)
+                    {
+                        // Try to read new content for diff, but don't fail if it can't be read
+                        let new_content = std::path::Path::new(file_path)
+                            .exists()
+                            .then(|| std::fs::read_to_string(file_path).ok())
+                            .flatten();
 
-                    if let Some(new_content) = new_content {
-                        let diff_result = diff::compute_diff(original, &new_content);
-                        let file_name = std::path::Path::new(file_path)
-                            .file_name()
-                            .map(|s| s.to_string_lossy().to_string())
-                            .unwrap_or_else(|| file_path.clone());
+                        if let Some(new_content) = new_content {
+                            let diff_result = diff::compute_diff(original, &new_content);
+                            let file_name = std::path::Path::new(file_path)
+                                .file_name()
+                                .map(|s| s.to_string_lossy().to_string())
+                                .unwrap_or_else(|| file_path.clone());
 
-                        let hunks = diff_result.hunks.into_iter().map(|h| StreamDiffHunk {
-                            id: h.id,
-                            old_start: h.old_range.start_line,
-                            old_lines: h.old_range.end_line.saturating_sub(h.old_range.start_line) + 1,
-                            new_start: h.new_range.start_line,
-                            new_lines: h.new_range.end_line.saturating_sub(h.new_range.start_line) + 1,
-                            changes: h.changes.into_iter().map(|c| StreamDiffChange {
-                                tag: match c.tag {
-                                    diff::ChangeType::Delete => "delete".to_string(),
-                                    diff::ChangeType::Insert => "insert".to_string(),
-                                    diff::ChangeType::Equal => "equal".to_string(),
-                                },
-                                old_line: c.old_line,
-                                new_line: c.new_line,
-                                content: c.content,
-                            }).collect(),
-                        }).collect();
+                            let hunks = diff_result
+                                .hunks
+                                .into_iter()
+                                .map(|h| StreamDiffHunk {
+                                    id: h.id,
+                                    old_start: h.old_range.start_line,
+                                    old_lines: h
+                                        .old_range
+                                        .end_line
+                                        .saturating_sub(h.old_range.start_line)
+                                        + 1,
+                                    new_start: h.new_range.start_line,
+                                    new_lines: h
+                                        .new_range
+                                        .end_line
+                                        .saturating_sub(h.new_range.start_line)
+                                        + 1,
+                                    changes: h
+                                        .changes
+                                        .into_iter()
+                                        .map(|c| StreamDiffChange {
+                                            tag: match c.tag {
+                                                diff::ChangeType::Delete => "delete".to_string(),
+                                                diff::ChangeType::Insert => "insert".to_string(),
+                                                diff::ChangeType::Equal => "equal".to_string(),
+                                            },
+                                            old_line: c.old_line,
+                                            new_line: c.new_line,
+                                            content: c.content,
+                                        })
+                                        .collect(),
+                                })
+                                .collect();
 
-                        Some(FileDiffSummary {
-                            file_name,
-                            added_lines: diff_result.summary.added_lines,
-                            deleted_lines: diff_result.summary.deleted_lines,
-                            hunks,
-                        })
+                            Some(FileDiffSummary {
+                                file_name,
+                                added_lines: diff_result.summary.added_lines,
+                                deleted_lines: diff_result.summary.deleted_lines,
+                                hunks,
+                            })
+                        } else {
+                            None
+                        }
                     } else {
                         None
-                    }
-                } else {
-                    None
-                };
+                    };
 
                 // Detect if create_word_doc succeeded (non-error, has path)
-                let office_file_modified: Option<OfficeFileModified> = if !result.is_error
-                    && parsed.name == "create_word_doc"
-                {
-                    if let Some(path) = result.file_path.as_ref() {
-                        let format = std::path::Path::new(path)
-                            .extension()
-                            .and_then(|e| e.to_str())
-                            .unwrap_or("")
-                            .to_lowercase();
-                        Some(OfficeFileModified {
-                            path: path.clone(),
-                            format,
-                        })
+                let office_file_modified: Option<OfficeFileModified> =
+                    if !result.is_error && parsed.name == "create_word_doc" {
+                        if let Some(path) = result.file_path.as_ref() {
+                            let format = std::path::Path::new(path)
+                                .extension()
+                                .and_then(|e| e.to_str())
+                                .unwrap_or("")
+                                .to_lowercase();
+                            Some(OfficeFileModified {
+                                path: path.clone(),
+                                format,
+                            })
+                        } else {
+                            None
+                        }
                     } else {
                         None
-                    }
-                } else {
-                    None
-                };
+                    };
 
                 // Emit tool result event (includes diff info for file modifications)
                 on_event(StreamPayload {
@@ -494,7 +1083,11 @@ impl AgentExecutor {
                     tool_name: None,
                     tool_args: None,
                     final_content: None,
-                    error: if result.is_error { Some(result.output.clone()) } else { None },
+                    error: if result.is_error {
+                        Some(result.output.clone())
+                    } else {
+                        None
+                    },
                     search_results: None,
                     done: false,
                     // Diff info for file modification tools
@@ -508,12 +1101,24 @@ impl AgentExecutor {
                 // Add tool result to message history
                 session.add_message(Message::tool_result(&parsed.id, &result.output));
             }
+
+            // Protocol invariant: never insert a user/image message between
+            // an assistant's tool_calls and their tool results. We enqueue
+            // exactly once here, after the full batch has completed.
+            if let Err(error) = session.enqueue_visual_inspections(pending_visual_inspections) {
+                // Defensive invariant: each image was already admitted by the
+                // same bounded push helper above, so this should never fire.
+                tracing::error!(
+                    "failed to enqueue validated visual inspection batch: {}",
+                    error
+                );
+            }
         }
 
         Err(AgentError::MaxIterationsReached(session.max_iterations))
     }
 
-    /// Intercept meta-tools (`get_tool_help`, `delegate_to`, `update_todo`)
+    /// Intercept async meta-tools (`get_tool_help` and `delegate_to`)
     /// so the loop doesn't try to dispatch them via the registry.
     ///
     /// Returns `Some(ToolResult)` for intercepted calls (caller should
@@ -525,7 +1130,7 @@ impl AgentExecutor {
     /// `delegate_to`, sub-agent intermediate events are emitted under a
     /// prefixed sub-message-id so the UI can render them inside a
     /// collapsible "delegated to X" card.
-// ── Meta-tool dispatch ───────────────────────────────────────────────────
+    // ── Meta-tool dispatch ───────────────────────────────────────────────────
 
     fn try_handle_meta_tool<'a, F>(
         &'a self,
@@ -557,13 +1162,19 @@ impl AgentExecutor {
                         // string is internal — the frontend only renders a
                         // tiny indicator (category name), never the spec
                         // body itself.
-                        Some(text) => Some(ToolResult::success(
-                            &tool_call.id,
-                            text.to_string(),
-                        )),
+                        Some(text) => Some(ToolResult::success(&tool_call.id, text.to_string())),
                         None => {
-                            let available = ["general", "word", "excel", "markdown"]
-                                .join(", ");
+                            let available = [
+                                "general",
+                                "word",
+                                "excel",
+                                "pptx",
+                                "markdown",
+                                "media",
+                                "svg",
+                                "document_converter",
+                            ]
+                            .join(", ");
                             let msg = format!(
                                 "Unknown help category '{}'. Available: {}",
                                 category, available
@@ -627,55 +1238,11 @@ impl AgentExecutor {
 
                     match result {
                         Ok(summary) => Some(ToolResult::success(&tool_call.id, summary)),
-                        Err(e) => Some(ToolResult::error(&tool_call.id, format!("[{}] {}", expert, e))),
+                        Err(e) => Some(ToolResult::error(
+                            &tool_call.id,
+                            format!("[{}] {}", expert, e),
+                        )),
                     }
-                }
-                "update_todo" => {
-                    // The TodoList is rendered to the user via the normal
-                    // tool-call stream, so the ToolResult we hand back to
-                    // the LLM just needs to confirm the update landed —
-                    // but we DO want to surface the action the model
-                    // chose, because (a) it tells the model that the
-                    // call was accepted as the right action type, and
-                    // (b) the model's "did I just do this?" loop
-                    // benefits from explicit confirmation rather than a
-                    // generic "OK" string it has to correlate by
-                    // toolCallId alone.
-                    let action = tool_call
-                        .arguments
-                        .get("action")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("set"); // v1 callers didn't pass `action`; treat as `set`.
-                    let items_arr = tool_call
-                        .arguments
-                        .get("items")
-                        .and_then(|v| v.as_array());
-                    let count = items_arr.map(|a| a.len()).unwrap_or(0);
-                    let summary = match action {
-                        "set" => {
-                            if count == 0 {
-                                "Todo list cleared.".to_string()
-                            } else {
-                                format!(
-                                    "Todo list set ({} items). Step 1 marked in_progress — call action='advance' after finishing it.",
-                                    count
-                                )
-                            }
-                        }
-                        "advance" => {
-                            "Current step marked completed; next pending step promoted to in_progress.".to_string()
-                        }
-                        "complete_current" => {
-                            "Current step marked completed (no promotion).".to_string()
-                        }
-                        // Unknown action: the frontend will reject it,
-                        // but at least tell the model what we saw so
-                        // the next attempt can self-correct.
-                        other => {
-                            format!("Ignored unknown action '{}'.", other)
-                        }
-                    };
-                    Some(ToolResult::success(&tool_call.id, summary))
                 }
                 _ => None,
             }
@@ -687,7 +1254,7 @@ impl AgentExecutor {
     /// propagate), filters tool visibility via the profile, and routes the
     /// sub-agent's stream events under a sub-message-id prefixed with
     /// `"sub:"` so the UI can collapse them.
-// ── Sub-agent execution ────────────────────────────────────────────────
+    // ── Sub-agent execution ────────────────────────────────────────────────
 
     fn run_subagent<'a, F>(
         &'a self,
@@ -704,7 +1271,8 @@ impl AgentExecutor {
     {
         Box::pin(async move {
             let registry = parent_session.tool_registry.clone();
-            let mut sub_session = AgentSession::new_with_profile(profile.clone(), registry);
+            let mut sub_session = AgentSession::new_with_profile(profile.clone(), registry)
+                .with_workspace(parent_session.workspace.clone());
 
             // Append an optional context line so the sub-agent knows the why.
             let task_message = match context {
@@ -730,18 +1298,24 @@ impl AgentExecutor {
             // Run nested. The same callback channel is reused; the on_event
             // listener (frontend) should distinguish via message_id.
             let summary = self
-                .run(&mut sub_session, &task_message, session_id, &sub_message_id, on_event.clone())
+                .run(
+                    &mut sub_session,
+                    &task_message,
+                    session_id,
+                    &sub_message_id,
+                    on_event.clone(),
+                )
                 .await;
 
             // Notify the frontend that the sub-agent has finished.
-            on_event(StreamPayload::subagent_end(session_id, parent_message_id, &sub_message_id));
+            on_event(StreamPayload::subagent_end(
+                session_id,
+                parent_message_id,
+                &sub_message_id,
+            ));
 
             match summary {
-                Ok(s) => Ok(format!(
-                    "[{} completed]\n\n{}",
-                    profile.label,
-                    s
-                )),
+                Ok(s) => Ok(format!("[{} completed]\n\n{}", profile.label, s)),
                 Err(e) => Err(e),
             }
         })
@@ -808,7 +1382,11 @@ impl AgentExecutor {
             request = request.header(*key, value);
         }
 
-        tracing::info!("Sending request to {} with {} messages", url, messages.len());
+        tracing::info!(
+            "Sending request to {} with {} messages",
+            url,
+            messages.len()
+        );
 
         let response = request
             .send()
@@ -828,10 +1406,7 @@ impl AgentExecutor {
                     String::new()
                 }
             };
-            return Err(AgentError::AIError(format!(
-                "HTTP {}: {}",
-                status, body
-            )));
+            return Err(AgentError::AIError(format!("HTTP {}: {}", status, body)));
         }
 
         tracing::info!("Received response, status: {}", response.status());
@@ -853,7 +1428,8 @@ impl AgentExecutor {
         // Track which tool_call indices have already had their `tool_call_start` event
         // emitted, so we can fire the start event the first time a new index appears,
         // and emit incremental args deltas on every subsequent chunk.
-        let mut tool_call_started: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        let mut tool_call_started: std::collections::HashSet<usize> =
+            std::collections::HashSet::new();
 
         // Throttle: avoid emitting a `tool_call_args_delta` for the same tool
         // call index more than once per `TOOL_ARGS_EMIT_INTERVAL_MS`. The raw
@@ -897,9 +1473,7 @@ impl AgentExecutor {
             // single "\n" so that CRLF-terminated streams from proxies
             // (and Ollama's mangled line endings) don't leak a stray '\r'
             // into the JSON parser.
-            while let Some((event, rest)) =
-                crate::openai_stream::take_next_sse_event(&buffer)
-            {
+            while let Some((event, rest)) = crate::openai_stream::take_next_sse_event(&buffer) {
                 buffer = rest;
 
                 // An event with no `data:` lines (e.g. event-name-only
@@ -966,8 +1540,8 @@ impl AgentExecutor {
                                         original_content: None,
                                         new_content: None,
                                         diff_summary: None,
-office_file_modified: None,
-                                });
+                                        office_file_modified: None,
+                                    });
                                 }
                             }
 
@@ -1017,16 +1591,17 @@ office_file_modified: None,
 
                                     // Capture the argument delta BEFORE appending so we can
                                     // emit a true incremental `args_delta` event.
-                                    let arg_delta: Option<String> = if let Some(args) = &tc.function.arguments {
-                                        if !args.is_empty() {
-                                            entry.function.arguments.push_str(args);
-                                            Some(args.clone())
+                                    let arg_delta: Option<String> =
+                                        if let Some(args) = &tc.function.arguments {
+                                            if !args.is_empty() {
+                                                entry.function.arguments.push_str(args);
+                                                Some(args.clone())
+                                            } else {
+                                                None
+                                            }
                                         } else {
                                             None
-                                        }
-                                    } else {
-                                        None
-                                    };
+                                        };
 
                                     // Emit `tool_call_start` the first time we see this index.
                                     // This lets the frontend show the tool card with partial arguments
@@ -1056,20 +1631,23 @@ office_file_modified: None,
                                             original_content: None,
                                             new_content: None,
                                             diff_summary: None,
-office_file_modified: None,
-                                });
+                                            office_file_modified: None,
+                                        });
                                     } else if id_updated || name_updated || arg_delta.is_some() {
                                         // Subsequent chunk for the same tool call index.
                                         // Throttle the emission so we don't flood the IPC
                                         // channel with 10000-char payloads at SSE rate.
                                         let now = std::time::Instant::now();
                                         let should_emit = tool_args_has_pending.contains(&tc.index)
-                                            || now.duration_since(
-                                                last_tool_args_emit
-                                                    .get(&tc.index)
-                                                    .copied()
-                                                    .unwrap_or(now),
-                                            ).as_millis() >= TOOL_ARGS_EMIT_INTERVAL_MS;
+                                            || now
+                                                .duration_since(
+                                                    last_tool_args_emit
+                                                        .get(&tc.index)
+                                                        .copied()
+                                                        .unwrap_or(now),
+                                                )
+                                                .as_millis()
+                                                >= TOOL_ARGS_EMIT_INTERVAL_MS;
                                         if should_emit {
                                             tool_args_has_pending.remove(&tc.index);
                                             last_tool_args_emit.insert(tc.index, now);
@@ -1093,8 +1671,8 @@ office_file_modified: None,
                                                 original_content: None,
                                                 new_content: None,
                                                 diff_summary: None,
-office_file_modified: None,
-                                });
+                                                office_file_modified: None,
+                                            });
                                         } else {
                                             // Mark that we owe a delta so the *next* chunk
                                             // (or the post-loop flush below) sends the
@@ -1164,18 +1742,27 @@ office_file_modified: None,
                     original_content: None,
                     new_content: None,
                     diff_summary: None,
-office_file_modified: None,
-                                });
+                    office_file_modified: None,
+                });
             }
         }
         tool_args_has_pending.clear();
 
-        tracing::debug!("Stream processing complete. bytes_received: {}, current_content_len: {}", bytes_received, current_content.len());
+        tracing::debug!(
+            "Stream processing complete. bytes_received: {}, current_content_len: {}",
+            bytes_received,
+            current_content.len()
+        );
 
         // Debug: log the final tool calls
         for (i, tc) in current_tool_calls.iter().enumerate() {
-            tracing::debug!("[TOOL_CALL_DEBUG] #{:02}: id='{}', name='{}', args='{}'",
-                i, tc.id, tc.function.name, tc.function.arguments);
+            tracing::debug!(
+                "[TOOL_CALL_DEBUG] #{:02}: id='{}', name='{}', args='{}'",
+                i,
+                tc.id,
+                tc.function.name,
+                tc.function.arguments
+            );
         }
 
         // Build final response
@@ -1190,11 +1777,15 @@ office_file_modified: None,
 
     /// Parse SSE delta from OpenAI format (handles DeepSeek's reasoning_content)
     /// For Ollama, uses a different response format (message.tool_calls instead of delta.tool_calls)
-// ── SSE / response parsing ─────────────────────────────────────────────
+    // ── SSE / response parsing ─────────────────────────────────────────────
 
-    fn parse_sse_delta(&self, data: &str, is_ollama: bool) -> Result<Option<DeltaResponse>, String> {
-        let json: Value = serde_json::from_str(data)
-            .map_err(|e| format!("JSON parse error: {}", e))?;
+    fn parse_sse_delta(
+        &self,
+        data: &str,
+        is_ollama: bool,
+    ) -> Result<Option<DeltaResponse>, String> {
+        let json: Value =
+            serde_json::from_str(data).map_err(|e| format!("JSON parse error: {}", e))?;
 
         if is_ollama {
             // Ollama format: data.message.tool_calls
@@ -1203,9 +1794,7 @@ office_file_modified: None,
 
         // OpenAI format: data.choices[0].delta
         let delta = match json.get("choices") {
-            Some(choices) if choices.is_array() => {
-                choices.get(0).and_then(|c| c.get("delta"))
-            }
+            Some(choices) if choices.is_array() => choices.get(0).and_then(|c| c.get("delta")),
             _ => None,
         };
 
@@ -1235,10 +1824,7 @@ office_file_modified: None,
                 arr.iter()
                     .filter_map(|tc| {
                         let index = tc.get("index")?.as_u64()? as usize;
-                        let id = tc
-                            .get("id")
-                            .and_then(|v| v.as_str())
-                            .map(String::from);
+                        let id = tc.get("id").and_then(|v| v.as_str()).map(String::from);
                         let function = tc.get("function")?;
                         let name = function
                             .get("name")
@@ -1292,25 +1878,22 @@ office_file_modified: None,
                     .filter_map(|tc| {
                         // Ollama has index field in tool_calls
                         let index = tc.get("index")?.as_u64()? as usize;
-                        let id = tc
-                            .get("id")
-                            .and_then(|v| v.as_str())
-                            .map(String::from);
+                        let id = tc.get("id").and_then(|v| v.as_str()).map(String::from);
                         let function = tc.get("function")?;
                         let name = function
                             .get("name")
                             .and_then(|v| v.as_str())
                             .map(String::from);
-                        let arguments = function
-                            .get("arguments")
-                            .and_then(|v| {
-                                // Arguments can be a string or already-parsed object in Ollama
-                                match v {
-                                    serde_json::Value::String(s) => Some(s.clone()),
-                                    serde_json::Value::Object(_) => Some(serde_json::to_string(v).ok()?),
-                                    _ => None,
+                        let arguments = function.get("arguments").and_then(|v| {
+                            // Arguments can be a string or already-parsed object in Ollama
+                            match v {
+                                serde_json::Value::String(s) => Some(s.clone()),
+                                serde_json::Value::Object(_) => {
+                                    Some(serde_json::to_string(v).ok()?)
                                 }
-                            });
+                                _ => None,
+                            }
+                        });
 
                         Some(DeltaToolCall {
                             index,
@@ -1329,7 +1912,10 @@ office_file_modified: None,
     }
 
     /// Parse the final response
-    fn parse_response(&self, response: &str) -> Result<(Option<String>, Option<String>, Option<Vec<ToolCallMessage>>), AgentError> {
+    fn parse_response(
+        &self,
+        response: &str,
+    ) -> Result<(Option<String>, Option<String>, Option<Vec<ToolCallMessage>>), AgentError> {
         let json: Value = serde_json::from_str(response)
             .map_err(|e| AgentError::InvalidResponse(format!("JSON parse error: {}", e)))?;
 
@@ -1385,3 +1971,303 @@ pub fn create_agent_executor(config: AIConfig) -> AgentExecutor {
 
 // Prompts are re-exported from the prompts module
 pub use super::prompts::*;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::tools::ToolRegistry;
+    use crate::agent::ImageDetail;
+    use std::sync::Arc;
+    use tokio::sync::RwLock;
+
+    fn session() -> AgentSession {
+        AgentSession::new(Arc::new(RwLock::new(ToolRegistry::new())))
+    }
+
+    fn image(name: &str) -> ImageAttachment {
+        ImageAttachment {
+            mime_type: "image/png".to_string(),
+            data_base64: "iVBORw0KGgo=".to_string(),
+            detail: ImageDetail::High,
+            name: Some(name.to_string()),
+            byte_len: 8,
+        }
+    }
+
+    #[tokio::test]
+    async fn shared_registry_uses_each_sessions_immutable_workspace() {
+        let root =
+            std::env::temp_dir().join(format!("inkuo_session_workspace_{}", uuid::Uuid::new_v4()));
+        let workspace_a = root.join("a");
+        let workspace_b = root.join("b");
+        std::fs::create_dir_all(&workspace_a).unwrap();
+        std::fs::create_dir_all(&workspace_b).unwrap();
+        let file_a = workspace_a.join("private.txt");
+        std::fs::write(&file_a, "workspace-a").unwrap();
+
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let session_a = AgentSession::new(registry.clone())
+            .with_workspace(Some(workspace_a.to_string_lossy().to_string()));
+        let session_b = AgentSession::new(registry.clone())
+            .with_workspace(Some(workspace_b.to_string_lossy().to_string()));
+        let call = ToolCall {
+            id: "read-a".to_string(),
+            name: "read_file".to_string(),
+            arguments: serde_json::json!({"path": file_a}),
+        };
+
+        let allowed = registry
+            .read()
+            .await
+            .execute_in_workspace(&call, session_a.workspace())
+            .await;
+        assert!(!allowed.is_error);
+        assert_eq!(allowed.output, "workspace-a");
+
+        let denied = registry
+            .read()
+            .await
+            .execute_in_workspace(&call, session_b.workspace())
+            .await;
+        assert!(denied.is_error);
+        assert!(denied.output.contains("outside the workspace"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn first_turn_without_workspace_cannot_read_absolute_files() {
+        let root =
+            std::env::temp_dir().join(format!("inkuo_no_workspace_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let secret = root.join("secret.txt");
+        std::fs::write(&secret, "must-not-read").unwrap();
+        let registry = Arc::new(RwLock::new(ToolRegistry::new()));
+        let session = AgentSession::new(registry.clone());
+        let call = ToolCall {
+            id: "read-without-workspace".to_string(),
+            name: "read_file".to_string(),
+            arguments: serde_json::json!({"path": secret}),
+        };
+
+        let denied = registry
+            .read()
+            .await
+            .execute_in_workspace(&call, session.workspace())
+            .await;
+        assert!(denied.is_error);
+        assert!(denied
+            .output
+            .contains("requires a non-empty active workspace"));
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn hidden_tools_are_rejected_at_execution_time() {
+        let sandbox_off = session().with_allowed_tools(Some(vec!["read_file".to_string()]));
+        let sandbox_call = ToolCall {
+            id: "sandbox-hidden".to_string(),
+            name: "run_sandbox_command".to_string(),
+            arguments: serde_json::json!({}),
+        };
+        let denied = sandbox_off
+            .tool_authorization_error(&sandbox_call)
+            .expect("sandbox-off tool call must be denied");
+        assert!(denied.is_error);
+        assert!(denied.output.contains("disabled for this session"));
+
+        let kb_strict = session().with_allowed_tools(Some(vec!["database_search".to_string()]));
+        let write_call = ToolCall {
+            id: "write-hidden".to_string(),
+            name: "write_file".to_string(),
+            arguments: serde_json::json!({}),
+        };
+        assert!(kb_strict.tool_authorization_error(&write_call).is_some());
+    }
+
+    #[tokio::test]
+    async fn empty_allowlist_advertises_no_tools() {
+        let restricted = session().with_allowed_tools(Some(Vec::new()));
+        assert!(restricted
+            .tool_definitions_for_api(Some(&[]))
+            .await
+            .is_empty());
+    }
+
+    #[test]
+    fn live_todo_is_injected_as_system_state_and_advances() {
+        let mut session = session();
+        session.add_message(Message::system("base"));
+        session
+            .apply_todo_arguments(&serde_json::json!({
+                "action": "set",
+                "items": ["Inspect source", "Write fix"]
+            }))
+            .unwrap();
+        let provider = AIProvider::OpenAI {
+            api_key: "test".to_string(),
+            base_url: "https://example.invalid".to_string(),
+        };
+        let messages = session.get_messages_for_api(&provider);
+        let system = messages[0]["content"].as_str().unwrap();
+        assert!(system.contains("[in_progress] Inspect source"));
+        assert!(system.contains("[pending] Write fix"));
+
+        session
+            .apply_todo_arguments(&serde_json::json!({"action": "advance"}))
+            .unwrap();
+        let messages = session.get_messages_for_api(&provider);
+        let system = messages[0]["content"].as_str().unwrap();
+        assert!(system.contains("[completed] Inspect source"));
+        assert!(system.contains("[in_progress] Write fix"));
+    }
+
+    #[test]
+    fn multimodal_serialization_adapts_openai_and_ollama() {
+        let mut session = session();
+        session.add_message(Message::user_with_images(
+            "inspect",
+            vec![image("page.png")],
+        ));
+        let openai = AIProvider::OpenAI {
+            api_key: "test".to_string(),
+            base_url: "https://example.invalid".to_string(),
+        };
+        let openai_messages = session.get_messages_for_api(&openai);
+        assert_eq!(openai_messages[0]["content"][1]["type"], "image_url");
+        assert!(openai_messages[0]["content"][1]["image_url"]["url"]
+            .as_str()
+            .unwrap()
+            .starts_with("data:image/png;base64,"));
+
+        let ollama = AIProvider::Ollama {
+            base_url: "http://localhost:11434".to_string(),
+        };
+        let ollama_messages = session.get_messages_for_api(&ollama);
+        assert_eq!(ollama_messages[0]["content"], "inspect");
+        assert_eq!(ollama_messages[0]["images"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn visual_inspection_is_ordered_after_all_tool_results_and_sent_once() {
+        let mut session = session();
+        session.add_message(Message::assistant(
+            None,
+            None,
+            Some(vec![
+                ToolCallMessage {
+                    id: "call-1".to_string(),
+                    call_type: "function".to_string(),
+                    function: ToolCallFunction {
+                        name: "read_image".to_string(),
+                        arguments: "{}".to_string(),
+                    },
+                },
+                ToolCallMessage {
+                    id: "call-2".to_string(),
+                    call_type: "function".to_string(),
+                    function: ToolCallFunction {
+                        name: "read_file".to_string(),
+                        arguments: "{}".to_string(),
+                    },
+                },
+            ]),
+        ));
+        session.add_message(Message::tool_result("call-1", "asset ready"));
+        session.add_message(Message::tool_result("call-2", "text ready"));
+        session
+            .enqueue_visual_inspections(vec![VisualInspectionInput {
+                source_tool_call_id: "call-1".to_string(),
+                asset_id: "asset-1".to_string(),
+                attachment: image("preview.png"),
+            }])
+            .unwrap();
+
+        let provider = AIProvider::OpenAI {
+            api_key: "test".to_string(),
+            base_url: "https://example.invalid".to_string(),
+        };
+        let messages = session.get_messages_for_api(&provider);
+        let roles: Vec<&str> = messages
+            .iter()
+            .map(|message| message["role"].as_str().unwrap())
+            .collect();
+        assert_eq!(roles, vec!["assistant", "tool", "tool", "user"]);
+        assert!(messages[3]["content"].is_array());
+
+        session.consume_one_shot_images();
+        let next = session.get_messages_for_api(&provider);
+        assert!(next[3]["content"].is_string());
+        assert!(next[3]["content"]
+            .as_str()
+            .unwrap()
+            .contains("not being retransmitted"));
+    }
+
+    #[test]
+    fn office_preview_tool_output_reaches_the_next_multimodal_request() {
+        use std::time::Instant;
+
+        let _registry_guard = crate::agent::tools::asset_registry::test_registry_guard();
+        crate::agent::tools::asset_registry::clear();
+        let workspace = std::env::temp_dir().join(format!(
+            "inkuo_office_visual_bridge_{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&workspace).unwrap();
+        let canonical_workspace = std::fs::canonicalize(&workspace).unwrap();
+        let asset_id = crate::agent::tools::asset_registry::fresh_id();
+        crate::agent::tools::asset_registry::insert(
+            asset_id.clone(),
+            crate::agent::tools::asset_registry::AssetEntry {
+                mime: "image/png".to_string(),
+                ext: "png".to_string(),
+                data: b"\x89PNG\r\n\x1a\npreview".to_vec(),
+                inserted_at: Instant::now(),
+                source_path: "deck.pptx#page=1".to_string(),
+                workspace_root: canonical_workspace.to_string_lossy().to_string(),
+            },
+        );
+
+        let output = serde_json::json!({
+            "visual_assets": [{"asset_id": asset_id, "page_number": 1}]
+        })
+        .to_string();
+        let inputs = visual_inspections_from_tool_output(
+            "render-call",
+            "render_office_preview",
+            &output,
+            Some(workspace.to_string_lossy().as_ref()),
+        )
+        .unwrap();
+        let mut session = session().with_workspace(Some(workspace.to_string_lossy().to_string()));
+        session.add_message(Message::assistant(
+            None,
+            None,
+            Some(vec![ToolCallMessage {
+                id: "render-call".to_string(),
+                call_type: "function".to_string(),
+                function: ToolCallFunction {
+                    name: "render_office_preview".to_string(),
+                    arguments: "{}".to_string(),
+                },
+            }]),
+        ));
+        session.add_message(Message::tool_result("render-call", &output));
+        session.enqueue_visual_inspections(inputs).unwrap();
+
+        let provider = AIProvider::OpenAI {
+            api_key: "test".to_string(),
+            base_url: "https://example.invalid".to_string(),
+        };
+        let messages = session.get_messages_for_api(&provider);
+        assert_eq!(messages[0]["role"], "assistant");
+        assert_eq!(messages[1]["role"], "tool");
+        assert_eq!(messages[2]["role"], "user");
+        assert_eq!(messages[2]["content"][1]["type"], "image_url");
+
+        crate::agent::tools::asset_registry::clear();
+        let _ = std::fs::remove_dir_all(workspace);
+    }
+}

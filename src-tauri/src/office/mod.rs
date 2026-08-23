@@ -2,9 +2,9 @@
 //!
 //! Provides utilities to read and write Office documents (Word .docx and Excel .xlsx)
 
-pub mod shared;
-pub mod render_check;
 mod docx;
+pub mod render_check;
+pub mod shared;
 mod xlsx;
 
 // Re-export the document XML builder so other in-crate callers (e.g.
@@ -14,35 +14,38 @@ mod xlsx;
 #[cfg(test)]
 pub(crate) use docx::writer::build_document_xml;
 
+pub use docx::{
+    read_word_document, word_document_to_text, write_word_document_to_path, DocElement, ElementId,
+    FieldRef, FontRun, FooterPart, FooterPartRef, HeaderPart, HeaderPartRef, InsertElement,
+    NumberingRef, PageMargins, PageSize, PageSizeMm, WordDocument, WordDocumentMeta, WordImage,
+    WordParagraph, WordSection, WordTable,
+};
 pub use shared::{OfficeError, TableCell, TableRow};
-pub use docx::{ElementId, WordDocument, WordDocumentMeta, WordParagraph, WordTable, WordImage, FontRun, FieldRef, DocElement, InsertElement, NumberingRef, WordSection, PageSize, PageSizeMm, PageMargins, HeaderPart, FooterPart, HeaderPartRef, FooterPartRef, read_word_document, word_document_to_text, write_word_document_to_path};
 // Re-export the brand new design-system surface so callers can
 // `use crate::office::{DesignTokens, ContentBlock, render_blocks}`.
 // These are pure additions; existing call sites that only use the
 // above types don't need to change.
-pub use docx::design_tokens::{DesignTokens, FontScale, Palette, Spacing, DEFAULT_PALETTE};
 pub use docx::components::{CalloutLevel, CalloutRender, CodeBlockRender, TableStyle};
+pub use docx::design_tokens::{DesignTokens, FontScale, Palette, Spacing, DEFAULT_PALETTE};
 pub use docx::renderer::{
-    render_blocks, render_document, ContentBlock, ContentTableStyle, DocumentContent, RichRun,
-    CalloutLevelName, RenderedDocument,
+    render_blocks, render_document, CalloutLevelName, ContentBlock, ContentTableStyle,
+    DocumentContent, RenderedDocument, RichRun,
 };
+pub use docx::styled_pipeline::{write_sample_document, write_styled_docx, RenderStats};
+pub use docx::styled_styles::EXTENDED_STYLES_XML;
 pub use docx::styled_writer::{
     build_callout_close_xml, build_callout_container_xml, build_code_block_container_xml,
     build_styled_table_xml, classify_and_strip, page_break_run_xml, TableKind,
     CALLOUT_MARKER_PREFIX, CODE_MARKER_PREFIX, STYLE_MARKER_PREFIX,
 };
-pub use docx::styled_styles::EXTENDED_STYLES_XML;
-pub use docx::styled_pipeline::{write_styled_docx, write_sample_document, RenderStats};
 pub use render_check::{
-    find_libreoffice, render_docx_to_pngs, smoke_render, RenderCheckResult, RenderedPage,
+    find_libreoffice, render_docx_to_pngs, render_office_page_window_to_pngs,
+    render_office_to_pngs, smoke_render, RenderCheckResult, RenderedPage,
 };
 pub use xlsx::{
-    read_excel_workbook, excel_workbook_to_text,
-    XlsxWorkbook, XlsxSheet, Cell, CellValue, MergedRange,
-    CellModification, read_xlsx_structured,
-    incremental_write_xlsx, create_xlsx_workbook, write_excel_document,
-    cell_address, parse_cell_address,
-    ExcelOperation,
+    cell_address, create_xlsx_workbook, excel_workbook_to_text, incremental_write_xlsx,
+    parse_cell_address, read_excel_workbook, read_xlsx_structured, write_excel_document, Cell,
+    CellModification, CellValue, ExcelOperation, MergedRange, XlsxSheet, XlsxWorkbook,
 };
 
 use std::path::Path;
@@ -96,8 +99,8 @@ pub fn write_office_file(path: &Path, json_content: &str) -> Result<(), OfficeEr
             Ok(())
         }
         "docx" => {
-            let doc: docx::WordDocument = serde_json::from_str(json_content)
-                .map_err(|e| OfficeError::Json(e.to_string()))?;
+            let doc: docx::WordDocument =
+                serde_json::from_str(json_content).map_err(|e| OfficeError::Json(e.to_string()))?;
             docx::write_word_document_to_path(&doc, path, None)?;
             Ok(())
         }

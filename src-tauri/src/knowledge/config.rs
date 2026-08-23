@@ -44,6 +44,20 @@ pub struct Document {
     pub title: String,
     pub content: String,
     pub file_hash: String,
+    /// Logical knowledge collection. `default` is used for legacy indexes
+    /// and for files added before collection-aware retrieval was introduced.
+    #[serde(default = "default_collection")]
+    pub collection: String,
+    /// Normalized source format (for example `pdf`, `docx`, `typescript`).
+    /// This is surfaced in the UI so unsupported/failed imports are clear.
+    #[serde(default)]
+    pub source_type: String,
+    #[serde(default)]
+    pub size_bytes: u64,
+}
+
+pub fn default_collection() -> String {
+    "default".to_string()
 }
 
 /// Text chunk with embedding
@@ -56,6 +70,8 @@ pub struct Chunk {
     pub start_line: usize,
     pub end_line: usize,
     pub embedding: Vec<f32>,
+    #[serde(default = "default_collection")]
+    pub collection: String,
 }
 
 /// Search result
@@ -69,6 +85,8 @@ pub struct SearchResult {
     pub file_path: String,
     pub start_line: Option<usize>,
     pub end_line: Option<usize>,
+    #[serde(default = "default_collection")]
+    pub collection: String,
 }
 
 /// Build result
@@ -85,4 +103,19 @@ pub struct UpdateResult {
     pub added: usize,
     pub removed: usize,
     pub updated: usize,
+    /// Paths already present with the same content hash.
+    #[serde(default)]
+    pub unchanged: usize,
+    /// Number of files that could not be read or parsed.
+    #[serde(default)]
+    pub failed: usize,
+    /// Per-file diagnostics. Batch imports remain useful when one file is bad.
+    #[serde(default)]
+    pub failures: Vec<ImportFailure>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportFailure {
+    pub path: String,
+    pub error: String,
 }

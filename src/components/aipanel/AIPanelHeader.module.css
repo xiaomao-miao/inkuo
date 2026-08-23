@@ -139,6 +139,11 @@
   color: var(--fg-primary);
 }
 
+.closeButton[data-active] {
+  background-color: var(--accent-subtle);
+  color: var(--accent-primary);
+}
+
 .modelChip {
   display: flex;
   align-items: center;

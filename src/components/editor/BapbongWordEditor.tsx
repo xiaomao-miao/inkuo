@@ -3,6 +3,9 @@ import { invoke } from '@tauri-apps/api/core';
 import { BapbongEditorComponent, type BapbongEditorRef } from './BapbongEditor';
 import { BapbongToolbar } from './BapbongToolbar';
 import { useKeyboardSave } from './useKeyboardSave';
+import { useExternalFileSync } from './useExternalFileSync';
+import { ExternalFileConflictBanner } from './ExternalFileConflictBanner';
+import { decideExternalRefresh } from './externalFileConflict';
 import { useSidebarStore, useEditorStore, useNotificationStore } from '../../store';
 import { reportError } from '../../utils/errors';
 import styles from './OfficeViewer.module.css';
@@ -35,10 +38,16 @@ export const BapbongWordEditor: React.FC<WordEditorProps> = ({
   const [loading, setLoading] = useState<boolean>(() => initialBuffer === null);
   const [error, setError] = useState<string | null>(null);
   const [isDirty, setIsDirty] = useState(false);
+  const [hasExternalConflict, setHasExternalConflict] = useState(false);
   const dirtyStateRef = useRef(false);
+  // Programmatic DOCX loads also emit editor change notifications. Keep those
+  // out of the user-dirty path; otherwise an AI refresh immediately turns the
+  // freshly-loaded tab dirty again.
+  const suppressChangesRef = useRef(true);
 
   const loadTokenRef = useRef(0);
   const hasInitializedFromCacheRef = useRef(false);
+  const explicitReloadInProgressRef = useRef(false);
 
   const setOpenTabDirty = useSidebarStore((state) => state.setOpenTabDirty);
   const officeBufferVersion = useEditorStore(s => s.documentContents[filePath]?.office.bufferVersion ?? 0);
@@ -47,19 +56,24 @@ export const BapbongWordEditor: React.FC<WordEditorProps> = ({
 
   // Read bytes from disk
   const readAndApplyBuffer = useCallback(
-    async (token: number): Promise<boolean> => {
+    async (token: number, discardLocalChanges: boolean): Promise<boolean> => {
       try {
         const data = await invoke<number[]>('read_office_file', { path: filePath });
         if (loadTokenRef.current !== token) return false;
+        // The tab may have become dirty after the disk read started. Never
+        // commit that async result unless the user explicitly chose to
+        // discard the local version.
+        if (dirtyStateRef.current && !discardLocalChanges) {
+          setHasExternalConflict(true);
+          return false;
+        }
         const buf = new Uint8Array(data);
+        suppressChangesRef.current = true;
         setDocumentBuffer(buf);
         setDocxBuffer(filePath, data);
+        dirtyStateRef.current = false;
         setIsDirty(false);
         setOpenTabDirty(filePath, false);
-        // Reload the editor if it exists
-        if (editorRef.current) {
-          await editorRef.current.loadDocx(buf.buffer);
-        }
         return loadTokenRef.current === token;
       } catch (err) {
         if (loadTokenRef.current !== token) return false;
@@ -77,18 +91,50 @@ export const BapbongWordEditor: React.FC<WordEditorProps> = ({
   );
 
   // Reload from disk
-  const reloadFromDisk = useCallback(async () => {
+  const reloadFromDisk = useCallback(async (discardLocalChanges = false): Promise<boolean> => {
     const token = ++loadTokenRef.current;
+    if (discardLocalChanges) explicitReloadInProgressRef.current = true;
     setLoading(true);
     setError(null);
+    let applied = false;
     try {
-      await readAndApplyBuffer(token);
+      applied = await readAndApplyBuffer(token, discardLocalChanges);
+      return applied;
     } finally {
       if (loadTokenRef.current === token) {
         setLoading(false);
       }
+      if (discardLocalChanges) {
+        explicitReloadInProgressRef.current = false;
+        // A failed read must not strand the user without either their dirty
+        // marker or a way to retry the disk version.
+        if (!applied && dirtyStateRef.current) setHasExternalConflict(true);
+      }
     }
   }, [readAndApplyBuffer]);
+
+  // Both the stream reducer and the semantic file events can announce the
+  // same write. Funnel them through one trailing reload so Bapbong parses a
+  // new DOCX exactly once per write burst.
+  const reloadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const requestExternalReload = useCallback(() => {
+    if (!hasInitializedFromCacheRef.current) return;
+    if (reloadTimerRef.current !== null) clearTimeout(reloadTimerRef.current);
+    reloadTimerRef.current = setTimeout(() => {
+      reloadTimerRef.current = null;
+      const decision = decideExternalRefresh(
+        dirtyStateRef.current,
+        explicitReloadInProgressRef.current,
+      );
+      if (decision === 'show-conflict') {
+        setHasExternalConflict(true);
+      } else if (decision === 'reload') {
+        void reloadFromDisk(false);
+      }
+    }, 160);
+  }, [reloadFromDisk]);
+
+  useExternalFileSync(filePath, requestExternalReload);
 
   // Initial load
   useEffect(() => {
@@ -107,8 +153,16 @@ export const BapbongWordEditor: React.FC<WordEditorProps> = ({
   useEffect(() => {
     if (officeBufferVersion === 0) return;
     if (!hasInitializedFromCacheRef.current) return;
-    void reloadFromDisk();
-  }, [officeBufferVersion, reloadFromDisk]);
+    requestExternalReload();
+  }, [officeBufferVersion, requestExternalReload]);
+
+  useEffect(() => () => {
+    loadTokenRef.current += 1;
+    if (reloadTimerRef.current !== null) {
+      clearTimeout(reloadTimerRef.current);
+      reloadTimerRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
     if (isActive && isDirty) {
@@ -125,7 +179,9 @@ export const BapbongWordEditor: React.FC<WordEditorProps> = ({
       const bufferArray = Array.from(new Uint8Array(savedBuffer));
       await invoke('write_office_file', { path: filePath, data: bufferArray });
       setDocxBuffer(filePath, bufferArray);
+      dirtyStateRef.current = false;
       setIsDirty(false);
+      setHasExternalConflict(false);
       setOpenTabDirty(filePath, false);
     } catch (err) {
       const message = reportError('office-word-save', err);
@@ -136,6 +192,7 @@ export const BapbongWordEditor: React.FC<WordEditorProps> = ({
   useKeyboardSave({ onSave: handleSave, enabled: isDirty && isActive });
 
   const handleChange = useCallback(() => {
+    if (suppressChangesRef.current) return;
     if (dirtyStateRef.current) return;
     dirtyStateRef.current = true;
     setIsDirty(true);
@@ -145,18 +202,30 @@ export const BapbongWordEditor: React.FC<WordEditorProps> = ({
   // Editor view ready callback
   const handleEditorViewReady = useCallback((editor: BapbongEditorRef) => {
     editorRef.current = editor;
-    // If we have a buffer ready, load it
-    if (documentBuffer) {
-      editor.loadDocx(documentBuffer.buffer).catch((err) => {
-        setError((err as Error).message);
-        pushNotification({
-          kind: 'error',
-          title: '加载 Word 文档失败',
-          message: (err as Error).message,
-        });
-      });
+    // BapbongEditorComponent owns loading `documentBuffer`. Loading it here
+    // as well used to race the child's buffer effect and parse every DOCX
+    // twice (three times on an external refresh).
+  }, []);
+
+  const handleEditorLoad = useCallback(() => {
+    suppressChangesRef.current = false;
+    dirtyStateRef.current = false;
+    setIsDirty(false);
+    setOpenTabDirty(filePath, false);
+  }, [filePath, setOpenTabDirty]);
+
+  const handleKeepLocalVersion = useCallback(() => {
+    setHasExternalConflict(false);
+  }, []);
+
+  const handleReloadExternalVersion = useCallback(() => {
+    if (reloadTimerRef.current !== null) {
+      clearTimeout(reloadTimerRef.current);
+      reloadTimerRef.current = null;
     }
-  }, [documentBuffer, pushNotification]);
+    setHasExternalConflict(false);
+    void reloadFromDisk(true);
+  }, [reloadFromDisk]);
 
   // Error handler
   const handleError = useCallback((err: Error) => {
@@ -193,6 +262,7 @@ export const BapbongWordEditor: React.FC<WordEditorProps> = ({
         editorRef={editorRef}
         fileName={fileName}
         isDirty={isDirty}
+        isActive={isActive}
         onSave={handleSave}
         canSave={isDirty && !loading && !error}
         onFind={handleFind}
@@ -200,12 +270,21 @@ export const BapbongWordEditor: React.FC<WordEditorProps> = ({
         onZoomIn={handleZoomIn}
         onZoomOut={handleZoomOut}
       />
+
+      {hasExternalConflict && (
+        <ExternalFileConflictBanner
+          fileName={fileName}
+          onKeepLocal={handleKeepLocalVersion}
+          onReloadFromDisk={handleReloadExternalVersion}
+        />
+      )}
       
       <div ref={containerRef} className={styles.docxContainer} data-office-editor-root="word">
         <BapbongEditorComponent
           documentBuffer={documentBuffer}
           onChange={handleChange}
           onEditorViewReady={handleEditorViewReady}
+          onLoad={handleEditorLoad}
           onError={handleError}
         />
         {(loading || error) && (

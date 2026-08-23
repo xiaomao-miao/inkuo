@@ -301,6 +301,76 @@
   gap: 6px;
 }
 
+.imageAttachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.imageAttachment {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 190px;
+  height: 26px;
+  padding: 0 5px 0 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--fg-secondary);
+  font-size: 11px;
+}
+
+.imageAttachment > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.imageAttachment button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.imageAttachment button:hover {
+  color: var(--fg-primary);
+  background: var(--bg-hover);
+}
+
+.attachmentBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.attachmentBtn:hover:not(:disabled) {
+  color: var(--accent-primary);
+  border-color: var(--border-color);
+  background: var(--bg-secondary);
+}
+
+.attachmentBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* Quick model switcher — a compact dropdown that mirrors the mode
  * button height so they sit on the same baseline. The custom
  * `appearance: none` + faux chevron keeps the native browser chrome

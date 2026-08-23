@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import {
   Bold,
   Italic,
@@ -29,6 +29,7 @@ interface BapbongToolbarProps {
   editorRef: React.MutableRefObject<BapbongEditorRef | null>;
   fileName: string;
   isDirty: boolean;
+  isActive: boolean;
   onSave: () => void;
   canSave: boolean;
   onFind?: () => void;
@@ -37,13 +38,40 @@ interface BapbongToolbarProps {
   onZoomOut?: () => void;
 }
 
-// Active state polling interval
-const POLL_INTERVAL_MS = 250;
+const POLL_INTERVAL_MS = 750;
+
+type ActiveStates = {
+  bold: boolean;
+  italic: boolean;
+  underline: boolean;
+  strike: boolean;
+  subscript: boolean;
+  superscript: boolean;
+};
+
+const EMPTY_ACTIVE_STATES: ActiveStates = {
+  bold: false,
+  italic: false,
+  underline: false,
+  strike: false,
+  subscript: false,
+  superscript: false,
+};
+
+function areToolbarActiveStatesEqual(left: ActiveStates, right: ActiveStates): boolean {
+  return left.bold === right.bold &&
+    left.italic === right.italic &&
+    left.underline === right.underline &&
+    left.strike === right.strike &&
+    left.subscript === right.subscript &&
+    left.superscript === right.superscript;
+}
 
 export const BapbongToolbar: React.FC<BapbongToolbarProps> = ({
   editorRef,
   fileName,
   isDirty,
+  isActive,
   onSave,
   canSave,
   onFind,
@@ -51,43 +79,76 @@ export const BapbongToolbar: React.FC<BapbongToolbarProps> = ({
   onZoomIn,
   onZoomOut,
 }) => {
-  const [, setTick] = useState(0);
-  const [activeStates, setActiveStates] = useState({
-    bold: false,
-    italic: false,
-    underline: false,
-    strike: false,
-    subscript: false,
-    superscript: false,
-  });
+  const [activeStates, setActiveStates] = useState<ActiveStates>(EMPTY_ACTIVE_STATES);
+  const windowFocusedRef = useRef(typeof document === 'undefined' || document.hasFocus());
 
-  // Poll for active state changes
+  const refreshActiveStates = useCallback(() => {
+    const editor = editorRef.current;
+    if (
+      !isActive ||
+      !editor ||
+      document.visibilityState !== 'visible' ||
+      !windowFocusedRef.current
+    ) return;
+
+    const next: ActiveStates = {
+      bold: editor.isCommandActive('bold'),
+      italic: editor.isCommandActive('italic'),
+      underline: editor.isCommandActive('underline'),
+      strike: editor.isCommandActive('strike'),
+      subscript: editor.isCommandActive('subscript'),
+      superscript: editor.isCommandActive('superscript'),
+    };
+    // Returning the previous object prevents a toolbar render when neither
+    // the selection nor its formatting changed.
+    setActiveStates((previous) => areToolbarActiveStatesEqual(previous, next) ? previous : next);
+  }, [editorRef, isActive]);
+
+  // Bapbong does not expose a public selection subscription. Refresh on the
+  // browser input events that move the selection, with a slow fallback poll
+  // for programmatic editor changes. Suspend all work while the window is not
+  // visible/focused.
   useEffect(() => {
-    const interval = setInterval(() => {
-      const editor = editorRef.current;
-      if (!editor) return;
-
-      // Check active states from editor
-      setActiveStates({
-        bold: editor.isCommandActive('bold'),
-        italic: editor.isCommandActive('italic'),
-        underline: editor.isCommandActive('underline'),
-        strike: editor.isCommandActive('strike'),
-        subscript: editor.isCommandActive('subscript'),
-        superscript: editor.isCommandActive('superscript'),
+    if (!isActive) return undefined;
+    let frame: number | null = null;
+    const scheduleRefresh = () => {
+      if (frame !== null) return;
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        refreshActiveStates();
       });
+    };
+    const handleFocus = () => {
+      windowFocusedRef.current = true;
+      scheduleRefresh();
+    };
+    const handleBlur = () => {
+      windowFocusedRef.current = false;
+    };
+    const interval = setInterval(refreshActiveStates, POLL_INTERVAL_MS);
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('blur', handleBlur);
+    document.addEventListener('visibilitychange', scheduleRefresh);
+    document.addEventListener('pointerup', scheduleRefresh, true);
+    document.addEventListener('keyup', scheduleRefresh, true);
+    scheduleRefresh();
 
-      // Force re-render
-      setTick((t) => t + 1);
-    }, POLL_INTERVAL_MS);
-
-    return () => clearInterval(interval);
-  }, [editorRef]);
+    return () => {
+      clearInterval(interval);
+      if (frame !== null) cancelAnimationFrame(frame);
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('blur', handleBlur);
+      document.removeEventListener('visibilitychange', scheduleRefresh);
+      document.removeEventListener('pointerup', scheduleRefresh, true);
+      document.removeEventListener('keyup', scheduleRefresh, true);
+    };
+  }, [isActive, refreshActiveStates]);
 
   // Execute a command on the editor
   const executeCommand = useCallback((commandName: string, params?: unknown) => {
     editorRef.current?.executeCommand(commandName, params);
-  }, [editorRef]);
+    requestAnimationFrame(refreshActiveStates);
+  }, [editorRef, refreshActiveStates]);
 
   return (
     <div className={styles.toolbar}>

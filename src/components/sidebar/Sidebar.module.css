@@ -395,6 +395,49 @@
   font-style: italic;
 }
 
+.directoryLoadError {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 12px 4px 36px;
+  font-size: var(--font-size-sm);
+  color: var(--error, #e76f51);
+}
+
+.directoryLoadErrorStale {
+  color: var(--fg-muted);
+  background: color-mix(in oklch, var(--error, #e76f51) 7%, transparent);
+}
+
+.directoryLoadError > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.directoryRetryButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  padding: 2px 5px;
+  border-radius: var(--radius-sm);
+  color: inherit;
+  background: var(--bg-hover);
+  cursor: pointer;
+}
+
+.directoryRetryButton:hover {
+  color: var(--fg-primary);
+  background: var(--bg-active);
+}
+
+.directoryRetryButton:focus-visible {
+  outline: 1px solid var(--accent-primary);
+  outline-offset: 1px;
+}
+
 /* Search clear button */
 .searchClear {
   position: absolute;
@@ -1028,6 +1071,369 @@
   color: var(--fg-muted);
   text-align: center;
   padding: 12px;
+}
+
+/* Collection-aware knowledge manager */
+.knowledgeManager {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  color: var(--fg-primary);
+  background: var(--bg-primary);
+}
+
+.knowledgeManagerHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.knowledgeManagerTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.knowledgeManagerTitleRow svg {
+  color: var(--accent-primary);
+}
+
+.knowledgeManagerTitleRow h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.knowledgeManagerHeader p {
+  margin: 5px 0 0;
+  color: var(--fg-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.knowledgeIconAction,
+.knowledgeNewCollection button,
+.knowledgeCommandRow button,
+.knowledgeSearchRow button,
+.knowledgeDocumentActions button,
+.knowledgeManagerFooter button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 28px;
+  border: 1px solid var(--border-color);
+  border-radius: 7px;
+  color: var(--fg-secondary);
+  background: var(--bg-secondary);
+  cursor: pointer;
+}
+
+.knowledgeIconAction {
+  width: 29px;
+  flex: 0 0 29px;
+  padding: 0;
+}
+
+.knowledgeIconAction:hover,
+.knowledgeNewCollection button:hover,
+.knowledgeCommandRow button:hover,
+.knowledgeSearchRow button:hover,
+.knowledgeDocumentActions button:hover,
+.knowledgeManagerFooter button:hover {
+  color: var(--fg-primary);
+  border-color: color-mix(in srgb, var(--accent-primary) 45%, var(--border-color));
+  background: var(--bg-hover);
+}
+
+.knowledgeIconAction:disabled,
+.knowledgeNewCollection button:disabled,
+.knowledgeCommandRow button:disabled,
+.knowledgeSearchRow button:disabled,
+.knowledgeDocumentActions button:disabled,
+.knowledgeManagerFooter button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.knowledgeCollectionBar {
+  display: flex;
+  gap: 6px;
+}
+
+.knowledgeCollectionSelect,
+.knowledgeNewCollection input,
+.knowledgeSearchRow input {
+  min-width: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 7px;
+  outline: none;
+  color: var(--fg-primary);
+  background: var(--bg-secondary);
+}
+
+.knowledgeCollectionSelect {
+  flex: 1;
+  height: 30px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.knowledgeNewCollection {
+  display: grid;
+  flex: 1;
+  grid-template-columns: minmax(0, 1fr) auto 28px;
+  gap: 5px;
+}
+
+.knowledgeNewCollection input {
+  padding: 0 8px;
+}
+
+.knowledgeNewCollection button {
+  padding: 0 8px;
+  font-size: 11px;
+}
+
+.knowledgeCommandRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 6px;
+}
+
+.knowledgeCommandRow button {
+  min-width: 0;
+  padding: 0 7px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.knowledgeCommandRow .knowledgePrimaryCommand {
+  color: var(--button-primary-fg, #fff);
+  border-color: var(--accent-primary);
+  background: var(--accent-primary);
+}
+
+.knowledgeProgressInline,
+.knowledgeSummaryLine {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 24px;
+  color: var(--fg-muted);
+  font-size: 10px;
+}
+
+.knowledgeProgressInline {
+  padding: 5px 8px;
+  border-left: 2px solid var(--accent-primary);
+  background: color-mix(in srgb, var(--accent-primary) 7%, transparent);
+}
+
+.knowledgeProgressInline span:nth-last-child(1) {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.knowledgeSummaryLine {
+  flex-wrap: wrap;
+}
+
+.knowledgeSummaryLine span:not(:last-child)::after {
+  margin-left: 7px;
+  content: "·";
+  color: var(--border-color);
+}
+
+.knowledgeSearchRow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 31px;
+  padding: 0 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 7px;
+  color: var(--fg-muted);
+  background: var(--bg-secondary);
+}
+
+.knowledgeSearchRow input {
+  flex: 1;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: 11px;
+}
+
+.knowledgeSearchRow button {
+  min-height: 22px;
+  width: 22px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.knowledgeDocumentList {
+  display: flex;
+  flex: 1;
+  min-height: 120px;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+}
+
+.knowledgeDocumentEmpty {
+  display: flex;
+  flex: 1;
+  min-height: 160px;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 7px;
+  padding: 18px;
+  color: var(--fg-muted);
+  text-align: center;
+}
+
+.knowledgeDocumentEmpty strong {
+  color: var(--fg-secondary);
+  font-size: 12px;
+}
+
+.knowledgeDocumentEmpty span {
+  max-width: 250px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.knowledgeDocumentRow {
+  display: grid;
+  grid-template-columns: 25px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 7px;
+  padding: 8px 6px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border-color) 70%, transparent);
+}
+
+.knowledgeDocumentRow[data-status="error"] {
+  border-left: 2px solid var(--error-color, #e05252);
+  padding-left: 5px;
+}
+
+.knowledgeDocumentIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 25px;
+  height: 25px;
+  color: var(--accent-primary);
+}
+
+.knowledgeDocumentBody {
+  min-width: 0;
+}
+
+.knowledgeDocumentTopline,
+.knowledgeDocumentMeta,
+.knowledgeDocumentActions {
+  display: flex;
+  align-items: center;
+}
+
+.knowledgeDocumentTopline {
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.knowledgeDocumentTopline strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg-primary);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.knowledgeDocumentStatus {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 3px;
+  color: var(--fg-muted);
+  font-size: 9px;
+}
+
+.knowledgeDocumentRow[data-status="error"] .knowledgeDocumentStatus {
+  color: var(--error-color, #e05252);
+}
+
+.knowledgeDocumentMeta {
+  gap: 5px;
+  margin-top: 4px;
+  overflow: hidden;
+  color: var(--fg-muted);
+  font-size: 9px;
+  white-space: nowrap;
+}
+
+.knowledgeDocumentMeta span:not(:last-child)::after {
+  margin-left: 5px;
+  content: "·";
+}
+
+.knowledgeDocumentPath {
+  min-width: 0;
+  overflow: hidden;
+  direction: rtl;
+  text-align: left;
+  text-overflow: ellipsis;
+}
+
+.knowledgeDocumentError {
+  margin: 5px 0 0;
+  color: var(--error-color, #e05252);
+  font-size: 10px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.knowledgeDocumentActions {
+  gap: 3px;
+}
+
+.knowledgeDocumentActions button {
+  min-height: 24px;
+  width: 24px;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+}
+
+.knowledgeManagerFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 7px;
+  border-top: 1px solid var(--border-color);
+  color: var(--fg-muted);
+  font-size: 9px;
+}
+
+.knowledgeManagerFooter span {
+  line-height: 1.35;
+}
+
+.knowledgeManagerFooter button {
+  flex: 0 0 auto;
+  min-height: 25px;
+  padding: 0 7px;
+  color: var(--error-color, #e05252);
+  font-size: 10px;
 }
 
 .knowledgeViewListRow {

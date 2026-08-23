@@ -59,6 +59,7 @@ function buildToolCallOutputItem(
   parsedArgs: Record<string, unknown>,
   rawArgs: string,
   streamingContent?: string,
+  startedAt?: number,
 ): Extract<OutputItem, { type: 'tool_call_start' }> {
   return {
     type: 'tool_call_start',
@@ -68,6 +69,7 @@ function buildToolCallOutputItem(
     rawArguments: rawArgs,
     streamingContent,
     isExecuting: true,
+    startedAt,
   };
 }
 
@@ -124,7 +126,14 @@ export function applyToolCallStartToState({
             toolCalls: [...(message.toolCalls || []), { id: toolCallId, name: toolName, arguments: parsedArgs }],
             outputItems: [
               ...message.outputItems,
-              buildToolCallOutputItem(toolCallId, toolName, parsedArgs, rawArgs, streamingContent),
+              buildToolCallOutputItem(
+                toolCallId,
+                toolName,
+                parsedArgs,
+                rawArgs,
+                streamingContent,
+                startTime,
+              ),
             ],
           } as ChatMessage;
         }),

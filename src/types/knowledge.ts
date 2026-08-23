@@ -11,6 +11,7 @@ export interface SearchResult {
   filePath: string;
   startLine?: number;
   endLine?: number;
+  collection?: string;
 }
 
 export interface KnowledgeSearchResult {
@@ -22,6 +23,7 @@ export interface KnowledgeSearchResult {
   file_path: string;
   start_line?: number;
   end_line?: number;
+  collection?: string;
 }
 
 export interface KnowledgeBase {
@@ -31,6 +33,32 @@ export interface KnowledgeBase {
   lastUpdated: number;
   /** Explicitly selected member file paths (relative to workspace) */
   members: string[];
+  /** Named collection -> member paths. `default` migrates legacy indexes. */
+  collections: Record<string, string[]>;
+  documents: KnowledgeDocumentStatus[];
+  supportedExtensions: string[];
+}
+
+export type KnowledgeIndexStatus = 'indexed' | 'pending' | 'error';
+
+export interface KnowledgeDocumentStatus {
+  path: string;
+  collection: string;
+  status: KnowledgeIndexStatus;
+  chunkCount: number;
+  sourceType: string;
+  sizeBytes: number;
+  indexedAt?: number;
+  error?: string;
+}
+
+export interface KnowledgeUpdateResult {
+  added: number;
+  removed: number;
+  updated: number;
+  unchanged: number;
+  failed: number;
+  failures: Array<{ path: string; error: string }>;
 }
 
 export interface BuildProgress {

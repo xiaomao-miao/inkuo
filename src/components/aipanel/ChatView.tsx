@@ -33,6 +33,7 @@ interface ChatViewProps {
   onRunPrompt?: (prompt: string) => Promise<void> | void;
   /** Disable the selection toolbar (e.g. while the AI is streaming). */
   selectionToolbarDisabled?: boolean;
+  displayMode: 'minimal' | 'detailed';
 }
 
 /**
@@ -59,10 +60,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
   footer,
   onRunPrompt,
   selectionToolbarDisabled = false,
+  displayMode,
 }) => {
   const contentRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef(true);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const sessionId = activeSession?.id;
 
   /**
    * Render-only signal: drives the placeholder's spinner UI. We keep
@@ -113,14 +115,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
    */
   const autoExpandRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const handleScrollForAutoExpand = () => {
-    if (!contentRef.current || !activeSession) return;
+    if (!contentRef.current || !sessionId) return;
     const el = contentRef.current;
     if (el.scrollTop > TIMING.TRUNCATED_PREFIX_AUTOEXPAND_SCROLL_PX) return;
     if (autoExpandRef.current !== null) {
       clearTimeout(autoExpandRef.current);
     }
     autoExpandRef.current = setTimeout(() => {
-      useAIPanelStore.getState().autoExpandTruncatedPrefixes(activeSession.id);
+      useAIPanelStore.getState().autoExpandTruncatedPrefixes(sessionId);
       autoExpandRef.current = null;
     }, TIMING.HISTORY_AUTOLOAD_DEBOUNCE_MS);
   };
@@ -183,7 +185,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
    * top of the viewport is still at the top.
    */
   const tryExpandHistory = () => {
-    if (!contentRef.current || !activeSession) return;
+    if (!contentRef.current || !sessionId) return;
     if (isStreaming) return;
     // Synchronous lock: closes the gap between dispatching the store
     // update and React committing the next render. Without the ref,
@@ -206,7 +208,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     lastExpandAtRef.current = now;
     expandingRef.current = true;
     setIsExpandingHistory(true);
-    useAIPanelStore.getState().expandCollapsedHistory(activeSession.id);
+    useAIPanelStore.getState().expandCollapsedHistory(sessionId);
   };
 
   /**
@@ -255,11 +257,20 @@ export const ChatView: React.FC<ChatViewProps> = ({
     return () => cancelAnimationFrame(rafId);
   }, [messages, partition.hiddenCount]);
 
+  const scrollFrameRef = useRef<number | null>(null);
   useEffect(() => {
-    if (isAtBottomRef.current || messages.length <= 2) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-    }
+    if (!isAtBottomRef.current && messages.length > 2) return;
+    if (scrollFrameRef.current !== null) return;
+    scrollFrameRef.current = requestAnimationFrame(() => {
+      scrollFrameRef.current = null;
+      const content = contentRef.current;
+      if (content) content.scrollTop = content.scrollHeight;
+    });
   }, [messages, activeToolCalls]);
+
+  useEffect(() => () => {
+    if (scrollFrameRef.current !== null) cancelAnimationFrame(scrollFrameRef.current);
+  }, []);
 
   /**
    * Make sure the session actually has the data-side collapsed flags
@@ -294,6 +305,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
     expandingRef.current = false;
     setIsExpandingHistory(false);
   }, [activeSession?.id]);
+
+  const streamingMessageId = useMemo(() => {
+    if (!isStreaming) return undefined;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      if (messages[index]?.role === 'assistant') return messages[index].id;
+    }
+    return undefined;
+  }, [isStreaming, messages]);
 
   if (messages.length === 0) {
     return (
@@ -338,7 +357,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
             message={message}
             isStreaming={isStreaming}
             activeToolCalls={activeToolCalls}
-            activeSession={activeSession}
+            sessionId={sessionId}
+            streamingMessageId={streamingMessageId}
+            displayMode={displayMode}
             editingMessageId={editingMessageId}
             editingContent={editingContent}
             onStartEdit={onStartEdit}
@@ -357,17 +378,16 @@ export const ChatView: React.FC<ChatViewProps> = ({
           />
         ))}
 
-        {pendingDiff && activeSession && (
+        {pendingDiff && sessionId && (
           <InlineDiffPreview
             originalText={pendingDiff.originalText}
             newText={pendingDiff.newText}
-            sessionId={activeSession.id}
+            sessionId={sessionId}
             isStreaming={isStreaming}
           />
         )}
 
         {footer}
-        <div ref={messagesEndRef} />
       </div>
       {/* Floating toolbar: lives inside the scroll container so the
        *  "is the selection inside the chat?" check below is a single

@@ -93,7 +93,16 @@ impl Chunker {
             // and for CJK text 1 char = 3 bytes, so a byte-based threshold
             // would let ~17-char Chinese chunks through while rejecting 50-char
             // English chunks of the same "logical" length.
-            if chunk_text.chars().count() >= self.config.min_size {
+            // A short document is still useful knowledge. The previous
+            // minimum-size gate silently produced zero vectors for short
+            // notes, CSV rows and README stubs, even though the UI reported
+            // the file as indexed. Keep the final/only non-empty chunk while
+            // continuing to discard tiny overlap fragments in long files.
+            let chunk_chars = chunk_text.chars().count();
+            let is_whole_short_document = total_chars <= self.config.min_size;
+            if !chunk_text.is_empty()
+                && (chunk_chars >= self.config.min_size || is_whole_short_document)
+            {
                 let chunk_start_line = line_number_for_byte_offset(content, byte_start);
                 let chunk_end_line = line_number_for_byte_offset(content, byte_end.saturating_sub(1));
                 let chunk = Chunk {
@@ -104,6 +113,7 @@ impl Chunker {
                     start_line: chunk_start_line,
                     end_line: chunk_end_line.max(chunk_start_line),
                     embedding: Vec::new(), // Will be filled later
+                    collection: "default".to_string(),
                 };
                 chunks.push(chunk);
             }
@@ -174,7 +184,10 @@ impl Chunker {
         let mut all_chunks = Vec::new();
 
         for doc in documents {
-            let doc_chunks = self.chunk_document(&doc.id, &doc.title, &doc.content);
+            let mut doc_chunks = self.chunk_document(&doc.id, &doc.title, &doc.content);
+            for chunk in &mut doc_chunks {
+                chunk.collection = doc.collection.clone();
+            }
             all_chunks.extend(doc_chunks);
         }
 
@@ -209,4 +222,3 @@ fn line_number_for_byte_offset(content: &str, byte_offset: usize) -> usize {
 
     line
 }
-

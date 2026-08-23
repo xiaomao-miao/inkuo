@@ -1,14 +1,13 @@
-use quick_xml::events::{BytesStart, Event};
-use quick_xml::Reader;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::io::{Cursor, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use tokio::io::AsyncReadExt;
 
 use super::{validate_workspace_path, ToolDefinition, ToolError, ToolParameters};
 
+mod qa;
 mod svg_parser;
 
 // Re-export the parser surface so existing
@@ -16,10 +15,12 @@ mod svg_parser;
 // resolve. The OOXML writer (`write_shape`, `build_slide_xml`, …) still
 // lives in `mod.rs`; the cross-module use sites are intentionally
 // invisible to callers.
+use qa::inspect_deck;
+pub use qa::{DeckQualityReport, QualityIssue, QualitySeverity};
+pub(crate) use svg_parser::{base64_decode, base64_encode, SlideImage};
 pub use svg_parser::{
     parse_color, parse_svg, GradientStop, Paint, ParsedSvg, SvgShape, TextRun, Transform,
 };
-pub(crate) use svg_parser::{base64_decode, base64_encode, SlideImage};
 
 /// Intermediate representation of one input SVG. Holds the parser
 /// output plus the originating path/index for diagnostics.
@@ -42,6 +43,12 @@ pub const SLIDE_W_EMU: i64 = 12_192_000;
 /// Default slide height in EMU (7.5" × 914,400).
 pub const SLIDE_H_EMU: i64 = 6_858_000;
 
+/// Resource limits keep untrusted workspace SVGs from multiplying into an
+/// unbounded parsed model + decoded media + ZIP package in memory.
+const MAX_SLIDES: usize = 200;
+const MAX_SINGLE_SVG_BYTES: u64 = 12 * 1024 * 1024;
+const MAX_TOTAL_SVG_BYTES: u64 = 96 * 1024 * 1024;
+
 // ---------------------------------------------------------------------------
 // Outcome wrapper
 // ---------------------------------------------------------------------------
@@ -56,6 +63,7 @@ pub struct CreatePptxOutcome {
     pub byte_size: usize,
     pub slide_count: usize,
     pub slide_summaries: Vec<SlideSummary>,
+    pub quality: DeckQualityReport,
     pub is_error: bool,
 }
 
@@ -67,6 +75,7 @@ pub struct SlideSummary {
     pub source_svg: String,
     pub shape_count: usize,
     pub skipped_elements: Vec<String>,
+    pub quality_issues: Vec<QualityIssue>,
 }
 
 // ---------------------------------------------------------------------------
@@ -85,6 +94,10 @@ struct CreatePptxArgs {
     /// `<dc:title>`. Also shown in PowerPoint's "Title" field.
     #[serde(default)]
     title: Option<String>,
+    /// Optional speaker notes, one entry per slide. External claims and
+    /// assets must be documented in a `[Sources]` block here.
+    #[serde(default)]
+    speaker_notes: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -94,17 +107,27 @@ struct CreatePptxArgs {
 pub struct CreatePptxTool;
 
 impl CreatePptxTool {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self {
+        Self
+    }
 
     pub fn definition(&self) -> ToolDefinition {
         ToolDefinition::new_with_label(
             "create_pptx",
             "生成 PPT",
-            "Pack a list of `.svg` files into a single `.pptx` presentation in which every shape \
-             is native OOXML — fully editable in PowerPoint / Keynote / WPS (resize, recolour, \
-             edit text). Each SVG becomes one slide, in the same order as the input. The supported \
+            "Pack a list of `.svg` files into one `.pptx`. Supported text and basic geometry are \
+             converted to native OOXML; raster assets remain picture objects, gradients are flattened, \
+             and complex-path editing can vary across PowerPoint / Keynote / WPS. Each SVG becomes one \
+             slide in input order. The tool performs conservative source-level QA (minimum title/body \
+             sizes, predicted overflow/overlap/title wrapping, placeholders, media aspect risk, layout \
+             repetition, and media [Sources] notes) and returns structured issues. Hard QA failures \
+             preserve the generated draft but mark the tool result as an error, requiring SVG revision \
+             and a complete rebuild. It does not render the deck or verify citations for arbitrary text \
+             claims; after static QA passes, use `render_office_preview` for actual-pixel inspection. \
+             Output uses durable same-directory staging and preserves/restores an existing deck when \
+             a write or activation operation reports failure. The supported \
              SVG subset is `rect`, `circle`, `ellipse`, `line`, `polyline`, `polygon`, `path`, \
-             `text`, and `<g transform=...>`. Linear / radial gradients resolve to the first \
+             `text`, inline PNG/JPEG `image`, and `<g transform=...>`. Linear / radial gradients resolve to the first \
              `<stop>`'s colour as a `<a:solidFill>` (we don't try to recreate the gradient ramp \
              because it doesn't render portably across PowerPoint / Keynote / WPS). Unsupported \
              elements (use / foreignObject / filter / mask / script) are skipped with a \
@@ -112,9 +135,10 @@ impl CreatePptxTool {
             ToolParameters::new(
                 vec!["svg_paths", "output_path"],
                 vec![
-                    ("svg_paths", "array", Some("JSON array of absolute paths to `.svg` files. Order is preserved — n-th element becomes the n-th slide. Must contain at least one path.")),
+                    ("svg_paths", "array", Some("JSON array of absolute paths to `.svg` files. Order is preserved — n-th element becomes the n-th slide. Must contain 1-200 paths; each SVG is limited to 12 MiB and the batch to 96 MiB.")),
                     ("output_path", "string", Some("Absolute workspace path to write the `.pptx` to. Extension must be `.pptx`. Parent directories are created automatically.")),
                     ("title", "string", Some("Optional deck title, stamped into `docProps/core.xml` and PowerPoint's Title field.")),
+                    ("speaker_notes", "array", Some("Optional JSON array with exactly one note per slide. Put external claims/assets in a `[Sources]` block, one source per line.")),
                 ],
             ),
         )
@@ -142,9 +166,15 @@ impl CreatePptxTool {
         if ext != "pptx" {
             return Err(ToolError::InvalidArguments(
                 "create_pptx".to_string(),
-                format!("output_path must end with `.pptx`; got `.{}{}`",
-                        ext,
-                        if ext.is_empty() { " (no extension)" } else { "" }),
+                format!(
+                    "output_path must end with `.pptx`; got `.{}{}`",
+                    ext,
+                    if ext.is_empty() {
+                        " (no extension)"
+                    } else {
+                        ""
+                    }
+                ),
             ));
         }
         validate_workspace_path(&args.output_path, &workspace)?;
@@ -156,6 +186,17 @@ impl CreatePptxTool {
                 "svg_paths must contain at least one path".to_string(),
             ));
         }
+        if args.svg_paths.len() > MAX_SLIDES {
+            return Err(ToolError::InvalidArguments(
+                "create_pptx".to_string(),
+                format!(
+                    "svg_paths contains {} slides; the safety limit is {}",
+                    args.svg_paths.len(),
+                    MAX_SLIDES
+                ),
+            ));
+        }
+        let mut total_svg_bytes = 0u64;
         for (i, p) in args.svg_paths.iter().enumerate() {
             let ext = std::path::Path::new(p)
                 .extension()
@@ -169,18 +210,46 @@ impl CreatePptxTool {
                 ));
             }
             validate_workspace_path(p, &workspace)?;
+            let metadata = tokio::fs::metadata(p).await.map_err(|error| {
+                ToolError::IoError(format!("Failed to inspect SVG {p}: {error}"))
+            })?;
+            if !metadata.is_file() {
+                return Err(ToolError::InvalidArguments(
+                    "create_pptx".to_string(),
+                    format!("svg_paths[{i}] is not a regular file: {p}"),
+                ));
+            }
+            total_svg_bytes =
+                checked_svg_batch_size(total_svg_bytes, metadata.len()).map_err(|message| {
+                    ToolError::InvalidArguments("create_pptx".to_string(), message)
+                })?;
+        }
+        if !args.speaker_notes.is_empty() && args.speaker_notes.len() != args.svg_paths.len() {
+            return Err(ToolError::InvalidArguments(
+                "create_pptx".to_string(),
+                format!(
+                    "speaker_notes must be empty or contain exactly one entry per slide ({} slides, {} notes)",
+                    args.svg_paths.len(),
+                    args.speaker_notes.len()
+                ),
+            ));
         }
 
         // ── 3. Parse every SVG ───────────────────────────────────────────
         let mut slides = Vec::with_capacity(args.svg_paths.len());
+        let mut actual_svg_bytes = 0u64;
         for (idx, p) in args.svg_paths.iter().enumerate() {
-            let bytes = tokio::fs::read(p).await.map_err(|e| {
-                ToolError::IoError(format!("Failed to read SVG {p}: {e}"))
-            })?;
+            // Re-enforce the limit on bytes read from the opened handle. The
+            // file may be replaced or grow after the metadata preflight.
+            let bytes = read_file_bytes_bounded(p, MAX_SINGLE_SVG_BYTES)
+                .await
+                .map_err(|e| ToolError::IoError(format!("Failed to read SVG {p}: {e}")))?;
+            actual_svg_bytes = checked_svg_batch_size(actual_svg_bytes, bytes.len() as u64)
+                .map_err(|message| {
+                    ToolError::InvalidArguments("create_pptx".to_string(), message)
+                })?;
             let svg = std::str::from_utf8(&bytes).map_err(|e| {
-                ToolError::ExecutionError(format!(
-                    "SVG {p} is not valid UTF-8: {e}"
-                ))
+                ToolError::ExecutionError(format!("SVG {p} is not valid UTF-8: {e}"))
             })?;
             let parsed = match parse_svg(svg) {
                 Ok(p) => p,
@@ -198,28 +267,33 @@ impl CreatePptxTool {
         }
 
         // ── 4. Build the .pptx in memory ─────────────────────────────────
-        let deck = build_pptx(&slides, args.title.as_deref())?;
+        let quality = inspect_deck(&slides, &args.speaker_notes);
+        let deck = build_pptx(&slides, args.title.as_deref(), &args.speaker_notes)?;
         let byte_size = deck.len();
 
-        // ── 5. Ensure parent directory + atomic write ────────────────────
-        if let Some(parent) = output_path.parent() {
-            if !parent.as_os_str().is_empty() && !parent.exists() {
-                tokio::fs::create_dir_all(parent).await.map_err(|e| {
-                    ToolError::IoError(format!(
-                        "Failed to create output directory {}: {}",
-                        parent.display(),
-                        e
-                    ))
-                })?;
-            }
-        }
-        tokio::fs::write(&output_path, &deck).await.map_err(|e| {
-            ToolError::IoError(format!(
-                "Failed to write pptx to {}: {}",
-                output_path.display(),
-                e
-            ))
-        })?;
+        // ── 5. Durable same-directory staging + safe replacement ────────
+        // Building succeeded in memory, but never write directly over a
+        // user's last-known-good deck. A sibling temp file is flushed and
+        // synced before activation; replacement failure restores/preserves
+        // the previous output, including on Windows where rename does not
+        // overwrite an existing file.
+        let write_path = output_path.clone();
+        tokio::task::spawn_blocking(move || atomic_write_pptx(&write_path, &deck))
+            .await
+            .map_err(|error| {
+                ToolError::ExecutionError(format!(
+                    "PPTX writer task failed for {}: {}",
+                    output_path.display(),
+                    error
+                ))
+            })?
+            .map_err(|error| {
+                ToolError::IoError(format!(
+                    "Failed to safely replace pptx at {}: {}. Any previous file was preserved.",
+                    output_path.display(),
+                    error
+                ))
+            })?;
 
         // ── 6. Build the success output JSON ─────────────────────────────
         let summaries: Vec<serde_json::Value> = slides
@@ -230,6 +304,7 @@ impl CreatePptxTool {
                     "source_svg": s.source_path,
                     "shape_count": s.content.shapes.len(),
                     "skipped_elements": s.content.skipped,
+                    "quality_issues": quality.issues.iter().filter(|issue| issue.slide == Some(s.slide_index)).collect::<Vec<_>>(),
                 })
             })
             .collect();
@@ -241,13 +316,31 @@ impl CreatePptxTool {
             .filter(|s| !s.is_empty())
             .unwrap_or("(untitled)");
 
+        // A structurally valid PPTX may still fail hard presentation rules.
+        // Preserve that draft on disk so the expert can revise it, but expose
+        // a blocking tool result rather than allowing `needs_revision` to be
+        // mistaken for successful completion.
+        let revision_required = !quality.passed;
         let output = json!({
-            "status": "ok",
+            "status": if revision_required { "needs_revision" } else { "ok" },
             "file_path": output_path.to_string_lossy(),
             "title": title,
             "bytes": byte_size,
             "slide_count": slides.len(),
             "slides": summaries,
+            "quality": quality,
+            "completion_gate": {
+                "blocking": revision_required,
+                "next_action": if revision_required {
+                    "Revise the reported slide SVGs and call create_pptx again with the complete deck."
+                } else {
+                    "Run render_office_preview and inspect actual slide pixels before final handoff."
+                },
+            },
+            "visual_verification": {
+                "status": "not_run",
+                "detail": "create_pptx performs source-level QA only; rendered pixels have not been inspected."
+            },
         })
         .to_string();
 
@@ -263,12 +356,164 @@ impl CreatePptxTool {
                     source_svg: s.source_path.clone(),
                     shape_count: s.content.shapes.len(),
                     skipped_elements: s.content.skipped.clone(),
+                    quality_issues: quality
+                        .issues
+                        .iter()
+                        .filter(|issue| issue.slide == Some(s.slide_index))
+                        .cloned()
+                        .collect(),
                 })
                 .collect(),
-            is_error: false,
+            quality,
+            is_error: revision_required,
         })
     }
 }
+
+/// The registry currently transports outcome payloads as JSON strings. Keep
+/// this parser deliberately fail-closed for a declared revision state while
+/// leaving unrelated/malformed success payloads untouched.
+pub(crate) fn output_requires_revision(output: &str) -> bool {
+    let Ok(value) = serde_json::from_str::<Value>(output) else {
+        return false;
+    };
+    value.get("status").and_then(Value::as_str) == Some("needs_revision")
+        || value
+            .pointer("/completion_gate/blocking")
+            .and_then(Value::as_bool)
+            == Some(true)
+        || value.pointer("/quality/passed").and_then(Value::as_bool) == Some(false)
+}
+
+async fn read_file_bytes_bounded(path: &str, limit: u64) -> std::io::Result<Vec<u8>> {
+    let file = tokio::fs::File::open(path).await?;
+    let mut bytes = Vec::with_capacity(limit.min(64 * 1024) as usize);
+    file.take(limit.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .await?;
+    if bytes.len() as u64 > limit {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("actual input exceeds the {} byte safety limit", limit),
+        ));
+    }
+    Ok(bytes)
+}
+
+fn checked_svg_batch_size(current_total: u64, next_size: u64) -> Result<u64, String> {
+    if next_size > MAX_SINGLE_SVG_BYTES {
+        return Err(format!(
+            "an SVG is {:.1} MiB; the per-slide safety limit is {:.1} MiB",
+            next_size as f64 / (1024.0 * 1024.0),
+            MAX_SINGLE_SVG_BYTES as f64 / (1024.0 * 1024.0)
+        ));
+    }
+    let total = current_total
+        .checked_add(next_size)
+        .ok_or_else(|| "SVG input byte count overflowed".to_string())?;
+    if total > MAX_TOTAL_SVG_BYTES {
+        return Err(format!(
+            "SVG inputs total {:.1} MiB; the deck safety limit is {:.1} MiB",
+            total as f64 / (1024.0 * 1024.0),
+            MAX_TOTAL_SVG_BYTES as f64 / (1024.0 * 1024.0)
+        ));
+    }
+    Ok(total)
+}
+
+fn atomic_write_pptx(output_path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let parent = output_path.parent().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "cannot determine output directory for {}",
+                output_path.display()
+            ),
+        )
+    })?;
+    if !parent.as_os_str().is_empty() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let file_name = output_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("presentation.pptx");
+    let staged = parent.join(format!(".{}-{}.tmp", file_name, uuid::Uuid::new_v4()));
+
+    let write_result = (|| -> std::io::Result<()> {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&staged)?;
+        file.write_all(bytes)?;
+        file.flush()?;
+        file.sync_all()
+    })();
+    if let Err(error) = write_result {
+        let _ = std::fs::remove_file(&staged);
+        return Err(error);
+    }
+
+    if let Err(error) = replace_staged_pptx(&staged, output_path) {
+        let _ = std::fs::remove_file(&staged);
+        return Err(error);
+    }
+    sync_output_directory(parent);
+    Ok(())
+}
+
+fn replace_staged_pptx(staged: &Path, destination: &Path) -> std::io::Result<()> {
+    // POSIX rename replaces atomically. Windows reports an error when the
+    // destination exists; in that case use a recoverable backup dance.
+    match std::fs::rename(staged, destination) {
+        Ok(()) => return Ok(()),
+        Err(primary_error) if !destination.exists() => return Err(primary_error),
+        Err(_) => {}
+    }
+
+    let parent = destination.parent().unwrap_or_else(|| Path::new("."));
+    let backup = parent.join(format!(
+        ".{}-backup-{}",
+        destination
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("presentation.pptx"),
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::rename(destination, &backup)?;
+    if let Err(activation_error) = std::fs::rename(staged, destination) {
+        return match std::fs::rename(&backup, destination) {
+            Ok(()) => Err(activation_error),
+            Err(restore_error) => Err(std::io::Error::new(
+                restore_error.kind(),
+                format!(
+                    "activate staged deck failed: {}; restore previous deck from {} failed: {}",
+                    activation_error,
+                    backup.display(),
+                    restore_error
+                ),
+            )),
+        };
+    }
+    if let Err(error) = std::fs::remove_file(&backup) {
+        tracing::warn!(
+            "PPTX replacement succeeded but backup {} could not be removed: {}",
+            backup.display(),
+            error
+        );
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_output_directory(parent: &Path) {
+    if let Ok(directory) = std::fs::File::open(parent) {
+        let _ = directory.sync_all();
+    }
+}
+
+#[cfg(not(unix))]
+fn sync_output_directory(_parent: &Path) {}
 
 impl Default for CreatePptxTool {
     fn default() -> Self {
@@ -279,7 +524,6 @@ impl Default for CreatePptxTool {
 // ---------------------------------------------------------------------------
 // SVG → internal model
 // ---------------------------------------------------------------------------
-
 
 /// Collect all `<!--IMG|...|-->` markers from slide XML and extract the
 /// embedded image data. Returns (processed_xml, images).
@@ -296,11 +540,9 @@ fn extract_images_from_slide(xml: &str) -> (String, Vec<SlideImage>) {
             let inner = &xml[abs_start + 5..marker_end - 3]; // strip <!--IMG| and |-->
             let parts: Vec<&str> = inner.split('|').collect();
             if parts.len() >= 7 {
-                if let (Ok(shape_id), Some(ext), Some(b64)) = (
-                    parts[0].parse::<usize>(),
-                    parts.get(5),
-                    parts.get(6),
-                ) {
+                if let (Ok(shape_id), Some(ext), Some(b64)) =
+                    (parts[0].parse::<usize>(), parts.get(5), parts.get(6))
+                {
                     if let Some(data) = base64_decode(b64.as_bytes()) {
                         images.push(SlideImage {
                             shape_id,
@@ -327,7 +569,12 @@ fn patch_slide_image_refs(xml: &str, shape_id: usize, media_rid: &str) -> String
 }
 
 /// Build the `[Content_Types].xml` with optional PNG/JPEG overrides.
-fn build_content_types_with_images(slide_count: usize, has_png: bool, has_jpg: bool) -> String {
+fn build_content_types_with_images(
+    slide_count: usize,
+    has_png: bool,
+    has_jpg: bool,
+    has_notes: bool,
+) -> String {
     let mut out = String::new();
     out.push_str(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#);
     out.push_str("<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\">");
@@ -346,10 +593,18 @@ fn build_content_types_with_images(slide_count: usize, has_png: bool, has_jpg: b
     out.push_str("<Override PartName=\"/ppt/theme/theme1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.theme+xml\"/>");
     out.push_str("<Override PartName=\"/docProps/core.xml\" ContentType=\"application/vnd.openxmlformats-package.core-properties+xml\"/>");
     out.push_str("<Override PartName=\"/docProps/app.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.extended-properties+xml\"/>");
+    if has_notes {
+        out.push_str("<Override PartName=\"/ppt/notesMasters/notesMaster1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.notesMaster+xml\"/>");
+    }
     for i in 1..=slide_count {
         out.push_str(&format!(
             "<Override PartName=\"/ppt/slides/slide{i}.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.slide+xml\"/>"
         ));
+        if has_notes {
+            out.push_str(&format!(
+                "<Override PartName=\"/ppt/notesSlides/notesSlide{i}.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.notesSlide+xml\"/>"
+            ));
+        }
     }
     out.push_str("</Types>");
     out
@@ -357,18 +612,33 @@ fn build_content_types_with_images(slide_count: usize, has_png: bool, has_jpg: b
 
 /// Build slide rels with optional image relationships.
 /// media_rels: [(media_idx, ext)] — maps media_idx to its file extension.
-fn build_slide_rels_with_images(media_rels: &[(usize, String)]) -> String {
+fn build_slide_rels_with_images(
+    media_rels: &[(usize, String)],
+    slide_number: usize,
+    has_notes: bool,
+) -> String {
     let mut out = String::new();
     out.push_str(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#);
-    out.push_str("<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">");
+    out.push_str(
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">",
+    );
     out.push_str("<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout\" Target=\"../slideLayouts/slideLayout1.xml\"/>");
     for (media_idx, ext) in media_rels {
         let rid = format!("rIdM{}", media_idx);
         let target = format!("../media/image{}.{}", media_idx, ext);
-        let ct = if ext == "png" { "image/png" } else { "image/jpeg" };
+        let ct = if ext == "png" {
+            "image/png"
+        } else {
+            "image/jpeg"
+        };
         out.push_str(&format!(
             "<Relationship Id=\"{}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/image\" Target=\"{}\" ContentType=\"{}\"/>",
             rid, target, ct
+        ));
+    }
+    if has_notes {
+        out.push_str(&format!(
+            "<Relationship Id=\"rIdNotes\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesSlide\" Target=\"../notesSlides/notesSlide{slide_number}.xml\"/>"
         ));
     }
     out.push_str("</Relationships>");
@@ -376,8 +646,13 @@ fn build_slide_rels_with_images(media_rels: &[(usize, String)]) -> String {
 }
 
 /// Build a complete `.pptx` (as bytes) from a list of `SlideInput`s.
-fn build_pptx(slides: &[SlideInput], title: Option<&str>) -> Result<Vec<u8>, ToolError> {
+fn build_pptx(
+    slides: &[SlideInput],
+    title: Option<&str>,
+    speaker_notes: &[String],
+) -> Result<Vec<u8>, ToolError> {
     let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
+    let has_notes = !speaker_notes.is_empty();
 
     // Compute the presentation-wide slide size (OOXML: one size per deck).
     let (slide_w_emu, slide_h_emu) = slides
@@ -413,7 +688,7 @@ fn build_pptx(slides: &[SlideInput], title: Option<&str>) -> Result<Vec<u8>, Too
     // [Content_Types].xml
     entries.push((
         "[Content_Types].xml".to_string(),
-        build_content_types_with_images(slides.len(), has_png, has_jpg).into_bytes(),
+        build_content_types_with_images(slides.len(), has_png, has_jpg, has_notes).into_bytes(),
     ));
 
     // _rels/.rels
@@ -422,7 +697,7 @@ fn build_pptx(slides: &[SlideInput], title: Option<&str>) -> Result<Vec<u8>, Too
     // ppt/_rels/presentation.xml.rels
     entries.push((
         "ppt/_rels/presentation.xml.rels".to_string(),
-        build_presentation_rels(slides.len()).into_bytes(),
+        build_presentation_rels_with_notes(slides.len(), has_notes).into_bytes(),
     ));
 
     // Compute the presentation-wide slide size.
@@ -434,11 +709,15 @@ fn build_pptx(slides: &[SlideInput], title: Option<&str>) -> Result<Vec<u8>, Too
     // ppt/presentation.xml
     entries.push((
         "ppt/presentation.xml".to_string(),
-        build_presentation_xml(slides.len(), slide_w_emu, slide_h_emu).into_bytes(),
+        build_presentation_xml_with_notes(slides.len(), slide_w_emu, slide_h_emu, has_notes)
+            .into_bytes(),
     ));
 
     // ppt/theme/theme1.xml
-    entries.push(("ppt/theme/theme1.xml".to_string(), THEME_XML.as_bytes().to_vec()));
+    entries.push((
+        "ppt/theme/theme1.xml".to_string(),
+        THEME_XML.as_bytes().to_vec(),
+    ));
 
     // ppt/slides/_rels/slideN.xml.rels (with image refs)
     for (slide_idx, _) in slides.iter().enumerate() {
@@ -448,10 +727,16 @@ fn build_pptx(slides: &[SlideInput], title: Option<&str>) -> Result<Vec<u8>, Too
             .unwrap_or_default()
             .into_iter()
             .map(|(media_idx, _shape_id)| {
-                (media_idx, all_media.get(media_idx).map(|m| m.ext.clone()).unwrap_or_default())
+                (
+                    media_idx,
+                    all_media
+                        .get(media_idx)
+                        .map(|m| m.ext.clone())
+                        .unwrap_or_default(),
+                )
             })
             .collect();
-        let rels_xml = build_slide_rels_with_images(&media_rels);
+        let rels_xml = build_slide_rels_with_images(&media_rels, slide_idx + 1, has_notes);
         entries.push((
             format!("ppt/slides/_rels/slide{}.xml.rels", slide_idx + 1),
             rels_xml.into_bytes(),
@@ -501,6 +786,30 @@ fn build_pptx(slides: &[SlideInput], title: Option<&str>) -> Result<Vec<u8>, Too
     ));
     entries.push(("docProps/app.xml".to_string(), APP_XML.as_bytes().to_vec()));
 
+    if has_notes {
+        entries.push((
+            "ppt/notesMasters/notesMaster1.xml".to_string(),
+            NOTES_MASTER_XML.as_bytes().to_vec(),
+        ));
+        entries.push((
+            "ppt/notesMasters/_rels/notesMaster1.xml.rels".to_string(),
+            NOTES_MASTER_RELS.as_bytes().to_vec(),
+        ));
+        for (slide_index, note) in speaker_notes.iter().enumerate() {
+            entries.push((
+                format!("ppt/notesSlides/notesSlide{}.xml", slide_index + 1),
+                build_notes_slide_xml(note).into_bytes(),
+            ));
+            entries.push((
+                format!(
+                    "ppt/notesSlides/_rels/notesSlide{}.xml.rels",
+                    slide_index + 1
+                ),
+                build_notes_slide_rels(slide_index + 1).into_bytes(),
+            ));
+        }
+    }
+
     // Write media files
     for (media_idx, img) in all_media.iter().enumerate() {
         let path = format!("ppt/media/image{}.{}", media_idx, img.ext);
@@ -518,13 +827,11 @@ fn build_pptx(slides: &[SlideInput], title: Option<&str>) -> Result<Vec<u8>, Too
             zip.start_file(name.as_str(), opts).map_err(|e| {
                 ToolError::ExecutionError(format!("zip start_file({name}) failed: {e}"))
             })?;
-            zip.write_all(data).map_err(|e| {
-                ToolError::ExecutionError(format!("zip write({name}) failed: {e}"))
-            })?;
+            zip.write_all(data)
+                .map_err(|e| ToolError::ExecutionError(format!("zip write({name}) failed: {e}")))?;
         }
-        zip.finish().map_err(|e| {
-            ToolError::ExecutionError(format!("zip finish failed: {e}"))
-        })?;
+        zip.finish()
+            .map_err(|e| ToolError::ExecutionError(format!("zip finish failed: {e}")))?;
     }
     Ok(buf)
 }
@@ -565,16 +872,27 @@ pub fn build_root_rels() -> String {
 }
 
 pub fn build_presentation_rels(slide_count: usize) -> String {
+    build_presentation_rels_with_notes(slide_count, false)
+}
+
+fn build_presentation_rels_with_notes(slide_count: usize, has_notes: bool) -> String {
     let mut out = String::new();
     out.push_str(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#);
-    out.push_str("<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">");
+    out.push_str(
+        "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">",
+    );
     out.push_str("<Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster\" Target=\"slideMasters/slideMaster1.xml\"/>");
     out.push_str("<Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme\" Target=\"theme/theme1.xml\"/>");
-    out.push_str("<Relationship Id=\"rId11\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout\" Target=\"slideLayouts/slideLayout1.xml\"/>");
     for i in 1..=slide_count {
         out.push_str(&format!(
             "<Relationship Id=\"rId{}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide\" Target=\"slides/slide{i}.xml\"/>",
             i + 2
+        ));
+    }
+    if has_notes {
+        out.push_str(&format!(
+            "<Relationship Id=\"rId{}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesMaster\" Target=\"notesMasters/notesMaster1.xml\"/>",
+            slide_count + 3
         ));
     }
     out.push_str("</Relationships>");
@@ -588,22 +906,76 @@ pub fn build_slide_rels() -> String {
 </Relationships>"#.to_string()
 }
 
+fn build_notes_slide_rels(slide_number: usize) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="../slides/slide{slide_number}.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/notesMaster" Target="../notesMasters/notesMaster1.xml"/>
+</Relationships>"#
+    )
+}
+
+fn build_notes_slide_xml(note: &str) -> String {
+    let mut paragraphs = String::new();
+    let lines: Vec<&str> = if note.is_empty() {
+        vec![""]
+    } else {
+        note.lines().collect()
+    };
+    for line in lines {
+        paragraphs.push_str("<a:p>");
+        if !line.is_empty() {
+            paragraphs
+                .push_str("<a:r><a:rPr lang=\"zh-CN\" sz=\"1200\"/><a:t xml:space=\"preserve\">");
+            paragraphs.push_str(&xml_escape(line));
+            paragraphs.push_str("</a:t></a:r>");
+        }
+        paragraphs.push_str("<a:endParaRPr lang=\"zh-CN\" sz=\"1200\"/></a:p>");
+    }
+    format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:notes xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:cSld>
+    <p:spTree>
+      <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>
+      <p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>
+      <p:sp>
+        <p:nvSpPr><p:cNvPr id="2" name="Notes Placeholder 2"/><p:cNvSpPr txBox="1"/><p:nvPr><p:ph type="body" idx="1"/></p:nvPr></p:nvSpPr>
+        <p:spPr/>
+        <p:txBody><a:bodyPr/><a:lstStyle/>{paragraphs}</p:txBody>
+      </p:sp>
+    </p:spTree>
+  </p:cSld>
+  <p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>
+</p:notes>"#
+    )
+}
+
 // ---- presentation.xml -----------------------------------------------------
 
 pub fn build_presentation_xml(slide_count: usize, slide_w_emu: i64, slide_h_emu: i64) -> String {
+    build_presentation_xml_with_notes(slide_count, slide_w_emu, slide_h_emu, false)
+}
+
+fn build_presentation_xml_with_notes(
+    slide_count: usize,
+    slide_w_emu: i64,
+    slide_h_emu: i64,
+    has_notes: bool,
+) -> String {
     let mut out = String::new();
     out.push_str(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#);
     out.push_str("<p:presentation xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\">");
-    // OOXML wants a `type` attribute on `<p:sldSz>` for the well-known
-    // aspect ratios; for everything else we just emit the dimensions
-    // without a type. PowerPoint, Keynote and WPS all accept the
-    // dimension-only form, so we always emit that.
-    out.push_str(&format!(
-        "<p:sldSz cx=\"{}\" cy=\"{}\"/>",
-        slide_w_emu, slide_h_emu
-    ));
-    out.push_str("<p:notesSz cx=\"6858000\" cy=\"9144000\"/>");
-    out.push_str("<p:defaultTextStyle><a:defPPr/></p:defaultTextStyle>");
+    out.push_str(
+        "<p:sldMasterIdLst><p:sldMasterId id=\"2147483648\" r:id=\"rId1\"/></p:sldMasterIdLst>",
+    );
+    if has_notes {
+        out.push_str(&format!(
+            "<p:notesMasterIdLst><p:notesMasterId r:id=\"rId{}\"/></p:notesMasterIdLst>",
+            slide_count + 3
+        ));
+    }
     out.push_str("<p:sldIdLst>");
     for i in 1..=slide_count {
         out.push_str(&format!(
@@ -613,6 +985,15 @@ pub fn build_presentation_xml(slide_count: usize, slide_w_emu: i64, slide_h_emu:
         ));
     }
     out.push_str("</p:sldIdLst>");
+    // OOXML wants a `type` attribute on `<p:sldSz>` for well-known
+    // aspect ratios. The dimension-only form is portable across
+    // PowerPoint, Keynote and WPS and also supports user-defined sizes.
+    out.push_str(&format!(
+        "<p:sldSz cx=\"{}\" cy=\"{}\"/>",
+        slide_w_emu, slide_h_emu
+    ));
+    out.push_str("<p:notesSz cx=\"6858000\" cy=\"9144000\"/>");
+    out.push_str("<p:defaultTextStyle><a:defPPr/></p:defaultTextStyle>");
     out.push_str("</p:presentation>");
     out
 }
@@ -649,14 +1030,25 @@ fn build_slide_xml(svg: &ParsedSvg, slide_w: i64, slide_h: i64) -> Result<String
     // python-pptx). `id=1` is reserved for the group's own
     // `<p:cNvPr>`, so we start the per-shape counter at 2.
     for (idx, shape) in svg.shapes.iter().enumerate() {
-        write_shape(&mut shapes, shape, scale, off_x, off_y, slide_w, slide_h, idx + 2)?;
+        write_shape(
+            &mut shapes,
+            shape,
+            scale,
+            off_x,
+            off_y,
+            slide_w,
+            slide_h,
+            idx + 2,
+        )?;
     }
 
     let mut out = String::new();
     out.push_str(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#);
     out.push_str("<p:sld xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\">");
     out.push_str("<p:cSld><p:spTree>");
-    out.push_str("<p:nvGrpSpPr><p:cNvPr id=\"1\" name=\"\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>");
+    out.push_str(
+        "<p:nvGrpSpPr><p:cNvPr id=\"1\" name=\"\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>",
+    );
     out.push_str("<p:grpSpPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"0\" cy=\"0\"/><a:chOff x=\"0\" y=\"0\"/><a:chExt cx=\"0\" cy=\"0\"/></a:xfrm></p:grpSpPr>");
     out.push_str(&shapes);
     out.push_str("</p:spTree></p:cSld>");
@@ -681,7 +1073,10 @@ fn build_slide_xml(svg: &ParsedSvg, slide_w: i64, slide_h: i64) -> Result<String
 fn compute_slide_size_emu(svg: &ParsedSvg) -> (i64, i64) {
     let (w, h) = svg_slide_size(svg);
     let px_per_emu = EMU_PER_INCH as f64 / 96.0;
-    ((w * px_per_emu).round() as i64, (h * px_per_emu).round() as i64)
+    (
+        (w * px_per_emu).round() as i64,
+        (h * px_per_emu).round() as i64,
+    )
 }
 
 /// Pick the slide pixel size for an SVG. Tries `viewBox` first, then
@@ -733,8 +1128,16 @@ pub fn write_shape(
     let _ = slide_h;
     match *shape {
         SvgShape::Rect {
-            x, y, width, height, rx, ry,
-            ref fill, ref stroke, stroke_width, opacity,
+            x,
+            y,
+            width,
+            height,
+            rx,
+            ry,
+            ref fill,
+            ref stroke,
+            stroke_width,
+            opacity,
         } => {
             let px = project_x(x, scale, off_x);
             let py = project_y(y, scale, off_y);
@@ -753,8 +1156,14 @@ pub fn write_shape(
             out.push_str("</p:spPr></p:sp>");
         }
         SvgShape::Ellipse {
-            cx, cy, rx, ry,
-            ref fill, ref stroke, stroke_width, opacity,
+            cx,
+            cy,
+            rx,
+            ry,
+            ref fill,
+            ref stroke,
+            stroke_width,
+            opacity,
         } => {
             let px = project_x(cx - rx, scale, off_x);
             let py = project_y(cy - ry, scale, off_y);
@@ -766,8 +1175,13 @@ pub fn write_shape(
             out.push_str("</p:spPr></p:sp>");
         }
         SvgShape::Line {
-            x1, y1, x2, y2,
-            ref stroke, stroke_width, opacity,
+            x1,
+            y1,
+            x2,
+            y2,
+            ref stroke,
+            stroke_width,
+            opacity,
         } => {
             // PPT connector geometry uses `<a:xfrm>` and stores its endpoints
             // as flipH/flipV + an off/ext pair that *encloses* the line.
@@ -820,7 +1234,13 @@ pub fn write_shape(
             out.push_str("</p:spPr></p:sp>");
         }
         SvgShape::Text {
-            x, y, ref runs, font_size, ref fill, opacity, ref text_anchor,
+            x,
+            y,
+            ref runs,
+            font_size,
+            ref fill,
+            opacity,
+            ref text_anchor,
         } => {
             // PowerPoint text boxes need a *box* geometry (x, y, w, h)
             // but SVG `<text>` only gives us a baseline anchor point
@@ -893,32 +1313,31 @@ pub fn write_shape(
             let size_hundredths = (size_pt * 75.0).round() as i64;
             let line_h_emu = ((size_pt * 1.4) * EMU_PER_INCH as f64 / 72.0).round() as i64;
             let ph = line_h_emu.max(120_000); // at least ~0.13" so the box is grabbable
-            // SVG `<text y="…"/>` positions the glyph **baseline** at
-            // y, while OOXML `<p:txBody>` is anchored on the *box top*
-            // (anchor="t" sticks the first baseline to the top of the
-            // box). Without compensation the rendered text drops
-            // roughly one ascent downward compared to the SVG, which
-            // is the "everything is shifted down" the user reported.
-            //
-            // We pick `py` so the *baseline* of the first run lands on
-            // `py_baseline`. Empirically (verified against the user's
-            // slide1-title.svg where `<text y="350">` should land at
-            // baseline y=350 in the SVG coordinate space), PowerPoint
-            // with `anchor="t"` draws the baseline ~`font_size` pt
-            // below the box top — the "height of a capital letter"
-            // rather than the full line height. Using the line height
-            // × 0.8 (the typographic ascent ratio) was a slight
-            // over-correction and left the text too high.
-            //
-            // Empirical fit: PowerPoint with `anchor="t"` and a default-font
-            // run draws the baseline ≈ `sz_pt × 0.95` pt below the box
-            // top. Since `sz_pt` (PPT pt) = SVG px × 0.75, the combined
-            // SVG px → baseline shift coefficient is 0.75 × 0.95 = 0.7125.
-            // Previously we used `size_pt × 0.95` where `size_pt` was the
-            // SVG px value — too large by a factor of 1.333, which pushed
-            // the baseline up by that ratio and made text start too high.
-            let baseline_shift_emu =
-                (size_pt * 0.7125 * EMU_PER_INCH as f64 / 72.0).round() as i64;
+                                              // SVG `<text y="…"/>` positions the glyph **baseline** at
+                                              // y, while OOXML `<p:txBody>` is anchored on the *box top*
+                                              // (anchor="t" sticks the first baseline to the top of the
+                                              // box). Without compensation the rendered text drops
+                                              // roughly one ascent downward compared to the SVG, which
+                                              // is the "everything is shifted down" the user reported.
+                                              //
+                                              // We pick `py` so the *baseline* of the first run lands on
+                                              // `py_baseline`. Empirically (verified against the user's
+                                              // slide1-title.svg where `<text y="350">` should land at
+                                              // baseline y=350 in the SVG coordinate space), PowerPoint
+                                              // with `anchor="t"` draws the baseline ~`font_size` pt
+                                              // below the box top — the "height of a capital letter"
+                                              // rather than the full line height. Using the line height
+                                              // × 0.8 (the typographic ascent ratio) was a slight
+                                              // over-correction and left the text too high.
+                                              //
+                                              // Empirical fit: PowerPoint with `anchor="t"` and a default-font
+                                              // run draws the baseline ≈ `sz_pt × 0.95` pt below the box
+                                              // top. Since `sz_pt` (PPT pt) = SVG px × 0.75, the combined
+                                              // SVG px → baseline shift coefficient is 0.75 × 0.95 = 0.7125.
+                                              // Previously we used `size_pt × 0.95` where `size_pt` was the
+                                              // SVG px value — too large by a factor of 1.333, which pushed
+                                              // the baseline up by that ratio and made text start too high.
+            let baseline_shift_emu = (size_pt * 0.7125 * EMU_PER_INCH as f64 / 72.0).round() as i64;
             let py = py_baseline - baseline_shift_emu;
             // We intentionally do NOT clamp `px` or `pw` to the
             // slide bounds. OOXML allows shapes to extend past the
@@ -938,19 +1357,16 @@ pub fn write_shape(
             // pinning.
             // Honour per-run fill when present, otherwise the text-level
             // default fill, otherwise black.
-            let default_color = fill
-                .as_ref()
-                .and_then(text_color)
-                .unwrap_or_else(|| {
-                    "<a:solidFill><a:srgbClr val=\"000000\"/></a:solidFill>".to_string()
-                });
+            let default_color = fill.as_ref().and_then(text_color).unwrap_or_else(|| {
+                "<a:solidFill><a:srgbClr val=\"000000\"/></a:solidFill>".to_string()
+            });
             let _ = opacity; // alpha on text is encoded via <a:alpha> on the color
-            // OOXML schema: `<p:sp>` contains `<p:nvSpPr>`, then
-            // `<p:spPr>`, then `<p:txBody>` (which is a SIBLING of
-            // `<p:spPr>`, not a child). An earlier version of this
-            // writer pushed `<p:txBody>` inside `<p:spPr>` — PowerPoint
-            // and python-pptx both ignored the run text and the slide
-            // showed up empty in PPT.
+                             // OOXML schema: `<p:sp>` contains `<p:nvSpPr>`, then
+                             // `<p:spPr>`, then `<p:txBody>` (which is a SIBLING of
+                             // `<p:spPr>`, not a child). An earlier version of this
+                             // writer pushed `<p:txBody>` inside `<p:spPr>` — PowerPoint
+                             // and python-pptx both ignored the run text and the slide
+                             // showed up empty in PPT.
             write_sp_open(out, shape_id, "TextBox", px, py, pw, ph);
             out.push_str("</p:spPr>");
             out.push_str("<p:txBody>");
@@ -984,21 +1400,37 @@ pub fn write_shape(
             out.push_str("</p:sp>");
         }
         SvgShape::Image {
-            x: img_x, y: img_y, width: img_w, height: img_h,
-            mime: _, ref ext, ref data,
+            x: img_x,
+            y: img_y,
+            width: img_w,
+            height: img_h,
+            mime: _,
+            ref ext,
+            ref data,
         } => {
             let px = project_x(img_x, scale, off_x);
             let py = project_y(img_y, scale, off_y);
             let pw = project_len(img_w, scale);
             let ph = project_len(img_h, scale);
-            if pw == 0 || ph == 0 { return Ok(()); }
+            if pw == 0 || ph == 0 {
+                return Ok(());
+            }
             // Emit both the real <p:pic> (which build_pptx will post-process
             // to fix the rId) and a marker comment carrying the binary data
             // so build_pptx can extract it without re-visiting shapes.
             let b64 = base64_encode(&data);
             // Placeholder rId — build_pptx replaces rIdS{shape_id} → rId{media_id}
-            write_image_pic(out, px, py, pw, ph, shape_id,
-                &format!("rIdS{shape_id}"), &b64, ext.as_str());
+            write_image_pic(
+                out,
+                px,
+                py,
+                pw,
+                ph,
+                shape_id,
+                &format!("rIdS{shape_id}"),
+                &b64,
+                ext.as_str(),
+            );
         }
     }
     Ok(())
@@ -1027,19 +1459,32 @@ fn write_image_pic(
          <p:spPr><a:xfrm><a:off x=\"{}\" y=\"{}\"/><a:ext cx=\"{}\" cy=\"{}\"/></a:xfrm>\
          <a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></p:spPr></p:pic>",
         shape_id, r_id, x, y, w, h
-    ).ok();
+    )
+    .ok();
     // The marker comment lets build_pptx extract the binary image data without
     // re-visiting shapes. Format: <!--IMG|shape_id|x|y|w|h|ext|b64|-->
-    write!(out, "<!--IMG|{}|{}|{}|{}|{}|{}|{}|-->",
-        shape_id, x, y, w, h, ext, b64_data).ok();
+    write!(
+        out,
+        "<!--IMG|{}|{}|{}|{}|{}|{}|{}|-->",
+        shape_id, x, y, w, h, ext, b64_data
+    )
+    .ok();
 }
 
 /// Emit `<p:sp>` opening + the `<p:nvSpPr>` / `<p:spPr><a:xfrm>` headers.
 fn write_sp_open(out: &mut String, id: usize, name: &str, x: i64, y: i64, w: i64, h: i64) {
-    write!(out, "<p:sp><p:nvSpPr><p:cNvPr id=\"{}\" name=\"{}\"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>\
+    write!(
+        out,
+        "<p:sp><p:nvSpPr><p:cNvPr id=\"{}\" name=\"{}\"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>\
         <p:spPr><a:xfrm><a:off x=\"{}\" y=\"{}\"/><a:ext cx=\"{}\" cy=\"{}\"/></a:xfrm>",
-        id, xml_escape(name), x, y, w, h
-    ).ok();
+        id,
+        xml_escape(name),
+        x,
+        y,
+        w,
+        h
+    )
+    .ok();
 }
 
 /// Emit the `<a:solidFill>` / `<a:ln>` portion of a shape. Falls back to a
@@ -1060,7 +1505,10 @@ fn write_fill(out: &mut String, fill: Option<&Paint>, opacity: Option<f64>) {
         Some(Paint::None) => {
             out.push_str("<a:noFill/>");
         }
-        Some(Paint::Color { rgb, opacity: c_opacity }) => {
+        Some(Paint::Color {
+            rgb,
+            opacity: c_opacity,
+        }) => {
             let combined = c_opacity.or(opacity).unwrap_or(1.0).clamp(0.0, 1.0);
             out.push_str(&format!(
                 "<a:solidFill><a:srgbClr val=\"{}\"><a:alpha val=\"{}\"/></a:srgbClr></a:solidFill>",
@@ -1073,7 +1521,10 @@ fn write_fill(out: &mut String, fill: Option<&Paint>, opacity: Option<f64>) {
         // whole point of the v1 gradient fallback — see the
         // Paint::GradientRef doc-comment for why we don't try to render
         // the actual ramp in DrawingML.
-        Some(Paint::GradientRef { rgb, opacity: c_opacity }) => {
+        Some(Paint::GradientRef {
+            rgb,
+            opacity: c_opacity,
+        }) => {
             let combined = c_opacity.or(opacity).unwrap_or(1.0).clamp(0.0, 1.0);
             out.push_str(&format!(
                 "<a:solidFill><a:srgbClr val=\"{}\"><a:alpha val=\"{}\"/></a:srgbClr></a:solidFill>",
@@ -1097,8 +1548,12 @@ fn write_stroke(
         Some(Paint::None) => {
             out.push_str("<a:ln><a:noFill/></a:ln>");
         }
-        Some(Paint::Color { rgb, opacity: c_opacity }) => {
-            let width_emu = (stroke_width.unwrap_or(1.0) * EMU_PER_INCH as f64 / 72.0).round() as i64;
+        Some(Paint::Color {
+            rgb,
+            opacity: c_opacity,
+        }) => {
+            let width_emu =
+                (stroke_width.unwrap_or(1.0) * EMU_PER_INCH as f64 / 72.0).round() as i64;
             let combined = c_opacity.or(opacity).unwrap_or(1.0).clamp(0.0, 1.0);
             out.push_str(&format!(
                 "<a:ln w=\"{}\"><a:solidFill><a:srgbClr val=\"{}\"><a:alpha val=\"{}\"/></a:srgbClr></a:solidFill></a:ln>",
@@ -1107,8 +1562,12 @@ fn write_stroke(
                 (combined * 100_000.0).round() as i64
             ));
         }
-        Some(Paint::GradientRef { rgb, opacity: c_opacity }) => {
-            let width_emu = (stroke_width.unwrap_or(1.0) * EMU_PER_INCH as f64 / 72.0).round() as i64;
+        Some(Paint::GradientRef {
+            rgb,
+            opacity: c_opacity,
+        }) => {
+            let width_emu =
+                (stroke_width.unwrap_or(1.0) * EMU_PER_INCH as f64 / 72.0).round() as i64;
             let combined = c_opacity.or(opacity).unwrap_or(1.0).clamp(0.0, 1.0);
             out.push_str(&format!(
                 "<a:ln w=\"{}\"><a:solidFill><a:srgbClr val=\"{}\"><a:alpha val=\"{}\"/></a:srgbClr></a:solidFill></a:ln>",
@@ -1133,11 +1592,17 @@ fn write_line_stroke(
 ) {
     let width_emu = (stroke_width.unwrap_or(1.0) * EMU_PER_INCH as f64 / 72.0).round() as i64;
     let (rgb, _) = match stroke {
-        Some(Paint::Color { rgb, opacity: c_opacity }) => {
+        Some(Paint::Color {
+            rgb,
+            opacity: c_opacity,
+        }) => {
             let combined = c_opacity.or(opacity).unwrap_or(1.0).clamp(0.0, 1.0);
             (rgb.clone(), (combined * 100_000.0).round() as i64)
         }
-        Some(Paint::GradientRef { rgb, opacity: c_opacity }) => {
+        Some(Paint::GradientRef {
+            rgb,
+            opacity: c_opacity,
+        }) => {
             let combined = c_opacity.or(opacity).unwrap_or(1.0).clamp(0.0, 1.0);
             (rgb.clone(), (combined * 100_000.0).round() as i64)
         }
@@ -1249,6 +1714,24 @@ pub const THEME_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="
   </a:themeElements>
 </a:theme>"#;
 
+pub const NOTES_MASTER_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:notesMaster xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">
+  <p:cSld>
+    <p:spTree>
+      <p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>
+      <p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>
+    </p:spTree>
+  </p:cSld>
+  <p:clrMap accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" bg1="lt1" bg2="lt2" folHlink="folHlink" hlink="hlink" tx1="dk1" tx2="dk2"/>
+  <p:hf hdr="1" ftr="1" dt="1" sldNum="1"/>
+  <p:notesStyle><a:lvl1pPr marL="0" algn="l" defTabSz="914400" rtl="0" eaLnBrk="1" latinLnBrk="0" hangingPunct="1"><a:defRPr sz="1200" kern="1200"/></a:lvl1pPr></p:notesStyle>
+</p:notesMaster>"#;
+
+pub const NOTES_MASTER_RELS: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="../theme/theme1.xml"/>
+</Relationships>"#;
+
 /// Bare-minimum slide master so PowerPoint doesn't complain about a missing
 /// background placeholder.
 pub const SLIDE_MASTER_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -1292,3 +1775,217 @@ pub const SLIDE_LAYOUT_RELS: &str = r#"<?xml version="1.0" encoding="UTF-8" stan
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="../slideMasters/slideMaster1.xml"/>
 </Relationships>"#;
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+    use std::io::Read;
+
+    fn test_slide(index: usize) -> SlideInput {
+        SlideInput {
+            source_path: format!("slide-{index}.svg"),
+            slide_index: index,
+            content: parse_svg(
+                r#"<svg viewBox="0 0 1280 720"><text x="80" y="100" font-size="72">A decisive title</text><text x="80" y="220" font-size="24">Readable supporting evidence</text></svg>"#,
+            )
+            .unwrap(),
+        }
+    }
+
+    #[test]
+    fn speaker_notes_are_written_as_real_notes_parts() {
+        let slides = vec![test_slide(1)];
+        let notes = vec!["Presenter context\n[Sources]\n- https://example.com/data".to_string()];
+        let bytes = build_pptx(&slides, Some("Test"), &notes).unwrap();
+        let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).unwrap();
+
+        let mut note_xml = String::new();
+        archive
+            .by_name("ppt/notesSlides/notesSlide1.xml")
+            .unwrap()
+            .read_to_string(&mut note_xml)
+            .unwrap();
+        assert!(note_xml.contains("[Sources]"));
+        assert!(note_xml.contains("https://example.com/data"));
+
+        let mut slide_rels = String::new();
+        archive
+            .by_name("ppt/slides/_rels/slide1.xml.rels")
+            .unwrap()
+            .read_to_string(&mut slide_rels)
+            .unwrap();
+        assert!(slide_rels.contains("relationships/notesSlide"));
+
+        let mut content_types = String::new();
+        archive
+            .by_name("[Content_Types].xml")
+            .unwrap()
+            .read_to_string(&mut content_types)
+            .unwrap();
+        assert!(content_types.contains("presentationml.notesSlide+xml"));
+        assert!(content_types.contains("presentationml.notesMaster+xml"));
+    }
+
+    #[test]
+    fn presentation_relationship_ids_remain_unique_for_large_decks() {
+        let rels = build_presentation_rels_with_notes(18, true);
+        let mut seen = HashSet::new();
+        for fragment in rels.split("Id=\"").skip(1) {
+            let id = fragment.split('"').next().unwrap();
+            assert!(
+                seen.insert(id.to_string()),
+                "duplicate relationship id {id}"
+            );
+        }
+        assert_eq!(seen.len(), 21); // master + theme + 18 slides + notes master
+    }
+
+    #[test]
+    fn durable_write_replaces_an_existing_deck_without_leaving_temp_files() {
+        let directory =
+            std::env::temp_dir().join(format!("inkuo-pptx-atomic-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let destination = directory.join("deck.pptx");
+        std::fs::write(&destination, b"last-known-good").unwrap();
+
+        atomic_write_pptx(&destination, b"new-complete-package").unwrap();
+
+        assert_eq!(
+            std::fs::read(&destination).unwrap(),
+            b"new-complete-package"
+        );
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+        std::fs::remove_dir_all(directory).ok();
+    }
+
+    #[test]
+    fn failed_activation_restores_the_previous_deck() {
+        let directory =
+            std::env::temp_dir().join(format!("inkuo-pptx-restore-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let destination = directory.join("deck.pptx");
+        let missing_stage = directory.join("missing-stage.tmp");
+        std::fs::write(&destination, b"last-known-good").unwrap();
+
+        replace_staged_pptx(&missing_stage, &destination)
+            .expect_err("activation from a missing stage must fail");
+
+        assert_eq!(std::fs::read(&destination).unwrap(), b"last-known-good");
+        assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1);
+        std::fs::remove_dir_all(directory).ok();
+    }
+
+    #[test]
+    fn svg_resource_limits_reject_oversized_slide_and_batch() {
+        assert!(checked_svg_batch_size(0, MAX_SINGLE_SVG_BYTES).is_ok());
+        assert!(checked_svg_batch_size(0, MAX_SINGLE_SVG_BYTES + 1)
+            .unwrap_err()
+            .contains("per-slide"));
+        assert!(checked_svg_batch_size(
+            MAX_TOTAL_SVG_BYTES - MAX_SINGLE_SVG_BYTES + 1,
+            MAX_SINGLE_SVG_BYTES,
+        )
+        .unwrap_err()
+        .contains("deck safety limit"));
+    }
+
+    #[tokio::test]
+    async fn svg_actual_read_is_bounded_after_metadata_preflight() {
+        let directory =
+            std::env::temp_dir().join(format!("inkuo-svg-read-cap-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("growing.svg");
+        std::fs::write(&path, b"0123456789").unwrap();
+
+        let error = read_file_bytes_bounded(&path.to_string_lossy(), 8)
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
+        std::fs::remove_dir_all(directory).ok();
+    }
+
+    #[test]
+    fn revision_gate_parser_is_fail_closed_only_for_declared_qa_failure() {
+        assert!(output_requires_revision(
+            r#"{"status":"needs_revision","quality":{"passed":false}}"#
+        ));
+        assert!(output_requires_revision(
+            r#"{"status":"ok","completion_gate":{"blocking":true}}"#
+        ));
+        assert!(!output_requires_revision(
+            r#"{"status":"ok","quality":{"passed":true}}"#
+        ));
+        assert!(!output_requires_revision("not json"));
+    }
+
+    #[tokio::test]
+    async fn hard_qa_failure_keeps_the_draft_but_requires_revision() {
+        let directory =
+            std::env::temp_dir().join(format!("inkuo-pptx-gate-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let svg_path = directory.join("slide.svg");
+        let output_path = directory.join("deck.pptx");
+        std::fs::write(
+            &svg_path,
+            r#"<svg viewBox="0 0 1280 720"><text x="80" y="100" font-size="20">Tiny title</text><text x="80" y="220" font-size="12">Tiny body</text></svg>"#,
+        )
+        .unwrap();
+
+        let outcome = CreatePptxTool::new()
+            .execute(
+                serde_json::json!({
+                    "svg_paths": [svg_path.to_string_lossy()],
+                    "output_path": output_path.to_string_lossy(),
+                    "title": "Draft",
+                }),
+                Some(directory.to_string_lossy().to_string()),
+            )
+            .await
+            .expect("a valid draft package should still be written");
+
+        assert!(
+            output_path.is_file(),
+            "revision draft must remain available"
+        );
+        assert!(outcome.is_error, "hard QA errors must block completion");
+        assert!(output_requires_revision(&outcome.output));
+        let payload: Value = serde_json::from_str(&outcome.output).unwrap();
+        assert_eq!(payload["status"], "needs_revision");
+        assert_eq!(payload["completion_gate"]["blocking"], true);
+        assert_eq!(payload["visual_verification"]["status"], "not_run");
+        std::fs::remove_dir_all(directory).ok();
+    }
+
+    #[tokio::test]
+    async fn clean_static_qa_passes_but_does_not_claim_visual_verification() {
+        let directory =
+            std::env::temp_dir().join(format!("inkuo-pptx-pass-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let svg_path = directory.join("slide.svg");
+        let output_path = directory.join("deck.pptx");
+        std::fs::write(
+            &svg_path,
+            r#"<svg viewBox="0 0 1280 720"><text x="80" y="100" font-size="72">A decisive title</text><text x="80" y="220" font-size="24">Readable supporting evidence</text></svg>"#,
+        )
+        .unwrap();
+
+        let outcome = CreatePptxTool::new()
+            .execute(
+                serde_json::json!({
+                    "svg_paths": [svg_path.to_string_lossy()],
+                    "output_path": output_path.to_string_lossy(),
+                    "title": "Complete static draft",
+                }),
+                Some(directory.to_string_lossy().to_string()),
+            )
+            .await
+            .unwrap();
+
+        assert!(!outcome.is_error);
+        assert!(!output_requires_revision(&outcome.output));
+        let payload: Value = serde_json::from_str(&outcome.output).unwrap();
+        assert_eq!(payload["status"], "ok");
+        assert_eq!(payload["visual_verification"]["status"], "not_run");
+        std::fs::remove_dir_all(directory).ok();
+    }
+}

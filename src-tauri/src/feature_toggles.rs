@@ -23,6 +23,8 @@ pub enum ToggleId {
     KbStrict,
     #[serde(rename = "web_search")]
     WebSearch,
+    #[serde(rename = "sandbox")]
+    Sandbox,
 }
 
 impl ToggleId {
@@ -30,6 +32,7 @@ impl ToggleId {
         match s {
             "kb_strict" => Some(Self::KbStrict),
             "web_search" => Some(Self::WebSearch),
+            "sandbox" => Some(Self::Sandbox),
             _ => None,
         }
     }
@@ -42,6 +45,7 @@ fn fragment_for(toggle: ToggleId) -> &'static str {
     match toggle {
         ToggleId::KbStrict => include_str!("../prompts/fragments/kb_strict.md"),
         ToggleId::WebSearch => include_str!("../prompts/fragments/web_search.md"),
+        ToggleId::Sandbox => include_str!("../prompts/fragments/sandbox.md"),
     }
 }
 
@@ -51,6 +55,10 @@ fn fragment_for(toggle: ToggleId) -> &'static str {
 const KB_STRICT_BLOCKED_TOOLS: &[&str] = &[
     "write_file",
     "edit_file",
+    "create_dir",
+    "move_file",
+    "create_svg",
+    "generate_image",
     "create_word_doc",
     "modify_excel",
     "create_excel",
@@ -60,11 +68,11 @@ const KB_STRICT_BLOCKED_TOOLS: &[&str] = &[
     "apply_hunk",
     "apply_all_hunks",
     "batch_write_files",
-    // NOTE: "shell_run" / "run_python" are intentionally NOT registered.
-    // The agent has no script-execution tool today. The string is kept
-    // below as a reserved name so that, if a future sandbox tool is
-    // added, KB-strict mode can block it by default without code changes.
+    // Arbitrary process execution is intentionally not registered. Keep its
+    // reserved name blocked as defence in depth, alongside the shipped
+    // dependency-free allowlisted sandbox.
     "shell_run",
+    "run_sandbox_command",
     "delegate_to",
     "build_knowledge_base",
     "add_knowledge_member",
@@ -91,9 +99,16 @@ const KB_STRICT_BLOCKED_TOOLS: &[&str] = &[
 /// as distinct sections and the boundary shows up clearly in logs.
 pub fn enabled_fragment(enabled: &[ToggleId]) -> String {
     let inventory = availability_inventory(enabled);
+    let kb_strict_on = enabled
+        .iter()
+        .any(|toggle| matches!(toggle, ToggleId::KbStrict));
 
     let guidance: String = enabled
         .iter()
+        // Strict-KB removes every execution/mutation surface. Do not append
+        // sandbox usage instructions that would contradict the effective
+        // tool set merely because both UI switches happened to be on.
+        .filter(|toggle| !(kb_strict_on && matches!(toggle, ToggleId::Sandbox)))
         .map(|t| fragment_for(*t))
         .filter(|s| !s.trim().is_empty())
         .collect::<Vec<_>>()
@@ -121,6 +136,7 @@ fn availability_inventory(enabled: &[ToggleId]) -> String {
     // easy to confuse.
     let web_search_on = enabled.iter().any(|t| matches!(t, ToggleId::WebSearch));
     let kb_strict_on = enabled.iter().any(|t| matches!(t, ToggleId::KbStrict));
+    let sandbox_on = enabled.iter().any(|t| matches!(t, ToggleId::Sandbox));
 
     let mut lines: Vec<String> = Vec::new();
     lines.push(
@@ -159,6 +175,23 @@ fn availability_inventory(enabled: &[ToggleId]) -> String {
         ));
     }
 
+    if sandbox_on && kb_strict_on {
+        lines.push(
+            "- `sandbox` (安全沙盒): REQUESTED, but unavailable because `kb_strict` takes precedence. `run_sandbox_command` is NOT in your tool list."
+                .to_string(),
+        );
+    } else if sandbox_on {
+        lines.push(
+            "- `sandbox` (安全沙盒): ON. `run_sandbox_command` is available for the shipped diagnostic allowlist only; it is not a shell and cannot install or download anything."
+                .to_string(),
+        );
+    } else {
+        lines.push(
+            "- `sandbox` (安全沙盒): OFF. `run_sandbox_command` is NOT in your tool list. Use normal first-class tools or ask the user to enable the sandbox toggle when a diagnostic command is genuinely needed."
+                .to_string(),
+        );
+    }
+
     lines.join("\n")
 }
 
@@ -167,7 +200,7 @@ fn availability_inventory(enabled: &[ToggleId]) -> String {
 /// Ask, full for Agent). Returns the effective list to advertise to the
 /// LLM.
 ///
-/// The two toggles have opposite semantics, so we walk the list once
+/// The toggles have different semantics, so we walk the list once
 /// instead of branching:
 ///
 ///   * `KbStrict` — always available in `base`; the toggle REMOVES the
@@ -180,9 +213,12 @@ fn availability_inventory(enabled: &[ToggleId]) -> String {
 ///     full registry's default set, this filter keeps the invariant
 ///     "toggle off ⇒ tool invisible"); when it's *on*, we insert the
 ///     tool id.
+///   * `Sandbox` — may exist in Agent mode's base set, but is hidden unless
+///     explicitly enabled. Strict-KB removes it even if both toggles arrive.
 pub fn effective_tool_set(base: &[String], enabled: &[ToggleId]) -> Vec<String> {
     let kb_strict_on = enabled.iter().any(|t| matches!(t, ToggleId::KbStrict));
     let web_search_on = enabled.iter().any(|t| matches!(t, ToggleId::WebSearch));
+    let sandbox_on = enabled.iter().any(|t| matches!(t, ToggleId::Sandbox));
 
     let blocked: Option<std::collections::HashSet<&str>> = if kb_strict_on {
         Some(KB_STRICT_BLOCKED_TOOLS.iter().copied().collect())
@@ -198,6 +234,7 @@ pub fn effective_tool_set(base: &[String], enabled: &[ToggleId]) -> Vec<String> 
         // toggle — better to enforce it in two places than to rely on
         // every caller remembering to omit the tool.
         .filter(|name| web_search_on || name.as_str() != "web_search")
+        .filter(|name| sandbox_on || name.as_str() != "run_sandbox_command")
         .filter(|name| {
             blocked
                 .as_ref()
@@ -214,3 +251,51 @@ pub fn effective_tool_set(base: &[String], enabled: &[ToggleId]) -> Vec<String> 
     result
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    #[test]
+    fn sandbox_is_hidden_until_explicitly_enabled() {
+        let base = names(&["read_file", "run_sandbox_command"]);
+        assert_eq!(effective_tool_set(&base, &[]), names(&["read_file"]));
+        assert_eq!(
+            effective_tool_set(&base, &[ToggleId::Sandbox]),
+            names(&["read_file", "run_sandbox_command"])
+        );
+    }
+
+    #[test]
+    fn strict_kb_wins_over_sandbox_and_all_mutating_tier_one_tools() {
+        let base = names(&[
+            "read_file",
+            "create_dir",
+            "move_file",
+            "create_svg",
+            "generate_image",
+            "run_sandbox_command",
+        ]);
+        assert_eq!(
+            effective_tool_set(&base, &[ToggleId::KbStrict, ToggleId::Sandbox]),
+            names(&["read_file"])
+        );
+    }
+
+    #[test]
+    fn inventory_never_implies_sandbox_exists_when_toggle_is_off() {
+        let fragment = enabled_fragment(&[]);
+        assert!(fragment.contains("sandbox` (安全沙盒): OFF"));
+        assert!(fragment.contains("run_sandbox_command` is NOT in your tool list"));
+    }
+
+    #[test]
+    fn strict_kb_inventory_and_guidance_do_not_claim_sandbox_is_available() {
+        let fragment = enabled_fragment(&[ToggleId::KbStrict, ToggleId::Sandbox]);
+        assert!(fragment.contains("REQUESTED, but unavailable"));
+        assert!(!fragment.contains("## Restricted Sandbox Mode"));
+    }
+}

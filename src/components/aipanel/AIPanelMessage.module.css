@@ -26,6 +26,27 @@
   word-break: break-word;
 }
 
+.userImageAttachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 0 30px 7px 0;
+}
+
+.userImageAttachments span {
+  max-width: 190px;
+  overflow: hidden;
+  padding: 3px 7px;
+  border: 1px solid color-mix(in oklch, var(--accent) 28%, transparent);
+  border-radius: 6px;
+  background: color-mix(in oklch, var(--accent) 8%, transparent);
+  color: var(--fg-secondary);
+  font-size: 11px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .editBtn {
   position: absolute;
   top: 8px;
@@ -569,4 +590,21 @@
   animation: historyPlaceholderSpin 1s linear infinite;
   margin-right: 6px;
   vertical-align: middle;
+}
+.minimalProgress {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 0;
+  color: var(--fg-secondary);
+  font-size: 12px;
+}
+
+.minimalProgress svg:not(.spinning) {
+  color: var(--success-color, #2f9e69);
+}
+
+.spinning {
+  animation: spin 1s linear infinite;
+  color: var(--accent-primary);
 }

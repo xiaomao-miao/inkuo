@@ -21,6 +21,8 @@ export function useChatComposer({
     editingMessageId,
     editingContent,
     setEditingContent,
+    imageAttachments,
+    setImageAttachments,
     clearEditingState,
     startEdit,
     cancelEdit,
@@ -40,6 +42,8 @@ export function useChatComposer({
     setInput,
     editingMessageId,
     editingContent,
+    imageAttachments,
+    setImageAttachments,
     clearEditingState,
   });
 
@@ -49,6 +53,8 @@ export function useChatComposer({
     editingMessageId,
     editingContent,
     setEditingContent,
+    imageAttachments,
+    setImageAttachments,
     handleSend,
     sendWithPrompt,
     handleStop,

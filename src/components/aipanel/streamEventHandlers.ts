@@ -3,7 +3,6 @@ import { invoke } from '@tauri-apps/api/core';
 import { useAIPanelStore, useEditorStore, useSidebarStore } from '../../store';
 import type { ChatMode, CurrentDiff } from '../../store';
 import { normalizeSearchResults } from './messageTransform';
-import { TIMING } from '../../constants/timing';
 import type { StreamPayload } from './streamTypes';
 import {
   applyMessageSearchResults,
@@ -12,6 +11,7 @@ import {
 } from './messageStreamActions';
 import { applyToolResultToState } from './toolCallStreamActions';
 import { syncTodoSnapshotFromToolCall } from './todoSync';
+import { resolveWorkspaceFilePath } from '../../utils/path';
 
 interface HandleStreamDoneArgs {
   payload: StreamPayload;
@@ -44,7 +44,10 @@ export async function handleStreamDone({
 
   delete streamingContentRef.current[message_id];
 
-  setTimeout(() => clearToolCalls(session_id), TIMING.TOOL_CALL_CLEAR_DELAY_MS);
+  // Terminal events are authoritative. Clear immediately so closing the
+  // panel, cancellation, or a missing tool_result can never leave an active
+  // spinner/timer behind for another two seconds (or forever after remount).
+  clearToolCalls(session_id);
 
   if (normalizedSearchResults) {
     useAIPanelStore.setState((state) =>
@@ -52,13 +55,9 @@ export async function handleStreamDone({
     );
   }
 
-  if (effectiveContent) {
-    useAIPanelStore.setState((state) =>
-      finalizeStreamingMessage(state, session_id, message_id, effectiveContent)
-    );
-  } else {
-    useAIPanelStore.getState().updateSession(session_id, (session) => ({ ...session, isStreaming: false }));
-  }
+  useAIPanelStore.setState((state) =>
+    finalizeStreamingMessage(state, session_id, message_id, effectiveContent)
+  );
 
   if (currentMode === 'agent' && original_content && new_content) {
     try {
@@ -130,9 +129,14 @@ export function handleToolResult(
   if (office_file_modified) {
     const { path } = office_file_modified;
     const { invalidateOfficeBuffer } = useEditorStore.getState();
-    const { setOpenTabDirty } = useSidebarStore.getState();
-    invalidateOfficeBuffer(path);
-    setOpenTabDirty(path, false);
+    const { workspacePath } = useSidebarStore.getState();
+    const resolvedPath = resolveWorkspaceFilePath(path, workspacePath);
+    // This event only says that the on-disk file changed. It must never
+    // declare the open editor clean: the tab may contain unrelated, unsaved
+    // user edits. Each Office editor consumes the version bump below and
+    // either reloads a clean tab or presents an explicit conflict choice for
+    // a dirty one.
+    invalidateOfficeBuffer(resolvedPath);
   }
 }
 
@@ -147,6 +151,11 @@ export function handleStreamError({
   delete streamingContentRef.current[message_id];
 
   useAIPanelStore.setState((state) =>
-    applyStreamingError(state, session_id, message_id, error ?? '发生错误')
+    applyStreamingError(
+      state,
+      session_id,
+      message_id,
+      error === 'cancelled' ? '任务已停止' : error ?? '发生错误',
+    )
   );
 }

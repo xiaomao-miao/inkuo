@@ -4,6 +4,7 @@ import type { BapbongEditorOptions } from '@shadow-garden/bapbong-editor';
 import type { EditorChange } from '@shadow-garden/bapbong-contracts';
 import type { Collection } from '@shadow-garden/bapbong-contracts';
 import type { Command } from '@shadow-garden/bapbong-contracts';
+import { claimBapbongLoad, type BapbongLoadCursor } from './bapbongLoadState';
 
 export interface BapbongEditorRef {
   loadDocx: (bytes: ArrayBuffer) => Promise<{ headerKeys: string[]; footerKeys: string[] }>;
@@ -55,7 +56,21 @@ export const BapbongEditorComponent = ({
   const editorRef = useRef<BapbongEditor | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [isLoaded, setIsLoaded] = useState(false);
+  // A ref becoming non-null does not schedule a render. Keep an explicit
+  // readiness generation so a buffer that arrived before editor construction
+  // is picked up exactly once as soon as the editor is ready.
+  const [editorReadyGeneration, setEditorReadyGeneration] = useState(0);
   const zoomRef = useRef(1);
+  const loadGenerationRef = useRef(0);
+  const loadQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const loadCursorRef = useRef<BapbongLoadCursor<BapbongEditor, Uint8Array>>({
+    editor: null,
+    buffer: null,
+  });
+  const onLoadRef = useRef(onLoad);
+  const onErrorRef = useRef(onError);
+  onLoadRef.current = onLoad;
+  onErrorRef.current = onError;
 
   // Initialize editor
   useEffect(() => {
@@ -67,6 +82,7 @@ export const BapbongEditorComponent = ({
       });
 
       editorRef.current = editor;
+      setEditorReadyGeneration((generation) => generation + 1);
 
       // Subscribe to changes
       editor.onChange((change: EditorChange) => {
@@ -114,10 +130,10 @@ export const BapbongEditorComponent = ({
           try {
             const result = await editor.loadDocx(bytes);
             setIsLoaded(true);
-            onLoad?.(result);
+            onLoadRef.current?.(result);
             return result;
           } catch (err) {
-            onError?.(err as Error);
+            onErrorRef.current?.(err as Error);
             throw err;
           }
         },
@@ -151,30 +167,42 @@ export const BapbongEditorComponent = ({
 
       // Cleanup
       return () => {
+        loadGenerationRef.current += 1;
         editor.destroy();
         editorRef.current = null;
       };
     } catch (err) {
-      onError?.(err as Error);
+      onErrorRef.current?.(err as Error);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Load document when buffer changes
   useEffect(() => {
-    if (!editorRef.current || !documentBuffer) return;
+    const editor = editorRef.current;
+    const buffer = documentBuffer;
+    if (!claimBapbongLoad(loadCursorRef.current, editor, buffer) || !editor || !buffer) return;
+    const generation = ++loadGenerationRef.current;
+    const bytes = buffer.slice().buffer as ArrayBuffer;
+    setIsLoaded(false);
 
-    const load = async () => {
-      try {
-        await editorRef.current!.loadDocx(documentBuffer.buffer);
-        setIsLoaded(true);
-      } catch (err) {
-        onError?.(err as Error);
-      }
-    };
-
-    load();
-  }, [documentBuffer, onError]);
+    // `loadDocx` is not re-entrant. Serialize parses and skip superseded
+    // buffers before they start, so rapid AI edits cannot leave two layout
+    // engines mutating the same canvas concurrently.
+    loadQueueRef.current = loadQueueRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        if (generation !== loadGenerationRef.current || !editorRef.current) return;
+        try {
+          const result = await editorRef.current.loadDocx(bytes);
+          if (generation !== loadGenerationRef.current) return;
+          setIsLoaded(true);
+          onLoadRef.current?.(result);
+        } catch (err) {
+          if (generation === loadGenerationRef.current) onErrorRef.current?.(err as Error);
+        }
+      });
+  }, [documentBuffer, editorReadyGeneration]);
 
   return (
     <div

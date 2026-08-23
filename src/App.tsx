@@ -3,6 +3,7 @@ import { Layout } from './components/layout';
 import { CmdK } from './components/cmdk';
 import { WelcomePage } from './components/welcome';
 import { WorkspaceBootstrap } from './components/WorkspaceBootstrap';
+import { FileDropOverlay } from './components/FileDropOverlay';
 import { FloatingAiLayer } from './components/floating-ai';
 import { useInitialSnapshotLoader } from './hooks/useInitialSnapshotLoader';
 import { useEditorStore } from './store';
@@ -89,6 +90,7 @@ function App() {
     return (
       <>
         <WorkspaceBootstrap />
+        <FileDropOverlay />
         <WelcomePage />
         <CmdK />
         <FloatingAiLayer />
@@ -99,6 +101,7 @@ function App() {
   return (
     <>
       <WorkspaceBootstrap />
+      <FileDropOverlay />
       <Layout />
       <CmdK />
       <FloatingAiLayer />

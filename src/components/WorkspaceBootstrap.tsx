@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { useWorkspaceSnapshotAutosave } from '../hooks/useWorkspaceSnapshotAutosave';
+import { useAgentStream } from './aipanel/useAgentStream';
 
 /**
  * Mounted once per window. Wires up:
@@ -21,6 +22,10 @@ import { useWorkspaceSnapshotAutosave } from '../hooks/useWorkspaceSnapshotAutos
  */
 export function WorkspaceBootstrap(): null {
   useWorkspaceSnapshotAutosave();
+  // Stream events must outlive the visible panel. Previously closing the AI
+  // panel unmounted its only listener, silently dropping done/error events and
+  // leaving the session permanently "running" until an app restart.
+  useAgentStream({ mode: 'agent' });
 
   useEffect(() => {
     const handleBeforeUnload = () => {

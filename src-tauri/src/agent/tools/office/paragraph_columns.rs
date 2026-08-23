@@ -300,6 +300,10 @@ mod tests {
     use crate::office::WordDocument;
     use std::io::Read;
 
+    fn temp_workspace() -> Option<String> {
+        Some(std::env::temp_dir().to_string_lossy().into_owned())
+    }
+
     fn make_paragraph(id: &str, text: &str) -> WordParagraph {
         WordParagraph {
             id: id.to_string(),
@@ -585,7 +589,7 @@ mod tests {
             ]
         });
 
-        tool.execute(payload, None)
+        tool.execute(payload, temp_workspace())
             .await
             .expect("tool should succeed with columns hint");
 
@@ -646,7 +650,7 @@ mod tests {
             ]
         });
 
-        tool.execute(payload, None)
+        tool.execute(payload, temp_workspace())
             .await
             .expect("tool should succeed with body columns hint");
 
@@ -693,7 +697,7 @@ mod tests {
         });
 
         CreateWordDocTool::new()
-            .execute(payload, None)
+            .execute(payload, temp_workspace())
             .await
             .expect("adjacent body column hints should succeed");
 
@@ -754,7 +758,7 @@ mod tests {
             ]
         });
 
-        tool.execute(payload, None)
+        tool.execute(payload, temp_workspace())
             .await
             .expect("tool should succeed with both sections and columns");
 
@@ -816,7 +820,7 @@ mod tests {
                 {"type": "paragraph", "id": "init", "text": "Initial paragraph"},
             ]
         });
-        tool.execute(initial, None).await.expect("initial creation should succeed");
+        tool.execute(initial, temp_workspace()).await.expect("initial creation should succeed");
 
         // Append with columns
         let append = serde_json::json!({
@@ -826,7 +830,7 @@ mod tests {
                 {"type": "paragraph", "id": "col_target", "text": "Column section text", "columns": 2},
             ]
         });
-        tool.execute(append, None).await.expect("append with columns should succeed");
+        tool.execute(append, temp_workspace()).await.expect("append with columns should succeed");
 
         let bytes = std::fs::read(&path).expect("file should exist");
         let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).expect("valid zip");
@@ -865,7 +869,7 @@ mod tests {
                 "path": path.to_string_lossy(),
                 "elements": [{"type": "body", "id": "initial", "text": "Initial"}]
             }),
-            None,
+            temp_workspace(),
         )
         .await
         .expect("initial creation should succeed");
@@ -879,7 +883,7 @@ mod tests {
                     {"type": "body", "id": "append_right", "text": "Right", "columns": 2}
                 ]
             }),
-            None,
+            temp_workspace(),
         )
         .await
         .expect("component paragraphs must be appended before column ids are resolved");

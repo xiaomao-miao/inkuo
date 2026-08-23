@@ -21,6 +21,7 @@ interface AssistantMessageBodyProps {
   isThisStreaming: boolean;
   activeToolCalls: ActiveToolCall[];
   sessionId: string;
+  minimal?: boolean;
 }
 
 export const AssistantMessageBody: React.FC<AssistantMessageBodyProps> = ({
@@ -28,8 +29,13 @@ export const AssistantMessageBody: React.FC<AssistantMessageBodyProps> = ({
   isThisStreaming,
   activeToolCalls,
   sessionId,
+  minimal = false,
 }) => {
-  const hasOutputItems = message.outputItems && message.outputItems.length > 0;
+  const renderedOutputItems = React.useMemo(
+    () => minimal ? message.outputItems.filter((item) => item.type === 'text') : message.outputItems,
+    [message.outputItems, minimal],
+  );
+  const hasOutputItems = renderedOutputItems.length > 0;
   const workspacePath = useSidebarStore((s) => s.workspacePath);
   const openWorkspaceFile = useSidebarStore((s) => s.openWorkspaceFile);
   const toggleSubagentActivityExpanded = useAIPanelStore((s) => s.toggleSubagentActivityExpanded);
@@ -62,14 +68,14 @@ export const AssistantMessageBody: React.FC<AssistantMessageBodyProps> = ({
 
   return (
     <>
-      {hasOutputItems && message.outputItems.map((item, idx) => (
+      {hasOutputItems && renderedOutputItems.map((item, idx) => (
         <OutputItemView
           key={`output-${idx}`}
           item={item}
           messageId={message.id}
           sessionId={sessionId}
           isThisStreaming={isThisStreaming}
-          isLastItem={idx === message.outputItems.length - 1}
+          isLastItem={idx === renderedOutputItems.length - 1}
           onFileClick={handleFileClick}
           workspacePath={workspacePath ?? undefined}
           onSubagentToggle={handleSubagentToggle}
@@ -87,6 +93,7 @@ export const AssistantMessageBody: React.FC<AssistantMessageBodyProps> = ({
           onFileClick={handleFileClick}
           workspacePath={workspacePath ?? undefined}
           onSubagentToggle={handleSubagentToggle}
+          minimal={minimal}
         />
       )}
     </>
@@ -393,6 +400,8 @@ const ReasoningItemView: React.FC<ReasoningItemViewProps> = ({
       userExpanded={userExpanded}
       reasoningId={reasoningId}
       onToggleExpansion={handleToggleExpansion}
+      startedAt={item.startedAt}
+      durationMs={item.durationMs}
     />
   );
 };
@@ -415,6 +424,7 @@ interface LegacyMessageContentProps {
   onFileClick?: (filePath: string) => void;
   workspacePath?: string;
   onSubagentToggle?: (subagentId: string) => void;
+  minimal: boolean;
 }
 
 const LegacyMessageContent: React.FC<LegacyMessageContentProps> = ({
@@ -425,6 +435,7 @@ const LegacyMessageContent: React.FC<LegacyMessageContentProps> = ({
   onFileClick,
   workspacePath,
   onSubagentToggle,
+  minimal,
 }) => {
   /**
    * Map for O(1) tool-call lookups. Built once per render so the
@@ -439,13 +450,13 @@ const LegacyMessageContent: React.FC<LegacyMessageContentProps> = ({
 
   return (
     <>
-      {isThisStreaming && activeToolCalls.map((tc) => (
+      {!minimal && isThisStreaming && activeToolCalls.map((tc) => (
         <div key={tc.id} className={styles.streamingToolCall}>
           <Loader2 size={12} className={styles.spinning} />
           <span className={styles.streamingToolName}>{tc.name}</span>
         </div>
       ))}
-      {message.toolCalls && message.toolCalls.length > 0 && !message.toolResults?.length && (
+      {!minimal && message.toolCalls && message.toolCalls.length > 0 && !message.toolResults?.length && (
         <div className={styles.toolExecutingIndicator}>
           <Loader2 size={12} className={styles.spinning} />
           <span>正在执行工具...</span>
@@ -461,10 +472,10 @@ const LegacyMessageContent: React.FC<LegacyMessageContentProps> = ({
           onFileClick={onFileClick}
           workspacePath={workspacePath}
         />
-      ) : !message.toolResults?.length && !isThisStreaming ? (
+      ) : !minimal && !message.toolResults?.length && !isThisStreaming ? (
         <div className={styles.toolOnlyPlaceholder}>工具执行完成</div>
       ) : null}
-      {message.toolResults?.map((result) => {
+      {!minimal && message.toolResults?.map((result) => {
         const toolCall = toolCallMap?.get(result.toolCallId);
         const toolName = toolCall?.name || 'unknown';
         if (toolName === 'delegate_to') {

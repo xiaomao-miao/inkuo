@@ -14,6 +14,8 @@ import {
   Loader2,
   BookMarked,
   FolderX,
+  CircleAlert,
+  RefreshCw,
 } from 'lucide-react';
 import type { MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import {
@@ -24,16 +26,20 @@ import {
 import type { FileEntry } from '../../types';
 import { InlineRenameInput } from './InlineRenameInput';
 import { getRelativePath, normalizeDirPath } from '../../utils/path';
+import { getDirectoryContentState } from './fileTreeState';
 import styles from './Sidebar.module.css';
 
 interface FileTreeProps {
   workspaceRoot: string;
   getChildren: (dirPath: string) => FileEntry[];
+  isDirectoryCached: (dirPath: string) => boolean;
   expandedDirs: Set<string>;
   loadingDirs: Set<string>;
+  directoryErrors: Map<string, string>;
   selectedFile: string | null;
   openTabs: OpenTab[];
   onFileClick: (entry: FileEntry) => void | Promise<void>;
+  onRetryDirectory: (dirPath: string) => void | Promise<void>;
   knowledgeSelectMode?: boolean;
   knowledgeCheckedPaths?: Set<string>;
   knowledgeMembers?: string[];
@@ -49,31 +55,43 @@ interface FileTreeProps {
  *   - The tree itself never fetches — `useWorkspaceTree` is the only
  *     component allowed to talk to the backend.
  *
- * Three rendering paths:
+ * Four rendering paths:
  *   1. Root cache is unknown      → show a single "loading…" placeholder
  *      until the hook finishes its initial fetch.
- *   2. Root cache is known but empty → show "空文件夹".
- *   3. Root cache has entries     → recurse into `TreeRow` for each child.
+ *   2. Root cache load failed     → show a retry action.
+ *   3. Root cache is known but empty → show "空文件夹".
+ *   4. Root cache has entries     → recurse into `TreeRow` for each child.
  */
 export const FileTree = ({
   workspaceRoot,
   getChildren,
+  isDirectoryCached,
   expandedDirs,
   loadingDirs,
+  directoryErrors,
   selectedFile,
   openTabs,
   onFileClick,
+  onRetryDirectory,
   knowledgeSelectMode = false,
   knowledgeCheckedPaths = new Set(),
   knowledgeMembers = [],
   onKnowledgeCheck,
 }: FileTreeProps) => {
-  const isRootLoading = loadingDirs.has(normalizeDirPath(workspaceRoot));
+  const normalizedRoot = normalizeDirPath(workspaceRoot);
+  const isRootLoading = loadingDirs.has(normalizedRoot);
+  const rootError = directoryErrors.get(normalizedRoot);
   const rootChildren = getChildren(workspaceRoot);
-  const rootKnown = rootChildren.length > 0 || !isRootLoading;
+  const rootKnown = isDirectoryCached(workspaceRoot);
+  const rootContentState = getDirectoryContentState(
+    rootKnown,
+    rootChildren.length,
+    isRootLoading,
+    Boolean(rootError),
+  );
   // We only know "this folder is empty" once we've actually loaded it.
   // Before the first fetch lands we must not flash an "空文件夹" message.
-  const rootIsEmpty = rootKnown && rootChildren.length === 0 && !isRootLoading;
+  const rootIsEmpty = rootContentState === 'empty';
 
   const inlineEdit = useSidebarStore((s) => s.inlineEdit);
   const isInlineCreateAtRoot =
@@ -94,10 +112,23 @@ export const FileTree = ({
     <div
       role="tree"
       aria-label="文件树"
+      aria-busy={isRootLoading}
       onContextMenu={handleRootContextMenu}
     >
-      {isRootLoading && rootChildren.length === 0 ? (
+      {rootKnown && rootError && (
+        <DirectoryLoadError
+          message={rootError}
+          stale
+          onRetry={() => onRetryDirectory(workspaceRoot)}
+        />
+      )}
+      {rootContentState === 'loading' ? (
         <RootLoading />
+      ) : rootContentState === 'error' ? (
+        <DirectoryLoadError
+          message={rootError ?? '目录加载失败'}
+          onRetry={() => onRetryDirectory(workspaceRoot)}
+        />
       ) : isInlineCreateAtRoot ? (
         <InlineRenameInput state={inlineEdit} depth={0} />
       ) : rootIsEmpty ? (
@@ -108,11 +139,14 @@ export const FileTree = ({
             key={child.path}
             entry={child}
             getChildren={getChildren}
+            isDirectoryCached={isDirectoryCached}
             expandedDirs={expandedDirs}
             loadingDirs={loadingDirs}
+            directoryErrors={directoryErrors}
             selectedFile={selectedFile}
             openTabs={openTabs}
             onFileClick={onFileClick}
+            onRetryDirectory={onRetryDirectory}
             depth={0}
             workspaceRoot={workspaceRoot}
             knowledgeSelectMode={knowledgeSelectMode}
@@ -129,11 +163,14 @@ export const FileTree = ({
 interface TreeRowProps {
   entry: FileEntry;
   getChildren: (dirPath: string) => FileEntry[];
+  isDirectoryCached: (dirPath: string) => boolean;
   expandedDirs: Set<string>;
   loadingDirs: Set<string>;
+  directoryErrors: Map<string, string>;
   selectedFile: string | null;
   openTabs: OpenTab[];
   onFileClick: (entry: FileEntry) => void | Promise<void>;
+  onRetryDirectory: (dirPath: string) => void | Promise<void>;
   depth: number;
   workspaceRoot: string;
   knowledgeSelectMode: boolean;
@@ -151,11 +188,14 @@ interface TreeRowProps {
 const TreeRow = ({
   entry,
   getChildren,
+  isDirectoryCached,
   expandedDirs,
   loadingDirs,
+  directoryErrors,
   selectedFile,
   openTabs,
   onFileClick,
+  onRetryDirectory,
   depth,
   workspaceRoot,
   knowledgeSelectMode,
@@ -164,12 +204,15 @@ const TreeRow = ({
   onKnowledgeCheck,
 }: TreeRowProps) => {
   const isDir = entry.is_dir;
+  const normalizedEntryPath = normalizeDirPath(entry.path);
   const isExpanded = isDir && expandedDirs.has(entry.path);
-  const isLoading = isDir && loadingDirs.has(entry.path);
+  const isLoading = isDir && loadingDirs.has(normalizedEntryPath);
+  const loadError = isDir ? directoryErrors.get(normalizedEntryPath) : undefined;
   const isSelected = !isDir && selectedFile === entry.path;
   const isOpen = !isDir && openTabs.some((tab) => tab.path === entry.path);
 
   const children = isDir ? getChildren(entry.path) : [];
+  const childrenKnown = !isDir || isDirectoryCached(entry.path);
 
   const inlineEdit = useSidebarStore((s) => s.inlineEdit);
   const isRenamingThis =
@@ -294,14 +337,20 @@ const TreeRow = ({
         <div role="group" className={styles.children}>
           {renderChildren({
             children,
-            isLoading: !!isLoading,
+            childrenKnown,
+            directoryPath: entry.path,
+            isLoading,
+            loadError,
             depth,
             getChildren,
+            isDirectoryCached,
             expandedDirs,
             loadingDirs,
+            directoryErrors,
             selectedFile,
             openTabs,
             onFileClick,
+            onRetryDirectory,
             workspaceRoot,
             knowledgeSelectMode,
             knowledgeCheckedPaths,
@@ -317,16 +366,22 @@ const TreeRow = ({
 
 interface RenderChildrenArgs {
   children: FileEntry[];
+  childrenKnown: boolean;
+  directoryPath: string;
   isLoading: boolean;
+  loadError?: string;
   depth: number;
   inlineCreateSlot: ReturnType<typeof useSidebarStore.getState>['inlineEdit'];
   // Re-forwarded props — collapsed into one bag so the JSX stays readable.
   getChildren: TreeRowProps['getChildren'];
+  isDirectoryCached: TreeRowProps['isDirectoryCached'];
   expandedDirs: TreeRowProps['expandedDirs'];
   loadingDirs: TreeRowProps['loadingDirs'];
+  directoryErrors: TreeRowProps['directoryErrors'];
   selectedFile: TreeRowProps['selectedFile'];
   openTabs: TreeRowProps['openTabs'];
   onFileClick: TreeRowProps['onFileClick'];
+  onRetryDirectory: TreeRowProps['onRetryDirectory'];
   workspaceRoot: TreeRowProps['workspaceRoot'];
   knowledgeSelectMode: TreeRowProps['knowledgeSelectMode'];
   knowledgeCheckedPaths: TreeRowProps['knowledgeCheckedPaths'];
@@ -336,12 +391,21 @@ interface RenderChildrenArgs {
 
 function renderChildren({
   children,
+  childrenKnown,
+  directoryPath,
   isLoading,
+  loadError,
   depth,
   inlineCreateSlot,
   ...rest
 }: RenderChildrenArgs): ReactNode {
-  if (isLoading && children.length === 0) {
+  const contentState = getDirectoryContentState(
+    childrenKnown,
+    children.length,
+    isLoading,
+    Boolean(loadError),
+  );
+  if (contentState === 'loading') {
     return (
       <div className={styles.loadingChildren}>
         <Loader2 size={12} className={styles.spin} />
@@ -350,11 +414,30 @@ function renderChildren({
     );
   }
 
-  if (children.length === 0 && !inlineCreateSlot) {
-    return <EmptyFolder />;
+  if (contentState === 'error') {
+    return (
+      <DirectoryLoadError
+        message={loadError ?? '目录加载失败'}
+        onRetry={() => rest.onRetryDirectory(directoryPath)}
+      />
+    );
   }
 
   const rows: ReactNode[] = [];
+  if (loadError) {
+    rows.push(
+      <DirectoryLoadError
+        key="__load-error__"
+        message={loadError}
+        stale
+        onRetry={() => rest.onRetryDirectory(directoryPath)}
+      />,
+    );
+  }
+  if (children.length === 0 && !inlineCreateSlot) {
+    rows.push(<EmptyFolder key="__empty__" />);
+    return rows;
+  }
   if (inlineCreateSlot) {
     rows.push(
       <InlineRenameInput
@@ -422,6 +505,42 @@ const RootLoading = () => (
   <div className={styles.emptyFolder}>
     <Loader2 size={12} className={styles.spin} />
     <span>加载中…</span>
+  </div>
+);
+
+interface DirectoryLoadErrorProps {
+  message: string;
+  stale?: boolean;
+  onRetry: () => void | Promise<void>;
+}
+
+/**
+ * A native button deliberately provides both pointer and keyboard retry.
+ * When cached data exists this becomes a small stale-data notice and leaves
+ * the previously rendered directory contents in place.
+ */
+const DirectoryLoadError = ({
+  message,
+  stale = false,
+  onRetry,
+}: DirectoryLoadErrorProps) => (
+  <div
+    className={`${styles.directoryLoadError} ${
+      stale ? styles.directoryLoadErrorStale : ''
+    }`}
+    role="status"
+  >
+    <CircleAlert size={12} aria-hidden />
+    <span title={message}>{stale ? '刷新失败，显示旧内容' : '目录加载失败'}</span>
+    <button
+      type="button"
+      className={styles.directoryRetryButton}
+      onClick={() => void onRetry()}
+      aria-label={stale ? '重新刷新目录' : '重试加载目录'}
+    >
+      <RefreshCw size={11} aria-hidden />
+      <span>重试</span>
+    </button>
   </div>
 );
 

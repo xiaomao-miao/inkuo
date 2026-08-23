@@ -112,9 +112,12 @@ export const Sidebar = () => {
     selectedFile,
     isLoading,
     loadingDirs,
+    directoryErrors,
     openTabs,
     onDirectoryClick,
     getChildren,
+    isDirectoryCached,
+    refreshDirectory,
   } = useWorkspaceTree();
 
   const [isCollapsed, setIsCollapsed] = useState(false);
@@ -337,11 +340,14 @@ export const Sidebar = () => {
               <FileTree
                 workspaceRoot={workspacePath}
                 getChildren={getChildren}
+                isDirectoryCached={isDirectoryCached}
                 expandedDirs={expandedDirs}
                 loadingDirs={loadingDirs}
+                directoryErrors={directoryErrors}
                 selectedFile={selectedFile}
                 openTabs={openTabs}
                 onFileClick={handleFileClick}
+                onRetryDirectory={refreshDirectory}
                 knowledgeSelectMode={knowledgeSelectMode}
                 knowledgeCheckedPaths={knowledgeCheckedPaths}
                 knowledgeMembers={knowledgeBase?.members ?? []}

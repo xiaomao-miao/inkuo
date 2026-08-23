@@ -4,7 +4,8 @@
 //! and surfaced to the user via the standard `tool_call_start` /
 //! `tool_result` stream events). It does NOT touch the filesystem or any
 //! sandboxed state — the registry stub always returns an error, and the
-//! real implementation lives in `agent_loop::try_handle_meta_tool`.
+//! real implementation lives in `AgentExecutor`, which updates both the
+//! frontend stream and the session-owned prompt state.
 //!
 //! # Schema (v2 — incremental, not snapshot)
 //!
@@ -35,10 +36,10 @@
 //!     wants to mark progress but not yet commit to the next step
 //!     (rare — `advance` is the common path).
 //!
-//! The state machine is owned by the frontend, not the model. The model
-//! only needs to say "I just finished step 1" or "I'm starting a new
-//! plan with these 4 steps"; the panel decides which row gets
-//! `in_progress` and which one collapses into the `completed` set.
+//! The state machine is owned by inkuo, not the model. The frontend mirrors
+//! it for display, while `AgentSession` injects the same authoritative rows
+//! into every following provider request. The model only needs to say "I
+//! just finished step 1" or "I'm starting a new plan with these 4 steps".
 //!
 //! # Backward compatibility
 //!
@@ -47,7 +48,7 @@
 //! publishing to the UI: a v1 snapshot replaces the list as if it were
 //! `set`, with one row per item, and statuses are preserved where they
 //! make sense (otherwise the first non-`completed` row becomes
-//! `in_progress`). See `agent_loop::try_handle_meta_tool`.
+//! `in_progress`). See `AgentSession::apply_todo_arguments`.
 
 use crate::agent::tools::{ToolDefinition, ToolError, ToolOpResult, ToolParameters};
 use serde_json::Value;
@@ -79,7 +80,7 @@ impl UpdateTodoTool {
         ToolDefinition::new_with_label(
             "update_todo",
             "更新任务列表",
-            "Publish or advance your task list. The panel above the chat input is the user's primary window into your work — keep it accurate. Each call takes exactly one action:\n\n• action='set' + items=[strings] — publish a new list. First row becomes in_progress (you've started it), the rest are pending. Call this ONCE at the start of a multi-step task.\n\n• action='advance' — atomic 'I just finished the current step, move on'. Flips the current in_progress row to completed and the first pending row to in_progress. Call this EXACTLY ONCE per finished step. This is the workhorse call — you should produce one of these after every meaningful unit of work, not at the end of the whole task.\n\n• action='complete_current' — flip the current in_progress row to completed without promoting the next one. Rarely needed; prefer 'advance'.\n\nitems: array of one-line strings (the actual steps). Empty array is a no-op.\n\nDo NOT pass status fields — the panel owns those. Do NOT use one call to set the whole list to completed at the end; advance one step at a time so the user sees live progress.",
+            "Publish or advance the operational task list. The same state is rendered in the panel and injected into every following model request, so it drives execution rather than acting as decorative UI. Each call takes exactly one action:\n\n• action='set' + items=[strings] — publish a new list. First row becomes in_progress (you've started it), the rest are pending. Call this ONCE at the start of a multi-step task. An empty array explicitly clears the plan.\n\n• action='advance' — atomic 'I just finished the current step, move on'. Flips the current in_progress row to completed and the first pending row to in_progress. Call this EXACTLY ONCE per finished step. This is the workhorse call — produce one after every meaningful unit of work, not only at the end.\n\n• action='complete_current' — flip the current in_progress row to completed without promoting the next one. Rarely needed; prefer 'advance'.\n\nDo NOT pass status or id fields — inkuo owns those. Do NOT use one call to set the whole list to completed at the end; advance one step at a time so the user sees live progress.",
             ToolParameters::new(
                 vec!["action"],
                 vec![
@@ -91,7 +92,7 @@ impl UpdateTodoTool {
                     (
                         "items",
                         "array",
-                        Some("Array of one-line strings describing the steps. Required for action='set' (ignored otherwise). Empty array is a no-op."),
+                        Some("Array of one-line strings describing the steps. Required for action='set' (ignored otherwise). Empty array clears the active plan."),
                     ),
                 ],
             ),
@@ -99,7 +100,7 @@ impl UpdateTodoTool {
     }
 
     pub async fn execute(&self, _args: Value, _workspace: Option<String>) -> ToolOpResult<String> {
-        // Intercepted by the agent loop (see `try_handle_meta_tool`); this
+        // Intercepted by AgentExecutor before registry dispatch; this
         // stub exists only so the unified registry stays uniform.
         Err(ToolError::ExecutionError(
             "update_todo is handled by the agent loop, not the registry".to_string(),

@@ -126,7 +126,7 @@ export const TIMING = {
    * counter. 250ms (= 4 fps) is plenty for a "00:01" / "00:02" style
    * display.
    */
-  REASONING_ELAPSED_TICK_MS: 250,
+  REASONING_ELAPSED_TICK_MS: 1000,
 } as const;
 
 // ============================================================================

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { TitleBar } from '../titlebar/TitleBar';
 import { ActivityBar } from '../activitybar/ActivityBar';
@@ -15,10 +15,13 @@ import { useGlobalKeydown } from '../../hooks/useGlobalKeydown';
 import { useAIPanelStore, useLayoutStore, useNotificationStore } from '../../store';
 import styles from './Layout.module.css';
 
+const PluginManager = lazy(() =>
+  import('../extensions/PluginManager').then((module) => ({ default: module.PluginManager })),
+);
+
 const DISABLED_VIEW_LABELS = {
   search: '搜索',
   git: '源代码管理',
-  extensions: '扩展',
 } as const;
 
 // Bounds MUST stay in sync with `layoutStore.ts` — clamping happens in
@@ -207,6 +210,14 @@ export const Layout = () => {
                 <KnowledgeView />
               ) : activeView === 'snapshots' ? (
                 <SnapshotPanel />
+              ) : activeView === 'extensions' ? (
+                <Suspense fallback={(
+                  <div className={styles.placeholder} aria-live="polite">
+                    <p>正在加载插件…</p>
+                  </div>
+                )}>
+                  <PluginManager />
+                </Suspense>
               ) : (
                 <div className={styles.placeholder} aria-live="polite">
                   <p>{DISABLED_VIEW_LABELS[activeView as keyof typeof DISABLED_VIEW_LABELS]}</p>

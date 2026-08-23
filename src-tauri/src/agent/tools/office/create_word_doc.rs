@@ -2027,12 +2027,16 @@ mod component_bridge_tests {
         p
     }
 
+    fn temp_workspace() -> Option<String> {
+        Some(std::env::temp_dir().to_string_lossy().into_owned())
+    }
+
     /// Drive the tool with a JSON payload and return the parsed WordDocument.
     async fn run_tool(payload: serde_json::Value) -> WordDocument {
         let tool = CreateWordDocTool::new();
         let path = payload["path"].as_str().unwrap().to_string();
         let result = tool
-            .execute(payload.clone(), None)
+            .execute(payload.clone(), temp_workspace())
             .await
             .expect("tool should succeed");
         assert!(result.starts_with("Successfully"), "tool returned: {}", result);
@@ -2271,7 +2275,7 @@ mod component_bridge_tests {
         });
 
         let tool = CreateWordDocTool::new();
-        let result = tool.execute(payload, None).await;
+        let result = tool.execute(payload, temp_workspace()).await;
         match result {
             Err(ToolError::InvalidArguments(_, msg)) => {
                 assert!(msg.contains("Unknown element type"), "got: {}", msg);

@@ -15,10 +15,11 @@
 // The remaining JSX is just the textarea, send button, and bottom row.
 
 import React, { useRef } from 'react';
-import { Send, StopCircle, Loader2, Plus } from 'lucide-react';
+import { ImagePlus, Loader2, Plus, Send, StopCircle, X } from 'lucide-react';
+import { open } from '@tauri-apps/plugin-dialog';
 
 import { useAIPanelStore } from '../../../store';
-import type { FeatureToggleMap } from '../../../types';
+import type { FeatureToggleMap, ImageAttachmentInput } from '../../../types';
 import { Tooltip } from '../../common/Tooltip';
 
 import { ActiveToggleStrip } from './ActiveToggleStrip';
@@ -26,6 +27,10 @@ import { ComposerToggleRows } from './ComposerToggleRows';
 import { ModelSwitcher } from './ModelSwitcher';
 import { useComposerDismiss } from './useComposerDismiss';
 import { useComposerPanelAnimation } from './useComposerPanelAnimation';
+import {
+  appendImagePaths,
+  MAX_COMPOSER_IMAGE_ATTACHMENTS,
+} from './imageAttachments';
 
 import styles from '../AIPanelInput.module.css';
 
@@ -35,6 +40,8 @@ interface ChatInputProps {
   isStreaming: boolean;
   sessionId: string | null;
   featureToggles: FeatureToggleMap | undefined;
+  imageAttachments: ImageAttachmentInput[];
+  onImageAttachmentsChange: (attachments: ImageAttachmentInput[]) => void;
   onSend: () => void;
   onStop: () => void;
 }
@@ -45,6 +52,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   isStreaming,
   sessionId,
   featureToggles,
+  imageAttachments,
+  onImageAttachmentsChange,
   onSend,
   onStop,
 }) => {
@@ -58,6 +67,20 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   // Two focused hooks own the side-effects. See their docs.
   useComposerPanelAnimation(panelRef, expanded);
   useComposerDismiss(panelRef, expanded);
+
+  const pickImages = async () => {
+    const selection = await open({
+      multiple: true,
+      directory: false,
+      filters: [{
+        name: '图片',
+        extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif'],
+      }],
+    });
+    if (!selection) return;
+    const paths = Array.isArray(selection) ? selection : [selection];
+    onImageAttachmentsChange(appendImagePaths(imageAttachments, paths));
+  };
 
   return (
     <div
@@ -92,6 +115,30 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         </div>
       </div>
 
+      {imageAttachments.length > 0 && (
+        <div className={styles.imageAttachments} aria-label="待发送图片">
+          {imageAttachments.map((attachment, index) => (
+            <span
+              className={styles.imageAttachment}
+              key={attachment.path ?? attachment.name ?? index}
+              title={attachment.path ?? attachment.name}
+            >
+              <ImagePlus size={12} />
+              <span>{attachment.name ?? `图片 ${index + 1}`}</span>
+              <button
+                type="button"
+                aria-label={`移除 ${attachment.name ?? `图片 ${index + 1}`}`}
+                onClick={() => onImageAttachmentsChange(
+                  imageAttachments.filter((_, attachmentIndex) => attachmentIndex !== index),
+                )}
+              >
+                <X size={11} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
       <textarea
         className={styles.input}
         placeholder="输入指令... (例如：帮我创建一个文档)"
@@ -112,6 +159,20 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         </div>
 
         <div className={styles.inputActions}>
+          <Tooltip
+            content={`添加图片（最多 ${MAX_COMPOSER_IMAGE_ATTACHMENTS} 张）`}
+            side="top"
+          >
+            <button
+              type="button"
+              className={styles.attachmentBtn}
+              aria-label="添加图片"
+              onClick={() => void pickImages()}
+              disabled={isStreaming || imageAttachments.length >= MAX_COMPOSER_IMAGE_ATTACHMENTS}
+            >
+              <ImagePlus size={14} />
+            </button>
+          </Tooltip>
           <button
             type="button"
             className={styles.expandBtn}
@@ -143,7 +204,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               type="button"
               className={styles.sendBtn}
               onClick={onSend}
-              disabled={!input.trim() || isStreaming}
+              disabled={(!input.trim() && imageAttachments.length === 0) || isStreaming}
             >
               {isStreaming ? (
                 <Loader2 size={16} className={styles.loadingSpinner} />

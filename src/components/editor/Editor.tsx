@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { lazy, Suspense } from 'react';
 import { type Extension } from '@codemirror/state';
 import { type ReactCodeMirrorRef } from '@uiw/react-codemirror';
@@ -20,6 +20,7 @@ import { LazyImageViewer, LazyPdfViewer, LazySvgViewer } from './LazyMediaViewer
 import { EditorBody } from './EditorBody';
 import { useEditorInlineCompletion } from './useEditorInlineCompletion';
 import { useEditorKeyboardShortcuts, useEditorSelectionSync } from './useEditorInteraction';
+import { shouldMountOfficeTab } from './officeTabRetention';
 import styles from './Editor.module.css';
 import inlineCompleteStyles from '../inline-complete/InlineComplete.module.css';
 
@@ -196,10 +197,6 @@ const EditorContent: React.FC<{
       const trimmed = text.trim();
       const x = e.clientX;
       const y = e.clientY;
-      // Debug breadcrumb so the user can confirm in DevTools that
-      // the listener is firing. The `[editor]` prefix is grep-able.
-      // eslint-disable-next-line no-console
-      console.log('[editor] contextmenu captured', { x, y, hasSelection: trimmed.length > 0, path: selectedFile });
       if (trimmed.length > 0) {
         useContextMenuStore.getState().open({
           kind: 'selection',
@@ -456,7 +453,7 @@ const EditorContent: React.FC<{
       autoTriggerStateRef,
       language,
     });
-  }, [diffDecorationsField, inlineCompletionKeyHandler, inlineAutoTrigger, autoTriggerStateRef, language]);
+  }, [diffDecorationsCompartment, diffDecorationsField, inlineCompletionKeyHandler, inlineAutoTrigger, autoTriggerStateRef, language]);
 
   return (
     <div ref={editorContainerRef} className={`${styles.editorContainer} editorContainer`} data-inline-complete-styles={inlineCompleteStyles}>
@@ -587,22 +584,20 @@ const OfficeTabRenderer: React.FC<{
 }> = ({ tab, fileType, isActive }) => {
   const officeState = useEditorStore((state) => state.documentContents[tab.path]?.office);
 
-  // We render the active tab (and only the active tab). Switching tabs
-  // unmounts the previous editor and mounts the new one, which is the only
-  // reliable way to keep ProseMirror / ExcelGrid quiescent when not in
-  // view. With `visibility: hidden` the editors continue to run their
-  // ResizeObserver + measurement loops in the background, which leaked
-  // out as a constantly flickering right-hand scrollbar on first open.
-  if (!isActive) {
+  // Word and Excel keep their authoritative unsaved model inside the editor
+  // engine. A dirty editor therefore survives tab switches. Clean inactive
+  // editors still unmount to release their substantial layout/runtime cost.
+  // The parked wrapper uses `display: none`, which keeps React/editor state
+  // alive without feeding hidden geometry into ResizeObserver loops.
+  if (!shouldMountOfficeTab(isActive, tab.isDirty)) {
     return null;
   }
 
-  if (fileType === 'word') {
+  const editor = fileType === 'word' ? (() => {
     const tabCached = officeState?.docxBuffer ?? null;
     return (
       <Suspense fallback={<RouteFallback label="正在加载 Word 编辑器" />}>
         <WordEditor
-          key={tab.id}
           filePath={tab.path}
           fileName={tab.name}
           initialBuffer={tabCached ? new Uint8Array(tabCached) : null}
@@ -610,19 +605,37 @@ const OfficeTabRenderer: React.FC<{
         />
       </Suspense>
     );
-  }
-
-  return (
+  })() : (
     <Suspense fallback={<RouteFallback label="正在加载 Excel 编辑器" />}>
       <ExcelEditor
-        key={tab.id}
         filePath={tab.path}
         fileName={tab.name}
         isActive={isActive}
       />
     </Suspense>
   );
+
+  return (
+    <div
+      className={`${styles.officeStackItem} ${
+        isActive ? '' : styles.officeStackItemParked
+      }`}
+      aria-hidden={!isActive}
+    >
+      {editor}
+    </div>
+  );
 };
+
+/*
+ * Active non-Office routes share the same absolute stack slot as Office.
+ * Keeping this wrapper at the Editor level means Settings/Cloud/empty-state
+ * switches no longer replace the whole tree and accidentally unmount a dirty
+ * parked Office editor.
+ */
+const ActiveEditorRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <div className={styles.officeStackItem}>{children}</div>
+);
 
 export const Editor: React.FC = () => {
   const editorRef = useRef<ReactCodeMirrorRef>(null);
@@ -650,25 +663,13 @@ export const Editor: React.FC = () => {
     return base.toLowerCase().endsWith('.svg');
   }, [selectedFile]);
 
-  if (isSettingsTab) {
-    return <SettingsState />;
-  }
-
-  if (activeTabId === CLOUD_TAB_ID) {
-    return <CloudState />;
-  }
-
-  if (!selectedFile) {
-    return <EmptyState />;
-  }
-
-  // Decide which top-level viewer to render. The office tabs are stacked
-  // (only one is shown at a time, the rest keep their state); the
-  // markdown/code/text editor is rendered separately and shares the
-  // same selected-file state. Image and PDF viewers are mounted as
-  // their own dedicated stack items because they have no live-edit
-  // state and should not participate in the OfficeTabRenderer cache.
-  const isOffice = activeFileType && (OFFICE_KINDS as readonly string[]).includes(activeFileType);
+  // Decide which top-level viewer to render. Dirty Office editors stay in the
+  // stack even when a text/media/settings/cloud tab becomes active. This is
+  // essential because their unsaved model cannot be reconstructed from the
+  // disk-backed editor store after an unmount.
+  const isOffice = Boolean(
+    activeFileType && (OFFICE_KINDS as readonly string[]).includes(activeFileType),
+  );
   const isEditableText =
     activeFileType === 'markdown' ||
     activeFileType === 'text' ||
@@ -678,10 +679,35 @@ export const Editor: React.FC = () => {
   const isImage = activeFileType === 'image';
   const isPdf = activeFileType === 'pdf';
 
+  let activeNonOfficeRoute: ReactNode = null;
+  if (isSettingsTab) {
+    activeNonOfficeRoute = <SettingsState />;
+  } else if (activeTabId === CLOUD_TAB_ID) {
+    activeNonOfficeRoute = <CloudState />;
+  } else if (!selectedFile) {
+    activeNonOfficeRoute = <EmptyState />;
+  } else if (!isOffice && isEditableText) {
+    activeNonOfficeRoute = (
+      <InlineCompleteProvider>
+        <EditorContent editorRef={editorRef} fileKind={activeFileType!} />
+      </InlineCompleteProvider>
+    );
+  } else if (!isOffice && isSvg) {
+    activeNonOfficeRoute = <LazySvgViewer filePath={selectedFile} />;
+  } else if (!isOffice && isImage) {
+    activeNonOfficeRoute = <LazyImageViewer filePath={selectedFile} />;
+  } else if (!isOffice && isPdf) {
+    activeNonOfficeRoute = <LazyPdfViewer filePath={selectedFile} />;
+  } else if (!isOffice) {
+    activeNonOfficeRoute = (
+      <UnsupportedFileHint fileKind={activeFileType!} fileName={selectedFile} />
+    );
+  }
+
   return (
     <div className={styles.officeStack}>
       {officeTabs.map(({ tab, fileType }) => {
-        const isActive = tab.path === selectedFile && activeFileType === fileType;
+        const isActive = tab.id === activeTabId && activeFileType === fileType;
 
         return (
           <OfficeTabRenderer
@@ -692,38 +718,8 @@ export const Editor: React.FC = () => {
           />
         );
       })}
-
-      {isEditableText && (
-        <div className={styles.officeStackItem}>
-          <InlineCompleteProvider>
-            <EditorContent editorRef={editorRef} fileKind={activeFileType!} />
-          </InlineCompleteProvider>
-        </div>
-      )}
-
-      {isSvg && (
-        <div className={styles.officeStackItem}>
-          <LazySvgViewer filePath={selectedFile} />
-        </div>
-      )}
-
-      {isImage && !isSvg && (
-        <div className={styles.officeStackItem}>
-          <LazyImageViewer filePath={selectedFile} />
-        </div>
-      )}
-
-      {isPdf && (
-        <div className={styles.officeStackItem}>
-          <LazyPdfViewer filePath={selectedFile} />
-        </div>
-      )}
-
-      {/* Binary / archive / audio / video modes currently have no in-app
-         viewer; if the active file is one of those, render an empty
-         hint so the editor pane isn't blank. */}
-      {selectedFile && !isOffice && !isEditableText && !isImage && !isPdf && (
-        <UnsupportedFileHint fileKind={activeFileType!} fileName={selectedFile} />
+      {activeNonOfficeRoute && (
+        <ActiveEditorRoute>{activeNonOfficeRoute}</ActiveEditorRoute>
       )}
     </div>
   );
@@ -751,27 +747,25 @@ const UnsupportedFileHint: React.FC<{ fileKind: FileKind; fileName: string }> = 
   };
 
   return (
-    <div className={styles.officeStackItem}>
-      <div className={styles.noFileHint}>
-        <Sparkles className={styles.hintIcon} size={20} />
-        <span>
-          不支持在 inkuo 中预览 <code>{displayName}</code>（类型：{fileKind}）。
-          <button
-            onClick={openExternal}
-            style={{
-              marginLeft: 8,
-              background: 'none',
-              border: '1px solid var(--border-color)',
-              padding: '2px 10px',
-              borderRadius: 4,
-              cursor: 'pointer',
-              color: 'inherit',
-            }}
-          >
-            用系统应用打开
-          </button>
-        </span>
-      </div>
+    <div className={styles.noFileHint}>
+      <Sparkles className={styles.hintIcon} size={20} />
+      <span>
+        不支持在 inkuo 中预览 <code>{displayName}</code>（类型：{fileKind}）。
+        <button
+          onClick={openExternal}
+          style={{
+            marginLeft: 8,
+            background: 'none',
+            border: '1px solid var(--border-color)',
+            padding: '2px 10px',
+            borderRadius: 4,
+            cursor: 'pointer',
+            color: 'inherit',
+          }}
+        >
+          用系统应用打开
+        </button>
+      </span>
     </div>
   );
 };

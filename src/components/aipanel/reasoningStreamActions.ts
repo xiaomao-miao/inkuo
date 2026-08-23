@@ -13,6 +13,8 @@ type ReasoningItem = {
    * survives across re-renders.
    */
   reasoningId?: string;
+  startedAt?: number;
+  durationMs?: number;
   completed?: boolean;
 };
 
@@ -66,6 +68,7 @@ export function applyStreamingReasoningDeltas(
             type: 'reasoning' as const,
             content: delta,
             reasoningId: `reasoning-${crypto.randomUUID()}`,
+            startedAt: Date.now(),
           };
           const updated = postProcess ? postProcess(initial) : initial;
           return { ...message, outputItems: [...items, updated] };
@@ -97,7 +100,11 @@ export function completeReasoningItem(
               if (lastIdx < 0) return message;
               const last = items[lastIdx];
               if (!last || last.type !== 'reasoning') return message;
-              const updated = { ...last, completed: true };
+              const updated = {
+                ...last,
+                completed: true,
+                durationMs: last.durationMs ?? (last.startedAt ? Date.now() - last.startedAt : undefined),
+              };
               return { ...message, outputItems: [...items.slice(0, lastIdx), updated] };
             }),
           }

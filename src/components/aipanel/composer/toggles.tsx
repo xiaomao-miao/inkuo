@@ -7,7 +7,7 @@
 // sync. To add a new toggle, drop in a new entry.
 
 import React from 'react';
-import { Database, Globe } from 'lucide-react';
+import { Database, Globe, TerminalSquare } from 'lucide-react';
 
 import type { FeatureToggleId } from '../../../types';
 
@@ -37,6 +37,12 @@ export const TOGGLES: ReadonlyArray<ToggleSpec> = [
     label: '联网搜索',
     hint: '允许 Agent 检索最新网页内容（后续需配置 API）。',
     icon: <Globe size={13} />,
+  },
+  {
+    id: 'sandbox',
+    label: '安全沙盒',
+    hint: '允许 Agent 运行内置的白名单诊断命令；不执行脚本、不联网、不安装依赖。',
+    icon: <TerminalSquare size={13} />,
   },
 ];
 

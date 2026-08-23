@@ -32,6 +32,40 @@ interface KnowledgeStatusPayload {
   created_at: string;
   last_updated: string;
   members: string[];
+  collections?: Record<string, string[]>;
+  supported_extensions?: string[];
+  documents?: Array<{
+    path: string;
+    collection: string;
+    status: 'indexed' | 'pending' | 'error';
+    chunk_count: number;
+    source_type: string;
+    size_bytes: number;
+    indexed_at?: string | null;
+    error?: string | null;
+  }>;
+}
+
+function knowledgeBaseFromStatus(status: KnowledgeStatusPayload) {
+  return {
+    workspaceId: status.workspace_id,
+    documentCount: status.document_count,
+    chunkCount: status.chunk_count,
+    lastUpdated: new Date(status.last_updated).getTime() || Date.now(),
+    members: status.members ?? [],
+    collections: status.collections ?? { default: status.members ?? [] },
+    supportedExtensions: status.supported_extensions ?? [],
+    documents: (status.documents ?? []).map((document) => ({
+      path: document.path,
+      collection: document.collection,
+      status: document.status,
+      chunkCount: document.chunk_count,
+      sourceType: document.source_type,
+      sizeBytes: document.size_bytes,
+      indexedAt: document.indexed_at ? new Date(document.indexed_at).getTime() : undefined,
+      error: document.error ?? undefined,
+    })),
+  };
 }
 
 export function useKnowledgeBase({ activeSessionId }: UseKnowledgeBaseArgs): UseKnowledgeBaseResult {
@@ -95,13 +129,7 @@ export function useKnowledgeBase({ activeSessionId }: UseKnowledgeBaseArgs): Use
           return;
         }
 
-        setKnowledgeBase({
-          workspaceId: status.workspace_id,
-          documentCount: status.document_count,
-          chunkCount: status.chunk_count,
-          lastUpdated: new Date(status.last_updated).getTime() || Date.now(),
-          members: status.members ?? [],
-        });
+        setKnowledgeBase(knowledgeBaseFromStatus(status));
       } catch (err) {
         if (!cancelled) {
           const message = reportError('knowledge-status-load', err);
@@ -195,15 +223,41 @@ export function useKnowledgeBase({ activeSessionId }: UseKnowledgeBaseArgs): Use
         workspacePath,
         sessionId: activeSessionId,
       });
+      let hydratedStatus: KnowledgeStatusPayload | null = null;
+      try {
+        hydratedStatus = await invoke<KnowledgeStatusPayload | null>('knowledge_status', {
+          workspacePath,
+        });
+      } catch (statusError) {
+        reportError('knowledge-build-status-refresh', statusError);
+      }
 
       // Only apply the result if we are still the active build.
       if (activeBuildIdRef.current === toolCallId) {
-        setKnowledgeBase({
-          workspaceId: result.workspace_id,
-          documentCount: result.total_documents,
-          chunkCount: result.total_chunks,
-          lastUpdated: Date.now(),
-          members: [],
+        // Re-read metadata instead of fabricating an empty member list. The
+        // build result only contains counts; `knowledge_status` is the source
+        // of truth for collections, members, per-file state and supported
+        // formats.
+        setKnowledgeBase(hydratedStatus
+          ? knowledgeBaseFromStatus(hydratedStatus)
+          : {
+              workspaceId: result.workspace_id,
+              documentCount: result.total_documents,
+              chunkCount: result.total_chunks,
+              lastUpdated: Date.now(),
+              members: [],
+              collections: { default: [] },
+              documents: [],
+              supportedExtensions: [],
+            });
+        setKnowledgeToolCall({
+          id: toolCallId,
+          name: 'knowledge_build',
+          arguments: { workspacePath },
+          status: 'success',
+          result: `已索引 ${result.total_documents} 个文档，生成 ${result.total_chunks} 个分块。`,
+          startTime: startedAt,
+          duration: Date.now() - startedAt,
         });
         pushNotification({
           kind: 'success',
@@ -314,13 +368,7 @@ export function useKnowledgeBase({ activeSessionId }: UseKnowledgeBaseArgs): Use
         workspacePath,
       });
       if (status) {
-        setKnowledgeBase({
-          workspaceId: status.workspace_id,
-          documentCount: status.document_count,
-          chunkCount: status.chunk_count,
-          lastUpdated: new Date(status.last_updated).getTime() || Date.now(),
-          members: status.members ?? [],
-        });
+        setKnowledgeBase(knowledgeBaseFromStatus(status));
       }
 
       pushNotification({
@@ -354,13 +402,7 @@ export function useKnowledgeBase({ activeSessionId }: UseKnowledgeBaseArgs): Use
         workspacePath,
       });
       if (status) {
-        setKnowledgeBase({
-          workspaceId: status.workspace_id,
-          documentCount: status.document_count,
-          chunkCount: status.chunk_count,
-          lastUpdated: new Date(status.last_updated).getTime() || Date.now(),
-          members: status.members ?? [],
-        });
+        setKnowledgeBase(knowledgeBaseFromStatus(status));
       } else {
         setKnowledgeBase(undefined);
       }
@@ -384,15 +426,16 @@ export function useKnowledgeBase({ activeSessionId }: UseKnowledgeBaseArgs): Use
   // this, a build in-flight when the panel closes would keep its listener
   // subscribed, leaking Tauri IPC handles across navigations.
   useEffect(() => {
+    const progressListeners = knowledgeProgressUnlistenRef.current;
     return () => {
-      knowledgeProgressUnlistenRef.current.forEach((unlisten) => {
+      progressListeners.forEach((unlisten) => {
         try {
           unlisten();
         } catch (err) {
           console.warn('Failed to detach build progress listener:', err);
         }
       });
-      knowledgeProgressUnlistenRef.current.clear();
+      progressListeners.clear();
       activeBuildIdRef.current = null;
     };
   }, []);

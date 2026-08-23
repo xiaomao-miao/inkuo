@@ -8,6 +8,62 @@
 import type { AIPanelState } from '../../aiPanelStore.types';
 import type { AIPanelStateCreator, SubagentActivitySlice } from '../../aiPanelStore.types';
 import { TIMING } from '../../../constants/timing';
+import type { OutputItem, SubagentActivity } from '../../../types';
+
+export function applySubagentOutputItem(
+  items: OutputItem[],
+  outputItem: OutputItem,
+  now = Date.now(),
+): OutputItem[] {
+  if (outputItem.type !== 'tool_result') return [...items, outputItem];
+
+  let matchedStart = false;
+  const next = items
+    .filter((item) => !(item.type === 'tool_result' && item.toolCallId === outputItem.toolCallId))
+    .map((item) => {
+      if (item.type !== 'tool_call_start' || item.toolCallId !== outputItem.toolCallId) return item;
+      matchedStart = true;
+      return {
+        ...item,
+        isExecuting: false,
+        status: outputItem.status,
+        result: outputItem.result,
+        duration: outputItem.duration ?? (item.startedAt ? Math.max(0, now - item.startedAt) : undefined),
+        diffSummary: outputItem.diffSummary,
+      };
+    });
+  return matchedStart ? next : [...next, outputItem];
+}
+
+export function finalizeSubagentOutputItems(
+  items: OutputItem[],
+  status: 'completed' | 'error',
+  now = Date.now(),
+): OutputItem[] {
+  let changed = false;
+  const next = items.map((item) => {
+    if (item.type === 'reasoning' && !item.completed) {
+      changed = true;
+      return {
+        ...item,
+        completed: true,
+        durationMs: item.durationMs ?? (item.startedAt ? Math.max(0, now - item.startedAt) : undefined),
+      };
+    }
+    if (item.type === 'tool_call_start' && (item.isExecuting || !item.status)) {
+      changed = true;
+      return {
+        ...item,
+        isExecuting: false,
+        status: status === 'error' ? 'error' as const : 'success' as const,
+        duration: item.duration ?? (item.startedAt ? Math.max(0, now - item.startedAt) : undefined),
+        result: item.result ?? (status === 'error' ? '子任务在工具返回前结束' : undefined),
+      };
+    }
+    return item;
+  });
+  return changed ? next : items;
+}
 
 /**
  * Targeted slice updater: mutates only the subagentActivities array of
@@ -28,7 +84,7 @@ function updateSubagentActivitiesInState(
   state: AIPanelState,
   sessionId: string,
   parentMessageId: string,
-  mutator: (activities: unknown[]) => unknown[],
+  mutator: (activities: SubagentActivity[]) => SubagentActivity[],
 ): AIPanelState {
   const sessions = state.sessions;
   const sessionIdx = sessions.findIndex((s) => s.id === sessionId);
@@ -44,7 +100,7 @@ function updateSubagentActivitiesInState(
   // Only copy arrays that actually changed
   if (nextActivities === prevActivities) return state;
 
-  const nextMessage = { ...message, subagentActivities: nextActivities as typeof message.subagentActivities };
+  const nextMessage = { ...message, subagentActivities: nextActivities };
   const nextMessages = [...session.messages.slice(0, msgIdx), nextMessage, ...session.messages.slice(msgIdx + 1)];
   const nextSession = { ...session, messages: nextMessages };
   const nextSessions = [...sessions.slice(0, sessionIdx), nextSession, ...sessions.slice(sessionIdx + 1)];
@@ -61,10 +117,9 @@ export const createSubagentSlice: AIPanelStateCreator<SubagentActivitySlice> = (
   addOutputToSubagentActivity: (sessionId, parentMessageId, subagentId, outputItem) =>
     set((state) => updateSubagentActivitiesInState(
       state, sessionId, parentMessageId,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (activities) => (activities as any[]).map((a: any) =>
+      (activities) => activities.map((a) =>
         a.id === subagentId
-          ? { ...a, outputItems: [...a.outputItems, outputItem] }
+          ? { ...a, outputItems: applySubagentOutputItem(a.outputItems, outputItem) }
           : a,
       ),
     )),
@@ -88,10 +143,22 @@ export const createSubagentSlice: AIPanelStateCreator<SubagentActivitySlice> = (
       const activityIdx = prevActivities.findIndex((a: unknown) => (a as { id?: string }).id === subagentId);
       if (activityIdx < 0) return state;
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const activity = prevActivities[activityIdx] as any;
+      const activity = prevActivities[activityIdx];
       const items = activity.outputItems;
-      const last = items[items.length - 1];
+      const originalLast = items[items.length - 1];
+      const workingItems = delta.type === 'text' && originalLast?.type === 'reasoning' && !originalLast.completed
+        ? [
+            ...items.slice(0, -1),
+            {
+              ...originalLast,
+              completed: true,
+              durationMs: originalLast.durationMs ?? (
+                originalLast.startedAt ? Math.max(0, Date.now() - originalLast.startedAt) : undefined
+              ),
+            },
+          ]
+        : items;
+      const last = workingItems[workingItems.length - 1];
 
       // Apply truncation if content exceeds threshold — keeps the DOM bounded
       // for long-running sub-agents without discarding data (the full content
@@ -114,11 +181,10 @@ export const createSubagentSlice: AIPanelStateCreator<SubagentActivitySlice> = (
           };
         }
 
-        const nextItems = [...items.slice(0, -1), finalItem];
-        if (nextItems === items) return state;
+        const nextItems = [...workingItems.slice(0, -1), finalItem];
         const nextActivity = { ...activity, outputItems: nextItems };
         const nextActivities = [...prevActivities.slice(0, activityIdx), nextActivity, ...prevActivities.slice(activityIdx + 1)];
-        const nextMessage = { ...message, subagentActivities: nextActivities as typeof message.subagentActivities };
+        const nextMessage = { ...message, subagentActivities: nextActivities };
         const nextMessages = [...session.messages.slice(0, msgIdx), nextMessage, ...session.messages.slice(msgIdx + 1)];
         const nextSession = { ...session, messages: nextMessages };
         const nextSessions = [...sessions.slice(0, sessionIdx), nextSession, ...sessions.slice(sessionIdx + 1)];
@@ -128,11 +194,16 @@ export const createSubagentSlice: AIPanelStateCreator<SubagentActivitySlice> = (
       // No matching trailing item — append a fresh one
       const fresh = delta.type === 'text'
         ? { type: 'text' as const, content: delta.content, isPendingMarkdown: false }
-        : { type: 'reasoning' as const, content: delta.content, isPendingMarkdown: false };
-      const nextItems = [...items, fresh];
+        : {
+            type: 'reasoning' as const,
+            content: delta.content,
+            isPendingMarkdown: false,
+            startedAt: Date.now(),
+          };
+      const nextItems = [...workingItems, fresh];
       const nextActivity = { ...activity, outputItems: nextItems };
       const nextActivities = [...prevActivities.slice(0, activityIdx), nextActivity, ...prevActivities.slice(activityIdx + 1)];
-      const nextMessage = { ...message, subagentActivities: nextActivities as typeof message.subagentActivities };
+      const nextMessage = { ...message, subagentActivities: nextActivities };
       const nextMessages = [...session.messages.slice(0, msgIdx), nextMessage, ...session.messages.slice(msgIdx + 1)];
       const nextSession = { ...session, messages: nextMessages };
       const nextSessions = [...sessions.slice(0, sessionIdx), nextSession, ...sessions.slice(sessionIdx + 1)];
@@ -142,10 +213,16 @@ export const createSubagentSlice: AIPanelStateCreator<SubagentActivitySlice> = (
   completeSubagentActivity: (sessionId, parentMessageId, subagentId, status, summary, error) =>
     set((state) => updateSubagentActivitiesInState(
       state, sessionId, parentMessageId,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (activities) => (activities as any[]).map((a: any) =>
+      (activities) => activities.map((a) =>
         a.id === subagentId
-          ? { ...a, status, summary, error, expanded: false }
+          ? {
+              ...a,
+              status,
+              summary,
+              error,
+              expanded: false,
+              outputItems: finalizeSubagentOutputItems(a.outputItems, status),
+            }
           : a,
       ),
     )),
@@ -153,8 +230,7 @@ export const createSubagentSlice: AIPanelStateCreator<SubagentActivitySlice> = (
   toggleSubagentActivityExpanded: (sessionId, parentMessageId, subagentId) =>
     set((state) => updateSubagentActivitiesInState(
       state, sessionId, parentMessageId,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (activities) => (activities as any[]).map((a: any) =>
+      (activities) => activities.map((a) =>
         a.id === subagentId ? { ...a, expanded: !a.expanded } : a,
       ),
     )),

@@ -49,6 +49,40 @@ pub struct AIConfigInput {
     pub model: String,
     pub temperature: Option<f32>,
     pub max_tokens: Option<u32>,
+    /// Explicit visual-input capability override. `None` uses conservative
+    /// model-name inference; `Some(false)` prevents accidental image payloads
+    /// from being sent to a text-only endpoint.
+    #[serde(default)]
+    pub supports_vision: Option<bool>,
+}
+
+impl AIConfigInput {
+    /// `Some(true/false)` when capability is known, `None` when the custom
+    /// provider/model cannot be classified safely. Unknown models are allowed
+    /// to try the standard multimodal wire format; explicit and well-known
+    /// text-only models fail before the network request with a clear error.
+    pub fn vision_capability(&self) -> Option<bool> {
+        if let Some(explicit) = self.supports_vision {
+            return Some(explicit);
+        }
+        let model = self.model.trim().to_ascii_lowercase();
+        const VISION_MARKERS: &[&str] = &[
+            "vision", "llava", "qwen-vl", "qwen2-vl", "qwen2.5-vl",
+            "deepseek-vl", "minicpm-v", "gemma3", "pixtral", "gpt-4o",
+            "gpt-4.1", "gpt-5", "o1", "o3", "o4-mini",
+        ];
+        if VISION_MARKERS.iter().any(|marker| model.contains(marker)) {
+            return Some(true);
+        }
+        const TEXT_ONLY_MARKERS: &[&str] = &[
+            "deepseek-chat", "deepseek-reasoner", "deepseek-coder", "gpt-3.5",
+            "text-davinci", "codestral", "embedding",
+        ];
+        if TEXT_ONLY_MARKERS.iter().any(|marker| model.contains(marker)) {
+            return Some(false);
+        }
+        None
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,6 +114,40 @@ impl AIProviderKind {
             Self::Official => "official",
             Self::Cloud => "cloud",
         }
+    }
+}
+
+#[cfg(test)]
+mod vision_tests {
+    use super::*;
+
+    fn input(model: &str, supports_vision: Option<bool>) -> AIConfigInput {
+        AIConfigInput {
+            provider: AIProviderKind::Ollama,
+            api_key: None,
+            base_url: None,
+            model: model.to_string(),
+            temperature: None,
+            max_tokens: None,
+            supports_vision,
+        }
+    }
+
+    #[test]
+    fn explicit_vision_capability_overrides_model_name_inference() {
+        assert_eq!(input("deepseek-chat", Some(true)).vision_capability(), Some(true));
+        assert_eq!(input("llava", Some(false)).vision_capability(), Some(false));
+    }
+
+    #[test]
+    fn recognises_common_visual_and_text_only_models() {
+        assert_eq!(input("qwen2.5-vl:7b", None).vision_capability(), Some(true));
+        assert_eq!(input("deepseek-reasoner", None).vision_capability(), Some(false));
+    }
+
+    #[test]
+    fn leaves_custom_model_capability_unknown_instead_of_silent_downgrade() {
+        assert_eq!(input("company-custom-model", None).vision_capability(), None);
     }
 }
 
@@ -186,6 +254,7 @@ pub fn build_settings_ai_config(settings: &Settings) -> Result<ai::AIConfig, AIC
                     model: entry.id.clone(),
                     temperature: 0.7,
                     max_tokens: None,
+                    supports_vision: None,
                 });
             }
         }
@@ -207,12 +276,14 @@ pub fn build_settings_ai_config(settings: &Settings) -> Result<ai::AIConfig, AIC
         model: config.model.clone(),
         temperature: config.temperature,
         max_tokens: config.max_tokens,
+        supports_vision: None,
     })
 }
 
 // ── Cloud config resolver ────────────────────────────────────────────────────────
 
 pub fn build_input_ai_config(config_input: AIConfigInput) -> Result<ai::AIConfig, AIConfigError> {
+    let supports_vision = config_input.vision_capability();
     Ok(ai::AIConfig {
         provider: build_provider(
             config_input.provider,
@@ -222,6 +293,7 @@ pub fn build_input_ai_config(config_input: AIConfigInput) -> Result<ai::AIConfig
         model: config_input.model,
         temperature: config_input.temperature.unwrap_or(0.7),
         max_tokens: config_input.max_tokens,
+        supports_vision,
     })
 }
 
@@ -239,6 +311,7 @@ pub async fn build_input_ai_config_async(
     config_input: AIConfigInput,
     cloud: Arc<CloudClient>,
 ) -> Result<ai::AIConfig, AIConfigError> {
+    let supports_vision = config_input.vision_capability();
     if matches!(config_input.provider, AIProviderKind::Cloud) {
         let settings = crate::commands::get_settings_cached().map_err(|e| {
             AIConfigError::Cloud(format!("read settings for cloud re-resolve: {}", e))
@@ -264,6 +337,7 @@ pub async fn build_input_ai_config_async(
             model: model_id,
             temperature: config_input.temperature.unwrap_or(0.7),
             max_tokens: config_input.max_tokens,
+            supports_vision,
         });
     }
     build_input_ai_config(config_input)
@@ -354,6 +428,7 @@ impl AIConfigResolver {
                 model: model_id,
                 temperature: 0.7,
                 max_tokens: None,
+                supports_vision: None,
             });
         }
 
@@ -803,4 +878,3 @@ pub async fn test_image_gen_provider_impl(
         }
     }
 }
-
