@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import {
   Table, Button, Input, Space, Tag, Drawer, Descriptions, App, Modal, Form, InputNumber,
-  Statistic, Row, Col, Card, List, Empty, Tooltip, Popconfirm,
+  Statistic, Row, Col, Card, List, Empty, Tooltip,
 } from 'antd';
 import { SearchOutlined, ReloadOutlined, DollarOutlined, StopOutlined, DeleteOutlined, EyeOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
@@ -29,7 +29,7 @@ export default function UsersPage() {
       const result = await usersApi.list({ page, pageSize, search, sortBy, sortDir });
       setData(result.items);
       setTotal(result.total);
-    } catch (e) {
+    } catch {
       message.error('加载用户列表失败');
     } finally {
       setLoading(false);

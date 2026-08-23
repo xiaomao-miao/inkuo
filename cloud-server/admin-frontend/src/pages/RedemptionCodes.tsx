@@ -136,7 +136,16 @@ export default function RedemptionCodesPage() {
       </Space>
 
       <Table rowKey="id" loading={loading} dataSource={data} columns={columns}
-        pagination={{ current: page, pageSize, total, onChange: setPage, showSizeChanger: true }} />
+        pagination={{
+          current: page,
+          pageSize,
+          total,
+          onChange: (nextPage, nextPageSize) => {
+            setPage(nextPage);
+            setPageSize(nextPageSize);
+          },
+          showSizeChanger: true,
+        }} />
 
       <Modal
         title={editing ? `编辑兑换码 - ${editing.code}` : '新增兑换码'}

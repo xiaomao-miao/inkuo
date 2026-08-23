@@ -5,7 +5,16 @@ import reactRefresh from 'eslint-plugin-react-refresh';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['dist', 'src-tauri/target'] },
+  {
+    ignores: [
+      'dist',
+      '**/dist/**',
+      'src-tauri/target',
+      // Server projects copy bundled frontend assets here. Lint their sources,
+      // not generated/minified JavaScript that embeds third-party directives.
+      'cloud-server/**/wwwroot/**',
+    ],
+  },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ['**/*.{ts,tsx}'],

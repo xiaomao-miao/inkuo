@@ -71,11 +71,6 @@ export default function ModelConfigsPage() {
     });
   };
 
-  const copy = (text: string) => {
-    navigator.clipboard.writeText(text);
-    message.success('已复制');
-  };
-
   const columns = [
     { title: '排序', dataIndex: 'sortOrder', width: 60 },
     {
