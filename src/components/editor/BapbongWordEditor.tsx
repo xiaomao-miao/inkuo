@@ -6,7 +6,12 @@ import { useKeyboardSave } from './useKeyboardSave';
 import { useExternalFileSync } from './useExternalFileSync';
 import { ExternalFileConflictBanner } from './ExternalFileConflictBanner';
 import { decideExternalRefresh } from './externalFileConflict';
-import { useSidebarStore, useEditorStore, useNotificationStore } from '../../store';
+import {
+  useSidebarStore,
+  useEditorStore,
+  useEditorHandleStore,
+  useNotificationStore,
+} from '../../store';
 import { reportError } from '../../utils/errors';
 import styles from './OfficeViewer.module.css';
 
@@ -53,6 +58,12 @@ export const BapbongWordEditor: React.FC<WordEditorProps> = ({
   const officeBufferVersion = useEditorStore(s => s.documentContents[filePath]?.office.bufferVersion ?? 0);
   const setDocxBuffer = useEditorStore((state) => state.setDocxBuffer);
   const pushNotification = useNotificationStore((state) => state.pushNotification);
+  const registerDocumentSaveHandler = useEditorHandleStore(
+    (state) => state.registerDocumentSaveHandler,
+  );
+  const unregisterDocumentSaveHandler = useEditorHandleStore(
+    (state) => state.unregisterDocumentSaveHandler,
+  );
 
   // Read bytes from disk
   const readAndApplyBuffer = useCallback(
@@ -171,11 +182,20 @@ export const BapbongWordEditor: React.FC<WordEditorProps> = ({
   }, [isActive, isDirty, filePath, setOpenTabDirty]);
 
   // Save
-  const handleSave = useCallback(async () => {
-    if (!isDirty) return;
+  const handleSave = useCallback(async (): Promise<boolean> => {
+    // Read the ref instead of the render-time state so an immediate close
+    // after the first edit cannot hit a stale "clean" save closure.
+    if (!dirtyStateRef.current) return true;
     try {
       const savedBuffer = await editorRef.current?.save();
-      if (!savedBuffer) return;
+      if (!savedBuffer) {
+        pushNotification({
+          kind: 'error',
+          title: '保存 Word 文档失败',
+          message: 'Word 编辑器尚未就绪，文件仍保持打开。',
+        });
+        return false;
+      }
       const bufferArray = Array.from(new Uint8Array(savedBuffer));
       await invoke('write_office_file', { path: filePath, data: bufferArray });
       setDocxBuffer(filePath, bufferArray);
@@ -183,11 +203,23 @@ export const BapbongWordEditor: React.FC<WordEditorProps> = ({
       setIsDirty(false);
       setHasExternalConflict(false);
       setOpenTabDirty(filePath, false);
+      return true;
     } catch (err) {
       const message = reportError('office-word-save', err);
       pushNotification({ kind: 'error', title: '保存 Word 文档失败', message });
+      return false;
     }
-  }, [filePath, isDirty, setOpenTabDirty, setDocxBuffer, pushNotification]);
+  }, [filePath, setOpenTabDirty, setDocxBuffer, pushNotification]);
+
+  useEffect(() => {
+    registerDocumentSaveHandler(filePath, handleSave);
+    return () => unregisterDocumentSaveHandler(filePath, handleSave);
+  }, [
+    filePath,
+    handleSave,
+    registerDocumentSaveHandler,
+    unregisterDocumentSaveHandler,
+  ]);
 
   useKeyboardSave({ onSave: handleSave, enabled: isDirty && isActive });
 

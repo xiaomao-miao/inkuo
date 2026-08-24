@@ -18,12 +18,11 @@ import {
   useLayoutStore,
   useAIPanelStore,
   useEditorHandleStore,
-  useConfirmDialogStore,
   type EditorCommands,
 } from '../../store';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { applyWorkspaceDirectoryLoad, openWorkspaceDirectory, switchWorkspace } from '../../services/workspace';
-import { persistDocument } from '../../services/documentSave';
+import { requestCloseOpenTab, saveOpenTab } from '../../services/openTabLifecycle';
 import { reportError } from '../../utils/errors';
 import { openSettingsTab } from '../../utils/openSettingsTab';
 import { openCloudTab } from '../../utils/openCloudTab';
@@ -61,12 +60,18 @@ export const TitleBar: React.FC = () => {
 
   const selectedFile = useSidebarStore((state) => state.selectedFile);
   const workspacePath = useSidebarStore((state) => state.workspacePath);
+  const activeTab = useSidebarStore((state) => (
+    state.openTabs.find((tab) => tab.id === state.activeTabId) ?? null
+  ));
   const pushNotification = useNotificationStore((state) => state.pushNotification);
   const cloudAccount = useSettingsStore((s) => s.settings.cloud.account);
   const currentMetadata = useEditorStore((state) => (
     selectedFile ? state.documentContents[selectedFile]?.metadata : null
   ));
-  const isDirty = currentMetadata?.isDirty ?? false;
+  // Office editors keep their authoritative dirty flag on the tab, while
+  // text editors publish it in metadata first. Observe both so the title-bar
+  // Save action never goes missing for one editor family.
+  const isDirty = Boolean(activeTab?.isDirty || currentMetadata?.isDirty);
 
   const handleOpenSettings = () => {
     openSettingsTab();
@@ -153,15 +158,7 @@ export const TitleBar: React.FC = () => {
       return;
     }
 
-    const result = await persistDocument({
-      path: selectedFile,
-      content: currentMetadata?.content || '',
-      isDirty,
-    });
-
-    if (!result.ok) {
-      // reserved for future user-facing notification surface
-    }
+    if (activeTab) await saveOpenTab(activeTab);
 
     setActiveMenu(null);
   };
@@ -305,40 +302,29 @@ export const TitleBar: React.FC = () => {
     setActiveMenu(null);
   };
 
-  // `Close editor` from the top bar: closes the active tab. Mirrors
-  // TabBar's logic — if the tab is dirty, ask the user to discard
-  // before closing. The confirmation dialog is the same one used by
-  // the context menu's `closeTab` action so the UX is consistent.
+  // `Close editor` from the top bar follows the same three-way lifecycle as
+  // tab buttons, tab context menus, and native-window close.
   const handleCloseEditor = async () => {
-    if (!selectedFile) {
-      setActiveMenu(null);
-      return;
-    }
-    const sidebar = useSidebarStore.getState();
-    const tab = sidebar.openTabs.find(
-      (t) => t.path === selectedFile && !t.isSettings && !t.isCloud,
-    );
-    if (!tab) {
-      setActiveMenu(null);
-      return;
-    }
-    if (tab.isDirty) {
-      const ok = await useConfirmDialogStore.getState().ask({
-        title: '未保存的更改',
-        message: `"${tab.name}" 有未保存的更改，关闭将丢弃。`,
-        confirmLabel: '丢弃并关闭',
-        danger: true,
-      });
-      if (!ok) {
-        setActiveMenu(null);
-        return;
-      }
-      // Mark the tab clean so `requestCloseTab` will accept the close.
-      sidebar.setOpenTabDirty(tab.path, false);
-    }
-    sidebar.closeTab(tab.id);
+    if (activeTab) await requestCloseOpenTab(activeTab);
     setActiveMenu(null);
   };
+
+  useEffect(() => {
+    if (!isTauri || !activeTab) return;
+    const handleCloseShortcut = (event: KeyboardEvent) => {
+      if (
+        !(event.ctrlKey || event.metaKey)
+        || event.shiftKey
+        || event.altKey
+        || event.key.toLowerCase() !== 'w'
+      ) return;
+      event.preventDefault();
+      void requestCloseOpenTab(activeTab);
+      setActiveMenu(null);
+    };
+    window.addEventListener('keydown', handleCloseShortcut);
+    return () => window.removeEventListener('keydown', handleCloseShortcut);
+  }, [activeTab, isTauri]);
 
   // ---------------------------------------------------------------------------
   // Edit menu — undo/redo/cut/copy/paste/selectAll/find/replace
@@ -441,7 +427,7 @@ export const TitleBar: React.FC = () => {
         { divider: true, label: '' },
         { label: '保存', shortcut: 'Ctrl+S', action: handleSave, disabled: !isDirty },
         { divider: true, label: '' },
-        { label: '关闭编辑器', shortcut: 'Ctrl+W', action: handleCloseEditor, disabled: !selectedFile },
+        { label: '关闭编辑器', shortcut: 'Ctrl+W', action: handleCloseEditor, disabled: !activeTab },
         { divider: true, label: '' },
         { label: '退出', shortcut: 'Alt+F4', action: handleClose },
       ],

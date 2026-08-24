@@ -15,12 +15,12 @@ const ICON_UP = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" str
 
 // ---- Feature data ----
 const FEATURES = [
-  { icon: ICON_DOC, title: 'Word / Excel / PPT / Markdown', desc: '你每天在用的文件,InkUO 都能直接打开、改、回写,不用换来换去。' },
+  { icon: ICON_DOC, title: 'Word / Excel / Markdown', desc: '直接打开、编辑并保存常用文档；PPT 支持让 AI 新建生成，暂不提供现有 PPT 的内置编辑。' },
   { icon: ICON_TABLE, title: '表格也能对话', desc: '直接问表里的问题,AI 帮你算、帮你改、帮你从中找出关键结论。' },
   { icon: ICON_SEARCH, title: '在一个文件夹里搜', desc: '不必翻遍子文件夹,直接问它:这堆资料里关于某某的内容在哪。' },
-  { icon: ICON_CLOUD, title: '云端 AI,开箱即用', desc: '注册即送额度,DeepSeek、GPT 等主流模型按量付费,不必自己部署。' },
-  { icon: ICON_LOCAL, title: '想自己跑模型也行', desc: '支持接入 Ollama 等本地模型服务,文件不出本机,AI 也照样能用。' },
-  { icon: ICON_KEY, title: '邀请码注册', desc: '现在通过邀请码注册即送 ¥5 额度,先试到顺手再说。' },
+  { icon: ICON_LOCAL, title: '本地模型', desc: '接入本机 Ollama 时，请求由本地模型处理，不会发送到 InkUO Cloud 或第三方模型服务。' },
+  { icon: ICON_KEY, title: '自备 API Key', desc: '应用直接请求你配置的模型供应商，不经过 InkUO Cloud；数据处理遵循该供应商的隐私政策。' },
+  { icon: ICON_CLOUD, title: 'InkUO Cloud', desc: '仅在你主动选择 Cloud 模型时，提示词和完成任务所需的内容会经 InkUO Cloud 转发给模型供应商。' },
 ];
 
 // ---- Hero typewriter phrases ----
@@ -64,8 +64,7 @@ function buildPage(): void {
       h('div', { class: 'nav-links' }, [
         h('a', { href: '#features' }, ['特性']),
         h('a', { href: '#download' }, ['下载']),
-        h('a', { href: '#changelog' }, ['更新日志']),
-        h('a', { href: '/admin', class: 'nav-cta' }, ['登录 Admin']),
+        h('a', { href: '#download', class: 'nav-cta' }, ['立即下载']),
       ]),
     ]),
   ]);
@@ -74,7 +73,7 @@ function buildPage(): void {
   const twEl = h('span', { id: 'tw', class: 'tw-target' });
   const hero = h('section', { class: 'hero', id: 'top' }, [
     h('div', { class: 'container' }, [
-      h('span', { class: 'hero-eyebrow' }, ['桌面端 · 中文优先 · 真正能改文件']),
+      h('span', { class: 'hero-eyebrow' }, ['桌面端 · 中文优先 · Word / Excel 可直接修改']),
       h('h1', { class: 'hero-title' }, ['让 AI 直接帮你处理文档']),
       h('div', { class: 'hero-type' }, [twEl, h('span', { class: 'hero-caret' })]),
       h('p', { class: 'hero-sub' }, [
@@ -123,10 +122,7 @@ function buildPage(): void {
   const footer = h('footer', {}, [
     h('div', { class: 'container' }, [
       h('p', {}, [
-        document.createTextNode('© 2026 inkuo team · '),
-        Object.assign(document.createElement('a'), { href: 'https://github.com/inkuo/inkuo', textContent: 'GitHub', target: '_blank', rel: 'noreferrer' }),
-        document.createTextNode(' · '),
-        Object.assign(document.createElement('a'), { href: '/admin', textContent: '管理后台', target: '_blank', rel: 'noreferrer' }),
+        document.createTextNode('© 2026 inkuo team · 本地 Ollama：在本机处理 · 自备 Key：直连供应商 · InkUO Cloud：经 InkUO 转发'),
       ]),
     ]),
   ]);
@@ -213,11 +209,7 @@ async function loadReleases(grid: HTMLElement): Promise<void> {
   if (releases.length === 0) {
     grid.append(
       h('div', { class: 'empty-state' }, [
-        h('p', {}, [
-          document.createTextNode('暂无发行版。管理员请到 '),
-          Object.assign(document.createElement('code'), { textContent: '/admin' }),
-          document.createTextNode(' → 发行版 页面上传安装包。'),
-        ]),
+        h('p', {}, ['暂时没有可下载的公开版本，请稍后再来查看。']),
       ]),
     );
     return;

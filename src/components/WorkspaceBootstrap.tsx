@@ -1,5 +1,10 @@
 import { useEffect } from 'react';
+import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useWorkspaceSnapshotAutosave } from '../hooks/useWorkspaceSnapshotAutosave';
+import { confirmWindowClose } from '../services/openTabLifecycle';
+import { reportError } from '../utils/errors';
+import { isTauriRuntime } from '../utils/tauri';
+import { useNotificationStore } from '../store';
 import { useAgentStream } from './aipanel/useAgentStream';
 
 /**
@@ -9,14 +14,12 @@ import { useAgentStream } from './aipanel/useAgentStream';
  *     sidebar and AI panel stores and writes through to the Rust backend
  *     with a 1.5 s debounce, so disk is kept continuously up-to-date.
  *
- *  2. A best-effort final save when the window unloads (component unmount).
- *     We deliberately do NOT register a Tauri `onCloseRequested` handler —
- *     that API blocks window close until the handler resolves, which made
- *     Super+Q / Alt+F4 hang on Linux.  The 1.5 s debounce is short enough
- *     that any state the user touched in the last second or two is already
- *     in Rust's in-memory snapshot map; if the process dies before the next
- *     flush, the worst case is losing the very last keystroke, which is an
- *     acceptable trade-off for keeping window close responsive.
+ *  2. A native close guard. `preventDefault()` runs synchronously, then the
+ *     shared lifecycle asks Save / Don't Save / Cancel without blocking the
+ *     native callback. An accepted close is re-issued once behind a bypass
+ *     flag, avoiding both silent data loss and recursive close prompts.
+ *
+ *  3. A best-effort final workspace-snapshot flush on browser unload.
  *
  * Renders nothing.
  */
@@ -26,6 +29,64 @@ export function WorkspaceBootstrap(): null {
   // panel unmounted its only listener, silently dropping done/error events and
   // leaving the session permanently "running" until an app restart.
   useAgentStream({ mode: 'agent' });
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+
+    const appWindow = getCurrentWindow();
+    let disposed = false;
+    let allowNextClose = false;
+    let closeInProgress = false;
+    let unlisten: (() => void) | null = null;
+
+    void appWindow.onCloseRequested((event) => {
+      if (allowNextClose) return;
+
+      // Tauri requires this to happen before the callback returns. The async
+      // dialog/save work below is deliberately detached from the callback.
+      event.preventDefault();
+      if (closeInProgress) return;
+      closeInProgress = true;
+
+      void (async () => {
+        try {
+          const mayClose = await confirmWindowClose();
+          if (!mayClose || disposed) return;
+
+          await flushPendingSnapshotSave();
+          if (disposed) return;
+          allowNextClose = true;
+          try {
+            await appWindow.close();
+          } catch (error) {
+            // The window is still alive, so a future close must go through the
+            // guard again instead of inheriting a stale one-shot bypass.
+            allowNextClose = false;
+            reportError('workspace-window-close', error);
+          }
+        } catch (error) {
+          allowNextClose = false;
+          useNotificationStore.getState().pushNotification({
+            kind: 'error',
+            title: '暂时无法关闭窗口',
+            message: reportError('workspace-close-flow', error),
+          });
+        } finally {
+          closeInProgress = false;
+        }
+      })();
+    }).then((disposeListener) => {
+      if (disposed) disposeListener();
+      else unlisten = disposeListener;
+    }).catch((error) => {
+      reportError('workspace-close-listener', error);
+    });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
 
   useEffect(() => {
     const handleBeforeUnload = () => {

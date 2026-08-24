@@ -6,14 +6,12 @@ import {
   Cloud,
   FileText,
   FolderOpen,
-  LayoutGrid,
   Loader2,
   LogOut,
   MessageCircle,
   Moon,
   Palette,
   Plus,
-  Search,
   Sparkles,
   Sun,
   SunMedium,
@@ -55,14 +53,14 @@ const TYPING_PHRASES = [
 const FILE_TYPES = [
   { label: 'Word', className: 'word' },
   { label: 'Excel', className: 'excel' },
-  { label: 'PPT', className: 'ppt' },
+  { label: 'PPT（AI 新建）', className: 'ppt' },
   { label: 'Markdown', className: 'markdown' },
 ] as const;
 
 const AI_STEPS = [
-  { label: '读懂你的文件', icon: Search },
-  { label: '找到需要的内容', icon: LayoutGrid },
-  { label: '帮你完成修改', icon: WandSparkles },
+  { label: '打开 Word / Excel', icon: FileText },
+  { label: '告诉 AI 要做什么', icon: MessageCircle },
+  { label: '检查结果后保存', icon: Check },
 ] as const;
 
 const PREFERENCE_PANELS = {
@@ -448,7 +446,7 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onWorkspaceSelected })
               <span className={styles.heroTitleAccent}>帮你处理文档</span>
             </h1>
             <p className={styles.heroSubtitle}>
-              打开一个文件夹，剩下的交给 InkUO。
+              选择一个包含 Word 或 Excel 的文件夹，打开文件后告诉 AI 你想完成什么。
               <br />
               <span className={styles.typeLine} aria-hidden="true">
                 {animatedPhrase}
@@ -471,7 +469,7 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onWorkspaceSelected })
                 {!isLoading && <ArrowRight size={15} className={styles.arrowIcon} />}
                 <span className={styles.kbdHint}>{modifierKey} O</span>
               </button>
-              <p className={styles.actionHint}>无需学习 · 打开就会用</p>
+              <p className={styles.actionHint}>第一次使用：打开文件夹 → 选择文档 → 在右侧告诉 AI 任务</p>
             </div>
           </div>
 
@@ -530,27 +528,27 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onWorkspaceSelected })
 
         <section className={styles.capabilities} aria-label="InkUO 可以帮你做什么">
           <div className={styles.capabilityIntro}>
-            <span className={styles.sectionKicker}>一个文件夹，整个工作流</span>
-            <h2>你说想做什么，InkUO 就去完成。</h2>
+            <span className={styles.sectionKicker}>第一次任务，三步完成</span>
+            <h2>先从一份 Word 或 Excel 开始。</h2>
           </div>
           <div className={styles.capabilityList}>
             <div className={styles.capabilityItem}>
-              <div className={`${styles.capabilityIcon} ${styles.capabilityIconBlue}`}><Search size={17} /></div>
-              <div><strong>帮你找</strong><span>不必翻遍文件夹，直接问它。</span></div>
+              <div className={`${styles.capabilityIcon} ${styles.capabilityIconBlue}`}><FolderOpen size={17} /></div>
+              <div><strong>1. 打开文件</strong><span>选择一份 Word 或 Excel 文档。</span></div>
             </div>
             <div className={styles.capabilityItem}>
               <div className={`${styles.capabilityIcon} ${styles.capabilityIconPurple}`}><MessageCircle size={17} /></div>
-              <div><strong>帮你写</strong><span>从一个想法，变成一份完整文档。</span></div>
+              <div><strong>2. 描述任务</strong><span>例如“润色这段”或“分析这张表”。</span></div>
             </div>
             <div className={styles.capabilityItem}>
-              <div className={`${styles.capabilityIcon} ${styles.capabilityIconGreen}`}><WandSparkles size={17} /></div>
-              <div><strong>帮你改</strong><span>润色、重排、补全，交给 AI。</span></div>
+              <div className={`${styles.capabilityIcon} ${styles.capabilityIconGreen}`}><Check size={17} /></div>
+              <div><strong>3. 检查并保存</strong><span>确认修改符合预期，再保存文件。</span></div>
             </div>
           </div>
         </section>
 
         <section className={styles.fileTypes} aria-label="支持的文件类型">
-          <span className={styles.fileTypesLabel}>支持你每天都在用的文件</span>
+          <span className={styles.fileTypesLabel}>Word / Excel / Markdown 可编辑；PPT 支持 AI 新建生成</span>
           <div className={styles.fileTypeList}>
             {FILE_TYPES.map((fileType) => (
               <span key={fileType.label} className={`${styles.fileType} ${styles[`fileType${fileType.className}`]}`}>
@@ -604,7 +602,7 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onWorkspaceSelected })
           {!hasCloudAccount && (
             <p className={styles.cloudRegisterHint} role="note">
               <Sparkles size={11} aria-hidden />
-              <span>登录后可同步 AI 额度与设置 · 注册与登录需要邀请码</span>
+              <span>Cloud 为可选模式 · 仅使用 Cloud 模型时，经 InkUO 转发任务所需内容</span>
             </p>
           )}
         </section>
@@ -735,7 +733,7 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onWorkspaceSelected })
                     </div>
                   ) : (
                     <>
-                      <p className={styles.cloudDescription}>登录后可同步 AI 额度与设置，注册需要邀请码。</p>
+                      <p className={styles.cloudDescription}>Cloud 是可选的托管模型模式。仅当你选择 Cloud 模型时，提示词和完成任务所需的内容会经 InkUO 转发给模型供应商；注册需要邀请码。</p>
                       <div className={styles.modeSwitch}>
                         <button
                           type="button"
@@ -818,7 +816,7 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onWorkspaceSelected })
                           '注册并登录'
                         )}
                       </button>
-                      <p className={styles.cloudHint}>云端服务为可选功能，不影响本地使用。</p>
+                      <p className={styles.cloudHint}>本地 Ollama 的模型请求在本机处理；自备 API Key 会直连你配置的模型供应商。</p>
                     </>
                   )}
                 </div>
@@ -833,7 +831,7 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onWorkspaceSelected })
         <span className={styles.footerDot}>·</span>
         <span><kbd>{modifierKey}</kbd><kbd>O</kbd> 打开文件夹</span>
         <span className={styles.footerDot}>·</span>
-        <span>你的文件，始终在你的电脑里</span>
+        <span>本地 Ollama：在本机处理 · 自备 Key：直连供应商 · Cloud：经 InkUO 转发</span>
       </footer>
     </div>
   );

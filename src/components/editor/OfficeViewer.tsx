@@ -8,7 +8,12 @@ import { useKeyboardSave } from './useKeyboardSave';
 import { useExternalFileSync } from './useExternalFileSync';
 import { ExternalFileConflictBanner } from './ExternalFileConflictBanner';
 import { decideExternalRefresh } from './externalFileConflict';
-import { useSidebarStore, useEditorStore, useNotificationStore } from '../../store';
+import {
+  useSidebarStore,
+  useEditorStore,
+  useEditorHandleStore,
+  useNotificationStore,
+} from '../../store';
 import {
   rustWorkbookToFortuneSheets,
 } from './fortuneSheetConverter';
@@ -156,6 +161,12 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
   const setOpenTabDirty = useSidebarStore((s) => s.setOpenTabDirty);
   const setFortuneSheetsToStore = useEditorStore((s) => s.setFortuneSheets);
   const pushNotification = useNotificationStore((s) => s.pushNotification);
+  const registerDocumentSaveHandler = useEditorHandleStore(
+    (state) => state.registerDocumentSaveHandler,
+  );
+  const unregisterDocumentSaveHandler = useEditorHandleStore(
+    (state) => state.unregisterDocumentSaveHandler,
+  );
 
   // ── External file version watcher ─────────────────────────────────────────
   const officeBufferVersion = useEditorStore(
@@ -425,16 +436,17 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
   }, [isActive, isDirty, filePath, setOpenTabDirty]);
 
   // ── Save ────────────────────────────────────────────────────────────────
-  const handleSave = useCallback(async () => {
+  const handleSave = useCallback(async (): Promise<boolean> => {
+    if (!dirtyStateRef.current) return true;
     const wb = workbookRef.current;
     if (!wb) {
       pushNotification({ kind: 'error', title: '保存失败', message: '表格引擎未就绪' });
-      return;
+      return false;
     }
     const sheets = wb.getAllSheets();
     if (!sheets?.length) {
       pushNotification({ kind: 'error', title: '保存失败', message: '没有可用的工作表数据' });
-      return;
+      return false;
     }
     try {
       recalcAllSheetsRef.current();
@@ -455,11 +467,23 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
       setIsDirty(false);
       setHasExternalConflict(false);
       setOpenTabDirty(filePath, false);
+      return true;
     } catch (err) {
       const message = reportError('office-excel-save', err);
       pushNotification({ kind: 'error', title: '保存 Excel 文档失败', message });
+      return false;
     }
   }, [filePath, setFortuneSheetsToStore, setOpenTabDirty, pushNotification]);
+
+  useEffect(() => {
+    registerDocumentSaveHandler(filePath, handleSave);
+    return () => unregisterDocumentSaveHandler(filePath, handleSave);
+  }, [
+    filePath,
+    handleSave,
+    registerDocumentSaveHandler,
+    unregisterDocumentSaveHandler,
+  ]);
 
   useKeyboardSave({ onSave: handleSave, enabled: isDirty && isActive });
 

@@ -60,6 +60,10 @@ import {
   reloadCurrentWorkspace,
   revealInFileManager,
 } from '../../../services/workspace';
+import {
+  requestCloseOpenTab,
+  requestCloseOpenTabs,
+} from '../../../services/openTabLifecycle';
 import { reportError } from '../../../utils/errors';
 import { getRelativePath } from '../../../utils/path';
 
@@ -761,33 +765,14 @@ function appendCloseThisTab(
     label: '关闭',
     icon: <X size={14} />,
     action: async () => {
-      const state = useSidebarStore.getState();
-      // Settings / Cloud tabs close without a prompt.
-      if (tab.isSettings || tab.isCloud) {
-        state.closeTab(tab.id);
-        return;
-      }
-      const ok = state.requestCloseTab(tab.path);
-      if (ok) return;
-      const confirm = useConfirmDialogStore.getState().ask;
-      const discard = await confirm({
-        title: '未保存的更改',
-        message: `"${tab.name}" 有未保存的更改，关闭将丢弃。`,
-        confirmLabel: '丢弃并关闭',
-        danger: true,
-      });
-      if (discard) {
-        state.setOpenTabDirty(tab.path, false);
-        state.requestCloseTab(tab.path);
-      }
+      await requestCloseOpenTab(tab);
     },
   });
 }
 
 /**
- * Close every tab except the right-clicked one. Skips dirty file tabs
- * and settings tabs by default — the user can confirm them one-by-one
- * from the tab bar if they really want to drop changes.
+ * Close every tab except the right-clicked one. Dirty files share the same
+ * Save / Don't Save / Cancel prompt used everywhere else.
  */
 function appendCloseOtherTabs(
   items: MenuItem[],
@@ -801,20 +786,13 @@ function appendCloseOtherTabs(
     id: 'tab-close-others',
     label: '关闭其他标签页',
     icon: <X size={14} />,
-    action: () => {
-      const state = useSidebarStore.getState();
-      otherTabs.forEach((t) => {
-        if (t.isSettings || t.isCloud) {
-          state.closeTab(t.id);
-          return;
-        }
-        if (!t.isDirty) state.closeTab(t.id);
-      });
+    action: async () => {
+      await requestCloseOpenTabs(otherTabs);
     },
   });
 }
 
-/** Close every tab to the right of the right-clicked one (same dirty rules). */
+/** Close every tab to the right of the right-clicked one (same lifecycle). */
 function appendCloseRightTabs(
   items: MenuItem[],
   tab: OpenTab,
@@ -828,15 +806,8 @@ function appendCloseRightTabs(
     id: 'tab-close-right',
     label: '关闭右侧标签页',
     icon: <X size={14} />,
-    action: () => {
-      const state = useSidebarStore.getState();
-      openTabs.slice(tabIndex + 1).forEach((t) => {
-        if (t.isSettings || t.isCloud) {
-          state.closeTab(t.id);
-          return;
-        }
-        if (!t.isDirty) state.closeTab(t.id);
-      });
+    action: async () => {
+      await requestCloseOpenTabs(openTabs.slice(tabIndex + 1));
     },
   });
 }
@@ -861,80 +832,29 @@ function appendCloseSavedTabs(
     label: '关闭已保存的文件',
     icon: <X size={14} />,
     disabled: savedFileTabs.length === 0,
-    action: () => {
-      const state = useSidebarStore.getState();
-      savedFileTabs.forEach((t) => state.closeTab(t.id));
+    action: async () => {
+      await requestCloseOpenTabs(savedFileTabs);
     },
   });
 }
 
 /**
- * "全部关闭" — close every file tab. Already-saved tabs close silently;
- * dirty ones get a single confirmation dialog listing them so the user
- * can decide once instead of N times.
+ * "全部关闭" — close every tab. Dirty files get one three-way dialog so the
+ * user can save or discard them as a group instead of answering N prompts.
  */
 function appendCloseAllTabs(
   items: MenuItem[],
-  tab: OpenTab,
+  _tab: OpenTab,
   ctx: MenuBuilderContext,
 ): void {
   const { openTabs } = ctx;
-  const otherTabs = openTabs.filter((t) => t.id !== tab.id);
-  if (otherTabs.length === 0) {
-    items.push({
-      id: 'tab-close-all',
-      label: '全部关闭',
-      icon: <X size={14} />,
-      disabled: true,
-      action: () => {},
-    });
-    return;
-  }
-
   items.push({
     id: 'tab-close-all',
     label: '全部关闭',
     icon: <X size={14} />,
+    disabled: openTabs.length === 0,
     action: async () => {
-      const state = useSidebarStore.getState();
-      // First, drop every saved / settings / cloud tab. The right-clicked
-      // tab goes last so the user can keep their context anchor.
-      const toForceClose: OpenTab[] = [];
-      openTabs.forEach((t) => {
-        if (t.id === tab.id) return;
-        if (t.isSettings || t.isCloud) {
-          state.closeTab(t.id);
-          return;
-        }
-        if (!t.isDirty) {
-          state.closeTab(t.id);
-          return;
-        }
-        toForceClose.push(t);
-      });
-      // If anything dirty remains, ask once with a list of file names.
-      if (toForceClose.length === 0) return;
-      const names = toForceClose.map((t) => t.name).join('\n');
-      const confirm = useConfirmDialogStore.getState().ask;
-      const discard = await confirm({
-        title: '未保存的更改',
-        message: `以下 ${toForceClose.length} 个文件有未保存的更改，关闭将丢弃：\n\n${names}`,
-        confirmLabel: '全部丢弃并关闭',
-        danger: true,
-      });
-      if (!discard) return;
-      toForceClose.forEach((t) => {
-        state.setOpenTabDirty(t.path, false);
-        state.requestCloseTab(t.path);
-      });
-      // And finally the right-clicked tab itself if it was dirty.
-      if (tab.isDirty && !tab.isSettings && !tab.isCloud) {
-        const ok = state.requestCloseTab(tab.path);
-        if (!ok) {
-          state.setOpenTabDirty(tab.path, false);
-          state.requestCloseTab(tab.path);
-        }
-      }
+      await requestCloseOpenTabs(openTabs);
     },
   });
 }

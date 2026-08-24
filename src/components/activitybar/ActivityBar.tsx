@@ -1,9 +1,6 @@
 import React from 'react';
 import {
   Files,
-  Search,
-  GitBranch,
-  BookOpen,
   Brain,
   History,
   PanelLeft
@@ -12,8 +9,6 @@ import { useSidebarStore } from '../../store';
 import styles from './ActivityBar.module.css';
 
 export type ViewType = 'files' | 'search' | 'git' | 'extensions' | 'knowledge' | 'snapshots';
-
-const EXTENSIONS_BADGE_COUNT = 0;
 
 interface ActivityBarProps {
   activeView: ViewType;
@@ -31,11 +26,8 @@ export const ActivityBar = ({
 
   const views: { id: ViewType; icon: React.ReactNode; label: string }[] = [
     { id: 'files', icon: <Files size={22} />, label: '资源管理器' },
-    { id: 'search', icon: <Search size={22} />, label: '搜索' },
-    { id: 'git', icon: <GitBranch size={22} />, label: '源代码管理' },
     { id: 'knowledge', icon: <Brain size={22} />, label: '知识库' },
     { id: 'snapshots', icon: <History size={22} />, label: '快照' },
-    { id: 'extensions', icon: <BookOpen size={22} />, label: '扩展' },
   ];
 
   return (
@@ -49,9 +41,6 @@ export const ActivityBar = ({
             title={view.label}
           >
             {view.icon}
-            {view.id === 'extensions' && EXTENSIONS_BADGE_COUNT > 0 && (
-              <span className={styles.badge}>{EXTENSIONS_BADGE_COUNT}</span>
-            )}
             {view.id === 'knowledge' && knowledgeMemberCount > 0 && (
               <span className={styles.badge}>{knowledgeMemberCount}</span>
             )}

@@ -5,16 +5,15 @@ import {
 } from 'lucide-react';
 import {
   useSidebarStore,
-  useConfirmDialogStore,
   useContextMenuStore,
 } from '../../store';
 import type { OpenTab } from '../../store';
+import { requestCloseOpenTab } from '../../services/openTabLifecycle';
 import { detectFileKind } from '../../types';
 import styles from './TabBar.module.css';
 
 export const TabBar = () => {
-  const { openTabs, activeTabId, setActiveTab, closeTab } = useSidebarStore();
-  const ask = useConfirmDialogStore((s) => s.ask);
+  const { openTabs, activeTabId, setActiveTab } = useSidebarStore();
   const tabBarRef = useRef<HTMLDivElement>(null);
 
   const handleWheel = (e: React.WheelEvent) => {
@@ -42,22 +41,8 @@ export const TabBar = () => {
   const handleCloseTab = async (e: React.MouseEvent, tabId: string) => {
     e.stopPropagation();
     const tab = openTabs.find((item) => item.id === tabId);
-    if (!tab || tab.isSettings || tab.isCloud) {
-      closeTab(tabId);
-      return;
-    }
-    if (tab.isDirty) {
-      const confirmed = await ask({
-        title: '未保存的更改',
-        message: `${tab.name} 有未保存的更改。关闭将丢弃这些更改。`,
-        confirmLabel: '丢弃更改',
-        cancelLabel: '取消',
-        danger: true,
-      });
-      if (confirmed) closeTab(tabId);
-    } else {
-      closeTab(tabId);
-    }
+    if (!tab) return;
+    await requestCloseOpenTab(tab);
   };
 
   if (openTabs.length === 0) {
