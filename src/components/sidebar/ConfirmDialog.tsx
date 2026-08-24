@@ -12,11 +12,14 @@ export const ConfirmDialog = () => {
   const request = useConfirmDialogStore((s) => s.request);
   const close = useConfirmDialogStore((s) => s.close);
   const confirmRef = useRef<HTMLButtonElement | null>(null);
+  const cancelRef = useRef<HTMLButtonElement | null>(null);
 
   useEffect(() => {
     if (request) {
-      // Focus the most-actionable button so Enter immediately resolves.
-      confirmRef.current?.focus();
+      // Destructive/three-way dialogs default to Cancel. This prevents an
+      // accidental Enter from discarding work.
+      if (request.danger || request.secondaryLabel) cancelRef.current?.focus();
+      else confirmRef.current?.focus();
     }
   }, [request]);
 
@@ -25,10 +28,7 @@ export const ConfirmDialog = () => {
       if (!request) return;
       if (e.key === 'Escape') {
         e.preventDefault();
-        close(false);
-      } else if (e.key === 'Enter') {
-        e.preventDefault();
-        close(true);
+        close('cancel');
       }
     },
     [request, close],
@@ -43,6 +43,7 @@ export const ConfirmDialog = () => {
   if (!request || typeof document === 'undefined') return null;
 
   const confirmLabel = request.confirmLabel ?? '确定';
+  const secondaryLabel = request.secondaryLabel;
   const cancelLabel = request.cancelLabel ?? '取消';
   const buttonClass = request.danger ? styles.dangerBtn : styles.confirmBtn;
 
@@ -51,7 +52,7 @@ export const ConfirmDialog = () => {
       className={styles.overlay}
       role="presentation"
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) close(false);
+        if (e.target === e.currentTarget) close('cancel');
       }}
     >
       <div
@@ -68,14 +69,28 @@ export const ConfirmDialog = () => {
           {request.message}
         </div>
         <div className={styles.actions}>
-          <button type="button" className={styles.cancelBtn} onClick={() => close(false)}>
+          <button
+            ref={cancelRef}
+            type="button"
+            className={styles.cancelBtn}
+            onClick={() => close('cancel')}
+          >
             {cancelLabel}
           </button>
+          {secondaryLabel && (
+            <button
+              type="button"
+              className={styles.dangerBtn}
+              onClick={() => close('secondary')}
+            >
+              {secondaryLabel}
+            </button>
+          )}
           <button
             ref={confirmRef}
             type="button"
             className={buttonClass}
-            onClick={() => close(true)}
+            onClick={() => close('confirm')}
           >
             {confirmLabel}
           </button>

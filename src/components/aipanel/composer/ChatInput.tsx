@@ -31,6 +31,7 @@ import {
   appendImagePaths,
   MAX_COMPOSER_IMAGE_ATTACHMENTS,
 } from './imageAttachments';
+import { shouldSubmitComposerMessage } from './composerKeyboard';
 
 import styles from '../AIPanelInput.module.css';
 
@@ -145,7 +146,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({
         value={input}
         onChange={(e) => setInput(e.target.value)}
         onKeyDown={(e) => {
-          if (e.key === 'Enter' && !e.shiftKey) {
+          if (shouldSubmitComposerMessage({
+            key: e.key,
+            shiftKey: e.shiftKey,
+            isComposing: e.nativeEvent.isComposing,
+            keyCode: e.nativeEvent.keyCode,
+          })) {
             e.preventDefault();
             onSend();
           }

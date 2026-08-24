@@ -1,28 +1,19 @@
-import { lazy, Suspense, useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { TitleBar } from '../titlebar/TitleBar';
 import { ActivityBar } from '../activitybar/ActivityBar';
 import { Sidebar } from '../sidebar/Sidebar';
 import { KnowledgeView } from '../sidebar/KnowledgeView';
-import { ConfirmDialog } from '../sidebar/ConfirmDialog';
-import { NotificationStack } from '../sidebar/NotificationStack';
 import { SnapshotPanel } from '../snapshots/SnapshotPanel';
 import { ResizableHandle } from '../resizable';
 import { Editor } from '../editor/Editor';
 import { TabBar } from '../editor/TabBar';
 import { AIPanel } from '../aipanel/AIPanel';
 import { useGlobalKeydown } from '../../hooks/useGlobalKeydown';
-import { useAIPanelStore, useLayoutStore, useNotificationStore } from '../../store';
+import { useAIPanelStore, useLayoutStore } from '../../store';
 import styles from './Layout.module.css';
 
-const PluginManager = lazy(() =>
-  import('../extensions/PluginManager').then((module) => ({ default: module.PluginManager })),
-);
-
-const DISABLED_VIEW_LABELS = {
-  search: '搜索',
-  git: '源代码管理',
-} as const;
+const PUBLIC_SIDEBAR_VIEWS = new Set(['files', 'knowledge', 'snapshots']);
 
 // Bounds MUST stay in sync with `layoutStore.ts` — clamping happens in
 // `applyPanelDelta` below so the CSS variable never escapes the [min, max]
@@ -67,7 +58,6 @@ const applyPanelDelta = (
 
 export const Layout = () => {
   const { isOpen: isAIPanelOpen, togglePanel } = useAIPanelStore();
-  const clearNotifications = useNotificationStore((state) => state.clearNotifications);
   // NOTE: We deliberately do NOT subscribe to `sidebarWidth` / `aipanelWidth`
   // here. The widths are stored in CSS variables and written directly
   // during a drag, so re-rendering this component on every pointer tick
@@ -81,6 +71,13 @@ export const Layout = () => {
     setActiveView,
     toggleSidebar,
   } = useLayoutStore();
+  const visibleActiveView = PUBLIC_SIDEBAR_VIEWS.has(activeView) ? activeView : 'files';
+
+  // Older builds may have persisted one of the experimental views. Recover
+  // to the file browser instead of leaving the user on a hidden placeholder.
+  useEffect(() => {
+    if (visibleActiveView !== activeView) setActiveView('files');
+  }, [activeView, setActiveView, visibleActiveView]);
 
   const handleToggleSidebar = useCallback(() => {
     toggleSidebar();
@@ -187,16 +184,12 @@ export const Layout = () => {
 
   useGlobalKeydown(handleGlobalKeyDown);
 
-  useEffect(() => {
-    clearNotifications();
-  }, [clearNotifications]);
-
   return (
     <div className={styles.layout}>
       <TitleBar />
       <div className={styles.body}>
         <ActivityBar
-          activeView={activeView}
+          activeView={visibleActiveView}
           onViewChange={handleViewChange}
           onToggleSidebar={handleToggleSidebar}
         />
@@ -204,25 +197,12 @@ export const Layout = () => {
         {isSidebarVisible && (
           <>
             <div className={styles.sidebar}>
-              {activeView === 'files' ? (
+              {visibleActiveView === 'files' ? (
                 <Sidebar />
-              ) : activeView === 'knowledge' ? (
+              ) : visibleActiveView === 'knowledge' ? (
                 <KnowledgeView />
-              ) : activeView === 'snapshots' ? (
-                <SnapshotPanel />
-              ) : activeView === 'extensions' ? (
-                <Suspense fallback={(
-                  <div className={styles.placeholder} aria-live="polite">
-                    <p>正在加载插件…</p>
-                  </div>
-                )}>
-                  <PluginManager />
-                </Suspense>
               ) : (
-                <div className={styles.placeholder} aria-live="polite">
-                  <p>{DISABLED_VIEW_LABELS[activeView as keyof typeof DISABLED_VIEW_LABELS]}</p>
-                  <span>该视图暂未开放，当前以禁用状态展示。</span>
-                </div>
+                <SnapshotPanel />
               )}
             </div>
             <ResizableHandle
@@ -254,10 +234,6 @@ export const Layout = () => {
         )}
       </div>
 
-      {/* Global dialog portals — must be rendered outside the sidebar
-          tree so they're available from any view (files, snapshots, etc.). */}
-      <ConfirmDialog />
-      <NotificationStack />
     </div>
   );
 };

@@ -2,9 +2,16 @@ name: ci
 
 on:
   push:
-    branches: [main]
+    branches: [master, "codex/**"]
   pull_request:
-    branches: [main]
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   frontend:
@@ -36,6 +43,9 @@ jobs:
       - name: Test
         run: pnpm test
 
+      - name: Production frontend build
+        run: pnpm build:vite
+
   rust-check:
     name: Rust (check + clippy)
     runs-on: ubuntu-latest
@@ -65,6 +75,10 @@ jobs:
         working-directory: src-tauri
         run: cargo clippy --all-targets -- -D warnings
 
+      - name: Rust tests
+        working-directory: src-tauri
+        run: cargo test --all-targets
+
   cloud-server:
     name: Cloud server (.NET build + test)
     runs-on: ubuntu-latest
@@ -78,16 +92,12 @@ jobs:
 
       - name: Restore
         working-directory: cloud-server
-        run: dotnet restore
+        run: dotnet restore src/Inkuso.Cloud.slnx
 
       - name: Build
         working-directory: cloud-server
-        run: dotnet build --no-restore -c Release --warnaserror
+        run: dotnet build src/Inkuso.Cloud.slnx --no-restore -c Release --warnaserror
 
       - name: Test
         working-directory: cloud-server
-        run: dotnet test --no-build -c Release
-        # Tests will be skipped gracefully if the test project doesn't exist yet
-        # (no projects match the pattern). Once cloud-server tests are added,
-        # this job will run them automatically.
-        continue-on-error: false
+        run: dotnet test src/Inkuso.Cloud.slnx --no-build -c Release

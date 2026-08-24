@@ -2,6 +2,7 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
+using Inkuso.Cloud.Core.Billing;
 using Inkuso.Cloud.Core.Data;
 
 namespace Inkuso.Cloud.Billing.Services;
@@ -10,7 +11,8 @@ public class ReconciliationWorker : BackgroundService
 {
     private readonly IServiceProvider _sp;
     private readonly ILogger<ReconciliationWorker> _logger;
-    private readonly TimeSpan _interval = TimeSpan.FromMinutes(15);
+    private readonly TimeSpan _interval = TimeSpan.FromMinutes(1);
+    private static readonly TimeSpan PendingReservationTtl = TimeSpan.FromMinutes(15);
 
     public ReconciliationWorker(IServiceProvider sp, ILogger<ReconciliationWorker> logger)
     {
@@ -26,6 +28,7 @@ public class ReconciliationWorker : BackgroundService
             {
                 using var scope = _sp.CreateScope();
                 var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                var ledger = scope.ServiceProvider.GetRequiredService<BillingLedger>();
 
                 // Mark expired subscriptions
                 var expired = await db.Subscriptions
@@ -41,7 +44,18 @@ public class ReconciliationWorker : BackgroundService
                 if (expired.Count > 0)
                     await db.SaveChangesAsync(stoppingToken);
 
-                _logger.LogInformation($"Reconciliation pass complete: {expired.Count} subscriptions expired");
+                // Requests normally settle or release in the API process. A host
+                // crash can prevent its finally block from running, so reclaim
+                // only reservations older than the maximum stream lifetime.
+                var releasedReservations = await ledger.ReleaseStaleAsync(
+                    DateTime.UtcNow - PendingReservationTtl,
+                    batchSize: 100,
+                    ct: stoppingToken);
+
+                _logger.LogInformation(
+                    "Reconciliation pass complete: {ExpiredCount} subscriptions expired, {ReleasedCount} stale reservations released",
+                    expired.Count,
+                    releasedReservations);
             }
             catch (Exception ex)
             {
@@ -111,10 +125,10 @@ public static class AdminEndpoints
             var totalUsers = await db.Users.CountAsync();
             var activeSubs = await db.Subscriptions.CountAsync(s => s.Status == "active");
             var monthUsage = await db.UsageRecords
-                .Where(u => u.RecordedAt >= new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1, 0, 0, 0, DateTimeKind.Utc) && u.BillingStatus != "pending")
+                .Where(u => u.RecordedAt >= new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, 1, 0, 0, 0, DateTimeKind.Utc) && u.BillingStatus == "settled")
                 .SumAsync(u => (long?)u.CostPoints) ?? 0L;
             var totalRevenue = await db.UsageRecords
-                .Where(u => u.BillingStatus != "pending")
+                .Where(u => u.BillingStatus == "settled")
                 .SumAsync(u => (long?)u.CostPoints) ?? 0L;
 
             return Results.Ok(new

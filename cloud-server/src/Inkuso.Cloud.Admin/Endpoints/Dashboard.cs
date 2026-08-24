@@ -32,7 +32,9 @@ public static class DashboardEndpoints
             var usedRedemptionCodes = await db.RedemptionCodes.SumAsync(i => (int?)i.UsedCount) ?? 0;
             var suspendedUsers = await db.Users.CountAsync(u => u.IsSuspended);
 
-            var usageQuery = db.UsageRecords.Where(u => u.BillingStatus != "pending");
+            // Revenue means successfully collected points. Debt remains visible
+            // in usage/audit views but must not be reported as collected income.
+            var usageQuery = db.UsageRecords.Where(u => u.BillingStatus == "settled");
             var monthCost = await usageQuery
                 .Where(u => u.RecordedAt >= monthStart)
                 .SumAsync(u => (long?)u.CostPoints) ?? 0L;
@@ -64,7 +66,7 @@ public static class DashboardEndpoints
             var start = DateTime.UtcNow.Date.AddDays(-29);
 
             var records = await db.UsageRecords
-                .Where(u => u.RecordedAt >= start && u.BillingStatus != "pending")
+                .Where(u => u.RecordedAt >= start && u.BillingStatus == "settled")
                 .GroupBy(u => u.RecordedAt.Date)
                 .Select(g => new
                 {
@@ -122,7 +124,7 @@ public static class DashboardEndpoints
             var start = DateTime.UtcNow.Date.AddDays(-29);
 
             var rows = await db.UsageRecords
-                .Where(u => u.RecordedAt >= start && u.BillingStatus != "pending")
+                .Where(u => u.RecordedAt >= start && u.BillingStatus == "settled")
                 .GroupBy(u => u.ModelConfigId)
                 .Select(g => new
                 {

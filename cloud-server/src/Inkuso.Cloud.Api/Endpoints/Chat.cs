@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Inkuso.Cloud.Core.Data;
 using Inkuso.Cloud.Core.Entities;
+using Inkuso.Cloud.Core.Billing;
 using Inkuso.Cloud.Core.Upstream;
 
 namespace Inkuso.Cloud.Api.Endpoints;
@@ -31,6 +32,7 @@ public static class Chat
             HttpContext ctx,
             AppDbContext db,
             LlmForwarder forwarder,
+            BillingLedger ledger,
             ILoggerFactory loggerFactory,
             CancellationToken ct) =>
         {
@@ -84,17 +86,35 @@ public static class Chat
             var maxOutputCap = config.MaxOutputTokens > 0 ? config.MaxOutputTokens : 4096;
             var reservePoints = LlmForwarder.EstimateMaxCostPoints(config, approxPromptTokens, maxOutputCap);
 
-            var requestId = Guid.NewGuid().ToString("N");
-            var reserved = await forwarder.TryReservePointsAsync(userId, config.Id, reservePoints, requestId, ct);
-            if (reserved == 0)
+            var requestId = ctx.Request.Headers["Idempotency-Key"].FirstOrDefault()?.Trim();
+            if (string.IsNullOrWhiteSpace(requestId))
+                requestId = Guid.NewGuid().ToString("N");
+            if (requestId.Length > 64)
+                return Results.BadRequest(new { error = "Idempotency-Key must be at most 64 characters." });
+
+            ctx.Response.Headers["X-Request-Id"] = requestId;
+            var reservation = await ledger.TryReserveAsync(
+                userId, config.Id, reservePoints, requestId, ct);
+            if (reservation.State == BillingLedger.ReservationState.Rejected)
                 return Results.Json(new { error = "Insufficient points balance. Please top up to continue." }, statusCode: 402);
+            if (!reservation.CanForward)
+                return Results.Conflict(new
+                {
+                    error = "duplicate_request",
+                    request_id = requestId,
+                    billing_status = reservation.BillingStatus,
+                });
+
+            var billingFinalized = false;
+            try
+            {
 
             // Rewrite body: force upstream model name + force stream=true +
             // request usage blocks so we can bill. We mutate the original
             // JsonElement tree (instead of round-tripping through object→string
             // →object which would change number precision and string escaping),
             // then serialize once.
-            var newBody = RewriteRequestBody(root, config.ModelName);
+            var newBody = RewriteRequestBody(root, config.ModelName, maxOutputCap);
 
             // Call upstream
             var forwardResult = await forwarder.ForwardStreamAsync(userId, config.Id, newBody, ct);
@@ -149,18 +169,7 @@ public static class Chat
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
-                // Client disconnected: refund the reservation rather than leaving
-                // it held. We don't bill partially-received usage because the
-                // account is in an unsettled state and would otherwise lock out
-                // unrelated subsequent requests.
-                try
-                {
-                    await forwarder.ReleaseReservationAsync(userId, reservePoints, requestId, CancellationToken.None);
-                }
-                catch (Exception ex)
-                {
-                    logger.LogError(ex, "Failed to release reservation after client disconnect: user={UserId}", userId);
-                }
+                // The outer finally releases the hold with a fresh token.
                 return Results.Empty;
             }
 
@@ -170,15 +179,16 @@ public static class Chat
             // Reservation is released (refunded) and the actual cost is debited.
             try
             {
-                var outcome = await forwarder.SettleUsageAsync(
+                using var billingCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                var outcome = await ledger.SettleAsync(
                     userId,
                     config.Id,
                     totalPrompt,
                     totalCompletion,
                     totalCached,
-                    reservePoints,
                     requestId,
-                    ct);
+                    billingCts.Token);
+                billingFinalized = true;
 
                 if (outcome.Status == "debt")
                 {
@@ -188,7 +198,7 @@ public static class Chat
                     // log it instead of trying to rewrite the HTTP status.
                     logger.LogWarning(
                         "User suspended for unpaid usage: user={UserId} model={ModelId} cost_points={Cost} missing={Missing}",
-                        userId, config.Id, outcome.CostPoints, outcome.MissingPoints);
+                        userId, config.Id, outcome.CostPoints, outcome.DebtPoints);
                     await ctx.Response.WriteAsync(
                         $"data: {{\"error\":\"insufficient_points\",\"message\":\"usage_billed_but_balance_short\",\"suspended\":true}}\n\n",
                         ct);
@@ -203,41 +213,51 @@ public static class Chat
             }
 
             return Results.Empty;
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                return Results.Empty;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex,
+                    "Chat request failed after reservation: user={UserId} model={ModelId} request={RequestId}",
+                    userId, config.Id, requestId);
+                if (!ctx.Response.HasStarted)
+                    return Results.Json(
+                        new { error = "upstream_unavailable", request_id = requestId },
+                        statusCode: 502);
+                return Results.Empty;
+            }
+            finally
+            {
+                if (!billingFinalized)
+                {
+                    try
+                    {
+                        using var releaseCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                        await ledger.ReleaseAsync(userId, requestId, releaseCts.Token);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogCritical(ex,
+                            "Reservation cleanup failed: user={UserId} request={RequestId}",
+                            userId, requestId);
+                    }
+                }
+            }
         });
     }
 
     /// <summary>
     /// Rough token estimate for the inbound messages list. We don't have a real
-    /// tokenizer here, so we use a conservative 4 chars/token heuristic
-    /// (CJK-heavy 中文 typically estimates closer to 1.5 chars/token, but 4 is
-    /// safe for "this won't bill less than actual"). Returning a low estimate
-    /// would short-change the reservation and let the user bypass the gate.
+    /// tokenizer here, so we reserve one token per UTF-8 byte of the complete
+    /// request JSON. This deliberately overestimates ASCII and CJK prompts, but
+    /// prevents under-reserving tool definitions, multimodal metadata or Chinese.
     /// </summary>
     private static int EstimatePromptTokens(JsonElement root)
     {
-        if (!root.TryGetProperty("messages", out var messages) || messages.ValueKind != JsonValueKind.Array)
-            return 0;
-        int totalChars = 0;
-        foreach (var message in messages.EnumerateArray())
-        {
-            if (message.TryGetProperty("content", out var content))
-            {
-                if (content.ValueKind == JsonValueKind.String)
-                {
-                    totalChars += content.GetString()?.Length ?? 0;
-                }
-                else if (content.ValueKind == JsonValueKind.Array)
-                {
-                    // OpenAI multimodal: array of {type, text} parts.
-                    foreach (var part in content.EnumerateArray())
-                    {
-                        if (part.TryGetProperty("text", out var text))
-                            totalChars += text.GetString()?.Length ?? 0;
-                    }
-                }
-            }
-        }
-        return totalChars / 4;
+        return Encoding.UTF8.GetByteCount(root.GetRawText());
     }
 
     /// <summary>
@@ -249,7 +269,10 @@ public static class Chat
     /// usage data and the actual token cost would never reach the
     /// settlement code.
     /// </summary>
-    private static string RewriteRequestBody(JsonElement root, string upstreamModelName)
+    private static string RewriteRequestBody(
+        JsonElement root,
+        string upstreamModelName,
+        int maxOutputTokens)
     {
         using var ms = new MemoryStream();
         using (var writer = new Utf8JsonWriter(ms))
@@ -269,9 +292,20 @@ public static class Chat
                 {
                     // Merge the client's stream_options with the required include_usage flag.
                     writer.WriteStartObject("stream_options");
-                    foreach (var sub in prop.Value.EnumerateObject()) sub.WriteTo(writer);
+                    foreach (var sub in prop.Value.EnumerateObject())
+                    {
+                        if (!sub.NameEquals("include_usage")) sub.WriteTo(writer);
+                    }
                     writer.WriteBoolean("include_usage", true);
                     writer.WriteEndObject();
+                }
+                else if (prop.NameEquals("max_tokens") || prop.NameEquals("max_completion_tokens"))
+                {
+                    var requested = prop.Value.ValueKind == JsonValueKind.Number
+                        && prop.Value.TryGetInt32(out var parsed)
+                        ? parsed
+                        : maxOutputTokens;
+                    writer.WriteNumber(prop.Name, Math.Clamp(requested, 1, maxOutputTokens));
                 }
                 else
                 {
@@ -288,6 +322,9 @@ public static class Chat
                 writer.WriteBoolean("include_usage", true);
                 writer.WriteEndObject();
             }
+            if (!root.TryGetProperty("max_tokens", out _)
+                && !root.TryGetProperty("max_completion_tokens", out _))
+                writer.WriteNumber("max_tokens", maxOutputTokens);
             writer.WriteEndObject();
         }
         return Encoding.UTF8.GetString(ms.ToArray());

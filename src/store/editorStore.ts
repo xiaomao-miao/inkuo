@@ -45,8 +45,14 @@ export const editorDiffActions: DiffApplicationActions = {
   applyHunk: (path, hunkId) => {
     useEditorStore.getState().applyHunk(path, hunkId);
   },
+  rejectHunk: (path, hunkId) => {
+    useEditorStore.getState().rejectHunk(path, hunkId);
+  },
   applyAllHunks: (path) => {
     useEditorStore.getState().applyAllHunks(path);
+  },
+  rejectAllHunks: (path) => {
+    useEditorStore.getState().rejectAllHunks(path);
   },
 };
 

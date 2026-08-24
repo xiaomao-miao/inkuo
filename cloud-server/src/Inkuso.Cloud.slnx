@@ -3,4 +3,5 @@
   <Project Path="Inkuso.Cloud.Api/Inkuso.Cloud.Api.csproj" />
   <Project Path="Inkuso.Cloud.Billing/Inkuso.Cloud.Billing.csproj" />
   <Project Path="Inkuso.Cloud.Admin/Inkuso.Cloud.Admin.csproj" />
+  <Project Path="../tests/Inkuso.Cloud.Core.Tests/Inkuso.Cloud.Core.Tests.csproj" />
 </Solution>

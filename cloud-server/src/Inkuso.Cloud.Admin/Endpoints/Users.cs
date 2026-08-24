@@ -157,13 +157,21 @@ public static class AdminUsersEndpoints
             var user = await db.Users.FindAsync(id);
             if (user == null) return Results.NotFound();
 
-            var newBalance = user.BalancePoints + req.DeltaPoints;
-            if (newBalance < 0)
-                return Results.BadRequest(new { error = "Resulting balance would be negative" });
-
-            await db.Users
-                .Where(u => u.Id == id)
+            var updated = await db.Users
+                .Where(u => u.Id == id
+                            && u.BalancePoints + req.DeltaPoints >= 0
+                            && u.BalancePoints + req.DeltaPoints >= u.ReservedPoints)
                 .ExecuteUpdateAsync(s => s.SetProperty(u => u.BalancePoints, u => u.BalancePoints + req.DeltaPoints));
+            if (updated != 1)
+                return Results.BadRequest(new
+                {
+                    error = "Resulting balance cannot be negative or lower than currently reserved points",
+                });
+
+            var newBalance = await db.Users
+                .Where(u => u.Id == id)
+                .Select(u => u.BalancePoints)
+                .SingleAsync();
 
             return Results.Ok(new
             {

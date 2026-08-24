@@ -64,11 +64,15 @@ export const createDiffSlice = (
       };
     }),
   rejectHunk: (sessionId, hunkId) =>
-    set((state) => ({
-      sessions: updateSessions(state.sessions, sessionId, (session) =>
-        updatePendingDiffHunks(session, hunkId)
-      ),
-    })),
+    set((state) => {
+      const diff = state.sessions.find((s) => s.id === sessionId)?.pendingDiff;
+      if (diff?.filePath) applyDiffActions.rejectHunk(diff.filePath, hunkId);
+      return {
+        sessions: updateSessions(state.sessions, sessionId, (session) =>
+          updatePendingDiffHunks(session, hunkId)
+        ),
+      };
+    }),
   acceptAllHunks: (sessionId) =>
     set((state) => {
       const session = state.sessions.find((s) => s.id === sessionId);
@@ -84,10 +88,14 @@ export const createDiffSlice = (
       };
     }),
   rejectAllHunks: (sessionId) =>
-    set((state) => ({
-      sessions: updateSessions(state.sessions, sessionId, (session) => ({
-        ...session,
-        pendingDiff: null,
-      })),
-    })),
+    set((state) => {
+      const diff = state.sessions.find((s) => s.id === sessionId)?.pendingDiff;
+      if (diff?.filePath) applyDiffActions.rejectAllHunks(diff.filePath);
+      return {
+        sessions: updateSessions(state.sessions, sessionId, (session) => ({
+          ...session,
+          pendingDiff: null,
+        })),
+      };
+    }),
 });

@@ -5,6 +5,8 @@ import { WelcomePage } from './components/welcome';
 import { WorkspaceBootstrap } from './components/WorkspaceBootstrap';
 import { FileDropOverlay } from './components/FileDropOverlay';
 import { FloatingAiLayer } from './components/floating-ai';
+import { ConfirmDialog } from './components/sidebar/ConfirmDialog';
+import { NotificationStack } from './components/sidebar/NotificationStack';
 import { useInitialSnapshotLoader } from './hooks/useInitialSnapshotLoader';
 import { useEditorStore } from './store';
 import { useSidebarStore } from './store/sidebarStore';
@@ -85,26 +87,15 @@ function App() {
   // full-tree poll was both costly on large workspaces and redundant with
   // the event-driven watcher.
 
-  // If no workspace is set, show the welcome page
-  if (!workspacePath) {
-    return (
-      <>
-        <WorkspaceBootstrap />
-        <FileDropOverlay />
-        <WelcomePage />
-        <CmdK />
-        <FloatingAiLayer />
-      </>
-    );
-  }
-
   return (
     <>
       <WorkspaceBootstrap />
       <FileDropOverlay />
-      <Layout />
+      {workspacePath ? <Layout /> : <WelcomePage />}
       <CmdK />
       <FloatingAiLayer />
+      <ConfirmDialog />
+      <NotificationStack />
     </>
   );
 }

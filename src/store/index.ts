@@ -29,12 +29,18 @@ export {
   type FloatingAiWindow,
   type FloatingAiStatus,
 } from './floatingAiStore';
-export { useConfirmDialogStore, type ConfirmRequest } from './confirmDialogStore';
+export {
+  useConfirmDialogStore,
+  type ConfirmRequest,
+  type ConfirmDialogResult,
+} from './confirmDialogStore';
 export {
   useEditorHandleStore,
   getEditorCommands,
   getEditorCapabilities,
+  getDocumentSaveHandler,
   type EditorCapabilities,
+  type DocumentSaveHandler,
 } from './editorHandleStore';
 
 export type {

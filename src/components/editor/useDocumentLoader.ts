@@ -3,11 +3,14 @@ import { invoke } from '@tauri-apps/api/core';
 import type { Document } from '../../types';
 import { useEditorStore, useSidebarStore } from '../../store';
 import { reportError } from '../../utils/errors';
+import { shouldApplyDiskDocument } from './documentLoadPolicy';
 
 export function useDocumentLoader(
   selectedFile: string | null,
   cachedDocument: { content: string; mtime: number } | null,
   refreshToken = 0,
+  allowDirtyReload = false,
+  onDirtyConflict?: () => void,
 ) {
   // Assumptions this hook depends on:
   //
@@ -26,6 +29,7 @@ export function useDocumentLoader(
   //
   const setDocumentContent = useEditorStore((state) => state.setDocumentContent);
   const setOpenTabDirty = useSidebarStore((state) => state.setOpenTabDirty);
+  const hasCachedDocument = cachedDocument !== null;
   const cachedMtime = cachedDocument?.mtime ?? 0;
   const lastLoadedRef = useRef<{ path: string; refreshToken: number; mtime: number } | null>(null);
 
@@ -52,17 +56,34 @@ export function useDocumentLoader(
 
         if (cancelled) return;
 
+        const needsReload = !cachedDocument || cachedMtime === 0 || result.mtime !== cachedMtime;
+        if (needsReload) {
+          // Re-check immediately before applying the disk result. The editor
+          // may have become dirty while `read_document` was in flight; using
+          // the render-time `cachedDocument` alone would silently overwrite
+          // those newly typed changes. Initial loads have no local buffer and
+          // are always safe, while an explicit user-approved reload may opt in
+          // to discarding the dirty buffer.
+          const liveTabIsDirty = useSidebarStore.getState().openTabs
+            .some((tab) => tab.path === selectedFile && tab.isDirty);
+          if (!shouldApplyDiskDocument(
+            hasCachedDocument,
+            liveTabIsDirty,
+            allowDirtyReload,
+          )) {
+            onDirtyConflict?.();
+            return;
+          }
+
+          setDocumentContent(selectedFile, result.document, result.content, result.mtime);
+          setOpenTabDirty(selectedFile, false);
+        }
+
         lastLoadedRef.current = {
           path: selectedFile,
           refreshToken,
           mtime: result.mtime,
         };
-
-        const needsReload = !cachedDocument || cachedMtime === 0 || result.mtime !== cachedMtime;
-        if (needsReload) {
-          setDocumentContent(selectedFile, result.document, result.content, result.mtime);
-          setOpenTabDirty(selectedFile, false);
-        }
       } catch (err) {
         reportError('document-load', err);
       }
@@ -73,5 +94,14 @@ export function useDocumentLoader(
     return () => {
       cancelled = true;
     };
-  }, [selectedFile, cachedMtime, refreshToken, setDocumentContent, setOpenTabDirty]);
+  }, [
+    selectedFile,
+    hasCachedDocument,
+    cachedMtime,
+    refreshToken,
+    allowDirtyReload,
+    onDirtyConflict,
+    setDocumentContent,
+    setOpenTabDirty,
+  ]);
 }

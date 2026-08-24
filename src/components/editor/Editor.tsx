@@ -14,6 +14,8 @@ import { InlineCompleteProvider } from '../inline-complete';
 import { useDocumentLoader } from './useDocumentLoader';
 import { useDocumentSave } from './useDocumentSave';
 import { useExternalFileSync } from './useExternalFileSync';
+import { ExternalFileConflictBanner } from './ExternalFileConflictBanner';
+import { decideExternalRefresh } from './externalFileConflict';
 import { createDiffDecorationsField } from './diffDecorationsField';
 import { createEditorExtensions, languageExtensionForKind } from './editorExtensions';
 import { LazyImageViewer, LazyPdfViewer, LazySvgViewer } from './LazyMediaViewers';
@@ -60,6 +62,10 @@ const EditorContent: React.FC<{
   const settings = useSettingsStore((state) => state.settings);
   const setOpenTabDirty = useSidebarStore((state) => state.setOpenTabDirty);
   const [refreshToken, setRefreshToken] = useState(0);
+  const discardDirtyRefreshTokenRef = useRef<number | null>(null);
+  const [hasExternalConflict, setHasExternalConflict] = useState(false);
+  const dirtyStateRef = useRef(isDirty);
+  dirtyStateRef.current = isDirty;
   // Container ref for the editor. The context-menu listener attaches
   // here in capture phase so we always see the event before CM does.
   const editorContainerRef = useRef<HTMLDivElement | null>(null);
@@ -110,13 +116,35 @@ const EditorContent: React.FC<{
   }, [selectedFile, fileKind]);
 
   const requestDocumentRefresh = useCallback(() => {
+    const decision = decideExternalRefresh(dirtyStateRef.current, false);
+    if (decision === 'show-conflict') {
+      setHasExternalConflict(true);
+      return;
+    }
     setRefreshToken((current) => current + 1);
+  }, []);
+
+  const handleDirtyLoadConflict = useCallback(() => {
+    setHasExternalConflict(true);
+  }, []);
+
+  const handleKeepLocalVersion = useCallback(() => {
+    setHasExternalConflict(false);
+  }, []);
+
+  const handleReloadExternalVersion = useCallback(() => {
+    setHasExternalConflict(false);
+    setRefreshToken((current) => {
+      const next = current + 1;
+      discardDirtyRefreshTokenRef.current = next;
+      return next;
+    });
   }, []);
 
   useDocumentLoader(selectedFile, currentMetadata ? {
     content: currentMetadata.content,
     mtime: currentMetadata.mtime,
-  } : null, refreshToken);
+  } : null, refreshToken, discardDirtyRefreshTokenRef.current === refreshToken, handleDirtyLoadConflict);
   useExternalFileSync(selectedFile, requestDocumentRefresh);
   const handleSave = useDocumentSave(selectedFile, currentContent, isDirty);
   // Subscribe to the editor handle store's setters so we can publish
@@ -457,6 +485,13 @@ const EditorContent: React.FC<{
 
   return (
     <div ref={editorContainerRef} className={`${styles.editorContainer} editorContainer`} data-inline-complete-styles={inlineCompleteStyles}>
+      {hasExternalConflict && selectedFile && (
+        <ExternalFileConflictBanner
+          fileName={selectedFile.split(/[\\/]/).pop() ?? selectedFile}
+          onKeepLocal={handleKeepLocalVersion}
+          onReloadFromDisk={handleReloadExternalVersion}
+        />
+      )}
       <EditorBody
         inPreviewMode={inPreviewMode}
         currentContent={currentContent}

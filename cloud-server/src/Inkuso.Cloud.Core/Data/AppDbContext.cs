@@ -93,6 +93,10 @@ public class AppDbContext : DbContext
                 .HasForeignKey(u => u.ModelConfigId)
                 .OnDelete(DeleteBehavior.Restrict);
             e.HasIndex(u => new { u.UserId, u.RecordedAt });
+            // A request is a single immutable billing lifecycle. This unique
+            // key is the database backstop for retry/idempotency races.
+            e.HasIndex(u => new { u.UserId, u.RequestId }).IsUnique();
+            e.Property(u => u.RequestId).HasMaxLength(64);
             e.Property(u => u.BillingStatus).HasMaxLength(16);
         });
 

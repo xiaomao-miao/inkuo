@@ -218,7 +218,9 @@ export interface AIPanelDiffSlice {
 
 export interface DiffApplicationActions {
   applyHunk: (path: string, hunkId: string) => void;
+  rejectHunk: (path: string, hunkId: string) => void;
   applyAllHunks: (path: string) => void;
+  rejectAllHunks: (path: string) => void;
 }
 
 export type AIPanelState =

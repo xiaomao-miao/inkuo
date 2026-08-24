@@ -384,6 +384,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             newText={pendingDiff.newText}
             sessionId={sessionId}
             isStreaming={isStreaming}
+            pendingDiff={pendingDiff}
           />
         )}
 

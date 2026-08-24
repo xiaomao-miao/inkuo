@@ -8,6 +8,7 @@ using Inkuso.Cloud.Core.Auth;
 using Inkuso.Cloud.Core.Data;
 using Inkuso.Cloud.Core.Security;
 using Inkuso.Cloud.Core.Upstream;
+using Inkuso.Cloud.Core.Billing;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -102,6 +103,7 @@ builder.Services.AddHttpClient("upstream-search");
 
 // LLM forwarder
 builder.Services.AddScoped<LlmForwarder>();
+builder.Services.AddScoped<BillingLedger>();
 // Web search forwarder: scoped (mirrors LlmForwarder) so it can pick up
 // the latest provider config from the DbContext on every call without
 // a stale-cache surprise when the operator pastes a new API key.
