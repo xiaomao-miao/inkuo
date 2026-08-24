@@ -64,8 +64,6 @@ const EditorContent: React.FC<{
   const [refreshToken, setRefreshToken] = useState(0);
   const discardDirtyRefreshTokenRef = useRef<number | null>(null);
   const [hasExternalConflict, setHasExternalConflict] = useState(false);
-  const dirtyStateRef = useRef(isDirty);
-  dirtyStateRef.current = isDirty;
   // Container ref for the editor. The context-menu listener attaches
   // here in capture phase so we always see the event before CM does.
   const editorContainerRef = useRef<HTMLDivElement | null>(null);
@@ -84,6 +82,8 @@ const EditorContent: React.FC<{
   const currentDiff = currentDoc?.diff;
   const currentContent = currentMetadata?.content ?? '';
   const isDirty = currentMetadata?.isDirty ?? false;
+  const dirtyStateRef = useRef(isDirty);
+  dirtyStateRef.current = isDirty;
   const diffHunks = useMemo(() => currentDiff?.hunks ?? [], [currentDiff?.hunks]);
   const isDiffMode = currentDiff?.isActive || false;
   const selection = currentMetadata?.selection ?? null;

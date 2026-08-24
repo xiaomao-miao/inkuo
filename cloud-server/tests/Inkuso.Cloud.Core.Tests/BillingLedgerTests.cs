@@ -10,6 +10,37 @@ namespace Inkuso.Cloud.Core.Tests;
 public sealed class BillingLedgerTests
 {
     [Fact]
+    public async Task Duplicate_Reservation_Does_Not_Freeze_Twice()
+    {
+        await using var fixture = await LedgerFixture.CreateAsync();
+
+        var first = await fixture.Ledger.TryReserveAsync(
+            fixture.UserId, fixture.ModelId, 300, "same-request", default);
+        var duplicate = await fixture.Ledger.TryReserveAsync(
+            fixture.UserId, fixture.ModelId, 300, "same-request", default);
+
+        Assert.Equal(BillingLedger.ReservationState.Reserved, first.State);
+        Assert.Equal(BillingLedger.ReservationState.AlreadyPending, duplicate.State);
+        await fixture.AssertUserAsync(balance: 1_000, reserved: 300);
+        Assert.Equal(1, await fixture.Db.UsageRecords.CountAsync());
+    }
+
+    [Fact]
+    public async Task Reservation_Rejects_When_Available_Balance_Is_Too_Low()
+    {
+        await using var fixture = await LedgerFixture.CreateAsync();
+
+        await fixture.Ledger.TryReserveAsync(
+            fixture.UserId, fixture.ModelId, 700, "first-hold", default);
+        var rejected = await fixture.Ledger.TryReserveAsync(
+            fixture.UserId, fixture.ModelId, 400, "second-hold", default);
+
+        Assert.Equal(BillingLedger.ReservationState.Rejected, rejected.State);
+        await fixture.AssertUserAsync(balance: 1_000, reserved: 700);
+        Assert.Equal(1, await fixture.Db.UsageRecords.CountAsync());
+    }
+
+    [Fact]
     public async Task Release_Does_Not_Mint_Balance_And_Is_Idempotent()
     {
         await using var fixture = await LedgerFixture.CreateAsync();
@@ -79,6 +110,23 @@ public sealed class BillingLedgerTests
         Assert.Equal(800, user.BalancePoints);
         Assert.Equal(0, user.ReservedPoints);
         Assert.True(user.IsSuspended);
+    }
+
+    [Fact]
+    public async Task Zero_Cost_Settlement_Releases_Hold_Without_Charging()
+    {
+        await using var fixture = await LedgerFixture.CreateAsync();
+        await fixture.Ledger.TryReserveAsync(
+            fixture.UserId, fixture.ModelId, 400, "zero-cost", default);
+
+        var result = await fixture.Ledger.SettleAsync(
+            fixture.UserId, fixture.ModelId,
+            promptTokens: 0, completionTokens: 0, cachedPromptTokens: 0,
+            requestId: "zero-cost", ct: default);
+
+        Assert.Equal("released", result.Status);
+        Assert.Equal(0L, result.CostPoints);
+        await fixture.AssertUserAsync(balance: 1_000, reserved: 0);
     }
 
     [Fact]

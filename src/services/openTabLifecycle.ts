@@ -179,6 +179,11 @@ export async function confirmWindowClose(): Promise<boolean> {
 
   const choice = await askHowToClose(dirtyTabs);
   if (choice === 'cancel') return false;
+  // Do not clear in-memory buffers for a window-level discard. Native close
+  // can still fail; mutating the stores before it succeeds would erase the
+  // only recoverable copy while leaving the window open. A restored snapshot
+  // may briefly retain a stale dirty marker, but the disk load safely resets
+  // that marker and never loses user content in the current process.
   if (choice === 'discard') return true;
   return saveDirtyTabs(dirtyTabs);
 }

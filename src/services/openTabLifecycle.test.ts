@@ -120,6 +120,19 @@ describe('open tab lifecycle', () => {
     expect(useSidebarStore.getState().openTabs).toHaveLength(1);
   });
 
+  it('keeps recoverable buffers intact until native window close succeeds', async () => {
+    const tab = fileTab();
+    installTabs([tab]);
+
+    const closing = confirmWindowClose();
+    useConfirmDialogStore.getState().close('secondary');
+
+    await expect(closing).resolves.toBe(true);
+    // If native close subsequently fails, the app can still prompt/save this
+    // tab instead of having destroyed its only in-memory state.
+    expect(useSidebarStore.getState().openTabs[0].isDirty).toBe(true);
+  });
+
   it('does not let an old cleanup remove a replacement save handler', () => {
     const path = '/workspace/a.docx';
     const oldHandler = vi.fn(async () => true);

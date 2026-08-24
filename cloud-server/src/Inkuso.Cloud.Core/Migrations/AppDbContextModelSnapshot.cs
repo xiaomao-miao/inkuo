@@ -527,7 +527,8 @@ namespace Inkuso.Cloud.Core.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("RequestId")
-                        .HasColumnType("text");
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
 
                     b.Property<long?>("ReservedPoints")
                         .HasColumnType("bigint");
@@ -540,6 +541,9 @@ namespace Inkuso.Cloud.Core.Migrations
                     b.HasIndex("ModelConfigId");
 
                     b.HasIndex("UserId", "RecordedAt");
+
+                    b.HasIndex("UserId", "RequestId")
+                        .IsUnique();
 
                     b.ToTable("UsageRecords");
                 });

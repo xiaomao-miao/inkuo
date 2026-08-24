@@ -45,7 +45,16 @@ public static class Chat
             if (string.IsNullOrWhiteSpace(rawBody))
                 return Results.BadRequest(new { error = "Empty body" });
 
-            using var doc = JsonDocument.Parse(rawBody);
+            JsonDocument parsedBody;
+            try
+            {
+                parsedBody = JsonDocument.Parse(rawBody);
+            }
+            catch (JsonException)
+            {
+                return Results.BadRequest(new { error = "Request body must be valid JSON." });
+            }
+            using var doc = parsedBody;
             var root = doc.RootElement;
 
             var requestedModel = root.TryGetProperty("model", out var m) ? m.GetString() : null;
@@ -174,9 +183,9 @@ public static class Chat
             }
 
             // --- Settle billing ---
-            // Even if the upstream returned zero tokens we still write a settled
-            // row so the audit trail reflects the full lifecycle. The
-            // Reservation is released (refunded) and the actual cost is debited.
+            // Even if the upstream returned zero tokens we still finalize the
+            // audit row. Settlement releases the hold and debits only the actual
+            // collected cost; it never credits BalancePoints.
             try
             {
                 using var billingCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));

@@ -95,6 +95,22 @@ public sealed class BillingLedger(AppDbContext db)
                 pointsToReserve,
                 usage.BillingStatus);
         }
+        catch (DbUpdateException)
+        {
+            await tx.RollbackAsync(ct);
+            // A concurrent retry can pass the optimistic pre-check and then
+            // lose the unique (UserId, RequestId) insert race. Detach the
+            // failed Added entity and resolve the winner as an idempotent
+            // duplicate instead of surfacing a 500 or forwarding twice.
+            db.ChangeTracker.Clear();
+            var winner = await db.UsageRecords.AsNoTracking()
+                .SingleOrDefaultAsync(
+                    r => r.UserId == userId && r.RequestId == requestId,
+                    ct);
+            if (winner != null)
+                return ExistingReservation(winner);
+            throw;
+        }
         catch
         {
             await tx.RollbackAsync(ct);
@@ -234,6 +250,7 @@ public sealed class BillingLedger(AppDbContext db)
             .ToListAsync(ct);
 
         var released = 0;
+        List<Exception>? failures = null;
         foreach (var id in ids)
         {
             await using var tx = await db.Database.BeginTransactionAsync(ct);
@@ -257,12 +274,24 @@ public sealed class BillingLedger(AppDbContext db)
                     await tx.RollbackAsync(ct);
                 }
             }
-            catch
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 await tx.RollbackAsync(ct);
                 throw;
             }
+            catch (Exception ex)
+            {
+                await tx.RollbackAsync(CancellationToken.None);
+                failures ??= [];
+                failures.Add(ex);
+                // One damaged account must not prevent unrelated stale holds
+                // later in the batch from being released.
+            }
         }
+        if (failures is { Count: > 0 })
+            throw new AggregateException(
+                $"Failed to reconcile {failures.Count} stale billing reservation(s).",
+                failures);
         return released;
     }
 
