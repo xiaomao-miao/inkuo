@@ -2,6 +2,7 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Inkuso.Cloud.Core.Billing;
 using Inkuso.Cloud.Core.Data;
 
 namespace Inkuso.Cloud.Api.Endpoints;
@@ -9,96 +10,153 @@ namespace Inkuso.Cloud.Api.Endpoints;
 public static class Redeem
 {
     public record RedeemRequest(string Code);
-    public record RedeemResult(string Message, long NewBalancePoints, long GrantedPoints, string? PlanName, int? SubscriptionDaysAdded);
+    public record RedeemResult(
+        string Message,
+        long NewBalancePoints,
+        long GrantedPoints,
+        long RemainingDebtPoints,
+        bool IsSuspended,
+        string? PlanName,
+        int? SubscriptionDaysAdded);
 
     public static void MapRedeemEndpoints(this WebApplication app)
     {
         var group = app.MapGroup("/redeem").WithTags("redeem").RequireAuthorization();
 
-        group.MapPost("/", async (RedeemRequest req, HttpContext ctx, AppDbContext db) =>
+        group.MapPost("/", async (
+            RedeemRequest req,
+            HttpContext ctx,
+            AppDbContext db,
+            CancellationToken ct) =>
         {
             var userId = Guid.Parse(ctx.User.FindFirst(ClaimTypes.NameIdentifier)!.Value);
+            var normalizedCode = (req.Code ?? string.Empty).Trim();
+            if (normalizedCode.Length == 0)
+                return Results.BadRequest(new { error = "Code is required" });
 
-            // Atomically reserve a use of the redemption code. The conditional
-            // UPDATE guards against two concurrent callers both passing the
-            // UsedCount < MaxUses check that the previous implementation did
-            // in C# — the original bug let two users redeem a single-use code
-            // if they raced within the same millisecond.
-            var reservation = await db.RedemptionCodes
-                .Where(r => r.Code == req.Code && r.Enabled
-                    && (r.ExpiresAt == null || r.ExpiresAt > DateTime.UtcNow)
-                    && r.UsedCount < r.MaxUses)
-                .ExecuteUpdateAsync(s => s.SetProperty(r => r.UsedCount, r => r.UsedCount + 1));
+            var user = await db.Users.FindAsync(new object[] { userId }, ct);
+            if (user is null) return Results.Unauthorized();
 
-            if (reservation == 0)
-                return Results.BadRequest(new { error = "Invalid or exhausted redemption code" });
-
-            var code = await db.RedemptionCodes
-                .Include(r => r.Plan)
-                .FirstOrDefaultAsync(r => r.Code == req.Code);
-
-            // We just bumped UsedCount, so even if the reservation above
-            // succeeded the row might still be missing if a parallel admin
-            // hard-deleted it. Treat that as "no longer valid".
-            if (code is null)
-                return Results.BadRequest(new { error = "Invalid or exhausted redemption code" });
-
-            long grantedPoints = 0;
-            int? subscriptionDaysAdded = null;
-
-            // --- Plan grant ---
-            string? newPlan = null;
-            if (code.PlanId != null && code.Plan != null)
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
+            try
             {
-                var existingSub = await db.Subscriptions
-                    .Where(s => s.UserId == userId && s.Status == "active" && s.ExpiresAt > DateTime.UtcNow)
-                    .OrderByDescending(s => s.ExpiresAt)
-                    .FirstOrDefaultAsync();
 
-                var startAt = existingSub != null && existingSub.ExpiresAt > DateTime.UtcNow
-                    ? existingSub.ExpiresAt
-                    : DateTime.UtcNow;
+                // The use counter, subscription, and credit grant commit as one
+                // unit. A later write failure must not consume a limited code.
+                var reservation = await db.RedemptionCodes
+                    .Where(r => r.Code == normalizedCode && r.Enabled
+                        && (r.ExpiresAt == null || r.ExpiresAt > DateTime.UtcNow)
+                        && r.UsedCount < r.MaxUses)
+                    .ExecuteUpdateAsync(s => s.SetProperty(
+                        r => r.UsedCount,
+                        r => r.UsedCount + 1), ct);
 
-                db.Subscriptions.Add(new Core.Entities.Subscription
+                if (reservation == 0)
                 {
-                    UserId = userId,
-                    PlanId = code.Plan.Id,
-                    StartedAt = startAt,
-                    ExpiresAt = startAt.AddMonths(1),
-                    Status = "active",
-                });
+                    await tx.RollbackAsync(ct);
+                    return Results.BadRequest(new { error = "Invalid or exhausted redemption code" });
+                }
 
-                newPlan = code.Plan.Name;
-                subscriptionDaysAdded = 30;
+                var code = await db.RedemptionCodes.AsNoTracking()
+                    .Include(r => r.Plan)
+                    .FirstOrDefaultAsync(r => r.Code == normalizedCode, ct);
+
+                // We just bumped UsedCount, so this should be impossible unless
+                // the row was removed by an administrative race.
+                if (code is null)
+                    throw new InvalidOperationException("Reserved redemption code disappeared.");
+                if (BillingLimits.ValidatePointGrant(code.CreditPoints, allowZero: true) is not null)
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.Json(
+                        new { error = "Redemption code is temporarily unavailable; contact support." },
+                        statusCode: 503);
+                }
+                if (code.CreditPoints == 0 && (code.PlanId is null || code.Plan is null))
+                {
+                    await tx.RollbackAsync(ct);
+                    return Results.Json(
+                        new { error = "Redemption code is temporarily unavailable; contact support." },
+                        statusCode: 503);
+                }
+
+                long grantedPoints = 0;
+                int? subscriptionDaysAdded = null;
+
+                // --- Plan grant ---
+                string? newPlan = null;
+                if (code.PlanId != null && code.Plan != null)
+                {
+                    var existingSub = await db.Subscriptions
+                        .Where(s => s.UserId == userId
+                                    && s.Status == "active"
+                                    && s.ExpiresAt > DateTime.UtcNow)
+                        .OrderByDescending(s => s.ExpiresAt)
+                        .FirstOrDefaultAsync(ct);
+
+                    var startAt = existingSub != null && existingSub.ExpiresAt > DateTime.UtcNow
+                        ? existingSub.ExpiresAt
+                        : DateTime.UtcNow;
+
+                    db.Subscriptions.Add(new Core.Entities.Subscription
+                    {
+                        UserId = userId,
+                        PlanId = code.Plan.Id,
+                        StartedAt = startAt,
+                        ExpiresAt = startAt.AddMonths(1),
+                        Status = "active",
+                    });
+
+                    newPlan = code.Plan.Name;
+                    subscriptionDaysAdded = 30;
+                }
+
+                // --- Credit grant (atomic add) ---
+                if (code.CreditPoints > 0)
+                {
+                    grantedPoints = code.CreditPoints;
+                    var credited = await AccountCredit.ApplyAsync(
+                        db,
+                        userId,
+                        grantedPoints,
+                        ct);
+                    if (credited is null)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return Results.Conflict(new
+                        {
+                            error = "account_balance_limit",
+                            message = "This credit would exceed the account balance limit. Contact support before retrying.",
+                        });
+                    }
+                }
+
+                await db.SaveChangesAsync(ct);
+                await tx.CommitAsync(ct);
+
+                // ExecuteUpdate bypasses the tracked entity; reload after commit
+                // so the response reports the actual concurrent-safe balance.
+                await db.Entry(user).ReloadAsync(ct);
+
+                var message = code.PlanId != null
+                    ? "Subscription activated"
+                    : user.DebtPoints > 0
+                        ? "Credit applied to outstanding usage; account remains suspended"
+                        : "Credit added; account active";
+                return Results.Ok(new RedeemResult(
+                    message,
+                    user.BalancePoints,
+                    grantedPoints,
+                    user.DebtPoints,
+                    user.IsSuspended,
+                    newPlan,
+                    subscriptionDaysAdded));
             }
-
-            // --- Credit grant (atomic add) ---
-            // We use a single conditional UPDATE rather than read-modify-write
-            // so a concurrent redemption can't lose the grant under a stale
-            // balance snapshot. The reservation we made above (UsedCount++) still
-            // owns the "this was a valid grant" — if the credit add fails, the
-            // user gets a plan but no points, which is consistent with the code
-            // being applied for both at the same time.
-            var user = await db.Users.FindAsync(userId);
-            if (code.CreditPoints > 0 && user != null)
+            catch
             {
-                grantedPoints = code.CreditPoints;
-                await db.Users
-                    .Where(u => u.Id == userId)
-                    .ExecuteUpdateAsync(s => s.SetProperty(u => u.BalancePoints, u => u.BalancePoints + grantedPoints));
+                await tx.RollbackAsync(CancellationToken.None);
+                throw;
             }
-
-            await db.SaveChangesAsync();
-
-            // Re-fetch to report the accurate final balance.
-            if (user != null) await db.Entry(user).ReloadAsync();
-
-            return Results.Ok(new RedeemResult(
-                code.PlanId != null ? "Subscription activated" : "Credit added",
-                user?.BalancePoints ?? 0,
-                grantedPoints,
-                newPlan,
-                subscriptionDaysAdded));
         });
     }
 }

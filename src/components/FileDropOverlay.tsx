@@ -46,7 +46,8 @@ export function FileDropOverlay() {
         const sidebar = useSidebarStore.getState();
         const plan = planFileDrop(validEntries, sidebar.workspacePath);
         if (plan.workspaceToOpen) {
-          await switchWorkspace(plan.workspaceToOpen);
+          const switched = await switchWorkspace(plan.workspaceToOpen);
+          if (!switched) return;
           await applyWorkspaceDirectoryLoad(plan.workspaceToOpen, {
             mergeWithExisting: false,
             showSkeleton: true,

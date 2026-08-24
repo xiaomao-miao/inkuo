@@ -25,9 +25,18 @@ export async function persistDocument(options: {
 
     const editorStore = useEditorStore.getState();
     const sidebarStore = useSidebarStore.getState();
-    editorStore.markSaved(path);
-    editorStore.updateTabDirty(path, false);
-    sidebarStore.setOpenTabDirty(path, false);
+    const liveDocument = editorStore.documentContents[path];
+    // The write is asynchronous. If the user typed again while it was in
+    // flight, disk contains `content` but the editor contains a newer value;
+    // never mark that newer buffer clean. A future save will persist it.
+    if (liveDocument && liveDocument.metadata.content === content) {
+      editorStore.markSaved(path);
+      editorStore.updateTabDirty(path, false);
+      sidebarStore.setOpenTabDirty(path, false);
+    } else if (liveDocument) {
+      editorStore.updateTabDirty(path, true);
+      sidebarStore.setOpenTabDirty(path, true);
+    }
 
     return { ok: true };
   } catch (error) {

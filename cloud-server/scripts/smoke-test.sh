@@ -1,18 +1,15 @@
 #!/usr/bin/env bash
 # End-to-end smoke test for the inkuo Cloud Server stack (API + Billing + Admin).
-# Run after `docker compose up -d --build` and assuming:
-#   POSTGRES_PASSWORD=inkuo_dev_pwd (or whatever you set in .env)
-#   JWT_SECRET=test-jwt-secret-32-chars-or-longer-for-dev-only
-#   ADMIN_TOKEN=test-admin-token
-#   ADMIN_SEED_PASSWORD=admin123
+# Run after `docker compose up -d --build`. Export the same explicit
+# bootstrap credentials used by the Admin container; this script has no
+# built-in production or test password.
 set -euo pipefail
 
-BASE=http://localhost:8080
-BILLING=http://localhost:8081
-ADMIN_PANEL=http://localhost:8082
-ADMIN_TOKEN=test-admin-token
-ADMIN_USER=admin
-ADMIN_PASS=admin123
+BASE=${BASE:-http://localhost:8080}
+BILLING=${BILLING:-http://localhost:8081}
+ADMIN_PANEL=${ADMIN_PANEL:-http://localhost:8082}
+ADMIN_USER=${ADMIN_SEED_USERNAME:?export ADMIN_SEED_USERNAME before running the smoke test}
+ADMIN_PASS=${ADMIN_SEED_PASSWORD:?export ADMIN_SEED_PASSWORD before running the smoke test}
 
 red()    { printf '\033[31m%s\033[0m\n' "$*" >&2; }
 green()  { printf '\033[32m%s\033[0m\n' "$*"; }
@@ -35,79 +32,80 @@ check "admin health"    curl -fsS "$ADMIN_PANEL/health" >/dev/null
 check "admin SPA index" curl -fsS "$ADMIN_PANEL/" >/dev/null
 
 echo "==> 2. Admin login"
-ADMIN_LOGIN=$(curl -sS -X POST $ADMIN_PANEL/api/auth/login \
+ADMIN_LOGIN=$(curl -fsS -X POST "$ADMIN_PANEL/api/auth/login" \
   -H "Content-Type: application/json" \
   -d "{\"username\":\"$ADMIN_USER\",\"password\":\"$ADMIN_PASS\"}")
-ADMIN_JWT=$(echo "$ADMIN_LOGIN" | python3 -c "import sys, json; print(json.load(sys.stdin)['accessToken'])")
+ADMIN_JWT=$(echo "$ADMIN_LOGIN" | python3 -c "import sys, json; print(json.load(sys.stdin)['access_token'])")
 [ -n "$ADMIN_JWT" ] && green "  ✓ admin JWT obtained"
 
 echo "==> 3. Admin /me"
-curl -sS $ADMIN_PANEL/api/auth/me -H "Authorization: Bearer $ADMIN_JWT" | python3 -m json.tool
+curl -fsS "$ADMIN_PANEL/api/auth/me" -H "Authorization: Bearer $ADMIN_JWT" | python3 -m json.tool
 
 echo "==> 4. Admin dashboard summary"
-curl -sS $ADMIN_PANEL/api/dashboard/summary -H "Authorization: Bearer $ADMIN_JWT" | python3 -m json.tool
+curl -fsS "$ADMIN_PANEL/api/dashboard/summary" -H "Authorization: Bearer $ADMIN_JWT" | python3 -m json.tool
 
 echo "==> 5. Admin plans list"
-curl -sS $ADMIN_PANEL/api/plans/ -H "Authorization: Bearer $ADMIN_JWT" | \
+curl -fsS "$ADMIN_PANEL/api/plans/" -H "Authorization: Bearer $ADMIN_JWT" | \
   python3 -c "import sys, json; d=json.load(sys.stdin); print('  ', len(d), 'plans:', ', '.join(p['name'] for p in d))"
 
 echo "==> 6. Admin model-configs list (key masked)"
-curl -sS $ADMIN_PANEL/api/model-configs/ -H "Authorization: Bearer $ADMIN_JWT" | \
-  python3 -c "import sys, json; d=json.load(sys.stdin); print('  ', len(d), 'models'); [print('   -', m['displayName'], '|', m['upstreamProvider'], '| key=', m['upstreamApiKeyMasked'] or '(empty)') for m in d]"
+curl -fsS "$ADMIN_PANEL/api/model-configs/" -H "Authorization: Bearer $ADMIN_JWT" | \
+  python3 -c "import sys, json; d=json.load(sys.stdin); print('  ', len(d), 'models'); [print('   -', m['display_name'], '|', m['upstream_provider'], '| key=', m['upstream_api_key_masked'] or '(empty)') for m in d]"
 
-echo "==> 7. Admin: create invite code"
-curl -sS -X POST $ADMIN_PANEL/api/invite-codes/ \
+echo "==> 7. Admin: create one-use invite code"
+INVITE_CODE="SMOKE-INVITE-$(date +%s)-$RANDOM"
+curl -fsS -X POST "$ADMIN_PANEL/api/invite-codes/" \
   -H "Authorization: Bearer $ADMIN_JWT" \
   -H "Content-Type: application/json" \
-  -d "{\"code\":\"SMOKE-$(date +%s)\",\"freeQuotaCents\":100,\"maxUses\":5,\"enabled\":true}" | python3 -m json.tool
+  -d "{\"code\":\"$INVITE_CODE\",\"free_points\":1000,\"max_uses\":1,\"expires_at\":null,\"enabled\":true}" | python3 -m json.tool
 
 echo "==> 8. Admin: create redemption code"
-CODE=$(curl -sS -X POST $ADMIN_PANEL/api/redemption-codes/ \
+CODE=$(curl -fsS -X POST "$ADMIN_PANEL/api/redemption-codes/" \
   -H "Authorization: Bearer $ADMIN_JWT" \
   -H "Content-Type: application/json" \
-  -d "{\"code\":\"SMOKE-$(date +%s)\",\"creditCents\":500,\"maxUses\":1,\"enabled\":true}" | python3 -c "import sys, json; print(json.load(sys.stdin)['code'])")
+  -d "{\"code\":\"SMOKE-REDEEM-$(date +%s)-$RANDOM\",\"credit_points\":5000,\"plan_id\":null,\"max_uses\":1,\"expires_at\":null,\"enabled\":true}" | python3 -c "import sys, json; print(json.load(sys.stdin)['code'])")
 green "  created code: $CODE"
 
-echo "==> 9. Customer register via INKUO2026 invite"
+echo "==> 9. Customer registers via the one-use smoke invite"
 EMAIL="smoke-$(date +%s)@example.com"
-RESP=$(curl -sS -X POST $BASE/auth/register \
+RESP=$(curl -fsS -X POST "$BASE/auth/register" \
   -H "Content-Type: application/json" \
-  -d "{\"inviteCode\":\"INKUO2026\",\"email\":\"$EMAIL\",\"password\":\"smoke-pass-123\"}")
-echo "$RESP" | python3 -c "import sys, json; d=json.load(sys.stdin); print('  user_id=', d['user']['id'], 'balance=', d['user']['balanceCents'])"
-TOKEN=$(echo "$RESP" | python3 -c "import sys, json; print(json.load(sys.stdin)['accessToken'])")
-RT=$(echo "$RESP" | python3 -c "import sys, json; print(json.load(sys.stdin)['refreshToken'])")
+  -d "{\"invite_code\":\"$INVITE_CODE\",\"email\":\"$EMAIL\",\"password\":\"smoke-pass-123\"}")
+echo "$RESP" | python3 -c "import sys, json; d=json.load(sys.stdin); print('  user_id=', d['user']['id'], 'balance_points=', d['user']['balance_points'])"
+TOKEN=$(echo "$RESP" | python3 -c "import sys, json; print(json.load(sys.stdin)['access_token'])")
+RT=$(echo "$RESP" | python3 -c "import sys, json; print(json.load(sys.stdin)['refresh_token'])")
 
 echo "==> 10. Customer login + refresh"
-curl -sS -X POST $BASE/auth/login \
+curl -fsS -X POST "$BASE/auth/login" \
   -H "Content-Type: application/json" \
   -d "{\"email\":\"$EMAIL\",\"password\":\"smoke-pass-123\"}" >/dev/null && green "  ✓ login OK"
-curl -sS -X POST $BASE/auth/refresh \
+curl -fsS -X POST "$BASE/auth/refresh" \
   -H "Content-Type: application/json" \
-  -d "{\"refreshToken\":\"$RT\"}" >/dev/null && green "  ✓ refresh OK"
+  -d "{\"refresh_token\":\"$RT\"}" >/dev/null && green "  ✓ refresh OK"
 
 echo "==> 11. Customer lists cloud models"
-curl -sS $BASE/v1/models -H "Authorization: Bearer $TOKEN" | \
-  python3 -c "import sys, json; d=json.load(sys.stdin)['data']; print('  ', len(d), 'models:', ', '.join(m['displayName'] for m in d))"
+curl -fsS "$BASE/v1/models" -H "Authorization: Bearer $TOKEN" | \
+  python3 -c "import sys, json; d=json.load(sys.stdin)['data']; print('  ', len(d), 'models:', ', '.join(m['display_name'] for m in d))"
 
 echo "==> 12. Customer redeems admin-issued code"
-curl -sS -X POST $BASE/redeem \
+curl -fsS -X POST "$BASE/redeem" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d "{\"code\":\"$CODE\"}" | python3 -m json.tool
 
 echo "==> 13. Admin lists users (should now see the new customer)"
-curl -sS "$ADMIN_PANEL/api/users/?pageSize=5" -H "Authorization: Bearer $ADMIN_JWT" | \
-  python3 -c "import sys, json; d=json.load(sys.stdin); print('  ', d['total'], 'users total'); [print('   -', u['email'], '| balance ¥', u['balanceCents']/100, '| plan:', u['planName']) for u in d['items']]"
+curl -fsS "$ADMIN_PANEL/api/users/?pageSize=5" -H "Authorization: Bearer $ADMIN_JWT" | \
+  python3 -c "import sys, json; d=json.load(sys.stdin); print('  ', d['total'], 'users total'); [print('   -', u['email'], '| balance ¥', u['balance_points']/1000, '| plan:', u['plan_name']) for u in d['items']]"
 
 echo "==> 14. Admin adjusts user balance"
 USERID=$(echo "$RESP" | python3 -c "import sys, json; print(json.load(sys.stdin)['user']['id'])")
-curl -sS -X POST "$ADMIN_PANEL/api/users/$USERID/adjust-balance" \
+curl -fsS -X POST "$ADMIN_PANEL/api/users/$USERID/adjust-balance" \
   -H "Authorization: Bearer $ADMIN_JWT" \
   -H "Content-Type: application/json" \
-  -d '{"deltaCents":200,"reason":"smoke test bonus"}' | python3 -m json.tool
+  -d '{"delta_points":2000,"reason":"smoke test bonus"}' | python3 -m json.tool
 
 echo "==> 15. Admin usage dashboard trend (last 30 days)"
-curl -sS "$ADMIN_PANEL/api/dashboard/usage-trend" -H "Authorization: Bearer $ADMIN_JWT" | \
+curl -fsS "$ADMIN_PANEL/api/dashboard/usage-trend" -H "Authorization: Bearer $ADMIN_JWT" | \
   python3 -c "import sys, json; d=json.load(sys.stdin); print('  ', len(d), 'data points, sample first:', d[0])"
 
 echo "==> 16. Admin SPA fallback (any unknown route returns index.html)"
@@ -117,4 +115,4 @@ check "/plans route" curl -fsS "$ADMIN_PANEL/plans" | grep -q "inkuo Cloud Admin
 echo
 green "==> All smoke tests passed ✓"
 green "    Browse the admin panel at $ADMIN_PANEL"
-green "    Default credentials: admin / admin123"
+green "    Signed in with the explicit bootstrap admin credentials from the environment"

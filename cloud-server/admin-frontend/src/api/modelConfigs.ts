@@ -4,13 +4,14 @@ export interface ModelConfig {
   id: string;
   upstreamProvider: string;
   upstreamBaseUrl: string;
-  upstreamApiKeyMasked: string;
+  hasUpstreamApiKey: boolean;
   modelName: string;
   displayName: string;
   description: string | null;
   inputPricePerMTokens: number;
   outputPricePerMTokens: number;
   cachedInputPricePerMTokens: number;
+  maxOutputTokens: number;
   enabled: boolean;
   sortOrder: number;
   createdAt: string;
@@ -26,13 +27,13 @@ export interface ModelConfigUpsert {
   inputPricePerMTokens: number;
   outputPricePerMTokens: number;
   cachedInputPricePerMTokens: number;
+  maxOutputTokens: number;
   enabled: boolean;
   sortOrder: number;
 }
 
 export const modelConfigsApi = {
-  list: (includeKey = false) =>
-    api.get<ModelConfig[]>('/api/model-configs/', { params: { includeKey } }).then(r => r.data),
+  list: () => api.get<ModelConfig[]>('/api/model-configs/').then(r => r.data),
   create: (data: ModelConfigUpsert) => api.post('/api/model-configs/', data).then(r => r.data),
   update: (id: string, data: Omit<ModelConfigUpsert, 'upstreamApiKey'> & { upstreamApiKey?: string }) =>
     api.put(`/api/model-configs/${id}`, data).then(r => r.data),

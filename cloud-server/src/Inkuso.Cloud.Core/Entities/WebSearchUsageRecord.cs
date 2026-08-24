@@ -18,6 +18,10 @@ public class WebSearchUsageRecord
     /// </summary>
     public string ProviderId { get; set; } = string.Empty;
     public string Query { get; set; } = string.Empty;
+    public long CostPoints { get; set; }
+    public long? ReservedPoints { get; set; }
+    public string? RequestId { get; set; }
+    public string BillingStatus { get; set; } = "settled";
     public DateTime RecordedAt { get; set; } = DateTime.UtcNow;
 
     public User User { get; set; } = null!;

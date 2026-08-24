@@ -38,6 +38,7 @@ COPY src/Inkuso.Cloud.Core/*.csproj src/Inkuso.Cloud.Core/
 COPY src/Inkuso.Cloud.Api/*.csproj src/Inkuso.Cloud.Api/
 COPY src/Inkuso.Cloud.Billing/*.csproj src/Inkuso.Cloud.Billing/
 COPY src/Inkuso.Cloud.Admin/*.csproj src/Inkuso.Cloud.Admin/
+COPY tests/Inkuso.Cloud.Core.Tests/*.csproj tests/Inkuso.Cloud.Core.Tests/
 COPY src/Inkuso.Cloud.slnx src/
 
 RUN dotnet restore src/Inkuso.Cloud.slnx

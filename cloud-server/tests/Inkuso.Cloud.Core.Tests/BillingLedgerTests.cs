@@ -109,6 +109,7 @@ public sealed class BillingLedgerTests
         var user = await fixture.UserAsync();
         Assert.Equal(800, user.BalancePoints);
         Assert.Equal(0, user.ReservedPoints);
+        Assert.Equal(50, user.DebtPoints);
         Assert.True(user.IsSuspended);
     }
 
@@ -170,6 +171,96 @@ public sealed class BillingLedgerTests
         Assert.Equal("pending", await fixture.StatusAsync("fresh"));
         Assert.Equal(0, await fixture.Ledger.ReleaseStaleAsync(
             DateTime.UtcNow.AddMinutes(-15), 100, default));
+    }
+
+    [Fact]
+    public async Task Streaming_Usage_Is_Queued_And_Retried_Exactly_Once()
+    {
+        await using var fixture = await LedgerFixture.CreateAsync();
+        const string requestId = "queued-settlement";
+        await fixture.Ledger.TryReserveAsync(
+            fixture.UserId, fixture.ModelId, 400, requestId, default);
+
+        Assert.True(await fixture.Ledger.MarkStreamingAsync(
+            fixture.UserId, requestId, default));
+        Assert.True(await fixture.Ledger.QueueSettlementAsync(
+            fixture.UserId,
+            requestId,
+            promptTokens: 250,
+            completionTokens: 0,
+            cachedPromptTokens: 0,
+            ct: default));
+        Assert.Equal("bill_pending", await fixture.StatusAsync(requestId));
+
+        Assert.Equal(1, await fixture.Ledger.RetryQueuedSettlementsAsync(100, default));
+        Assert.Equal(0, await fixture.Ledger.RetryQueuedSettlementsAsync(100, default));
+        await fixture.AssertUserAsync(balance: 750, reserved: 0);
+        Assert.Equal("settled", await fixture.StatusAsync(requestId));
+        Assert.False(await fixture.Ledger.ReleaseAsync(
+            fixture.UserId, requestId, default));
+    }
+
+    [Fact]
+    public async Task Stale_Streaming_Request_Is_Charged_Hold_Not_Released()
+    {
+        await using var fixture = await LedgerFixture.CreateAsync();
+        const string requestId = "stale-stream";
+        await fixture.Ledger.TryReserveAsync(
+            fixture.UserId, fixture.ModelId, 300, requestId, default);
+        await fixture.Ledger.MarkStreamingAsync(fixture.UserId, requestId, default);
+        await fixture.Db.UsageRecords
+            .Where(record => record.RequestId == requestId)
+            .ExecuteUpdateAsync(update => update.SetProperty(
+                record => record.RecordedAt,
+                DateTime.UtcNow.AddMinutes(-30)));
+
+        Assert.Equal(0, await fixture.Ledger.ReleaseStaleAsync(
+            DateTime.UtcNow.AddMinutes(-10), 100, default));
+        await fixture.AssertUserAsync(balance: 1_000, reserved: 300);
+
+        Assert.Equal(1, await fixture.Ledger.SettleStaleStreamsAsync(
+            DateTime.UtcNow.AddMinutes(-10), 100, default));
+        Assert.Equal(0, await fixture.Ledger.SettleStaleStreamsAsync(
+            DateTime.UtcNow.AddMinutes(-10), 100, default));
+        await fixture.AssertUserAsync(balance: 700, reserved: 0);
+        Assert.Equal("estimated", await fixture.StatusAsync(requestId));
+        var cost = await fixture.Db.UsageRecords.AsNoTracking()
+            .Where(record => record.RequestId == requestId)
+            .Select(record => record.CostPoints)
+            .SingleAsync();
+        Assert.Equal(300, cost);
+    }
+
+    [Fact]
+    public async Task Settlement_Uses_The_Rate_Card_Frozen_At_Reservation()
+    {
+        await using var fixture = await LedgerFixture.CreateAsync();
+        const string requestId = "frozen-rate";
+        var snapshot = new BillingLedger.PricingSnapshot(1_000m, 1_000m, 1_000m);
+        await fixture.Ledger.TryReserveAsync(
+            fixture.UserId,
+            fixture.ModelId,
+            400,
+            requestId,
+            default,
+            snapshot);
+        await fixture.Db.ModelConfigs
+            .Where(model => model.Id == fixture.ModelId)
+            .ExecuteUpdateAsync(update => update.SetProperty(
+                model => model.InputPricePerMTokens,
+                2_000m));
+
+        var result = await fixture.Ledger.SettleAsync(
+            fixture.UserId,
+            fixture.ModelId,
+            promptTokens: 250,
+            completionTokens: 0,
+            cachedPromptTokens: 0,
+            requestId,
+            default);
+
+        Assert.Equal(250, result.CostPoints);
+        await fixture.AssertUserAsync(balance: 750, reserved: 0);
     }
 
     private sealed class LedgerFixture : IAsyncDisposable

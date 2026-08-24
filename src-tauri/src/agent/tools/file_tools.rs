@@ -1,9 +1,18 @@
 //! File manipulation tools: read_file, write_file, edit_file
 
 use serde_json::Value;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::{ToolDefinition, ToolError, ToolParameters, validate_workspace_path};
+
+async fn atomic_write_text(path: &str, content: &str) -> Result<(), ToolError> {
+    let target = PathBuf::from(path);
+    let bytes = content.as_bytes().to_vec();
+    tokio::task::spawn_blocking(move || crate::fs_utils::atomic_write(&target, &bytes))
+        .await
+        .map_err(|error| ToolError::IoError(format!("Atomic write task failed: {error}")))?
+        .map_err(|error| ToolError::IoError(format!("Failed to write file {}: {error}", path)))
+}
 
 pub async fn execute(arguments: Value, workspace: Option<String>) -> Result<String, ToolError> {
     let path = arguments["path"]
@@ -93,9 +102,7 @@ impl WriteFileTool {
                 .map_err(|e| ToolError::IoError(format!("Failed to create directory: {}", e)))?;
         }
 
-        tokio::fs::write(path, content)
-            .await
-            .map_err(|e| ToolError::IoError(format!("Failed to write file {}: {}", path, e)))?;
+        atomic_write_text(path, content).await?;
 
         Ok(format!("File '{}' written successfully", path))
     }
@@ -212,9 +219,7 @@ impl EditFileTool {
             content.replacen(old_text, new_text, 1)
         };
 
-        tokio::fs::write(path, &new_content)
-            .await
-            .map_err(|e| ToolError::IoError(format!("Failed to write file {}: {}", path, e)))?;
+        atomic_write_text(path, &new_content).await?;
 
         let replaced = if replace_all { occurrences } else { 1 };
         Ok(format!(

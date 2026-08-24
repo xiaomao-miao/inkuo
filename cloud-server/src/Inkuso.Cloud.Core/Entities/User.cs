@@ -14,5 +14,9 @@ public class User
     // 0 <= ReservedPoints <= BalancePoints.
     public long BalancePoints { get; set; } = 0;
     public long ReservedPoints { get; set; } = 0;
+    public long DebtPoints { get; set; } = 0;
+    // Manual operator bans are tracked separately so paying a billing debt
+    // cannot accidentally clear an abuse/security suspension.
+    public bool AdminSuspended { get; set; } = false;
     public bool IsSuspended { get; set; } = false; // set true after a deduction failure; blocks new requests until admin unblocks
 }

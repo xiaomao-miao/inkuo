@@ -115,6 +115,16 @@
   background: var(--accent-subtle);
 }
 
+.pill[data-state='warning'] {
+  color: var(--error, #ef4444);
+  border-color: var(--error, #ef4444);
+  background: var(--bg-tertiary);
+}
+
+.pill[data-state='warning'] .pillTag {
+  background: var(--error, #ef4444);
+}
+
 .pillEmail {
   font-weight: 600;
   max-width: 160px;

@@ -15,7 +15,6 @@
 //! importing this file (which would otherwise form a cycle once snapshots
 //! or settings helpers are also pulled out).
 
-use std::io::Write;
 use std::sync::Arc;
 
 use once_cell::sync::Lazy;
@@ -68,7 +67,9 @@ pub use logging::{frontend_log, frontend_log_path, FrontendLogPayload};
 // `snapshot_state`.
 pub(crate) use snapshot_state::{
     evict_lru_if_needed, flush_snapshots_to_disk, init_workspace_snapshots,
-    resolve_snapshots_path, touch_snapshot, SnapshotEntry, MAX_WORKSPACE_SNAPSHOTS,
+    resolve_snapshots_path, touch_snapshot, upsert_workspace_snapshot,
+    validate_workspace_snapshot, validate_workspace_snapshot_key, SnapshotEntry,
+    MAX_WORKSPACE_SNAPSHOTS,
     WORKSPACE_SNAPSHOTS, WORKSPACE_SNAPSHOTS_PATH,
 };
 
@@ -159,6 +160,21 @@ pub async fn read_document(path: String) -> Result<ReadDocumentResult, AppComman
     Ok(ReadDocumentResult { document: doc, content, mtime })
 }
 
+fn backup_existing_document(path: &std::path::Path) -> Result<(), AppCommandError> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let backup_dir = get_backup_dir();
+    std::fs::create_dir_all(&backup_dir)
+        .map_err(|e| AppCommandError::CreateBackupDirectory(e.to_string()))?;
+    let backup_path = create_backup_path(&path.to_string_lossy());
+    crate::fs_utils::atomic_copy(path, &backup_path)
+        .map_err(|e| AppCommandError::CreateBackup(e.to_string()))?;
+    request_backup_cleanup();
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn write_document(
     path: String,
@@ -167,49 +183,10 @@ pub async fn write_document(
 ) -> Result<(), AppCommandError> {
     tracing::info!("Writing document: {}", path);
 
-    if std::path::Path::new(&path).exists() {
-        let backup_dir = get_backup_dir();
-        std::fs::create_dir_all(&backup_dir)
-            .map_err(|e| AppCommandError::CreateBackupDirectory(e.to_string()))?;
+    backup_existing_document(std::path::Path::new(&path))?;
 
-        let backup_path = create_backup_path(&path);
-        std::fs::copy(&path, &backup_path)
-            .map_err(|e| AppCommandError::CreateBackup(e.to_string()))?;
-
-        request_backup_cleanup();
-    }
-
-    // Atomic write: write to a temp file, then rename (POSIX guarantees atomicity).
-    // The temp filename includes a process-unique suffix so concurrent writes to the
-    // same path don't race on the temp file (which would cause one writer's bytes to
-    // be clobbered mid-flush). On any error after the temp file is created, we remove
-    // it so we don't leave stale `.tmp` siblings behind.
-    let path_obj = std::path::Path::new(&path);
-    let unique_suffix = format!(
-        "{}.{}.tmp",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0)
-    );
-    let temp_path = path_obj.with_extension(
-        path_obj
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| format!("{}.{}", e, unique_suffix))
-            .unwrap_or_else(|| unique_suffix.clone())
-    );
-
-    if let Err(error) = std::fs::write(&temp_path, &content) {
-        let _ = std::fs::remove_file(&temp_path);
-        return Err(AppCommandError::WriteDocument(error.to_string()));
-    }
-
-    if let Err(error) = std::fs::rename(&temp_path, &path) {
-        let _ = std::fs::remove_file(&temp_path);
-        return Err(AppCommandError::WriteDocument(error.to_string()));
-    }
+    crate::fs_utils::atomic_write(std::path::Path::new(&path), content.as_bytes())
+        .map_err(|error| AppCommandError::WriteDocument(error.to_string()))?;
 
     // Inotify inside the same process is not always reliable for in-process
     // writes (atomic rename, kernel delivery timing). Emit explicitly so the
@@ -636,7 +613,9 @@ pub async fn write_office_file(
     app_handle: AppHandle,
 ) -> Result<(), AppCommandError> {
     tracing::info!("Writing office file: {}", path);
-    std::fs::write(&path, &data).map_err(|e| AppCommandError::WriteOfficeFile(e.to_string()))?;
+    backup_existing_document(std::path::Path::new(&path))?;
+    crate::fs_utils::atomic_write(std::path::Path::new(&path), &data)
+        .map_err(|e| AppCommandError::WriteOfficeFile(e.to_string()))?;
     emit_file_change(&app_handle, FileChangeEvent::Modified { path });
     Ok(())
 }
@@ -691,7 +670,14 @@ pub async fn write_xlsx_structured(
 ) -> Result<(), AppCommandError> {
     tracing::info!("Writing structured xlsx workbook: {}", path);
     let path_obj = std::path::Path::new(&path);
-    office::create_xlsx_workbook(&workbook, path_obj)
+    backup_existing_document(path_obj)?;
+    let temp_path = crate::fs_utils::create_sibling_temp_file(path_obj)
+        .map_err(|e| AppCommandError::WriteOfficeFile(e.to_string()))?;
+    if let Err(error) = office::create_xlsx_workbook(&workbook, &temp_path) {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(AppCommandError::WriteOfficeFile(error.to_string()));
+    }
+    crate::fs_utils::commit_sibling_temp_file(&temp_path, path_obj)
         .map_err(|e| AppCommandError::WriteOfficeFile(e.to_string()))?;
     emit_file_change(&app_handle, FileChangeEvent::Modified { path });
     Ok(())
@@ -707,8 +693,14 @@ pub async fn write_office_text(
     tracing::info!("Writing office file: {} ({})", path, format);
 
     let path_obj = std::path::Path::new(&path);
-
-    office::write_office_file(path_obj, &json_content)
+    backup_existing_document(path_obj)?;
+    let temp_path = crate::fs_utils::create_sibling_temp_file(path_obj)
+        .map_err(|e| AppCommandError::WriteOfficeFile(e.to_string()))?;
+    if let Err(error) = office::write_office_file(&temp_path, &json_content) {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(AppCommandError::WriteOfficeFile(error.to_string()));
+    }
+    crate::fs_utils::commit_sibling_temp_file(&temp_path, path_obj)
         .map_err(|e| AppCommandError::WriteOfficeFile(e.to_string()))?;
     emit_file_change(&app_handle, FileChangeEvent::Modified { path });
     Ok(())
@@ -732,16 +724,7 @@ pub async fn save_workspace_snapshot(
     path: String,
     snapshot: serde_json::Value,
 ) -> Result<(), AppCommandError> {
-    {
-        let mut map = WORKSPACE_SNAPSHOTS.lock();
-        map.insert(
-            path.clone(),
-            SnapshotEntry {
-                value: snapshot,
-                last_touched_at: std::time::Instant::now(),
-            },
-        );
-    }
+    upsert_workspace_snapshot(path, snapshot)?;
     // If we just pushed the map over the cap, drop the LRU entry before we
     // serialise so the on-disk file matches the in-memory state.
     evict_lru_if_needed();
@@ -754,13 +737,10 @@ pub async fn save_workspace_snapshot(
 pub async fn load_workspace_snapshot(
     path: String,
 ) -> Result<Option<serde_json::Value>, AppCommandError> {
+    validate_workspace_snapshot_key(&path)?;
     let value = {
         let snapshots = WORKSPACE_SNAPSHOTS.lock();
-        snapshots.get(&path).map(|entry| {
-            // Refresh the touch timestamp under the same lock so we never
-            // race with eviction. The value is cloned before the lock drops.
-            entry.value.clone()
-        })
+        snapshots.get(&path).map(|entry| entry.value.clone())
     };
     if value.is_some() {
         touch_snapshot(&path);
@@ -951,8 +931,12 @@ pub async fn read_snapshot_file_cmd(
     rel_path: String,
 ) -> Result<Option<String>, AppCommandError> {
     let path = crate::snapshots::snapshot_dir(&workspace_path, &snapshot_id)
+        .map_err(|e| AppCommandError::SnapshotReadFailed(e.to_string()))?
         .join("files")
-        .join(&rel_path);
+        .join(
+            crate::snapshots::validate_relative_path(&rel_path)
+                .map_err(|e| AppCommandError::SnapshotReadFailed(e.to_string()))?,
+        );
     if !path.exists() {
         return Ok(None);
     }
@@ -1035,6 +1019,21 @@ pub async fn create_workspace_snapshot_cmd(
         files,
         directories,
     } = args;
+
+    if !std::path::Path::new(&workspace_path).is_absolute()
+        || workspace_path.len() > 32 * 1024
+        || workspace_path.contains('\0')
+    {
+        return Err(AppCommandError::InvalidWorkspacePath(workspace_path));
+    }
+    for file in &files {
+        crate::snapshots::validate_relative_path(&file.rel_path)
+            .map_err(|e| AppCommandError::SnapshotWriteFailed(e.to_string()))?;
+    }
+    for directory in &directories {
+        crate::snapshots::validate_relative_path(directory)
+            .map_err(|e| AppCommandError::SnapshotWriteFailed(e.to_string()))?;
+    }
 
     let mut decoded: Vec<(String, Vec<u8>)> = Vec::with_capacity(files.len());
     for f in files {

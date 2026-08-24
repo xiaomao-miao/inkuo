@@ -43,6 +43,10 @@ export const CloudAuthPanel = ({ onAuthSuccess }: CloudAuthPanelProps) => {
       setError('注册需要邀请码');
       return;
     }
+    if (mode === 'register' && password.length < 6) {
+      setError('密码至少需要 6 个字符');
+      return;
+    }
 
     setSubmitting(true);
     try {
@@ -66,7 +70,7 @@ export const CloudAuthPanel = ({ onAuthSuccess }: CloudAuthPanelProps) => {
       } else if (message.toLowerCase().includes('unauthorized') || message.includes('401')) {
         setError('邮箱或密码错误');
       } else if (message.toLowerCase().includes('network')) {
-        setError('无法连接到云端服务器,请检查地址或网络');
+        setError('无法连接到云端服务器，请检查网络后重试');
       } else {
         setError(message);
       }
@@ -131,7 +135,8 @@ export const CloudAuthPanel = ({ onAuthSuccess }: CloudAuthPanelProps) => {
             type="text"
             value={inviteCode}
             onChange={(e) => setInviteCode(e.target.value)}
-            placeholder="如 INKUO2026"
+            placeholder="请输入管理员提供的邀请码"
+            autoComplete="off"
           />
         </div>
       )}

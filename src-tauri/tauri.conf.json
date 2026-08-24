@@ -6,11 +6,11 @@
   "build": {
     "beforeDevCommand": "pnpm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm run build:vite",
+    "beforeBuildCommand": "pnpm run build",
     "frontendDist": "../dist"
   },
   "app": {
-    "withGlobalTauri": true,
+    "withGlobalTauri": false,
     "windows": [
       {
         "title": "inkuo",
@@ -22,11 +22,12 @@
         "resizable": true,
         "decorations": false,
         "transparent": false,
-        "devtools": true
+        "devtools": false
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost data: blob:; media-src 'self' asset: http://asset.localhost data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+      "devCsp": "default-src 'self' http://localhost:1420; connect-src 'self' ipc: http://ipc.localhost http://localhost:1420 ws://localhost:1420 ws://localhost:1421; img-src 'self' asset: http://asset.localhost data: blob:; media-src 'self' asset: http://asset.localhost data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline' http://localhost:1420; script-src 'self' 'unsafe-eval' http://localhost:1420; worker-src 'self' blob: http://localhost:1420; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
     }
   },
   "bundle": {
@@ -35,9 +36,8 @@
     "publisher": "inkuo team",
     "category": "Productivity",
     "shortDescription": "AI Document Assistant",
-    "longDescription": "InkUO is a desktop AI assistant for everyday documents. Open a folder, tell it what you need, and it searches your files, drafts new documents, polishes reports, and edits Word, Excel, PPT, and Markdown files for you. Designed for non-technical users.",
+    "longDescription": "InkUO is a desktop AI assistant for everyday documents. Open a folder, tell it what you need, and it searches your files, drafts new documents, polishes reports, edits Word, Excel, and Markdown files, and can generate new PPT presentations. Designed for non-technical users.",
     "copyright": "Copyright (c) 2026 inkuo team",
-    "homepage": "https://github.com/inkuo/inkuo",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

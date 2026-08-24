@@ -6,6 +6,9 @@ import { PlusOutlined, EditOutlined, DeleteOutlined, CopyOutlined } from '@ant-d
 import dayjs from 'dayjs';
 import { redemptionCodesApi, RedemptionCode } from '../api/redemptionCodes';
 import { plansApi, Plan } from '../api/plans';
+import {
+  CODE_PATTERN, MAX_CODE_LENGTH, MAX_CODE_USES, MAX_SINGLE_CREDIT_POINTS, MIN_CODE_LENGTH, trimCode,
+} from '../billingLimits';
 
 export default function RedemptionCodesPage() {
   const [data, setData] = useState<RedemptionCode[]>([]);
@@ -34,8 +37,8 @@ export default function RedemptionCodesPage() {
   const onSubmit = async (values: any) => {
     try {
       const payload = {
-        code: values.code,
-        creditCents: values.creditCents ?? 0,
+        code: values.code.trim(),
+        creditPoints: values.creditPoints ?? 0,
         planId: values.planId || null,
         maxUses: values.maxUses,
         expiresAt: values.expiresAt ? values.expiresAt.toISOString() : null,
@@ -82,7 +85,7 @@ export default function RedemptionCodesPage() {
       width: 120,
       render: (_: any, r: RedemptionCode) => r.planId
         ? <Tag color="purple">套餐开通: {r.planName}</Tag>
-        : <Tag color="blue">充值 ¥{(r.creditCents / 100).toFixed(2)}</Tag>,
+        : <Tag color="blue">充值 ¥{(r.creditPoints / 1000).toFixed(3)}</Tag>,
     },
     {
       title: '使用情况', width: 160,
@@ -155,18 +158,22 @@ export default function RedemptionCodesPage() {
         width={600}
       >
         <Form form={form} layout="vertical" onFinish={onSubmit}
-          initialValues={{ maxUses: 1, enabled: true, creditCents: 0 }}>
-          <Form.Item name="code" label="兑换码 (建议大写)" rules={[{ required: true, min: 4 }]}>
-            <Input placeholder="PLUS-MAR2026" style={{ textTransform: 'uppercase' }} />
+          initialValues={{ maxUses: 1, enabled: true, creditPoints: 0 }}>
+          <Form.Item name="code" label="兑换码 (建议大写)" rules={[
+            { required: true, whitespace: true, transform: trimCode },
+            { min: MIN_CODE_LENGTH, max: MAX_CODE_LENGTH, transform: trimCode },
+            { pattern: CODE_PATTERN, message: '仅可使用英文字母、数字、- 和 _', transform: trimCode },
+          ]}>
+            <Input maxLength={MAX_CODE_LENGTH} placeholder="PLUS-MAR2026" style={{ textTransform: 'uppercase' }} />
           </Form.Item>
           <Form.Item name="planId" label="绑定套餐 (留空 = 纯充值)">
             <Select allowClear options={planOptions} placeholder="选择套餐则开通一个月, 否则只充值余额" />
           </Form.Item>
-          <Form.Item name="creditCents" label="充值额度 (分, 套餐模式下可不填)">
-            <InputNumber min={0} style={{ width: '100%' }} step={100} />
+          <Form.Item name="creditPoints" label="充值点数（1000 点 = ¥1，套餐模式可为 0）">
+            <InputNumber min={0} max={MAX_SINGLE_CREDIT_POINTS} precision={0} style={{ width: '100%' }} step={1000} />
           </Form.Item>
           <Form.Item name="maxUses" label="最大使用次数" rules={[{ required: true }]}>
-            <InputNumber min={1} style={{ width: '100%' }} />
+            <InputNumber min={Math.max(1, editing?.usedCount ?? 0)} max={MAX_CODE_USES} precision={0} style={{ width: '100%' }} />
           </Form.Item>
           <Form.Item name="expiresAt" label="过期时间 (留空 = 永久)">
             <DatePicker style={{ width: '100%' }} />

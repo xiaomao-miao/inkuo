@@ -5,20 +5,31 @@ export interface DashboardSummary {
   newUsersThisMonth: number;
   newUsersToday: number;
   activeSubscriptions: number;
+  suspendedUsers: number;
   totalInviteCodes: number;
   usedInviteCodes: number;
   totalRedemptionCodes: number;
   usedRedemptionCodes: number;
-  monthRevenueCents: number;
-  totalRevenueCents: number;
+  monthRevenuePoints: number;
+  totalRevenuePoints: number;
+  monthChatRevenuePoints: number;
+  totalChatRevenuePoints: number;
+  monthWebSearchRevenuePoints: number;
+  totalWebSearchRevenuePoints: number;
+  monthWebSearchRequests: number;
+  totalWebSearchRequests: number;
   monthTokens: number;
 }
 
 export interface DailyUsagePoint {
   date: string;
-  costCents: number;
+  costPoints: number;
   tokens: number;
   newUsers: number;
+  chatCostPoints: number;
+  webSearchCostPoints: number;
+  chatRequests: number;
+  webSearchRequests: number;
 }
 
 export interface PlanDistribution {
@@ -29,7 +40,7 @@ export interface PlanDistribution {
 export interface ModelUsageShare {
   modelName: string;
   tokens: number;
-  costCents: number;
+  costPoints: number;
 }
 
 export const dashboardApi = {

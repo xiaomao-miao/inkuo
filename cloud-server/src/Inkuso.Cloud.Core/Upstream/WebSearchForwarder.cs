@@ -81,6 +81,7 @@ public class WebSearchForwarder
         string providerId,
         string query,
         int maxResults,
+        Func<Task>? onUpstreamAccepted,
         CancellationToken ct)
     {
         var clampedMaxResults = Math.Clamp(maxResults, MinResultsLimit, MaxResultsLimit);
@@ -128,44 +129,23 @@ public class WebSearchForwarder
 
         return providerId switch
         {
-            "baike" => await DispatchBaikeAsync(provider, query, clampedMaxResults, ct),
+            "baike" => await DispatchBaikeAsync(
+                provider,
+                query,
+                clampedMaxResults,
+                onUpstreamAccepted,
+                ct),
             _ => ForwardResult.Err(
                 "not_implemented",
                 $"web_search provider '{providerId}' is not implemented on this cloud server."),
         };
     }
 
-    /// <summary>
-    /// Records a usage row for auditing / abuse-tracing. Wrapped in its
-    /// own method so the dispatch helpers can swallow write errors
-    /// without failing the user-visible search response.
-    /// </summary>
-    public async Task RecordUsageAsync(Guid userId, string providerId, string query, CancellationToken ct)
-    {
-        try
-        {
-            using var scope = _scopeFactory.CreateScope();
-            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-            db.WebSearchUsageRecords.Add(new WebSearchUsageRecord
-            {
-                UserId = userId,
-                ProviderId = providerId,
-                Query = Truncate(query, 512),
-            });
-            await db.SaveChangesAsync(ct);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to record web_search usage for user {UserId}", userId);
-        }
-    }
-
-    private static string Truncate(string s, int max) => s.Length <= max ? s : s[..max];
-
     private async Task<ForwardResult> DispatchBaikeAsync(
         WebSearchProvider provider,
         string query,
         int maxResults,
+        Func<Task>? onUpstreamAccepted,
         CancellationToken ct)
     {
         var baseUrl = string.IsNullOrWhiteSpace(provider.UpstreamBaseUrl)
@@ -197,11 +177,15 @@ public class WebSearchForwarder
         }
         catch (Exception ex)
         {
-            return ForwardResult.Err("upstream_network", $"upstream request failed: {ex.Message}");
+            _logger.LogWarning(ex,
+                "web_search upstream network failure for provider {ProviderId}",
+                provider.ProviderId);
+            return ForwardResult.Err("upstream_network", "upstream request failed; retry later");
         }
 
+        using var responseLease = response;
+
         var status = (int)response.StatusCode;
-        var body = await response.Content.ReadAsStringAsync(ct);
 
         if (status == 401 || status == 403)
         {
@@ -211,14 +195,21 @@ public class WebSearchForwarder
         }
         if (status < 200 || status >= 300)
         {
-            // Surface a short snippet of the body so the operator sees
-            // why the upstream is unhappy in logs / via the desktop
-            // error message, but be careful not to leak the entire body
-            // (Baidu's CDN occasionally returns HTML error pages with
-            // diagnostic info we don't want in front of users).
-            var snippet = body.Length > 200 ? body[..200] + "…" : body;
-            return ForwardResult.Err("upstream_error", $"upstream returned HTTP {status}: {snippet}");
+            _logger.LogWarning(
+                "web_search upstream returned HTTP {Status} for provider {ProviderId}",
+                status,
+                provider.ProviderId);
+            return ForwardResult.Err("upstream_error", $"upstream returned HTTP {status}");
         }
+
+        // Persist the billing transition only after the upstream has accepted
+        // the call. If this callback fails we intentionally abort before
+        // returning provider data; the endpoint can safely release its pending
+        // hold and the operator absorbs any tiny upstream header-only cost.
+        if (onUpstreamAccepted is not null)
+            await onUpstreamAccepted();
+
+        var body = await response.Content.ReadAsStringAsync(timeoutCts.Token);
 
         JsonElement parsed;
         try
@@ -227,7 +218,10 @@ public class WebSearchForwarder
         }
         catch (Exception ex)
         {
-            return ForwardResult.Err("upstream_bad_json", $"upstream response was not valid JSON: {ex.Message}");
+            _logger.LogWarning(ex,
+                "web_search upstream returned invalid JSON for provider {ProviderId}",
+                provider.ProviderId);
+            return ForwardResult.Err("upstream_bad_json", "upstream response was not valid JSON");
         }
 
         return ForwardResult.Ok(new ProviderSearchResult(provider.ProviderId, query, parsed));

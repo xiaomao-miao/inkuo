@@ -3,7 +3,7 @@ import { api } from './client';
 export interface InviteCode {
   id: number;
   code: string;
-  freeQuotaCents: number;
+  freePoints: number;
   maxUses: number;
   usedCount: number;
   expiresAt: string | null;

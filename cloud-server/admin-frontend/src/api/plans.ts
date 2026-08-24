@@ -3,7 +3,7 @@ import { api } from './client';
 export interface Plan {
   id: string;
   name: string;
-  monthlyQuotaCents: number;
+  monthlyPricePoints: number;
   monthlyTokenLimit: number;
   overageInputPricePer1k: number;
   overageOutputPricePer1k: number;

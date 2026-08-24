@@ -30,6 +30,7 @@ import {
 } from '../../services/workspace';
 import { reportError } from '../../utils/errors';
 import { cloudApi } from '../cloud/cloudApi';
+import { accountBalancePoints, formatPointsAsYuan } from '../cloud/cloudMoney';
 import { MOTION_LEVELS, type MotionLevel } from '../../hooks/useMotionLevel';
 import { Wordmark } from './Wordmark';
 import { getCloudBaseUrl } from '../../utils/cloudBaseUrl';
@@ -251,8 +252,9 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onWorkspaceSelected })
   const cloudBaseUrl = getCloudBaseUrl();
   const initialEmail = settings.cloud.account?.email ?? '';
   const planName = settings.cloud.account?.plan_name?.trim();
-  const balanceCents = settings.cloud.account?.balance_cents ?? 0;
-  const balanceYuan = (balanceCents / 100).toFixed(2);
+  const balanceLabel = settings.cloud.account
+    ? formatPointsAsYuan(accountBalancePoints(settings.cloud.account))
+    : formatPointsAsYuan(0);
   const planLabel = planName && planName.length > 0 ? planName : '免费套餐';
   const [authMode, setAuthMode] = useState<AuthMode>('login');
   const [email, setEmail] = useState(initialEmail);
@@ -275,7 +277,8 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onWorkspaceSelected })
         title: '选择工作区文件夹',
       });
       if (selected) {
-        await switchWorkspace(selected);
+        const switched = await switchWorkspace(selected);
+        if (!switched) return;
         await applyWorkspaceDirectoryLoad(selected, { mergeWithExisting: false });
         pushNotification({
           kind: 'info',
@@ -725,7 +728,7 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onWorkspaceSelected })
                       <div className={styles.accountAvatar} aria-hidden><User size={18} /></div>
                       <div className={styles.accountMeta}>
                         <span className={styles.accountEmail}>{settings.cloud.account?.email}</span>
-                        <span className={styles.accountServer}>{planLabel} · 余额 ¥{balanceYuan}</span>
+                        <span className={styles.accountServer}>{planLabel} · 余额 {balanceLabel}</span>
                       </div>
                       <button type="button" className={styles.logoutBtn} onClick={handleCloudLogout} title="退出登录">
                         <LogOut size={12} />退出

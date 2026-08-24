@@ -195,6 +195,7 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
   // that touches a user-visible field.
   const userEditSeenRef = useRef(false);
   const dirtyStateRef = useRef(false);
+  const editGenerationRef = useRef(0);
 
   // ── Hooks — empty. Formula recalculation is handled by FortuneSheet internally.
   const hooks = useMemo((): import('@fortune-sheet/core').Hooks => ({}), []);
@@ -260,8 +261,12 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
   //    paste actions — never for the post-load context rebuild. We use it as
   //    the gating signal that allows handleFortuneChange to flip isDirty.
   const handleFortuneOp = useCallback(() => {
+    editGenerationRef.current += 1;
     userEditSeenRef.current = true;
-  }, []);
+    dirtyStateRef.current = true;
+    setIsDirty(true);
+    setOpenTabDirty(filePath, true);
+  }, [filePath, setOpenTabDirty]);
 
   // ── Recalculate all sheets for save ───────────────────────────────────────────
   recalcAllSheetsRef.current = () => {
@@ -316,6 +321,7 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
         // full rationale.
         lastLoadedSheetsRef.current = sheets;
         lastLoadedFingerprintRef.current = fingerprintSheets(sheets);
+        editGenerationRef.current = 0;
         userEditSeenRef.current = false;
         formulaInitDoneRef.current = false;
         dirtyStateRef.current = false;
@@ -438,6 +444,7 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
   // ── Save ────────────────────────────────────────────────────────────────
   const handleSave = useCallback(async (): Promise<boolean> => {
     if (!dirtyStateRef.current) return true;
+    const generationAtStart = editGenerationRef.current;
     const wb = workbookRef.current;
     if (!wb) {
       pushNotification({ kind: 'error', title: '保存失败', message: '表格引擎未就绪' });
@@ -455,6 +462,17 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
       const bufferArray = Array.from(buffer);
       await invoke('write_office_file', { path: filePath, data: bufferArray });
 
+      setHasExternalConflict(false);
+      if (editGenerationRef.current !== generationAtStart) {
+        // A newer Workbook operation landed while conversion/write was in
+        // flight. The saved snapshot is valid, but it is no longer the live
+        // state, so preserve the dirty generation for the next save.
+        dirtyStateRef.current = true;
+        setIsDirty(true);
+        setOpenTabDirty(filePath, true);
+        return true;
+      }
+
       loadedSheetsRef.current = latestSheets;
       setFortuneSheetsToStore(filePath, { sheets: latestSheets });
       // Reset the dirty filter snapshot and user-edit gate to the just-saved
@@ -465,7 +483,6 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
       userEditSeenRef.current = false;
       dirtyStateRef.current = false;
       setIsDirty(false);
-      setHasExternalConflict(false);
       setOpenTabDirty(filePath, false);
       return true;
     } catch (err) {

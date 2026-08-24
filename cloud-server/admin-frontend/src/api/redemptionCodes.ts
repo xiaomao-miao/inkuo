@@ -3,7 +3,7 @@ import { api } from './client';
 export interface RedemptionCode {
   id: number;
   code: string;
-  creditCents: number;
+  creditPoints: number;
   planId: string | null;
   planName: string | null;
   maxUses: number;

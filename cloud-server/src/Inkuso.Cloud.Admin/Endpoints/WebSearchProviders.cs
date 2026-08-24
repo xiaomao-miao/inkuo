@@ -1,7 +1,7 @@
 // <copyright file="WebSearchProviders.cs" company="inkuo">
 // Admin CRUD for `WebSearchProvider` rows. Mirrors the shape of
 // `ModelConfigs.cs` so the admin UI can render it with the same
-// Form/Table pattern: list with masked key + reveal toggle, create /
+// Form/Table pattern: list with write-only key status, create /
 // update where blank key means "keep existing", per-row enable toggle.
 //
 // All endpoints live under `/api/web-search-providers/` and require
@@ -45,7 +45,7 @@ public static class AdminWebSearchProvidersEndpoints
     {
         var group = app.MapGroup("/api/web-search-providers").WithTags("web-search-providers").RequireAuthorization();
 
-        group.MapGet("/", async (AppDbContext db, bool includeKey = false) =>
+        group.MapGet("/", async (AppDbContext db) =>
         {
             var rows = await db.WebSearchProviders
                 .OrderBy(p => p.ProviderId)
@@ -57,7 +57,7 @@ public static class AdminWebSearchProvidersEndpoints
                 p.ProviderId,
                 p.DisplayName,
                 p.UpstreamBaseUrl,
-                UpstreamApiKeyMasked = includeKey ? p.UpstreamApiKey : Mask(p.UpstreamApiKey),
+                HasUpstreamApiKey = !string.IsNullOrWhiteSpace(p.UpstreamApiKey),
                 p.Enabled,
                 p.CreatedAt,
             });
@@ -160,10 +160,4 @@ public static class AdminWebSearchProvidersEndpoints
         });
     }
 
-    private static string Mask(string? key)
-    {
-        if (string.IsNullOrEmpty(key)) return "";
-        if (key.Length <= 8) return new string('*', key.Length);
-        return key[..4] + "***" + key[^4..];
-    }
 }

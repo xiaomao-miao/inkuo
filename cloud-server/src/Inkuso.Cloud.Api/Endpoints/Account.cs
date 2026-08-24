@@ -8,9 +8,36 @@ namespace Inkuso.Cloud.Api.Endpoints;
 
 public static class Account
 {
-    public record AccountInfo(Guid Id, string Email, long BalancePoints, long ReservedPoints,
+    public record AccountInfo(Guid Id, string Email, long BalancePoints, long ReservedPoints, long DebtPoints,
         bool IsSuspended, string? PlanName, long MonthlyTokenLimit, DateTime? SubscriptionExpiresAt,
         long TokensUsedThisMonth, long MonthlyTokensRemaining);
+
+    public record ChatUsageItem(
+        Guid Id,
+        string Model,
+        long PromptTokens,
+        long CompletionTokens,
+        long CostPoints,
+        string BillingStatus,
+        DateTime RecordedAt);
+
+    public record WebSearchUsageItem(
+        Guid Id,
+        string ProviderId,
+        string Query,
+        long CostPoints,
+        long? ReservedPoints,
+        string BillingStatus,
+        DateTime RecordedAt);
+
+    /// <summary>
+    /// <see cref="Data"/> intentionally retains the original chat-only payload
+    /// so existing desktop builds continue to deserialize it unchanged. Search
+    /// billing is exposed as an additive section for newer clients.
+    /// </summary>
+    public record AccountUsageResponse(
+        IReadOnlyList<ChatUsageItem> Data,
+        IReadOnlyList<WebSearchUsageItem> WebSearchData);
 
     public static void MapAccountEndpoints(this WebApplication app)
     {
@@ -48,35 +75,59 @@ public static class Account
             var remaining = Math.Max(0, limit - tokensUsed);
 
             return Results.Ok(new AccountInfo(
-                user.Id, user.Email, user.BalancePoints, user.ReservedPoints, user.IsSuspended,
+                user.Id, user.Email, user.BalancePoints, user.ReservedPoints, user.DebtPoints, user.IsSuspended,
                 sub?.Plan.Name, limit,
                 sub?.ExpiresAt,
                 tokensUsed, remaining
             ));
         });
 
-        group.MapGet("/usage", async (HttpContext ctx, AppDbContext db) =>
+        group.MapGet("/usage", async (HttpContext ctx, AppDbContext db, CancellationToken ct) =>
         {
             var userId = Guid.Parse(ctx.User.FindFirst(ClaimTypes.NameIdentifier)!.Value);
-
-            var records = await db.UsageRecords
-                .Include(u => u.ModelConfig)
-                .Where(u => u.UserId == userId && u.BillingStatus != "pending")
-                .OrderByDescending(u => u.RecordedAt)
-                .Take(50)
-                .Select(u => new
-                {
-                    u.Id,
-                    Model = u.ModelConfig.DisplayName,
-                    u.PromptTokens,
-                    u.CompletionTokens,
-                    u.CostPoints,
-                    u.BillingStatus,
-                    u.RecordedAt,
-                })
-                .ToListAsync();
-
-            return Results.Ok(new { data = records });
+            return Results.Ok(await GetUsageAsync(userId, db, ct));
         });
+    }
+
+    public static async Task<AccountUsageResponse> GetUsageAsync(
+        Guid userId,
+        AppDbContext db,
+        CancellationToken ct = default)
+    {
+        var chatRecords = await db.UsageRecords
+            .Where(u => u.UserId == userId
+                        && (u.BillingStatus == "settled"
+                            || u.BillingStatus == "released"
+                            || u.BillingStatus == "debt"
+                            || u.BillingStatus == "estimated"))
+            .OrderByDescending(u => u.RecordedAt)
+            .Take(50)
+            .Select(u => new ChatUsageItem(
+                u.Id,
+                u.ModelConfig.DisplayName,
+                u.PromptTokens,
+                u.CompletionTokens,
+                u.CostPoints,
+                u.BillingStatus,
+                u.RecordedAt))
+            .ToListAsync(ct);
+
+        var webSearchRecords = await db.WebSearchUsageRecords
+            .Where(u => u.UserId == userId
+                        && (u.BillingStatus == "settled"
+                            || u.BillingStatus == "released"))
+            .OrderByDescending(u => u.RecordedAt)
+            .Take(50)
+            .Select(u => new WebSearchUsageItem(
+                u.Id,
+                u.ProviderId,
+                u.Query,
+                u.CostPoints,
+                u.ReservedPoints,
+                u.BillingStatus,
+                u.RecordedAt))
+            .ToListAsync(ct);
+
+        return new AccountUsageResponse(chatRecords, webSearchRecords);
     }
 }

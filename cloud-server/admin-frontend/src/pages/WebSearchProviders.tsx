@@ -2,9 +2,7 @@ import { useEffect, useState } from 'react';
 import {
   Table, Button, Space, Tag, Modal, Form, Input, Switch, App, Tooltip,
 } from 'antd';
-import {
-  PlusOutlined, EditOutlined, DeleteOutlined, EyeOutlined,
-} from '@ant-design/icons';
+import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import { webSearchProvidersApi, WebSearchProvider } from '../api/webSearchProviders';
 
 /**
@@ -22,19 +20,18 @@ export default function WebSearchProvidersPage() {
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<WebSearchProvider | null>(null);
-  const [revealKey, setRevealKey] = useState(false);
   const [form] = Form.useForm();
   const { message, modal } = App.useApp();
 
   const load = async () => {
     setLoading(true);
     try {
-      setData(await webSearchProvidersApi.list(revealKey));
+      setData(await webSearchProvidersApi.list());
     } finally {
       setLoading(false);
     }
   };
-  useEffect(() => { load(); }, [revealKey]);
+  useEffect(() => { load(); }, []);
 
   const onSubmit = async (values: any) => {
     try {
@@ -49,17 +46,6 @@ export default function WebSearchProvidersPage() {
       const upstreamBaseUrl = (src.upstreamBaseUrl ?? '').toString().trim() || null;
       const upstreamApiKey = (src.upstreamApiKey ?? '').toString().trim() || null;
       const enabled = !!values.enabled;
-
-      // eslint-disable-next-line no-console
-      console.log('[web-search-providers] submit', {
-        values,
-        editing,
-        providerId,
-        displayName,
-        upstreamBaseUrl,
-        upstreamApiKey,
-        enabled,
-      });
 
       if (!displayName) {
         message.warning('请填写显示名');
@@ -76,8 +62,6 @@ export default function WebSearchProvidersPage() {
         // "leave existing if blank" branch fires.
         const updatePayload: any = { providerId, displayName, upstreamBaseUrl, enabled };
         if (upstreamApiKey) updatePayload.upstreamApiKey = upstreamApiKey;
-        // eslint-disable-next-line no-console
-        console.log('[web-search-providers] PUT payload=', updatePayload);
         await webSearchProvidersApi.update(editing.id, updatePayload);
         message.success('已更新');
       } else {
@@ -132,8 +116,10 @@ export default function WebSearchProvidersPage() {
         u ? <Tooltip title={u}><code style={{ fontSize: 12 }}>{u}</code></Tooltip> : <Tag>默认</Tag>,
     },
     {
-      title: 'API Key', dataIndex: 'upstreamApiKeyMasked', width: 180,
-      render: (k: string) => k ? <code>{k}</code> : <Tag color="red">未配置</Tag>,
+      title: 'API Key', dataIndex: 'hasUpstreamApiKey', width: 180,
+      render: (hasKey: boolean) => hasKey
+        ? <Tag color="green">已配置（只写）</Tag>
+        : <Tag color="red">未配置</Tag>,
     },
     {
       title: '创建时间', dataIndex: 'createdAt', width: 180,
@@ -172,9 +158,6 @@ export default function WebSearchProvidersPage() {
           form.setFieldsValue({ enabled: true });
           setModalOpen(true);
         }}>新增 Provider</Button>
-        <Button icon={revealKey ? <EyeOutlined /> : undefined} onClick={() => setRevealKey(!revealKey)}>
-          {revealKey ? '隐藏 API Key' : '查看完整 API Key'}
-        </Button>
       </Space>
 
       <Table rowKey="id" loading={loading} dataSource={data} columns={columns} pagination={false} scroll={{ x: 1100 }} />

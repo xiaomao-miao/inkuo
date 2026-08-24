@@ -177,8 +177,10 @@ export const TitleBar: React.FC = () => {
     try {
       const selected = await openWorkspaceDirectory();
       if (selected) {
-        switchWorkspace(selected);
-        await applyWorkspaceDirectoryLoad(selected, { mergeWithExisting: false });
+        const switched = await switchWorkspace(selected);
+        if (switched) {
+          await applyWorkspaceDirectoryLoad(selected, { mergeWithExisting: false });
+        }
       }
     } catch (err) {
       reportError('titlebar-open-folder', err);

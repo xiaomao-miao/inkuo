@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
+using Inkuso.Cloud.Core.Billing;
 using Inkuso.Cloud.Core.Data;
 using Inkuso.Cloud.Core.Entities;
 
@@ -43,10 +44,14 @@ public static class AdminRedemptionCodesEndpoints
 
         group.MapPost("/", async (RedemptionCodeRequest req, AppDbContext db) =>
         {
-            if (string.IsNullOrWhiteSpace(req.Code) || req.Code.Length < 4)
-                return Results.BadRequest(new { error = "Code must be at least 4 characters" });
+            var code = BillingLimits.NormalizeCode(req.Code);
+            var validationError = BillingLimits.ValidateCode(code)
+                                  ?? BillingLimits.ValidatePointGrant(req.CreditPoints, allowZero: true)
+                                  ?? BillingLimits.ValidateMaxUses(req.MaxUses);
+            if (validationError is not null)
+                return Results.BadRequest(new { error = validationError });
 
-            if (await db.RedemptionCodes.AnyAsync(r => r.Code == req.Code))
+            if (await db.RedemptionCodes.AnyAsync(r => r.Code == code))
                 return Results.Conflict(new { error = "Code already exists" });
 
             if (req.PlanId.HasValue && !await db.Plans.AnyAsync(p => p.Id == req.PlanId.Value))
@@ -59,7 +64,7 @@ public static class AdminRedemptionCodesEndpoints
 
             var r = new RedemptionCode
             {
-                Code = req.Code,
+                Code = code,
                 CreditPoints = req.CreditPoints,
                 PlanId = req.PlanId,
                 MaxUses = req.MaxUses,
@@ -68,23 +73,52 @@ public static class AdminRedemptionCodesEndpoints
                 CreatedAt = DateTime.UtcNow,
             };
             db.RedemptionCodes.Add(r);
-            await db.SaveChangesAsync();
+            try
+            {
+                await db.SaveChangesAsync();
+            }
+            catch (DbUpdateException)
+            {
+                return Results.Conflict(new { error = "Code already exists" });
+            }
             return Results.Ok(new { id = r.Id, code = r.Code });
         });
 
         group.MapPut("/{id:int}", async (int id, RedemptionCodeRequest req, AppDbContext db) =>
         {
+            var code = BillingLimits.NormalizeCode(req.Code);
+            var validationError = BillingLimits.ValidateCode(code)
+                                  ?? BillingLimits.ValidatePointGrant(req.CreditPoints, allowZero: true)
+                                  ?? BillingLimits.ValidateMaxUses(req.MaxUses);
+            if (validationError is not null)
+                return Results.BadRequest(new { error = validationError });
+            if (req.PlanId.HasValue && !await db.Plans.AnyAsync(p => p.Id == req.PlanId.Value))
+                return Results.BadRequest(new { error = "Invalid PlanId" });
+            if (req.CreditPoints <= 0 && !req.PlanId.HasValue)
+                return Results.BadRequest(new { error = "Redemption code must grant points or a plan" });
+
             var r = await db.RedemptionCodes.FindAsync(id);
             if (r == null) return Results.NotFound();
+            if (req.MaxUses < r.UsedCount)
+                return Results.BadRequest(new { error = "MaxUses cannot be lower than UsedCount" });
+            if (await db.RedemptionCodes.AnyAsync(other => other.Id != id && other.Code == code))
+                return Results.Conflict(new { error = "Code already exists" });
 
-            r.Code = req.Code;
+            r.Code = code;
             r.CreditPoints = req.CreditPoints;
             r.PlanId = req.PlanId;
             r.MaxUses = req.MaxUses;
             r.ExpiresAt = req.ExpiresAt;
             r.Enabled = req.Enabled;
 
-            await db.SaveChangesAsync();
+            try
+            {
+                await db.SaveChangesAsync();
+            }
+            catch (DbUpdateException)
+            {
+                return Results.Conflict(new { error = "Code already exists" });
+            }
             return Results.Ok(new { message = "Redemption code updated" });
         });
 
@@ -92,6 +126,26 @@ public static class AdminRedemptionCodesEndpoints
         {
             var r = await db.RedemptionCodes.FindAsync(id);
             if (r == null) return Results.NotFound();
+            if (!r.Enabled)
+            {
+                var normalizedCode = BillingLimits.NormalizeCode(r.Code);
+                var validationError = normalizedCode != r.Code
+                    ? "Code must not contain leading or trailing whitespace"
+                    : BillingLimits.ValidateCode(normalizedCode)
+                      ?? BillingLimits.ValidatePointGrant(r.CreditPoints, allowZero: true)
+                      ?? BillingLimits.ValidateMaxUses(r.MaxUses);
+                if (validationError is not null
+                    || r.UsedCount > r.MaxUses
+                    || (r.CreditPoints == 0 && !r.PlanId.HasValue)
+                    || (r.PlanId.HasValue && !await db.Plans.AnyAsync(plan => plan.Id == r.PlanId.Value)))
+                    return Results.BadRequest(new
+                    {
+                        error = validationError
+                                ?? (r.UsedCount > r.MaxUses
+                                    ? "UsedCount exceeds MaxUses; edit the code before enabling it"
+                                    : "The code must reference an existing plan or grant points"),
+                    });
+            }
             r.Enabled = !r.Enabled;
             await db.SaveChangesAsync();
             return Results.Ok(new { enabled = r.Enabled });

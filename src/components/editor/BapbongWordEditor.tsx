@@ -45,6 +45,7 @@ export const BapbongWordEditor: React.FC<WordEditorProps> = ({
   const [isDirty, setIsDirty] = useState(false);
   const [hasExternalConflict, setHasExternalConflict] = useState(false);
   const dirtyStateRef = useRef(false);
+  const editGenerationRef = useRef(0);
   // Programmatic DOCX loads also emit editor change notifications. Keep those
   // out of the user-dirty path; otherwise an AI refresh immediately turns the
   // freshly-loaded tab dirty again.
@@ -82,6 +83,7 @@ export const BapbongWordEditor: React.FC<WordEditorProps> = ({
         suppressChangesRef.current = true;
         setDocumentBuffer(buf);
         setDocxBuffer(filePath, data);
+        editGenerationRef.current = 0;
         dirtyStateRef.current = false;
         setIsDirty(false);
         setOpenTabDirty(filePath, false);
@@ -186,6 +188,7 @@ export const BapbongWordEditor: React.FC<WordEditorProps> = ({
     // Read the ref instead of the render-time state so an immediate close
     // after the first edit cannot hit a stale "clean" save closure.
     if (!dirtyStateRef.current) return true;
+    const generationAtStart = editGenerationRef.current;
     try {
       const savedBuffer = await editorRef.current?.save();
       if (!savedBuffer) {
@@ -199,9 +202,18 @@ export const BapbongWordEditor: React.FC<WordEditorProps> = ({
       const bufferArray = Array.from(new Uint8Array(savedBuffer));
       await invoke('write_office_file', { path: filePath, data: bufferArray });
       setDocxBuffer(filePath, bufferArray);
+      setHasExternalConflict(false);
+      if (editGenerationRef.current !== generationAtStart) {
+        // Disk now contains the snapshot captured at save start, but the live
+        // editor has newer input. Keep that newer generation dirty so a close
+        // or workspace switch cannot discard it.
+        dirtyStateRef.current = true;
+        setIsDirty(true);
+        setOpenTabDirty(filePath, true);
+        return true;
+      }
       dirtyStateRef.current = false;
       setIsDirty(false);
-      setHasExternalConflict(false);
       setOpenTabDirty(filePath, false);
       return true;
     } catch (err) {
@@ -225,6 +237,7 @@ export const BapbongWordEditor: React.FC<WordEditorProps> = ({
 
   const handleChange = useCallback(() => {
     if (suppressChangesRef.current) return;
+    editGenerationRef.current += 1;
     if (dirtyStateRef.current) return;
     dirtyStateRef.current = true;
     setIsDirty(true);
@@ -241,6 +254,7 @@ export const BapbongWordEditor: React.FC<WordEditorProps> = ({
 
   const handleEditorLoad = useCallback(() => {
     suppressChangesRef.current = false;
+    editGenerationRef.current = 0;
     dirtyStateRef.current = false;
     setIsDirty(false);
     setOpenTabDirty(filePath, false);

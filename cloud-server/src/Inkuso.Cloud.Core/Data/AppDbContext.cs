@@ -31,6 +31,8 @@ public class AppDbContext : DbContext
             // Account currency is points (1 元 = 1000 点). Whole points only — no fractional.
             e.Property(u => u.BalancePoints);
             e.Property(u => u.ReservedPoints);
+            e.Property(u => u.DebtPoints);
+            e.Property(u => u.AdminSuspended);
         });
 
         // RefreshToken
@@ -98,6 +100,9 @@ public class AppDbContext : DbContext
             e.HasIndex(u => new { u.UserId, u.RequestId }).IsUnique();
             e.Property(u => u.RequestId).HasMaxLength(64);
             e.Property(u => u.BillingStatus).HasMaxLength(16);
+            e.Property(u => u.InputPricePerMTokensSnapshot).HasPrecision(12, 6);
+            e.Property(u => u.OutputPricePerMTokensSnapshot).HasPrecision(12, 6);
+            e.Property(u => u.CachedInputPricePerMTokensSnapshot).HasPrecision(12, 6);
         });
 
         // Plan
@@ -136,7 +141,10 @@ public class AppDbContext : DbContext
                 .OnDelete(DeleteBehavior.Restrict);
             e.Property(u => u.ProviderId).HasMaxLength(64);
             e.Property(u => u.Query).HasMaxLength(512);
+            e.Property(u => u.RequestId).HasMaxLength(64);
+            e.Property(u => u.BillingStatus).HasMaxLength(16);
             e.HasIndex(u => new { u.UserId, u.RecordedAt });
+            e.HasIndex(u => new { u.UserId, u.RequestId }).IsUnique();
         });
 
         // Release
@@ -164,9 +172,11 @@ public class AppDbContext : DbContext
             new Plan { Id = Guid.Parse("00000000-0000-0000-0000-000000000004"), Name = "Max", MonthlyPricePoints = 299_000, MonthlyTokenLimit = 100_000_000, OverageInputPricePer1k = 0.001m, OverageOutputPricePer1k = 0.002m, Enabled = true, CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc) }
         );
 
-        // Seed default invite code (INKUO2026 for early adopters). 5000 points = ¥5 new-user credit.
+        // Keep inert placeholder rows for migration compatibility, but never
+        // ship a publicly known code that grants production credit. Operators
+        // must create real, scoped codes through the authenticated Admin UI.
         modelBuilder.Entity<InviteCode>().HasData(
-            new InviteCode { Id = 1, Code = "INKUO2026", FreePoints = 5000, MaxUses = 9999, Enabled = true, CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc) }
+            new InviteCode { Id = 1, Code = "INKUO2026", FreePoints = 0, MaxUses = 9999, Enabled = false, CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc) }
         );
 
         // Seed default model configs (prices in yuan per 1M tokens, converted to points at billing time)
@@ -176,11 +186,10 @@ public class AppDbContext : DbContext
             new ModelConfig { Id = Guid.Parse("00000000-0000-0000-0001-000000000003"), UpstreamProvider = "openai", UpstreamBaseUrl = "https://api.openai.com/v1", ModelName = "gpt-4o", DisplayName = "GPT-4o", InputPricePerMTokens = 2.5m, OutputPricePerMTokens = 10.0m, CachedInputPricePerMTokens = 1.25m, Enabled = true, SortOrder = 3, CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc) }
         );
 
-        // Seed one starter redemption code (5000 points = ¥5) so the admin UI has
-        // an example row immediately after a fresh deploy. Admins can disable or
-        // delete it; the seed is just a convenience.
+        // Inert migration-compatible placeholder. A known reusable redemption
+        // code must never grant credit in a fresh production deployment.
         modelBuilder.Entity<RedemptionCode>().HasData(
-            new RedemptionCode { Id = 1, Code = "WELCOME-5000", CreditPoints = 5_000, MaxUses = 9999, UsedCount = 0, Enabled = true, CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc) }
+            new RedemptionCode { Id = 1, Code = "WELCOME-5000", CreditPoints = 0, MaxUses = 9999, UsedCount = 0, Enabled = false, CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc) }
         );
 
         // Seed default web_search provider. The Baidu Baike endpoint

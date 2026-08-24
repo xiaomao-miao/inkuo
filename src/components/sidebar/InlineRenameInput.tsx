@@ -11,9 +11,16 @@ import type { InlineEditState } from '../../store';
 import {
   createFileEntry,
   loadDirectoryChildren,
+  pathExists,
   renamePath,
 } from '../../services/workspace';
-import { normalizeDirPath } from '../../utils/path';
+import { runPathMutationWithOpenTabLifecycle } from '../../services/openTabLifecycle';
+import {
+  areFilePathsEqual,
+  getBaseName,
+  joinPath,
+  normalizeDirPath,
+} from '../../utils/path';
 import { reportError } from '../../utils/errors';
 import { detectFileKind } from '../../types';
 import styles from './InlineRenameInput.module.css';
@@ -76,7 +83,7 @@ export const InlineRenameInput = ({ state, depth }: InlineRenameInputProps) => {
         cancelInlineEdit();
         return;
       }
-      const originalName = state.originalPath.split('/').pop() ?? '';
+      const originalName = getBaseName(state.originalPath);
       if (trimmed === originalName) {
         cancelInlineEdit();
         return;
@@ -114,11 +121,27 @@ export const InlineRenameInput = ({ state, depth }: InlineRenameInputProps) => {
 
     try {
       if (state.mode === 'rename' && state.originalPath) {
+        const originalPath = state.originalPath;
         const parent = state.parentPath;
-        const target = `${parent}/${trimmed}`;
+        const target = joinPath(parent, trimmed);
         // Backend returns TargetExists if collision. Surface as inline error.
         try {
-          await renamePath(state.originalPath, target);
+          if (
+            !areFilePathsEqual(originalPath, target)
+            && await pathExists(target)
+          ) {
+            setError('同名文件已存在');
+            return;
+          }
+          const renamed = await runPathMutationWithOpenTabLifecycle({
+            path: originalPath,
+            includeDescendants: state.isDirectory === true,
+            mutate: () => renamePath(originalPath, target),
+          });
+          if (!renamed) {
+            cancelInlineEdit();
+            return;
+          }
         } catch (err) {
           const message = reportError('inline-rename', err);
           if (message.includes('Target') || message.toLowerCase().includes('exist')) {

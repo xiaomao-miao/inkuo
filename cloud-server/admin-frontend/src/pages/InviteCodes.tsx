@@ -5,6 +5,9 @@ import {
 import { PlusOutlined, EditOutlined, DeleteOutlined, CopyOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { inviteCodesApi, InviteCode } from '../api/inviteCodes';
+import {
+  CODE_PATTERN, MAX_CODE_LENGTH, MAX_CODE_USES, MAX_SINGLE_CREDIT_POINTS, MIN_CODE_LENGTH, trimCode,
+} from '../billingLimits';
 
 export default function InviteCodesPage() {
   const [data, setData] = useState<InviteCode[]>([]);
@@ -30,6 +33,7 @@ export default function InviteCodesPage() {
     try {
       const payload = {
         ...values,
+        code: values.code.trim(),
         expiresAt: values.expiresAt ? values.expiresAt.toISOString() : null,
       };
       if (editing) await inviteCodesApi.update(editing.id, payload);
@@ -69,8 +73,8 @@ export default function InviteCodesPage() {
       ),
     },
     {
-      title: '赠送额度 (元)', dataIndex: 'freeQuotaCents', width: 130,
-      render: (c: number) => <strong>¥{(c / 100).toFixed(2)}</strong>,
+      title: '赠送额度 (元)', dataIndex: 'freePoints', width: 130,
+      render: (p: number) => <strong>¥{(p / 1000).toFixed(3)}</strong>,
     },
     {
       title: '使用情况', width: 180,
@@ -138,15 +142,19 @@ export default function InviteCodesPage() {
         onOk={() => form.submit()}
       >
         <Form form={form} layout="vertical" onFinish={onSubmit}
-          initialValues={{ maxUses: 1, freeQuotaCents: 100, enabled: true }}>
-          <Form.Item name="code" label="邀请码 (建议大写)" rules={[{ required: true, min: 4 }]}>
-            <Input placeholder="BETA2026" style={{ textTransform: 'uppercase' }} />
+          initialValues={{ maxUses: 1, freePoints: 1000, enabled: true }}>
+          <Form.Item name="code" label="邀请码 (建议大写)" rules={[
+            { required: true, whitespace: true, transform: trimCode },
+            { min: MIN_CODE_LENGTH, max: MAX_CODE_LENGTH, transform: trimCode },
+            { pattern: CODE_PATTERN, message: '仅可使用英文字母、数字、- 和 _', transform: trimCode },
+          ]}>
+            <Input maxLength={MAX_CODE_LENGTH} placeholder="BETA2026" style={{ textTransform: 'uppercase' }} />
           </Form.Item>
-          <Form.Item name="freeQuotaCents" label="注册免费赠送 (分)" rules={[{ required: true }]}>
-            <InputNumber min={0} style={{ width: '100%' }} step={100} />
+          <Form.Item name="freePoints" label="注册赠送点数（1000 点 = ¥1）" rules={[{ required: true }]}>
+            <InputNumber min={0} max={MAX_SINGLE_CREDIT_POINTS} precision={0} style={{ width: '100%' }} step={1000} />
           </Form.Item>
           <Form.Item name="maxUses" label="最大使用次数" rules={[{ required: true }]}>
-            <InputNumber min={1} style={{ width: '100%' }} />
+            <InputNumber min={Math.max(1, editing?.usedCount ?? 0)} max={MAX_CODE_USES} precision={0} style={{ width: '100%' }} />
           </Form.Item>
           <Form.Item name="expiresAt" label="过期时间 (留空 = 永久)">
             <DatePicker style={{ width: '100%' }} />

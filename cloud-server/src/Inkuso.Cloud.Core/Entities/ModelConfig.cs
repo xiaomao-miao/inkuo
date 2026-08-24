@@ -3,7 +3,7 @@ namespace Inkuso.Cloud.Core.Entities;
 public class ModelConfig
 {
     public Guid Id { get; set; } = Guid.NewGuid();
-    public string UpstreamProvider { get; set; } = string.Empty; // openai / deepseek / anthropic
+    public string UpstreamProvider { get; set; } = string.Empty; // openai / deepseek; both use OpenAI-compatible chat completions
     public string UpstreamBaseUrl { get; set; } = string.Empty;
     public string UpstreamApiKey { get; set; } = string.Empty; // stored encrypted in production
     public string ModelName { get; set; } = string.Empty; // upstream model id, e.g. "deepseek-chat"

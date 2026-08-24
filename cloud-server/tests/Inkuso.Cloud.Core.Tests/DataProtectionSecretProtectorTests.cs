@@ -47,6 +47,8 @@ public class DataProtectionSecretProtectorTests
         Assert.NotEqual(secret, protectedValue);
         Assert.StartsWith("dp:", protectedValue);
         Assert.Equal(secret, p.Unprotect(protectedValue));
+        Assert.True(p.IsProtected(protectedValue));
+        Assert.False(p.IsProtected(secret));
     }
 
     [Fact]
@@ -77,5 +79,6 @@ public class DataProtectionSecretProtectorTests
     {
         var p = NewProtector();
         Assert.Null(p.Unprotect(null));
+        Assert.False(p.IsProtected(null));
     }
 }

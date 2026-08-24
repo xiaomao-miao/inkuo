@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Cloud, LogIn, CheckCircle2, Sparkles, ShieldCheck } from 'lucide-react';
+import { AlertCircle, Cloud, LogIn, CheckCircle2, Sparkles, ShieldCheck } from 'lucide-react';
 import { useSettingsStore } from '../../store';
 import { cloudApi, type CloudAccountInfo } from './cloudApi';
 import { CloudPanel } from './CloudPanel';
@@ -102,13 +102,18 @@ const StatusPill: React.FC<{
     );
   }
   const planLabel = accountInfo?.plan_name ?? account.plan_name ?? 'Free';
+  const isSuspended = accountInfo?.is_suspended ?? account.is_suspended ?? false;
+  const debtPoints = accountInfo?.debt_points ?? account.debt_points ?? 0;
+  const hasBillingBlock = isSuspended || debtPoints > 0;
   return (
-    <div className={styles.pill} data-state={cloudMode ? 'active' : 'idle'}>
-      <CheckCircle2 size={12} />
+    <div className={styles.pill} data-state={hasBillingBlock ? 'warning' : cloudMode ? 'active' : 'idle'}>
+      {hasBillingBlock ? <AlertCircle size={12} /> : <CheckCircle2 size={12} />}
       <span className={styles.pillEmail}>{account.email}</span>
       <span className={styles.pillDivider}>·</span>
       <span>{planLabel}</span>
-      {cloudMode && <span className={styles.pillTag}>当前模式</span>}
+      {hasBillingBlock
+        ? <span className={styles.pillTag}>{debtPoints > 0 ? '欠费暂停' : '账号暂停'}</span>
+        : cloudMode && <span className={styles.pillTag}>当前模式</span>}
     </div>
   );
 };

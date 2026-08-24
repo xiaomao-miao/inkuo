@@ -117,6 +117,7 @@ impl From<crate::snapshots::SnapshotError> for AppError {
             E::Io(_) => AppError::SnapshotWriteFailed(err.to_string()),
             E::Json(_) => AppError::SnapshotCorrupt(err.to_string()),
             E::InvalidWorkspacePath(p) => AppError::InvalidWorkspacePath(p),
+            E::InvalidSnapshotPath(path) => AppError::SnapshotCorrupt(path),
             E::SnapshotNotFound(id) => AppError::SnapshotNotFound(id),
             E::SnapshotCorrupt(msg) => AppError::SnapshotCorrupt(msg),
             E::SettingsRead(msg) => AppError::ReadSettings(msg),

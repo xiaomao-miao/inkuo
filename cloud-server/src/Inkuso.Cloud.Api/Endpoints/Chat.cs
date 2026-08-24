@@ -1,7 +1,6 @@
 using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -15,15 +14,6 @@ namespace Inkuso.Cloud.Api.Endpoints;
 
 public static class Chat
 {
-    /// <summary>
-    /// SSE line pattern: a complete `data: ...` block sitting on its own
-    /// line. We use this to slice out the JSON payload even when a chunk
-    /// straddles the 8 KiB read buffer.
-    /// </summary>
-    private static readonly Regex DataLineRegex = new(
-        @"^data:\s*(?<payload>.*?)\s*$",
-        RegexOptions.Compiled | RegexOptions.Multiline);
-
     public static void MapChatEndpoints(this WebApplication app)
     {
         var group = app.MapGroup("/v1").WithTags("chat").RequireAuthorization();
@@ -34,6 +24,7 @@ public static class Chat
             LlmForwarder forwarder,
             BillingLedger ledger,
             ILoggerFactory loggerFactory,
+            IHostApplicationLifetime appLifetime,
             CancellationToken ct) =>
         {
             var logger = loggerFactory.CreateLogger("Inkuso.Cloud.Chat");
@@ -85,14 +76,21 @@ public static class Chat
             var user = await db.Users.FindAsync(userId);
             if (user is null) return Results.Unauthorized();
             if (user.IsSuspended)
-                return Results.Json(new { error = "Account suspended due to unpaid usage. Please top up to resume." }, statusCode: 402);
+                return user.AdminSuspended
+                    ? Results.Json(
+                        new { error = "Account suspended by an administrator. Please contact support." },
+                        statusCode: 403)
+                    : Results.Json(
+                        new { error = "Account suspended due to unpaid usage. Please top up to resume." },
+                        statusCode: 402);
 
             // Estimate the prompt token count from the inbound messages and
             // compute the worst-case cost. We use a generous output cap (the
             // model's MaxOutputTokens field, or 4096 fallback) because the real
             // output size is unknown until the stream completes.
             var approxPromptTokens = EstimatePromptTokens(root);
-            var maxOutputCap = config.MaxOutputTokens > 0 ? config.MaxOutputTokens : 4096;
+            var configuredOutputCap = config.MaxOutputTokens > 0 ? config.MaxOutputTokens : 4096;
+            var maxOutputCap = ResolveRequestedOutputCap(root, configuredOutputCap);
             var reservePoints = LlmForwarder.EstimateMaxCostPoints(config, approxPromptTokens, maxOutputCap);
 
             var requestId = ctx.Request.Headers["Idempotency-Key"].FirstOrDefault()?.Trim();
@@ -103,7 +101,15 @@ public static class Chat
 
             ctx.Response.Headers["X-Request-Id"] = requestId;
             var reservation = await ledger.TryReserveAsync(
-                userId, config.Id, reservePoints, requestId, ct);
+                userId,
+                config.Id,
+                reservePoints,
+                requestId,
+                ct,
+                new BillingLedger.PricingSnapshot(
+                    config.InputPricePerMTokens,
+                    config.OutputPricePerMTokens,
+                    config.CachedInputPricePerMTokens));
             if (reservation.State == BillingLedger.ReservationState.Rejected)
                 return Results.Json(new { error = "Insufficient points balance. Please top up to continue." }, statusCode: 402);
             if (!reservation.CanForward)
@@ -114,121 +120,221 @@ public static class Chat
                     billing_status = reservation.BillingStatus,
                 });
 
-            var billingFinalized = false;
-            try
-            {
-
-            // Rewrite body: force upstream model name + force stream=true +
-            // request usage blocks so we can bill. We mutate the original
-            // JsonElement tree (instead of round-tripping through object→string
-            // →object which would change number precision and string escaping),
-            // then serialize once.
-            var newBody = RewriteRequestBody(root, config.ModelName, maxOutputCap);
-
-            // Call upstream
-            var forwardResult = await forwarder.ForwardStreamAsync(userId, config.Id, newBody, ct);
-            var upstreamStream = forwardResult.UpstreamStream;
-
-            ctx.Response.ContentType = "text/event-stream";
-            ctx.Response.Headers.CacheControl = "no-cache";
-            ctx.Response.Headers.Connection = "keep-alive";
-
-            using var reader = new StreamReader(upstreamStream, Encoding.UTF8, detectEncodingFromByteOrderMarks: false);
-            // Reassemble SSE lines across chunk boundaries. The previous
-            // implementation called `chunk.Split('\n')` directly which dropped
-            // every `data:` line that straddled the 8 KiB network read buffer;
-            // that silently lost the usage block and meant real customer usage
-            // was never billed. The accumulator holds the partial line that
-            // didn't end in '\n' yet.
-            var carry = new StringBuilder();
+            var releasePendingReservation = true;
+            var upstreamAccepted = false;
+            var billingAttempted = false;
+            var clientConnected = !ctx.RequestAborted.IsCancellationRequested;
+            var hasAuthoritativeUsage = false;
             long totalPrompt = 0, totalCompletion = 0, totalCached = 0;
-            var buffer = new char[8192];
-            int read;
-            int linesProcessed = 0;
+            long streamedUtf8Bytes = 0;
 
-            try
+            async Task WriteToClientAsync(string payload)
             {
-                while ((read = await reader.ReadAsync(buffer.AsMemory(), ct)) > 0)
+                if (!clientConnected) return;
+                try
                 {
-                    var chunk = carry + new string(buffer, 0, read);
-                    int newlineIdx;
-                    int startIdx = 0;
-                    while ((newlineIdx = chunk.IndexOf('\n', startIdx)) >= 0)
-                    {
-                        var line = chunk.Substring(startIdx, newlineIdx - startIdx);
-                        startIdx = newlineIdx + 1;
-                        linesProcessed++;
-                        await ctx.Response.WriteAsync(line + "\n", ct);
-                        await ctx.Response.Body.FlushAsync(ct);
-
-                        AccumulateUsage(line, ref totalPrompt, ref totalCompletion, ref totalCached);
-                    }
-                    // Anything past the last newline is a partial line; stash it
-                    // for the next iteration's prefix.
-                    carry.Clear();
-                    if (startIdx < chunk.Length) carry.Append(chunk, startIdx, chunk.Length - startIdx);
+                    await ctx.Response.WriteAsync(payload, ctx.RequestAborted);
+                    await ctx.Response.Body.FlushAsync(ctx.RequestAborted);
                 }
-                // Flush any final carry (a stream that didn't end with a newline).
-                if (carry.Length > 0)
+                catch (OperationCanceledException) when (ctx.RequestAborted.IsCancellationRequested)
                 {
-                    await ctx.Response.WriteAsync(carry.ToString(), ct);
-                    AccumulateUsage(carry.ToString(), ref totalPrompt, ref totalCompletion, ref totalCached);
-                    await ctx.Response.Body.FlushAsync(ct);
+                    clientConnected = false;
+                }
+                catch (IOException)
+                {
+                    clientConnected = false;
+                }
+                catch (ObjectDisposedException)
+                {
+                    clientConnected = false;
                 }
             }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                // The outer finally releases the hold with a fresh token.
-                return Results.Empty;
-            }
 
-            // --- Settle billing ---
-            // Even if the upstream returned zero tokens we still finalize the
-            // audit row. Settlement releases the hold and debits only the actual
-            // collected cost; it never credits BalancePoints.
-            try
+            async Task FinalizeBillingAsync()
             {
-                using var billingCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-                var outcome = await ledger.SettleAsync(
-                    userId,
-                    config.Id,
-                    totalPrompt,
-                    totalCompletion,
-                    totalCached,
-                    requestId,
-                    billingCts.Token);
-                billingFinalized = true;
+                if (!upstreamAccepted || billingAttempted) return;
+                billingAttempted = true;
 
-                if (outcome.Status == "debt")
+                // A conforming provider emits an authoritative usage block at
+                // the end of the stream. If a timeout/network fault prevents
+                // that block, bill a conservative token estimate from the
+                // prompt and observed SSE bytes instead of silently making the
+                // delivered prefix free. The maximum is still bounded by the
+                // request's reserved output cap.
+                // Never charge beyond the server-approved hold. A buggy or
+                // compromised provider can report token counts larger than the
+                // request it accepted; clamping to our conservative input-byte
+                // estimate and configured output cap prevents surprise debt.
+                if (hasAuthoritativeUsage
+                    && (totalPrompt > approxPromptTokens || totalCompletion > maxOutputCap))
                 {
-                    // Surface the suspension to the desktop client so the next
-                    // /account/me refetch shows the suspended state. The body
-                    // may already have been fully streamed at this point, so we
-                    // log it instead of trying to rewrite the HTTP status.
                     logger.LogWarning(
-                        "User suspended for unpaid usage: user={UserId} model={ModelId} cost_points={Cost} missing={Missing}",
-                        userId, config.Id, outcome.CostPoints, outcome.DebtPoints);
-                    await ctx.Response.WriteAsync(
-                        $"data: {{\"error\":\"insufficient_points\",\"message\":\"usage_billed_but_balance_short\",\"suspended\":true}}\n\n",
-                        ct);
-                    await ctx.Response.Body.FlushAsync(ct);
+                        "Clamped impossible upstream usage: request={RequestId} prompt={Prompt}/{PromptCap} completion={Completion}/{CompletionCap}",
+                        requestId,
+                        totalPrompt,
+                        approxPromptTokens,
+                        totalCompletion,
+                        maxOutputCap);
+                }
+                var promptTokens = hasAuthoritativeUsage
+                    ? Math.Min(totalPrompt, approxPromptTokens)
+                    : approxPromptTokens;
+                var completionTokens = hasAuthoritativeUsage
+                    ? Math.Min(totalCompletion, (long)maxOutputCap)
+                    : Math.Min(
+                        (long)maxOutputCap,
+                        (streamedUtf8Bytes + 2L) / 3L);
+                var cachedTokens = hasAuthoritativeUsage
+                    ? Math.Min(totalCached, promptTokens)
+                    : 0L;
+
+                try
+                {
+                    using var queueCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                    await ledger.QueueSettlementAsync(
+                        userId,
+                        requestId,
+                        promptTokens,
+                        completionTokens,
+                        cachedTokens,
+                        queueCts.Token);
+                }
+                catch (Exception ex)
+                {
+                    // The row remains `streaming`; stale reconciliation will
+                    // conservatively charge the hold rather than release usage
+                    // already accepted by the upstream.
+                    logger.LogCritical(ex,
+                        "Could not queue delivered usage for settlement: user={UserId} model={ModelId} request={RequestId}",
+                        userId, config.Id, requestId);
+                    return;
+                }
+
+                try
+                {
+                    using var settleCts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+                    var outcome = await ledger.SettleAsync(
+                        userId,
+                        config.Id,
+                        promptTokens,
+                        completionTokens,
+                        cachedTokens,
+                        requestId,
+                        settleCts.Token);
+
+                    if (outcome.Status == "debt")
+                    {
+                        logger.LogWarning(
+                            "User suspended for unpaid usage: user={UserId} model={ModelId} cost_points={Cost} missing={Missing}",
+                            userId, config.Id, outcome.CostPoints, outcome.DebtPoints);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Usage and token counts are already durable in
+                    // `bill_pending`; the billing worker will retry.
+                    logger.LogError(ex,
+                        "Settlement queued for retry: user={UserId} model={ModelId} request={RequestId}",
+                        userId, config.Id, requestId);
                 }
             }
-            catch (Exception ex)
-            {
-                logger.LogError(ex,
-                    "Failed to settle usage: user={UserId} model={ModelId} reserved={Reserved}",
-                    userId, config.Id, reservePoints);
-            }
 
-            return Results.Empty;
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            try
             {
+                // Rewrite body: pin the upstream model, force streaming, and
+                // request a terminal usage block for exact billing.
+                var newBody = RewriteRequestBody(root, config.ModelName, maxOutputCap);
+                if (ctx.RequestAborted.IsCancellationRequested)
+                    return Results.Empty;
+
+                // The complete upstream lifetime is bounded independently of
+                // the browser/desktop connection. If the client disconnects we
+                // stop writing but keep draining the provider response so the
+                // final usage block can still be settled accurately.
+                using var upstreamCts = CancellationTokenSource.CreateLinkedTokenSource(
+                    appLifetime.ApplicationStopping);
+                upstreamCts.CancelAfter(LlmForwarder.MaxStreamDuration);
+                using var forwardResult = await forwarder.ForwardStreamAsync(
+                    userId, config.Id, newBody, upstreamCts.Token);
+
+                using (var markCts = new CancellationTokenSource(TimeSpan.FromSeconds(15)))
+                {
+                    var marked = await ledger.MarkStreamingAsync(userId, requestId, markCts.Token);
+                    if (!marked)
+                        throw new BillingInvariantException(
+                            $"Reservation {requestId} was not pending when the upstream accepted it.");
+                }
+                upstreamAccepted = true;
+                releasePendingReservation = false;
+
+                ctx.Response.ContentType = "text/event-stream";
+                ctx.Response.Headers.CacheControl = "no-cache";
+                ctx.Response.Headers.Connection = "keep-alive";
+
+                using var reader = new StreamReader(
+                    forwardResult.UpstreamStream,
+                    Encoding.UTF8,
+                    detectEncodingFromByteOrderMarks: false);
+                var carry = new StringBuilder();
+                var buffer = new char[8192];
+
+                try
+                {
+                    int read;
+                    while ((read = await reader.ReadAsync(
+                               buffer.AsMemory(),
+                               upstreamCts.Token)) > 0)
+                    {
+                        streamedUtf8Bytes += Encoding.UTF8.GetByteCount(buffer.AsSpan(0, read));
+                        var chunk = carry.ToString() + new string(buffer, 0, read);
+                        int newlineIdx;
+                        var startIdx = 0;
+                        while ((newlineIdx = chunk.IndexOf('\n', startIdx)) >= 0)
+                        {
+                            var line = chunk.Substring(startIdx, newlineIdx - startIdx);
+                            startIdx = newlineIdx + 1;
+                            hasAuthoritativeUsage |= AccumulateUsage(
+                                line,
+                                ref totalPrompt,
+                                ref totalCompletion,
+                                ref totalCached);
+                            await WriteToClientAsync(line + "\n");
+                        }
+                        carry.Clear();
+                        if (startIdx < chunk.Length)
+                            carry.Append(chunk, startIdx, chunk.Length - startIdx);
+                    }
+                    if (carry.Length > 0)
+                    {
+                        var finalLine = carry.ToString();
+                        hasAuthoritativeUsage |= AccumulateUsage(
+                            finalLine,
+                            ref totalPrompt,
+                            ref totalCompletion,
+                            ref totalCached);
+                        await WriteToClientAsync(finalLine);
+                    }
+                }
+                catch (OperationCanceledException) when (upstreamCts.IsCancellationRequested)
+                {
+                    logger.LogWarning(
+                        "Upstream stream reached its server-controlled limit: request={RequestId} limit_seconds={Limit}",
+                        requestId,
+                        LlmForwarder.MaxStreamDuration.TotalSeconds);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex,
+                        "Upstream stream ended before a complete usage block: request={RequestId}",
+                        requestId);
+                }
+
+                await FinalizeBillingAsync();
                 return Results.Empty;
             }
             catch (Exception ex)
             {
+                await FinalizeBillingAsync();
                 logger.LogError(ex,
                     "Chat request failed after reservation: user={UserId} model={ModelId} request={RequestId}",
                     userId, config.Id, requestId);
@@ -240,7 +346,7 @@ public static class Chat
             }
             finally
             {
-                if (!billingFinalized)
+                if (releasePendingReservation)
                 {
                     try
                     {
@@ -267,6 +373,20 @@ public static class Chat
     private static int EstimatePromptTokens(JsonElement root)
     {
         return Encoding.UTF8.GetByteCount(root.GetRawText());
+    }
+
+    private static int ResolveRequestedOutputCap(JsonElement root, int configuredCap)
+    {
+        var requested = 0;
+        foreach (var propertyName in new[] { "max_tokens", "max_completion_tokens" })
+        {
+            if (!root.TryGetProperty(propertyName, out var value)
+                || value.ValueKind != JsonValueKind.Number
+                || !value.TryGetInt32(out var parsed))
+                continue;
+            requested = Math.Max(requested, Math.Clamp(parsed, 1, configuredCap));
+        }
+        return requested > 0 ? requested : configuredCap;
     }
 
     /// <summary>
@@ -344,51 +464,16 @@ public static class Chat
     /// than <c>[DONE]</c>), extract any usage block and aggregate it into the
     /// caller's running totals.
     /// </summary>
-    private static void AccumulateUsage(
+    private static bool AccumulateUsage(
         string line,
         ref long totalPrompt,
         ref long totalCompletion,
         ref long totalCached)
     {
-        var trimmed = line.AsSpan().TrimStart();
-        if (!trimmed.StartsWith("data:"))
-            return;
-
-        // Skip everything after the first colon, then strip optional leading
-        // whitespace — SSE spec leaves a single space after the colon for
-        // compatibility, but clients should also accept none.
-        var payloadStart = line.IndexOf(':') + 1;
-        if (payloadStart <= 0 || payloadStart >= line.Length) return;
-        var payload = line.AsSpan(payloadStart).Trim();
-        if (payload.Length == 0) return;
-        if (payload.SequenceEqual("[DONE]")) return;
-
-        try
-        {
-            using var chunkDoc = JsonDocument.Parse(payload.ToString());
-            if (!chunkDoc.RootElement.TryGetProperty("usage", out var usage))
-                return;
-            if (usage.TryGetProperty("prompt_tokens", out var pt))
-                totalPrompt = pt.GetInt64();
-            if (usage.TryGetProperty("completion_tokens", out var ct2))
-                totalCompletion = ct2.GetInt64();
-            // OpenAI-style: usage.prompt_tokens_details.cached_tokens
-            // Anthropic-style: usage.cache_read_input_tokens (counts toward prompt_tokens)
-            if (usage.TryGetProperty("prompt_tokens_details", out var ptd) &&
-                ptd.ValueKind == JsonValueKind.Object &&
-                ptd.TryGetProperty("cached_tokens", out var cached))
-            {
-                totalCached = cached.GetInt64();
-            }
-            else if (usage.TryGetProperty("cache_read_input_tokens", out var cr))
-            {
-                totalCached = cr.GetInt64();
-            }
-        }
-        catch
-        {
-            // Malformed SSE line — ignore; upstream might emit heartbeats or
-            // mid-stream annotations that we don't care about.
-        }
+        if (!SseUsageParser.TryParseLine(line, out var usage)) return false;
+        totalPrompt = usage.PromptTokens;
+        totalCompletion = usage.CompletionTokens;
+        totalCached = usage.CachedPromptTokens;
+        return true;
     }
 }

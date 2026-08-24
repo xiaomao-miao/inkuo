@@ -63,6 +63,7 @@ import {
 import {
   requestCloseOpenTab,
   requestCloseOpenTabs,
+  runPathMutationWithOpenTabLifecycle,
 } from '../../../services/openTabLifecycle';
 import { reportError } from '../../../utils/errors';
 import { getRelativePath } from '../../../utils/path';
@@ -457,6 +458,7 @@ function appendMutateItems(
       useSidebarStore.getState().startInlineEdit({
         parentPath: parentPath(entry.path),
         originalPath: entry.path,
+        isDirectory: isDir,
         initialValue: itemName,
         mode: 'rename',
       });
@@ -480,11 +482,12 @@ function appendMutateItems(
       });
       if (!ok) return;
       try {
-        await deletePath(entry.path, isDir);
-        // Close any open tab pointing at the deleted entry.
-        const state = useSidebarStore.getState();
-        const openTab = state.openTabs.find((t) => t.path === entry.path);
-        if (openTab) state.closeTab(openTab.id);
+        const deleted = await runPathMutationWithOpenTabLifecycle({
+          path: entry.path,
+          includeDescendants: isDir,
+          mutate: () => deletePath(entry.path, isDir),
+        });
+        if (!deleted) return;
         await refresh(parentPath(entry.path));
         notify('success', '已删除', itemName);
       } catch (err) {

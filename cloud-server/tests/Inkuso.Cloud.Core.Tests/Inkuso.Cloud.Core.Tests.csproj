@@ -25,6 +25,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Inkuso.Cloud.Core\Inkuso.Cloud.Core.csproj" />
+    <ProjectReference Include="..\..\src\Inkuso.Cloud.Api\Inkuso.Cloud.Api.csproj" />
+    <ProjectReference Include="..\..\src\Inkuso.Cloud.Admin\Inkuso.Cloud.Admin.csproj" />
   </ItemGroup>
 
 </Project>

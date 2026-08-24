@@ -101,8 +101,8 @@ namespace Inkuso.Cloud.Core.Migrations
                             Id = 1,
                             Code = "INKUO2026",
                             CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),
-                            Enabled = true,
-                            FreePoints = 5000L,
+                            Enabled = false,
+                            FreePoints = 0L,
                             MaxUses = 9999,
                             UsedCount = 0
                         });
@@ -345,8 +345,8 @@ namespace Inkuso.Cloud.Core.Migrations
                             Id = 1,
                             Code = "WELCOME-5000",
                             CreatedAt = new DateTime(2025, 1, 1, 0, 0, 0, 0, DateTimeKind.Utc),
-                            CreditPoints = 5000L,
-                            Enabled = true,
+                            CreditPoints = 0L,
+                            Enabled = false,
                             MaxUses = 9999,
                             UsedCount = 0
                         });
@@ -511,6 +511,10 @@ namespace Inkuso.Cloud.Core.Migrations
                     b.Property<long>("CachedPromptTokens")
                         .HasColumnType("bigint");
 
+                    b.Property<decimal?>("CachedInputPricePerMTokensSnapshot")
+                        .HasPrecision(12, 6)
+                        .HasColumnType("numeric(12,6)");
+
                     b.Property<long>("CompletionTokens")
                         .HasColumnType("bigint");
 
@@ -519,6 +523,14 @@ namespace Inkuso.Cloud.Core.Migrations
 
                     b.Property<Guid>("ModelConfigId")
                         .HasColumnType("uuid");
+
+                    b.Property<decimal?>("InputPricePerMTokensSnapshot")
+                        .HasPrecision(12, 6)
+                        .HasColumnType("numeric(12,6)");
+
+                    b.Property<decimal?>("OutputPricePerMTokensSnapshot")
+                        .HasPrecision(12, 6)
+                        .HasColumnType("numeric(12,6)");
 
                     b.Property<long>("PromptTokens")
                         .HasColumnType("bigint");
@@ -550,6 +562,9 @@ namespace Inkuso.Cloud.Core.Migrations
 
             modelBuilder.Entity("Inkuso.Cloud.Core.Entities.User", b =>
                 {
+                    b.Property<bool>("AdminSuspended")
+                        .HasColumnType("boolean");
+
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
@@ -559,6 +574,9 @@ namespace Inkuso.Cloud.Core.Migrations
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<long>("DebtPoints")
+                        .HasColumnType("bigint");
 
                     b.Property<string>("Email")
                         .IsRequired()
@@ -635,6 +653,14 @@ namespace Inkuso.Cloud.Core.Migrations
 
             modelBuilder.Entity("Inkuso.Cloud.Core.Entities.WebSearchUsageRecord", b =>
                 {
+                    b.Property<string>("BillingStatus")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<long>("CostPoints")
+                        .HasColumnType("bigint");
+
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
@@ -652,12 +678,22 @@ namespace Inkuso.Cloud.Core.Migrations
                     b.Property<DateTime>("RecordedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("RequestId")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<long?>("ReservedPoints")
+                        .HasColumnType("bigint");
+
                     b.Property<Guid>("UserId")
                         .HasColumnType("uuid");
 
                     b.HasKey("Id");
 
                     b.HasIndex("UserId", "RecordedAt");
+
+                    b.HasIndex("UserId", "RequestId")
+                        .IsUnique();
 
                     b.ToTable("WebSearchUsageRecords");
                 });

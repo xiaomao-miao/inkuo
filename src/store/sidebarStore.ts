@@ -8,7 +8,15 @@ import type {
   BuildProgress,
   NewEntryPayload,
 } from '../types';
-import { getBaseName, getParentDirPath, getRelativePath, joinPath, normalizeDirPath } from '../utils/path';
+import { detectFileKind } from '../types';
+import {
+  areFilePathsEqual,
+  getBaseName,
+  getParentDirPath,
+  getRelativePath,
+  joinPath,
+  normalizeDirPath,
+} from '../utils/path';
 
 /**
  * Compute the parent directory of `filePath` inside `workspacePath`,
@@ -93,9 +101,12 @@ function resolveWorkspaceFileEntry(
     const found = children.find((file) => {
       if (file.is_dir) return false;
       const filePath = normalizeDirPath(file.path);
-      if (filePath === normalizedTarget) return true;
-      if (filePath === relativeTarget) return true;
-      if (normalizedRoot && joinPath(normalizedRoot, filePath) === normalizedTarget) return true;
+      if (areFilePathsEqual(filePath, normalizedTarget)) return true;
+      if (areFilePathsEqual(filePath, relativeTarget)) return true;
+      if (normalizedRoot && areFilePathsEqual(
+        joinPath(normalizedRoot, filePath),
+        normalizedTarget,
+      )) return true;
       return false;
     });
     if (found) return found;
@@ -104,7 +115,9 @@ function resolveWorkspaceFileEntry(
 }
 
 function updateOpenTabDirtyState(openTabs: OpenTab[], path: string, isDirty: boolean): OpenTab[] {
-  return openTabs.map((tab) => (tab.path === path ? { ...tab, isDirty } : tab));
+  return openTabs.map((tab) => (
+    areFilePathsEqual(tab.path, path) ? { ...tab, isDirty } : tab
+  ));
 }
 
 export const SETTINGS_TAB_ID = '__settings__';
@@ -123,6 +136,8 @@ export interface InlineEditState {
   parentPath: string;
   /** Original full path (for `rename`); empty when creating a new entry. */
   originalPath: string | null;
+  /** Directory renames cover every open descendant in the save lifecycle. */
+  isDirectory?: boolean;
   /** Pre-filled value (existing name for rename; empty for create). */
   initialValue: string;
   /** Whether to apply the `.md` / `.docx` extension automatically. */
@@ -308,7 +323,7 @@ export const useSidebarStore = create<SidebarState>()(
 
       openTab: (tab) =>
         set((state) => {
-          const existing = state.openTabs.find((t) => t.path === tab.path);
+          const existing = state.openTabs.find((t) => areFilePathsEqual(t.path, tab.path));
           if (existing) {
             const newSelectedFile = tab.isSettings || tab.isCloud ? null : tab.path;
             return { activeTabId: existing.id, selectedFile: newSelectedFile };
@@ -330,15 +345,21 @@ export const useSidebarStore = create<SidebarState>()(
             state.workspacePath,
           );
           const resolvedPath = resolvedEntry?.path ?? path;
-          const existing = state.openTabs.find((t) => t.path === resolvedPath);
+          const existing = state.openTabs.find((t) => areFilePathsEqual(t.path, resolvedPath));
+          const fileKind = detectFileKind(resolvedPath);
+          // Office editor engines own one authoritative in-memory model per
+          // path. Two tabs would register competing save handlers and make it
+          // ambiguous which version reaches disk, so "open in new tab" focuses
+          // the existing Office document instead.
+          const canForceDuplicate = fileKind !== 'word' && fileKind !== 'excel';
 
-          if (existing && !options?.forceNew) {
+          if (existing && (!options?.forceNew || !canForceDuplicate)) {
             return { activeTabId: existing.id, selectedFile: resolvedPath };
           }
 
           // When forcing a new tab we reuse the same path as the tab id but
           // disambiguate with a suffix so React keys remain unique.
-          const newTabId = existing && options?.forceNew
+          const newTabId = existing && options?.forceNew && canForceDuplicate
             ? `${resolvedPath}::${Date.now()}`
             : resolvedPath;
 
@@ -407,7 +428,9 @@ export const useSidebarStore = create<SidebarState>()(
 
       requestCloseTab: (path) => {
         const state = get();
-        const tab = state.openTabs.find((t) => t.path === path && !t.isSettings && !t.isCloud);
+        const tab = state.openTabs.find((t) => (
+          areFilePathsEqual(t.path, path) && !t.isSettings && !t.isCloud
+        ));
         if (!tab) return true;
         if (tab.isDirty) return false;
         state.closeTab(tab.id);
@@ -433,15 +456,24 @@ export const useSidebarStore = create<SidebarState>()(
        * snapshots of their own).
        */
       replaceTabs: (openTabs, activeTabId) =>
-        set((state) => ({
-          openTabs,
-          activeTabId,
-          selectedFile: openTabs.find((t) => t.id === activeTabId)?.path ?? state.selectedFile,
-        })),
+        set(() => {
+          const activeTab = openTabs.find((tab) => tab.id === activeTabId);
+          return {
+            openTabs,
+            activeTabId,
+            // Replacing with an empty snapshot must also clear the previous
+            // workspace's selection. Settings/Cloud are routes rather than
+            // files, so their synthetic tab paths must never leak into the
+            // document loader either.
+            selectedFile: !activeTab || activeTab.isSettings || activeTab.isCloud
+              ? null
+              : activeTab.path,
+          };
+        }),
 
       setOpenTabDirty: (path, isDirty) =>
         set((state) => {
-          const currentTab = state.openTabs.find((tab) => tab.path === path);
+          const currentTab = state.openTabs.find((tab) => areFilePathsEqual(tab.path, path));
           if (!currentTab || currentTab.isDirty === isDirty) {
             return {};
           }

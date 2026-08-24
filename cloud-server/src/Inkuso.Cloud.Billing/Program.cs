@@ -8,10 +8,21 @@ var builder = WebApplication.CreateBuilder(args);
 var connectionString = builder.Configuration.GetConnectionString("Postgres")
     ?? throw new InvalidOperationException("ConnectionStrings:Postgres is required");
 
-builder.Services.AddDbContext<AppDbContext>(opt => opt.UseNpgsql(connectionString)
-       .ConfigureWarnings(w => w.Ignore(
-           Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning)));
+var adminToken = builder.Configuration["Admin:Token"]
+    ?? throw new InvalidOperationException("Admin:Token is required");
+if (adminToken.Length < 32
+    || adminToken.Contains("change-me", StringComparison.OrdinalIgnoreCase)
+    || adminToken.StartsWith("dev-", StringComparison.OrdinalIgnoreCase))
+{
+    throw new InvalidOperationException(
+        "Admin:Token must be at least 32 characters of random data and not a placeholder. "
+      + "Generate one with `openssl rand -base64 32`.");
+}
+
+builder.Services.AddDbContext<AppDbContext>(opt => opt.UseNpgsql(connectionString));
 builder.Services.AddScoped<BillingLedger>();
+builder.Services.AddScoped<WebSearchLedger>();
+builder.Services.AddSingleton(new BillingAdminSettings(adminToken));
 builder.Services.AddHostedService<ReconciliationWorker>();
 
 var app = builder.Build();

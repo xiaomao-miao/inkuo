@@ -55,8 +55,8 @@ export default function PlansPage() {
   const columns = [
     { title: '名称', dataIndex: 'name', render: (n: string) => <Tag color="purple">{n}</Tag> },
     {
-      title: '月费', dataIndex: 'monthlyQuotaCents', width: 120,
-      render: (c: number) => <strong>¥{(c / 100).toFixed(2)}</strong>,
+      title: '月费', dataIndex: 'monthlyPricePoints', width: 120,
+      render: (p: number) => <strong>¥{(p / 1000).toFixed(3)}</strong>,
     },
     {
       title: '月 Token 额度', dataIndex: 'monthlyTokenLimit', width: 150,
@@ -115,8 +115,8 @@ export default function PlansPage() {
           <Form.Item name="name" label="套餐名" rules={[{ required: true }]}>
             <Input placeholder="Free / Plus / Pro / Max" />
           </Form.Item>
-          <Form.Item name="monthlyQuotaCents" label="月费 (分, 0 = 免费)" rules={[{ required: true }]}>
-            <InputNumber min={0} style={{ width: '100%' }} step={100} />
+          <Form.Item name="monthlyPricePoints" label="月费点数（1000 点 = ¥1，0 = 免费）" rules={[{ required: true }]}>
+            <InputNumber min={0} style={{ width: '100%' }} step={1000} />
           </Form.Item>
           <Form.Item name="monthlyTokenLimit" label="月 Token 额度" rules={[{ required: true }]}>
             <InputNumber min={0} style={{ width: '100%' }} step={1_000_000} />

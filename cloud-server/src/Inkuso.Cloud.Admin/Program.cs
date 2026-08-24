@@ -30,10 +30,7 @@ builder.Services.Configure<FormOptions>(opts =>
 var connectionString = builder.Configuration.GetConnectionString("Postgres")
     ?? throw new InvalidOperationException("ConnectionStrings:Postgres is required");
 
-builder.Services.AddDbContext<AppDbContext>(opt =>
-    opt.UseNpgsql(connectionString)
-       .ConfigureWarnings(w => w.Ignore(
-           Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning)));
+builder.Services.AddDbContext<AppDbContext>(opt => opt.UseNpgsql(connectionString));
 
 // JWT (separate audience from customer API)
 // Require an explicit JWT secret; refuse to start with a placeholder or a key
@@ -56,14 +53,18 @@ builder.Services.AddSingleton<AdminJwtService>();
 // they live on the same host — required because the Admin writes the
 // protected ciphertext and the Api reads it.
 var dpKeysDir = builder.Configuration["DataProtection:KeyDir"];
+if (string.IsNullOrWhiteSpace(dpKeysDir) && !builder.Environment.IsDevelopment())
+    throw new InvalidOperationException(
+        "DataProtection:KeyDir is required outside Development and must be shared with Api.");
+var adminDataProtection = builder.Services.AddDataProtection()
+    .SetApplicationName("inkuo-cloud");
 if (!string.IsNullOrWhiteSpace(dpKeysDir))
-    builder.Services.AddDataProtection()
-        .PersistKeysToFileSystem(new DirectoryInfo(dpKeysDir))
-        .SetApplicationName("inkuo-cloud");
-else
-    builder.Services.AddDataProtection().SetApplicationName("inkuo-cloud");
+    adminDataProtection.PersistKeysToFileSystem(new DirectoryInfo(dpKeysDir));
 
-builder.Services.AddSingleton<ISecretProtector, DataProtectionSecretProtector>();
+builder.Services.AddSingleton<ISecretProtector>(services =>
+    new DataProtectionSecretProtector(
+        services.GetRequiredService<IDataProtectionProvider>()
+            .CreateProtector(DataProtectionSecretProtector.Purpose)));
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(opt =>
@@ -145,11 +146,25 @@ builder.Services.AddSwaggerGen(c =>
 
 var app = builder.Build();
 
+// Fail fast if the protector cannot be constructed; waiting until the first
+// Admin write would turn a deployment mistake into a runtime credential outage.
+_ = app.Services.GetRequiredService<ISecretProtector>();
+
 // Auto-migrate + seed default admin user
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     db.Database.Migrate();
+
+    // Upgrade credentials from installations that pre-date Data Protection.
+    // This is deliberately idempotent and runs before the HTTP listener starts;
+    // never log credential values or protected payloads.
+    var protector = scope.ServiceProvider.GetRequiredService<ISecretProtector>();
+    var protectedSecretCount = await LegacySecretBackfill.ProtectAsync(db, protector);
+    if (protectedSecretCount > 0)
+        app.Logger.LogInformation(
+            "Protected {SecretCount} legacy upstream credential row(s) at rest",
+            protectedSecretCount);
 
     // Seed default admin if none exists.
     // We require Admin:SeedUsername/SeedPassword to be set explicitly so the

@@ -16,7 +16,7 @@ export interface APIConfig {
   name: string;                 // Display name (e.g., "DeepSeek V3", "GPT-4")
   provider: AIProviderType;     // Provider type
   baseUrl: string;              // API base URL
-  apiKey: string | null;        // API key (encrypted in storage)
+  apiKey: string | null;        // BYOK credential; currently persisted with local app settings
   model: string;                // Model name
   isDefault: boolean;            // Whether this is the default API
   enabled: boolean;              // Whether this API is enabled
@@ -36,7 +36,15 @@ export interface CloudAccount {
   /** ISO-8601 UTC timestamp. */
   access_expires_at: string;
   plan_name: string | null;
-  balance_cents: number;
+  /** Canonical billing value. 1000 integer points = ¥1. */
+  balance_points: number;
+  /** Frozen subset of balance_points that is waiting for settlement. */
+  reserved_points?: number;
+  /** Unpaid usage. A positive value suspends further billable requests. */
+  debt_points?: number;
+  is_suspended?: boolean;
+  /** @deprecated Read-only compatibility mirror for settings from older releases. */
+  balance_cents?: number;
 }
 
 /** Single upstream model exposed by the cloud server. The `id` is the

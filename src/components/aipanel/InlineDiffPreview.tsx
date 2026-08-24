@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 import { Check, X } from 'lucide-react';
 import { useAIPanelStore, useEditorStore, useInlineCompleteStore } from '../../store';
 import type { CurrentDiff } from '../../types';
@@ -33,17 +33,13 @@ export const InlineDiffPreview = ({
   isStreaming = false,
   pendingDiff = null,
 }: InlineDiffPreviewProps) => {
-  const lastSyncedKey = useRef<string | null>(null);
-
   useEffect(() => {
     if (isStreaming || !pendingDiff?.filePath) return;
-
-    const syncKey = `${sessionId}::${pendingDiff.filePath}::${pendingDiff.hunks.length}`;
-    if (lastSyncedKey.current !== syncKey) {
-      lastSyncedKey.current = syncKey;
-      syncPendingDiffToEditor(pendingDiff);
-    }
-  }, [isStreaming, pendingDiff, sessionId]);
+    // The pending-diff object is replaced whenever its actual identity or
+    // remaining hunks change. Do not key only on hunk count: two consecutive
+    // edits to the same file commonly contain the same number of hunks.
+    syncPendingDiffToEditor(pendingDiff);
+  }, [isStreaming, pendingDiff]);
 
   const handleAcceptAll = () => {
     useAIPanelStore.getState().acceptAllHunks(sessionId);

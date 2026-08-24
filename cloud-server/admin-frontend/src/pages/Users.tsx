@@ -6,6 +6,7 @@ import {
 import { SearchOutlined, ReloadOutlined, DollarOutlined, StopOutlined, DeleteOutlined, EyeOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { usersApi, UserListItem } from '../api/users';
+import { MAX_ADJUSTMENT_REASON_LENGTH, MAX_SINGLE_CREDIT_POINTS } from '../billingLimits';
 
 export default function UsersPage() {
   const [data, setData] = useState<UserListItem[]>([]);
@@ -48,10 +49,10 @@ export default function UsersPage() {
     }
   };
 
-  const onAdjust = async (values: { deltaCents: number; reason: string }) => {
+  const onAdjust = async (values: { deltaPoints: number; reason: string }) => {
     if (!adjustTarget) return;
     try {
-      await usersApi.adjustBalance(adjustTarget.id, values.deltaCents, values.reason);
+      await usersApi.adjustBalance(adjustTarget.id, values.deltaPoints, values.reason.trim());
       message.success('余额已调整');
       setAdjustOpen(false);
       adjustForm.resetFields();
@@ -95,9 +96,15 @@ export default function UsersPage() {
       render: (e: string) => <code>{e}</code>,
     },
     {
-      title: '余额 (元)', dataIndex: 'balanceCents', key: 'balanceCents', width: 110,
+      title: '余额 (元)', dataIndex: 'balancePoints', key: 'balance', width: 110,
       sorter: true, sortOrder: sortBy === 'balance' ? (sortDir === 'asc' ? 'ascend' : 'descend') : null,
-      render: (c: number) => <span style={{ color: c < 0 ? '#cf1322' : '#3f8600', fontWeight: 500 }}>{(c / 100).toFixed(2)}</span>,
+      render: (p: number) => <span style={{ color: p < 0 ? '#cf1322' : '#3f8600', fontWeight: 500 }}>{(p / 1000).toFixed(3)}</span>,
+    },
+    {
+      title: '欠费 (元)', dataIndex: 'debtPoints', key: 'debtPoints', width: 110,
+      render: (p: number, r: UserListItem) => p > 0
+        ? <Tag color="red">¥{(p / 1000).toFixed(3)}{r.isSuspended ? ' · 已暂停' : ''}</Tag>
+        : <Tag color="green">无</Tag>,
     },
     {
       title: '当前套餐', dataIndex: 'planName', key: 'planName', width: 120,
@@ -112,8 +119,8 @@ export default function UsersPage() {
       render: (t: number) => t.toLocaleString(),
     },
     {
-      title: '累计消费 (元)', dataIndex: 'totalCostCents', key: 'totalCostCents', width: 130,
-      render: (c: number) => (c / 100).toFixed(2),
+      title: '累计消费 (元)', dataIndex: 'totalCostPoints', key: 'totalCostPoints', width: 130,
+      render: (p: number) => (p / 1000).toFixed(3),
     },
     {
       title: '注册时间', dataIndex: 'createdAt', key: 'createdAt', width: 160,
@@ -177,17 +184,17 @@ export default function UsersPage() {
             <Row gutter={16} style={{ marginBottom: 16 }}>
               <Col span={8}>
                 <Card>
-                  <Statistic title="余额 (元)" value={(detail.user.balanceCents / 100).toFixed(2)} valueStyle={{ color: '#1677ff' }} />
+                  <Statistic title="余额 (元)" value={(detail.user.balancePoints / 1000).toFixed(3)} valueStyle={{ color: '#1677ff' }} />
                 </Card>
               </Col>
               <Col span={8}>
                 <Card>
-                  <Statistic title="累计 Tokens" value={detail.totalUsage.tokens.toLocaleString()} />
+                  <Statistic title="欠费 (元)" value={(detail.user.debtPoints / 1000).toFixed(3)} valueStyle={{ color: detail.user.debtPoints > 0 ? '#cf1322' : '#3f8600' }} />
                 </Card>
               </Col>
               <Col span={8}>
                 <Card>
-                  <Statistic title="累计消费 (元)" value={(detail.totalUsage.costCents / 100).toFixed(2)} />
+                  <Statistic title="累计消费 (元)" value={(detail.totalUsage.costPoints / 1000).toFixed(3)} />
                 </Card>
               </Col>
             </Row>
@@ -197,6 +204,10 @@ export default function UsersPage() {
               <Descriptions.Item label="邮箱">{detail.user.email}</Descriptions.Item>
               <Descriptions.Item label="注册时间">{dayjs(detail.user.createdAt).format('YYYY-MM-DD HH:mm:ss')}</Descriptions.Item>
               <Descriptions.Item label="使用邀请码">{detail.user.inviteCodeUsed || '-'}</Descriptions.Item>
+              <Descriptions.Item label="账户状态">
+                {detail.user.isSuspended ? <Tag color="red">已暂停</Tag> : <Tag color="green">正常</Tag>}
+              </Descriptions.Item>
+              <Descriptions.Item label="冻结点数">{detail.user.reservedPoints.toLocaleString()}</Descriptions.Item>
             </Descriptions>
 
             <Descriptions title="订阅历史" bordered column={2} size="small" style={{ marginTop: 16 }}>
@@ -219,7 +230,7 @@ export default function UsersPage() {
                   <List.Item>
                     <span><Tag>{u.modelName}</Tag></span>
                     <span>{u.promptTokens + u.completionTokens} tokens</span>
-                    <span>¥{(u.costCents / 100).toFixed(4)}</span>
+                    <span>¥{(u.costPoints / 1000).toFixed(3)}</span>
                     <span>{dayjs(u.recordedAt).format('MM-DD HH:mm:ss')}</span>
                   </List.Item>
                 )}
@@ -235,12 +246,24 @@ export default function UsersPage() {
         onCancel={() => setAdjustOpen(false)}
         onOk={() => adjustForm.submit()}
       >
-        <Form form={adjustForm} layout="vertical" onFinish={onAdjust} initialValues={{ deltaCents: 0 }}>
-          <Form.Item name="deltaCents" label="调整金额 (分, 可负数, 1元=100分)" rules={[{ required: true }]}>
-            <InputNumber style={{ width: '100%' }} step={100} />
+        <Form form={adjustForm} layout="vertical" onFinish={onAdjust} initialValues={{ deltaPoints: 0 }}>
+          <Form.Item name="deltaPoints" label="调整点数（可负数，1000 点 = ¥1）" rules={[
+            { required: true },
+            { validator: (_, value) => value === 0 ? Promise.reject(new Error('调整点数不能为 0')) : Promise.resolve() },
+          ]}>
+            <InputNumber
+              min={-MAX_SINGLE_CREDIT_POINTS}
+              max={MAX_SINGLE_CREDIT_POINTS}
+              precision={0}
+              style={{ width: '100%' }}
+              step={1000}
+            />
           </Form.Item>
-          <Form.Item name="reason" label="原因 (会写入审计)" rules={[{ required: true, min: 3 }]}>
-            <Input.TextArea rows={3} placeholder="例如: 用户补偿 / 退款 / 测试" />
+          <Form.Item name="reason" label="原因 (会写入审计)" rules={[
+            { required: true, whitespace: true, transform: (value?: string) => value?.trim() },
+            { min: 3, max: MAX_ADJUSTMENT_REASON_LENGTH, transform: (value?: string) => value?.trim() },
+          ]}>
+            <Input.TextArea maxLength={MAX_ADJUSTMENT_REASON_LENGTH} showCount rows={3} placeholder="例如: 用户补偿 / 退款 / 测试" />
           </Form.Item>
         </Form>
       </Modal>

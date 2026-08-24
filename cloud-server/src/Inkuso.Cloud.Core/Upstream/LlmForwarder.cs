@@ -27,9 +27,20 @@ public class LlmForwarder
         float? Temperature,
         int? MaxTokens);
 
-    public record TokenUsage(long PromptTokens, long CompletionTokens, long CostPoints);
+    public static readonly TimeSpan MaxStreamDuration = TimeSpan.FromMinutes(5);
 
-    public record ForwardStreamResult(Stream UpstreamStream, TokenUsage? Usage);
+    public sealed class ForwardStreamResult(
+        HttpResponseMessage response,
+        Stream upstreamStream) : IDisposable
+    {
+        public Stream UpstreamStream { get; } = upstreamStream;
+
+        public void Dispose()
+        {
+            UpstreamStream.Dispose();
+            response.Dispose();
+        }
+    }
 
     public async Task<ForwardStreamResult> ForwardStreamAsync(
         Guid userId,
@@ -44,10 +55,9 @@ public class LlmForwarder
         // would leak the Authorization header into other requests handled by the
         // same pooled instance, which is both a security risk (key bleed across
         // models) and a correctness bug (next caller sees a stale Bearer). Use
-        // a per-request HttpRequestMessage header instead, and a per-call
-        // timeout via a CancellationTokenSource instead of HttpClient.Timeout.
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(TimeSpan.FromSeconds(120));
+        // a per-request HttpRequestMessage header instead. The endpoint owns a
+        // bounded token for the complete response body, so a client disconnect
+        // can stop writes without aborting usage collection and billing.
 
         var client = _httpFactory.CreateClient("upstream");
         var upstreamUrl = $"{modelConfig.UpstreamBaseUrl.TrimEnd('/')}/chat/completions";
@@ -62,23 +72,29 @@ public class LlmForwarder
         var response = await client.SendAsync(
             upstreamReq,
             HttpCompletionOption.ResponseHeadersRead,
-            timeoutCts.Token);
+            ct);
 
         if (!response.IsSuccessStatusCode)
         {
-            // Do not leak the upstream body wholesale — it can include the
-            // operator's API key, request ids, or billing context that a
-            // desktop client should never see. Surface a status + truncated
-            // snippet; full body goes to the server log via the exception
-            // message which the operator can correlate via the request id.
-            var errBody = await response.Content.ReadAsStringAsync(timeoutCts.Token);
-            var snippet = errBody.Length > 200 ? errBody[..200] + "…" : errBody;
+            // Never include upstream response bodies in exceptions: providers
+            // may echo credentials, prompts, or account metadata. The caller
+            // logs the local request id for operator correlation.
+            var status = (int)response.StatusCode;
+            response.Dispose();
             throw new HttpRequestException(
-                $"Upstream returned {(int)response.StatusCode}: {snippet}");
+                $"Upstream returned HTTP {status}.");
         }
 
-        var stream = await response.Content.ReadAsStreamAsync(timeoutCts.Token);
-        return new ForwardStreamResult(stream, null);
+        try
+        {
+            var stream = await response.Content.ReadAsStreamAsync(ct);
+            return new ForwardStreamResult(response, stream);
+        }
+        catch
+        {
+            response.Dispose();
+            throw;
+        }
     }
 
     // --- public constants / structs -------------------------------------------------
@@ -98,6 +114,7 @@ public class LlmForwarder
         long cachedPromptTokens = 0)
     {
         if (promptTokens < 0 || completionTokens < 0 || cachedPromptTokens < 0) return 0;
+        ValidateRateCard(config);
 
         // Cached tokens are a subset of prompt tokens. Clamp defensively so a
         // malformed upstream payload can't push the cached bucket above the total.
@@ -134,12 +151,26 @@ public class LlmForwarder
     {
         if (promptTokens < 0) promptTokens = 0;
         if (maxOutputTokensCap < 0) maxOutputTokensCap = 0;
+        ValidateRateCard(config);
 
         // Charge input at full uncached rate (most conservative).
-        var inputPoints = (decimal)promptTokens / 1_000_000m * config.InputPricePerMTokens * PointsPerYuan;
+        var maximumInputPrice = Math.Max(
+            config.InputPricePerMTokens,
+            config.CachedInputPricePerMTokens);
+        var inputPoints = (decimal)promptTokens / 1_000_000m * maximumInputPrice * PointsPerYuan;
         var outputPoints = (decimal)maxOutputTokensCap / 1_000_000m * config.OutputPricePerMTokens * PointsPerYuan;
         var total = inputPoints + outputPoints;
         return (long)Math.Ceiling(total); // smallest integer ≥ estimate
+    }
+
+    private static void ValidateRateCard(ModelConfig config)
+    {
+        if (config.InputPricePerMTokens < 0
+            || config.OutputPricePerMTokens < 0
+            || config.CachedInputPricePerMTokens < 0)
+        {
+            throw new InvalidOperationException("Model token prices cannot be negative.");
+        }
     }
 
 }

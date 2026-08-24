@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import type { Document } from '../../types';
 import { useEditorStore, useSidebarStore } from '../../store';
 import { reportError } from '../../utils/errors';
+import { areFilePathsEqual } from '../../utils/path';
 import { shouldApplyDiskDocument } from './documentLoadPolicy';
 
 export function useDocumentLoader(
@@ -65,7 +66,7 @@ export function useDocumentLoader(
           // are always safe, while an explicit user-approved reload may opt in
           // to discarding the dirty buffer.
           const liveTabIsDirty = useSidebarStore.getState().openTabs
-            .some((tab) => tab.path === selectedFile && tab.isDirty);
+            .some((tab) => areFilePathsEqual(tab.path, selectedFile) && tab.isDirty);
           if (!shouldApplyDiskDocument(
             hasCachedDocument,
             liveTabIsDirty,

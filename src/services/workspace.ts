@@ -3,11 +3,13 @@ import { invoke } from '@tauri-apps/api/core';
 import { useSidebarStore, useAIPanelStore } from '../store';
 import { createNewSession } from '../store/aiPanelReducers';
 import {
+  areFilePathsEqual,
   getRelativePath,
   joinPath,
   normalizeDirPath,
 } from '../utils/path';
 import { reportError } from '../utils/errors';
+import { prepareForWorkspaceSwitch } from './openTabLifecycle';
 import type {
   CreateEntryResult,
   FileEntry,
@@ -223,12 +225,23 @@ async function reloadExpandedDirectories(
  * Caller is responsible for also calling `applyWorkspaceDirectoryLoad` to
  * populate the directory cache and trigger file-tree rendering.
  */
-export async function switchWorkspace(targetPath: string): Promise<void> {
+export async function switchWorkspace(targetPath: string): Promise<boolean> {
   // Coalesce rapid double-clicks of the picker so only one switch is in
   // flight at a time. The latest click still wins because each task reads
   // the live sidebar state at the moment it runs (after the previous task
   // has fully applied its changes).
   return withSwitchLock(async () => {
+    const currentPath = useSidebarStore.getState().workspacePath;
+    if (currentPath && areFilePathsEqual(currentPath, targetPath)) {
+      return true;
+    }
+
+    // A tab/session snapshot does not contain editor buffers. Ask the user to
+    // save, discard, or cancel before any authoritative editor is unmounted.
+    if (!(await prepareForWorkspaceSwitch())) {
+      return false;
+    }
+
     const sidebar = useSidebarStore.getState();
     const aiPanel = useAIPanelStore.getState();
 
@@ -294,6 +307,7 @@ export async function switchWorkspace(targetPath: string): Promise<void> {
         todoSnapshotBySession: {},
       });
     }
+    return true;
   });
 }
 

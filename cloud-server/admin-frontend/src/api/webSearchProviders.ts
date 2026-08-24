@@ -1,15 +1,13 @@
 import { api } from './client';
 
-/** Wire shape for a single web_search provider row, as exposed by the
- * cloud admin API. The API key is masked by default; pass
- * `includeKey=true` to `list()` to surface the real value (operators
- * only). */
+/** Wire shape for a single web_search provider row. Provider credentials
+ * are write-only: the API only tells the UI whether a key is configured. */
 export interface WebSearchProvider {
   id: string;
   providerId: string;
   displayName: string;
   upstreamBaseUrl: string | null;
-  upstreamApiKeyMasked: string;
+  hasUpstreamApiKey: boolean;
   enabled: boolean;
   createdAt: string;
 }
@@ -23,8 +21,7 @@ export interface WebSearchProviderUpsert {
 }
 
 export const webSearchProvidersApi = {
-  list: (includeKey = false) =>
-    api.get<WebSearchProvider[]>('/api/web-search-providers/', { params: { includeKey } }).then((r) => r.data),
+  list: () => api.get<WebSearchProvider[]>('/api/web-search-providers/').then((r) => r.data),
   create: (data: WebSearchProviderUpsert) =>
     api.post('/api/web-search-providers/', data).then((r) => r.data),
   update: (id: string, data: Omit<WebSearchProviderUpsert, 'upstreamApiKey'> & { upstreamApiKey?: string | null }) =>

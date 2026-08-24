@@ -88,6 +88,14 @@ const EditorContent: React.FC<{
   const isDiffMode = currentDiff?.isActive || false;
   const selection = currentMetadata?.selection ?? null;
 
+  useEffect(() => {
+    // EditorContent is intentionally reused between text tabs. Conflict UI,
+    // however, belongs to one concrete file and must not follow the user to
+    // the next tab. A prior user-approved refresh token is path-scoped too.
+    setHasExternalConflict(false);
+    discardDirtyRefreshTokenRef.current = null;
+  }, [selectedFile]);
+
   // Resolve the language extension for the current file. We resolve this
   // asynchronously because some language parsers (e.g. via
   // `@codemirror/language-data`) are dynamically imported on first use.

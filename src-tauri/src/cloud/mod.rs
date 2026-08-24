@@ -61,7 +61,7 @@ enum RefreshAttemptError {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct CloudAccount {
     /// Base URL of the inkuo Cloud Server, e.g. `https://cloud.example.com`.
     /// Stored without a trailing slash.
@@ -72,7 +72,77 @@ pub struct CloudAccount {
     pub refresh_token: String,
     pub access_expires_at: chrono::DateTime<chrono::Utc>,
     pub plan_name: Option<String>,
+    /// Canonical balance unit. 1000 points = ¥1; keeping this integer avoids
+    /// losing sub-cent credit when the account is persisted and restored.
+    pub balance_points: i64,
+    pub reserved_points: i64,
+    pub debt_points: i64,
+    pub is_suspended: bool,
+    /// Deprecated compatibility mirror for renderer code/settings written by
+    /// older releases. New code must use `balance_points`.
     pub balance_cents: f64,
+}
+
+/// Read both the current point-based account schema and the old persisted
+/// schema that only contained `balance_cents`. We deliberately serialize the
+/// compatibility mirror for one transition release because older renderer
+/// bundles may still read it, but points are always authoritative when both
+/// fields are present.
+#[derive(Deserialize)]
+struct CloudAccountWire {
+    base_url: String,
+    email: String,
+    user_id: String,
+    access_token: String,
+    refresh_token: String,
+    access_expires_at: chrono::DateTime<chrono::Utc>,
+    plan_name: Option<String>,
+    #[serde(default)]
+    balance_points: Option<i64>,
+    #[serde(default)]
+    reserved_points: i64,
+    #[serde(default)]
+    debt_points: i64,
+    #[serde(default)]
+    is_suspended: bool,
+    #[serde(default)]
+    balance_cents: Option<f64>,
+}
+
+impl<'de> Deserialize<'de> for CloudAccount {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let wire = CloudAccountWire::deserialize(deserializer)?;
+        let balance_points = wire.balance_points.unwrap_or_else(|| {
+            // Legacy cents may include one decimal place because old clients
+            // converted points to cents. Round to the nearest point and
+            // reject non-finite/out-of-range values instead of saturating a
+            // corrupt settings file to an enormous apparent balance.
+            let points = wire.balance_cents.unwrap_or_default() * 10.0;
+            if points.is_finite() && points >= i64::MIN as f64 && points <= i64::MAX as f64 {
+                points.round() as i64
+            } else {
+                0
+            }
+        }).max(0);
+
+        Ok(Self {
+            base_url: wire.base_url.trim_end_matches('/').to_string(),
+            email: wire.email,
+            user_id: wire.user_id,
+            access_token: wire.access_token,
+            refresh_token: wire.refresh_token,
+            access_expires_at: wire.access_expires_at,
+            plan_name: wire.plan_name,
+            balance_points,
+            reserved_points: wire.reserved_points.max(0),
+            debt_points: wire.debt_points.max(0),
+            is_suspended: wire.is_suspended,
+            balance_cents: balance_points as f64 / 10.0,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,7 +172,10 @@ pub struct CloudModelEntry {
 pub struct CloudAccountInfo {
     pub id: String,
     pub email: String,
-    pub balance_cents: f64,
+    pub balance_points: i64,
+    pub reserved_points: i64,
+    pub debt_points: i64,
+    pub is_suspended: bool,
     pub plan_name: Option<String>,
     pub monthly_token_limit: i64,
     pub subscription_expires_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -134,7 +207,11 @@ struct RefreshRequest<'a> {
 struct AuthUserDto {
     id: String,
     email: String,
-    balance_cents: f64,
+    balance_points: i64,
+    #[serde(default)]
+    debt_points: i64,
+    #[serde(default)]
+    is_suspended: bool,
     plan_name: Option<String>,
     subscription_expires_at: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -177,7 +254,13 @@ struct ModelDto {
 struct AccountMeResponse {
     id: String,
     email: String,
-    balance_cents: f64,
+    balance_points: i64,
+    #[serde(default)]
+    reserved_points: i64,
+    #[serde(default)]
+    debt_points: i64,
+    #[serde(default)]
+    is_suspended: bool,
     plan_name: Option<String>,
     monthly_token_limit: i64,
     subscription_expires_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -206,6 +289,10 @@ struct CloudWebSearchEnvelope {
 pub struct CloudClient {
     http: Client,
     inner: Arc<Mutex<Option<CloudAccount>>>,
+    /// Single-flight gate for refresh rotation. Network I/O happens while
+    /// this gate is held, never while `inner` is held, so logout/account
+    /// switches remain responsive during a slow refresh request.
+    refresh_gate: Arc<Mutex<()>>,
 }
 
 impl CloudClient {
@@ -216,6 +303,7 @@ impl CloudClient {
                 .build()
                 .expect("reqwest client"),
             inner: Arc::new(Mutex::new(None)),
+            refresh_gate: Arc::new(Mutex::new(())),
         }
     }
 
@@ -260,14 +348,18 @@ impl CloudClient {
             .map_err(|e| CloudError::Parse(e.to_string()))?;
 
         let account = CloudAccount {
-            base_url: base_url.to_string(),
+            base_url: base_url.trim_end_matches('/').to_string(),
             email: parsed.user.email,
             user_id: parsed.user.id,
             access_token: parsed.access_token,
             refresh_token: parsed.refresh_token,
             access_expires_at: parsed.expires_at,
             plan_name: parsed.user.plan_name,
-            balance_cents: parsed.user.balance_cents,
+            balance_points: parsed.user.balance_points,
+            reserved_points: 0,
+            debt_points: parsed.user.debt_points.max(0),
+            is_suspended: parsed.user.is_suspended,
+            balance_cents: parsed.user.balance_points as f64 / 10.0,
         };
         *self.inner.lock().await = Some(account.clone());
         Ok(account)
@@ -300,14 +392,18 @@ impl CloudClient {
             .map_err(|e| CloudError::Parse(e.to_string()))?;
 
         let account = CloudAccount {
-            base_url: base_url.to_string(),
+            base_url: base_url.trim_end_matches('/').to_string(),
             email: parsed.user.email,
             user_id: parsed.user.id,
             access_token: parsed.access_token,
             refresh_token: parsed.refresh_token,
             access_expires_at: parsed.expires_at,
             plan_name: parsed.user.plan_name,
-            balance_cents: parsed.user.balance_cents,
+            balance_points: parsed.user.balance_points,
+            reserved_points: 0,
+            debt_points: parsed.user.debt_points.max(0),
+            is_suspended: parsed.user.is_suspended,
+            balance_cents: parsed.user.balance_points as f64 / 10.0,
         };
         *self.inner.lock().await = Some(account.clone());
         Ok(account)
@@ -318,9 +414,9 @@ impl CloudClient {
     }
 
     /// Returns a *fresh* access token, refreshing if the stored one is
-    /// expired (or within a 30s safety window). The mutex here is per-call;
-    /// the stored account is updated in place so concurrent callers share
-    /// the rotation.
+    /// expired (or within a 30s safety window). A dedicated refresh gate
+    /// provides single-flight rotation without holding the account mutex
+    /// across network I/O.
     ///
     /// On a successful refresh the new (possibly rotated) tokens are
     /// mirrored into the in-process settings cache and persisted to
@@ -348,12 +444,17 @@ impl CloudClient {
 // ── Data fetching ────────────────────────────────────────────────────────
 
     pub async fn ensure_fresh_token(&self) -> Result<String, CloudError> {
-        let mut guard = self.inner.lock().await;
-        let account = guard.as_mut().ok_or(CloudError::NotLoggedIn)?;
+        let account = self.inner.lock().await.clone().ok_or(CloudError::NotLoggedIn)?;
+        if account.access_expires_at - chrono::Duration::seconds(30) > chrono::Utc::now() {
+            return Ok(account.access_token);
+        }
 
-        let now = chrono::Utc::now();
-        if account.access_expires_at - chrono::Duration::seconds(30) > now {
-            return Ok(account.access_token.clone());
+        // Wait for any concurrent rotation, then re-check: the first caller
+        // may already have installed a fresh token while we were queued.
+        let _refresh_guard = self.refresh_gate.lock().await;
+        let account = self.inner.lock().await.clone().ok_or(CloudError::NotLoggedIn)?;
+        if account.access_expires_at - chrono::Duration::seconds(30) > chrono::Utc::now() {
+            return Ok(account.access_token);
         }
 
         tracing::debug!(
@@ -361,8 +462,9 @@ impl CloudClient {
             "cloud access token nearing expiry, refreshing"
         );
 
-        let (base_url, refresh_token) =
-            (account.base_url.clone(), account.refresh_token.clone());
+        let user_id = account.user_id.clone();
+        let base_url = account.base_url.clone();
+        let refresh_token = account.refresh_token.clone();
 
         let mut attempt = 0u8;
         let parsed: RefreshResponse = loop {
@@ -371,19 +473,37 @@ impl CloudClient {
                 Ok(parsed) => break parsed,
                 Err(RefreshAttemptError::AuthFailed { status, body }) => {
                     tracing::warn!(
-                        user_id = %account.user_id,
+                        user_id = %user_id,
                         status = status.as_u16(),
                         "cloud refresh rejected (auth); clearing stored account: {}",
                         body.chars().take(200).collect::<String>()
                     );
-                    *guard = None;
-                    crate::commands::clear_settings_cache_account();
+                    {
+                        let mut current = self.inner.lock().await;
+                        let still_same_session = matches!(
+                            current.as_ref(),
+                            Some(candidate)
+                                if candidate.user_id == user_id
+                                    && candidate.refresh_token == refresh_token
+                        );
+                        if still_same_session {
+                            *current = None;
+                            if let Err(error) = Self::persist_account_state(None) {
+                                tracing::warn!(
+                                    user_id = %user_id,
+                                    "failed to persist rejected cloud session removal: {}",
+                                    error
+                                );
+                                crate::commands::clear_settings_cache_account();
+                            }
+                        }
+                    }
                     return Err(map_status(status, &body));
                 }
                 Err(RefreshAttemptError::Retriable { status, body }) => {
                     if attempt >= 2 {
                         tracing::warn!(
-                            user_id = %account.user_id,
+                            user_id = %user_id,
                             status = status.as_u16(),
                             "cloud refresh failed after retry; preserving account: {}",
                             body.chars().take(200).collect::<String>()
@@ -391,7 +511,7 @@ impl CloudClient {
                         return Err(map_status(status, &body));
                     }
                     tracing::info!(
-                        user_id = %account.user_id,
+                        user_id = %user_id,
                         status = status.as_u16(),
                         "cloud refresh transient failure; retrying once"
                     );
@@ -403,27 +523,49 @@ impl CloudClient {
             }
         };
 
-        account.access_token = parsed.access_token.clone();
-        account.access_expires_at = parsed.expires_at;
-        if let Some(new_rt) = parsed.refresh_token {
-            account.refresh_token = new_rt;
-        }
+        let snapshot = {
+            let mut current = self.inner.lock().await;
+            let active = current.as_mut().ok_or(CloudError::NotLoggedIn)?;
+            if active.user_id != user_id || active.refresh_token != refresh_token {
+                return Err(CloudError::Other(
+                    "Cloud account changed during token refresh; please retry".into(),
+                ));
+            }
+
+            active.access_token = parsed.access_token;
+            active.access_expires_at = parsed.expires_at;
+            if let Some(new_rt) = parsed.refresh_token {
+                active.refresh_token = new_rt;
+            }
+            active.clone()
+        };
 
         // Mirror the rotated tokens into the settings cache so the
         // chat-path's cached AIConfig sees fresh credentials on the
         // next read, and spawn an off-thread task to persist them.
-        let snapshot = account.clone();
-        let token_prefix: String = parsed.access_token.chars().take(8).collect();
         tracing::info!(
             user_id = %snapshot.user_id,
-            token_prefix = %token_prefix,
             expires_at = %snapshot.access_expires_at,
             "cloud access token refreshed"
         );
         crate::commands::patch_settings_cache_account(snapshot.clone());
+        let access_token = snapshot.access_token.clone();
         let client_for_persist = self.clone();
         tauri::async_runtime::spawn(async move {
-            if let Err(e) = client_for_persist.persist_current_account(&snapshot).await {
+            // Serialize this short disk write with logout/account replacement.
+            // Without the guard, a delayed refresh task could resurrect an
+            // account that the user had just logged out from.
+            let current = client_for_persist.inner.lock().await;
+            let still_current = matches!(
+                current.as_ref(),
+                Some(candidate)
+                    if candidate.user_id == snapshot.user_id
+                        && candidate.access_token == snapshot.access_token
+            );
+            if !still_current {
+                return;
+            }
+            if let Err(e) = Self::persist_account_snapshot(&snapshot) {
                 tracing::warn!(
                     user_id = %snapshot.user_id,
                     "failed to persist rotated cloud tokens: {}",
@@ -432,7 +574,7 @@ impl CloudClient {
             }
         });
 
-        Ok(account.access_token.clone())
+        Ok(access_token)
     }
 
     /// Issue exactly one refresh HTTP request and bucket the response
@@ -486,8 +628,7 @@ impl CloudClient {
         }
     }
 
-    /// Persist the supplied account (or, when `None`, the currently
-    /// in-memory account) back to `settings.json` and refresh the
+    /// Persist the supplied account back to `settings.json` and refresh the
     /// in-memory cache. Intended for two callers:
     ///
     /// 1. `ensure_fresh_token` after a successful rotation (so a
@@ -505,11 +646,20 @@ impl CloudClient {
         &self,
         account: &CloudAccount,
     ) -> Result<(), CloudError> {
+        Self::persist_account_snapshot(account)
+    }
+
+    fn persist_account_snapshot(account: &CloudAccount) -> Result<(), CloudError> {
+        Self::persist_account_state(Some(account))
+    }
+
+    fn persist_account_state(account: Option<&CloudAccount>) -> Result<(), CloudError> {
         // Read the latest settings from disk so we don't clobber other
         // concurrent edits (e.g. a user toggling web_search routing at
         // the same moment a refresh fires).
-        let mut updated = crate::commands::get_settings_cached().unwrap_or_default();
-        updated.cloud.account = Some(account.clone());
+        let mut updated = crate::commands::get_settings_cached()
+            .map_err(|e| CloudError::Other(format!("read settings: {}", e)))?;
+        updated.cloud.account = account.cloned();
 
         let path = crate::commands::get_settings_path();
         let content = serde_json::to_string_pretty(&updated)
@@ -592,7 +742,10 @@ impl CloudClient {
         Ok(CloudAccountInfo {
             id: parsed.id,
             email: parsed.email,
-            balance_cents: parsed.balance_cents,
+            balance_points: parsed.balance_points,
+            reserved_points: parsed.reserved_points,
+            debt_points: parsed.debt_points,
+            is_suspended: parsed.is_suspended,
             plan_name: parsed.plan_name,
             monthly_token_limit: parsed.monthly_token_limit,
             subscription_expires_at: parsed.subscription_expires_at,
@@ -725,5 +878,101 @@ fn map_status(status: StatusCode, body: &str) -> CloudError {
 impl Default for CloudClient {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_persisted_account_migrates_cents_to_exact_points() {
+        let json = r#"{
+            "base_url":"https://cloud.example.test/",
+            "email":"reader@example.test",
+            "user_id":"00000000-0000-0000-0000-000000000001",
+            "access_token":"test-access-token",
+            "refresh_token":"test-refresh-token",
+            "access_expires_at":"2030-01-01T00:00:00Z",
+            "plan_name":"Free",
+            "balance_cents":12.3
+        }"#;
+
+        let account: CloudAccount = serde_json::from_str(json).expect("legacy account parses");
+        assert_eq!(account.base_url, "https://cloud.example.test");
+        assert_eq!(account.balance_points, 123);
+        assert_eq!(account.balance_cents, 12.3);
+        assert_eq!(account.debt_points, 0);
+        assert!(!account.is_suspended);
+
+        let saved = serde_json::to_value(account).expect("account serializes");
+        assert_eq!(saved["balance_points"], 123);
+        assert_eq!(saved["balance_cents"], 12.3);
+    }
+
+    #[test]
+    fn canonical_points_win_over_stale_legacy_mirror() {
+        let json = r#"{
+            "base_url":"https://cloud.example.test",
+            "email":"reader@example.test",
+            "user_id":"00000000-0000-0000-0000-000000000001",
+            "access_token":"test-access-token",
+            "refresh_token":"test-refresh-token",
+            "access_expires_at":"2030-01-01T00:00:00Z",
+            "plan_name":null,
+            "balance_points":12345,
+            "balance_cents":0
+        }"#;
+
+        let account: CloudAccount = serde_json::from_str(json).expect("current account parses");
+        assert_eq!(account.balance_points, 12_345);
+        assert_eq!(account.balance_cents, 1_234.5);
+    }
+
+    #[test]
+    fn snake_case_auth_response_parses_billing_state() {
+        let json = r#"{
+            "access_token":"test-access-token",
+            "refresh_token":"test-refresh-token",
+            "expires_at":"2030-01-01T00:00:00Z",
+            "user":{
+                "id":"00000000-0000-0000-0000-000000000001",
+                "email":"reader@example.test",
+                "balance_points":12345,
+                "debt_points":7,
+                "is_suspended":true,
+                "plan_name":"Free",
+                "subscription_expires_at":null
+            }
+        }"#;
+
+        let response: AuthResponse = serde_json::from_str(json).expect("auth response parses");
+        assert_eq!(response.user.balance_points, 12_345);
+        assert_eq!(response.user.debt_points, 7);
+        assert!(response.user.is_suspended);
+    }
+
+    #[test]
+    fn snake_case_account_me_response_preserves_point_precision() {
+        let json = r#"{
+            "id":"00000000-0000-0000-0000-000000000001",
+            "email":"reader@example.test",
+            "balance_points":1,
+            "reserved_points":1,
+            "debt_points":2,
+            "is_suspended":true,
+            "plan_name":null,
+            "monthly_token_limit":500000,
+            "subscription_expires_at":null,
+            "tokens_used_this_month":3,
+            "monthly_tokens_remaining":499997
+        }"#;
+
+        let response: AccountMeResponse =
+            serde_json::from_str(json).expect("account/me response parses");
+        assert_eq!(response.balance_points, 1);
+        assert_eq!(response.reserved_points, 1);
+        assert_eq!(response.debt_points, 2);
+        assert!(response.is_suspended);
     }
 }

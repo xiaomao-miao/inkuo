@@ -29,13 +29,19 @@ namespace Inkuso.Cloud.Core.Security;
 
 public interface ISecretProtector
 {
+    bool IsProtected(string? value);
     string? Protect(string? plaintext);
     string? Unprotect(string? protectedValue);
 }
 
 public class DataProtectionSecretProtector(IDataProtector protector) : ISecretProtector
 {
+    public const string Purpose = "inkuo-cloud:upstream-credentials:v1";
     private const string Prefix = "dp:";
+
+    public bool IsProtected(string? value) =>
+        !string.IsNullOrEmpty(value)
+        && value.StartsWith(Prefix, StringComparison.Ordinal);
 
     public string? Protect(string? plaintext)
     {
@@ -52,7 +58,7 @@ public class DataProtectionSecretProtector(IDataProtector protector) : ISecretPr
     public string? Unprotect(string? protectedValue)
     {
         if (string.IsNullOrEmpty(protectedValue)) return protectedValue;
-        if (!protectedValue.StartsWith(Prefix, StringComparison.Ordinal))
+        if (!IsProtected(protectedValue))
             // Legacy plaintext row — return as-is so we don't break reads
             // while a rolling migration is in progress.
             return protectedValue;

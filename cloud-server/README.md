@@ -44,7 +44,15 @@ Desktop clients (the inkuo Tauri app) authenticate against this server with emai
 
 ```bash
 cp .env.example .env
-# Edit .env: set JWT_SECRET and POSTGRES_PASSWORD
+# Generate strong values, then paste them into .env. Dotenv files do not
+# execute command substitutions.
+openssl rand -base64 36  # POSTGRES_PASSWORD
+openssl rand -base64 48  # JWT_SECRET
+openssl rand -hex 32     # ADMIN_TOKEN
+openssl rand -base64 24  # ADMIN_SEED_PASSWORD
+
+# Also set a non-default ADMIN_SEED_USERNAME.
+# Compose intentionally refuses to start when any required secret is absent.
 
 docker compose up -d --build
 
@@ -53,17 +61,19 @@ curl http://localhost:8080/health    # API
 curl http://localhost:8081/health    # Billing
 curl http://localhost:8082/health    # Admin
 
-# Register a test user via API
+# First create a scoped invite code in the Admin UI, then register a test user
 curl -X POST http://localhost:8080/auth/register \
   -H "Content-Type: application/json" \
-  -d '{"inviteCode":"INKUO2026","email":"test@example.com","password":"testpass123"}'
+  -d '{"invite_code":"<operator-created-code>","email":"test@example.com","password":"testpass123"}'
 
 # Or open the admin web UI
 open http://localhost:8082
-# Default login: admin / admin123 (CHANGE IMMEDIATELY)
+# Sign in with the ADMIN_SEED_USERNAME / ADMIN_SEED_PASSWORD values from .env
 ```
 
-The default invite code `INKUO2026` is seeded with 9999 uses and ¥5 free credit per registration.
+Local development may use temporary credentials, but they must still be randomly generated and kept out of source control; there are no built-in weak password fallbacks.
+
+No enabled invite or redemption code grants credit by default. The historical public example rows are migrated to disabled, zero-credit placeholders; create scoped codes through the authenticated Admin UI/API.
 
 ## Admin Web UI
 
@@ -75,27 +85,28 @@ The admin panel at **http://localhost:8082** (production: behind your HTTPS reve
   - Top-N model usage horizontal bar chart
 - **Users**: paginated list with search/sort; view detail drawer (subscriptions + last 100 usage records + active refresh tokens); manually adjust balance with audit reason; revoke all sessions; delete user
 - **Plans**: full CRUD (name, monthly fee, token limit, overage prices, enabled)
-- **Models**: full CRUD (upstream provider/base URL/API key [masked by default, click to reveal]/display name/description/per-model pricing/sort order/enabled)
+- **Models**: full CRUD (OpenAI-compatible provider/base URL/write-only API key/display name/description/per-model pricing/output cap/sort order/enabled)
 - **Invite codes**: full CRUD + enable/disable toggle
 - **Redemption codes**: full CRUD + enable/disable toggle + bind-to-plan
 - **Usage**: time-range filtered log of every chat-completion call (user, model, tokens, cost)
 - **Admins**: superadmin can create/list/delete other admin users
 
-All forms have validation; API keys are typed as `<first4>***<last4>` unless you click "查看完整 API Key".
+All forms have validation. Provider API keys are write-only: the UI only reports whether a key exists, and editing with a blank key preserves the existing encrypted value.
 
-### Default credentials
+### Bootstrap credentials
 
-The first time the admin service starts with an empty database, it seeds a single `superadmin` user from `ADMIN_SEED_USERNAME` / `ADMIN_SEED_PASSWORD` env vars (default `admin` / `admin123`). **Change the password from the user menu in the top right immediately after first login.**
+The first time the admin service starts with an empty database, it seeds a single `superadmin` user from the explicitly configured `ADMIN_SEED_USERNAME` / `ADMIN_SEED_PASSWORD` environment variables. The Compose deployment has no default credentials and refuses to start when they are absent. Rotate the bootstrap password from the user menu in the top right immediately after first login.
 
 ## Configuration
 
 | Variable | Description | Default |
 |---|---|---|
-| `POSTGRES_PASSWORD` | PostgreSQL root password | `inkuo_dev_password` |
+| `POSTGRES_PASSWORD` | PostgreSQL password; use a strong random value | (required; no default) |
 | `JWT_SECRET` | HMAC-SHA256 signing secret (≥32 chars) | (required) |
 | `ADMIN_TOKEN` | Bearer for Billing service `/admin/*` legacy endpoints | (required) |
-| `ADMIN_SEED_USERNAME` | Username of the bootstrap admin user (created on first run if no admin exists) | `admin` |
-| `ADMIN_SEED_PASSWORD` | Password of the bootstrap admin user | `admin123` |
+| `ADMIN_SEED_USERNAME` | Username of the bootstrap admin user (created on first run if no admin exists) | (required; no default) |
+| `ADMIN_SEED_PASSWORD` | Strong bootstrap admin password | (required; no default) |
+| `DataProtection__KeyDir` | Persistent ASP.NET Data Protection key-ring directory; Api and Admin must share it | `/var/lib/inkuo/dp-keys` in Compose |
 
 ## Endpoints
 
@@ -130,7 +141,7 @@ The first time the admin service starts with an empty database, it seeds a singl
   - `/api/dashboard/{summary,usage-trend,plan-distribution,model-usage}`
   - `/api/users/...` (list, detail, adjust-balance, revoke-sessions, delete)
   - `/api/plans/...` (CRUD)
-  - `/api/model-configs/...` (CRUD; pass `?includeKey=true` to see real API keys)
+  - `/api/model-configs/...` (CRUD; saved API keys are never returned)
   - `/api/invite-codes/...` (CRUD + toggle)
   - `/api/redemption-codes/...` (CRUD + toggle)
   - `/api/usage/` (filterable by user/model/date range)
@@ -146,13 +157,17 @@ Tables: `users`, `plans`, `subscriptions`, `invite_codes`, `redemption_codes`, `
 
 Seeded data on first boot:
 - 4 plans: Free / Plus / Pro / Max
-- 1 invite code: `INKUO2026` (¥5 free credit, 9999 uses)
+- disabled, zero-credit placeholders for the historical public invite/redemption rows (migration compatibility only)
 - 3 model configs: DeepSeek-V3, GPT-4o Mini, GPT-4o (with placeholder upstream keys — set real ones via the admin UI)
-- 1 admin user: `admin` / `admin123` (only if no admin exists yet)
+- 1 admin user from `ADMIN_SEED_USERNAME` / `ADMIN_SEED_PASSWORD` (only if no admin exists yet)
 
 ## Upstream API keys
 
-The seeded `model_configs` rows have empty `upstream_api_key`. Set them via the **Models** page in the admin UI (`http://localhost:8082/models` → click "查看完整 API Key" → edit). API keys are masked in the UI by default.
+The seeded `model_configs` rows have empty `upstream_api_key`. Set them through the **Models** page in the admin UI (`http://localhost:8082/models` → edit) or the authenticated Admin API. Saved API keys are never returned by either interface; submit a new value only when rotating a key.
+
+Operator-supplied LLM and Web Search keys are protected at rest with ASP.NET Core Data Protection before they are stored. Admin writes a protected `dp:` payload and Api decrypts it only when forwarding a request. On either Api or Admin startup, legacy plaintext provider keys are protected in place before requests are served. **Do not insert or update `upstream_api_key` with psql, direct SQL, or migration scripts**: that bypasses `ISecretProtector`, can leave plaintext in the database, and can create a value the running services cannot decrypt.
+
+Api and Admin must use the same application name and the same persistent `DataProtection__KeyDir`. The Compose file mounts both services on the shared `dpkeys` volume. A named volume provides persistence, not encryption: protect its host storage and permissions. Back up that key ring together with PostgreSQL, encrypt and access-control the backup, and retain older Data Protection keys during normal rotation so existing payloads remain decryptable. Losing the key ring makes stored provider credentials unusable; exposure of the key ring requires rotating both it and the upstream provider keys.
 
 ## Project layout
 
@@ -189,7 +204,9 @@ cloud-server/
 - [ ] Set `ADMIN_SEED_PASSWORD` to a strong bootstrap password (and change it immediately after first login)
 - [ ] Put behind nginx/Caddy with HTTPS
 - [ ] Set up PostgreSQL backups (e.g. `pg_dump` cron)
-- [ ] Encrypt `upstream_api_key` column (currently plaintext)
+- [ ] Configure upstream API keys only through the Admin UI/API; never by direct SQL
+- [ ] Mount Api/Admin on the same persistent `DataProtection__KeyDir`
+- [ ] Back up, protect, test-restore, and plan rotation for the Data Protection key ring
 - [ ] Add rate limiting middleware
 - [ ] Wire logs to a central aggregator
 - [ ] Rotate the bootstrap admin password via the UI's "修改密码" menu on first deploy

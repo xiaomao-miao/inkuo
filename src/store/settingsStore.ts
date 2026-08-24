@@ -533,13 +533,38 @@ function sanitiseCloudConfig(
       ? raw.cloud_mode_enabled
       : fallback.cloud_mode_enabled;
 
-  // The account is opaque to the frontend — we mostly forward it as-is
-  // so the Rust side can refresh tokens. We only sanity-check the basic
-  // shape; tokens are just opaque strings here.
-  const account: CloudAccount | null =
-    raw.account && typeof raw.account === 'object' && typeof raw.account.access_token === 'string'
-      ? (raw.account as CloudAccount)
-      : null;
+  // Zustand can rehydrate a renderer snapshot without going through Rust's
+  // custom CloudAccount deserializer. Migrate the old cents-only shape here
+  // as well so every UI surface receives canonical integer points.
+  let account: CloudAccount | null = null;
+  if (
+    raw.account
+    && typeof raw.account === 'object'
+    && typeof raw.account.access_token === 'string'
+  ) {
+    const accountRecord = raw.account as unknown as Record<string, unknown>;
+    const rawPoints = accountRecord.balance_points;
+    const rawCents = accountRecord.balance_cents;
+    const balancePoints = Number.isSafeInteger(rawPoints) && Number(rawPoints) >= 0
+      ? Number(rawPoints)
+      : typeof rawCents === 'number' && Number.isFinite(rawCents)
+        ? Math.max(0, Math.round(rawCents * 10))
+        : 0;
+    const nonNegativePoints = (value: unknown): number => (
+      Number.isSafeInteger(value) && Number(value) >= 0 ? Number(value) : 0
+    );
+    account = {
+      ...raw.account,
+      base_url: typeof raw.account.base_url === 'string'
+        ? raw.account.base_url.replace(/\/+$/, '')
+        : '',
+      balance_points: balancePoints,
+      balance_cents: balancePoints / 10,
+      reserved_points: nonNegativePoints(accountRecord.reserved_points),
+      debt_points: nonNegativePoints(accountRecord.debt_points),
+      is_suspended: accountRecord.is_suspended === true,
+    };
+  }
 
   // The on-disk schema for CloudModelEntry has evolved: the price unit
   // was renamed from `*_per_1k_tokens` to `*_per_m_tokens` (and a

@@ -18,6 +18,7 @@ public static class AdminModelConfigsEndpoints
         decimal InputPricePerMTokens,
         decimal OutputPricePerMTokens,
         decimal CachedInputPricePerMTokens,
+        int MaxOutputTokens,
         bool Enabled,
         int SortOrder);
 
@@ -32,6 +33,7 @@ public static class AdminModelConfigsEndpoints
         decimal InputPricePerMTokens,
         decimal OutputPricePerMTokens,
         decimal CachedInputPricePerMTokens,
+        int MaxOutputTokens,
         bool Enabled,
         int SortOrder);
 
@@ -39,7 +41,7 @@ public static class AdminModelConfigsEndpoints
     {
         var group = app.MapGroup("/api/model-configs").WithTags("model-configs").RequireAuthorization();
 
-        group.MapGet("/", async (AppDbContext db, bool includeKey = false) =>
+        group.MapGet("/", async (AppDbContext db) =>
         {
             var rows = await db.ModelConfigs
                 .OrderBy(m => m.SortOrder)
@@ -50,13 +52,14 @@ public static class AdminModelConfigsEndpoints
                 m.Id,
                 m.UpstreamProvider,
                 m.UpstreamBaseUrl,
-                UpstreamApiKeyMasked = includeKey ? m.UpstreamApiKey : Mask(m.UpstreamApiKey),
+                HasUpstreamApiKey = !string.IsNullOrWhiteSpace(m.UpstreamApiKey),
                 m.ModelName,
                 m.DisplayName,
                 m.Description,
                 m.InputPricePerMTokens,
                 m.OutputPricePerMTokens,
                 m.CachedInputPricePerMTokens,
+                m.MaxOutputTokens,
                 m.Enabled,
                 m.SortOrder,
                 m.CreatedAt,
@@ -66,22 +69,35 @@ public static class AdminModelConfigsEndpoints
 
         group.MapPost("/", async (ModelConfigRequest req, AppDbContext db, ISecretProtector protector) =>
         {
-            if (string.IsNullOrWhiteSpace(req.DisplayName) || string.IsNullOrWhiteSpace(req.ModelName))
-                return Results.BadRequest(new { error = "DisplayName and ModelName are required" });
-            if (string.IsNullOrWhiteSpace(req.UpstreamBaseUrl))
-                return Results.BadRequest(new { error = "UpstreamBaseUrl is required" });
+            var endpointError = ValidateEndpoint(
+                req.UpstreamProvider,
+                req.UpstreamBaseUrl,
+                req.DisplayName,
+                req.ModelName);
+            if (endpointError is not null)
+                return Results.BadRequest(new { error = endpointError });
+            var validationError = ValidateRateCard(
+                req.InputPricePerMTokens,
+                req.OutputPricePerMTokens,
+                req.CachedInputPricePerMTokens,
+                req.MaxOutputTokens);
+            if (validationError is not null)
+                return Results.BadRequest(new { error = validationError });
+            if (string.IsNullOrWhiteSpace(req.UpstreamApiKey))
+                return Results.BadRequest(new { error = "UpstreamApiKey is required" });
 
             var m = new ModelConfig
             {
-                UpstreamProvider = req.UpstreamProvider,
-                UpstreamBaseUrl = req.UpstreamBaseUrl.TrimEnd('/'),
+                UpstreamProvider = req.UpstreamProvider.Trim().ToLowerInvariant(),
+                UpstreamBaseUrl = req.UpstreamBaseUrl.Trim().TrimEnd('/'),
                 UpstreamApiKey = protector.Protect(req.UpstreamApiKey) ?? string.Empty,
-                ModelName = req.ModelName,
-                DisplayName = req.DisplayName,
-                Description = req.Description,
+                ModelName = req.ModelName.Trim(),
+                DisplayName = req.DisplayName.Trim(),
+                Description = req.Description?.Trim(),
                 InputPricePerMTokens = req.InputPricePerMTokens,
                 OutputPricePerMTokens = req.OutputPricePerMTokens,
                 CachedInputPricePerMTokens = req.CachedInputPricePerMTokens,
+                MaxOutputTokens = req.MaxOutputTokens,
                 Enabled = req.Enabled,
                 SortOrder = req.SortOrder,
                 CreatedAt = DateTime.UtcNow,
@@ -96,16 +112,32 @@ public static class AdminModelConfigsEndpoints
             var m = await db.ModelConfigs.FindAsync(id);
             if (m == null) return Results.NotFound();
 
-            m.UpstreamProvider = req.UpstreamProvider;
-            m.UpstreamBaseUrl = req.UpstreamBaseUrl.TrimEnd('/');
+            var endpointError = ValidateEndpoint(
+                req.UpstreamProvider,
+                req.UpstreamBaseUrl,
+                req.DisplayName,
+                req.ModelName);
+            if (endpointError is not null)
+                return Results.BadRequest(new { error = endpointError });
+            var validationError = ValidateRateCard(
+                req.InputPricePerMTokens,
+                req.OutputPricePerMTokens,
+                req.CachedInputPricePerMTokens,
+                req.MaxOutputTokens);
+            if (validationError is not null)
+                return Results.BadRequest(new { error = validationError });
+
+            m.UpstreamProvider = req.UpstreamProvider.Trim().ToLowerInvariant();
+            m.UpstreamBaseUrl = req.UpstreamBaseUrl.Trim().TrimEnd('/');
             if (!string.IsNullOrWhiteSpace(req.UpstreamApiKey))
                 m.UpstreamApiKey = protector.Protect(req.UpstreamApiKey) ?? string.Empty; // leave existing if blank
-            m.ModelName = req.ModelName;
-            m.DisplayName = req.DisplayName;
-            m.Description = req.Description;
+            m.ModelName = req.ModelName.Trim();
+            m.DisplayName = req.DisplayName.Trim();
+            m.Description = req.Description?.Trim();
             m.InputPricePerMTokens = req.InputPricePerMTokens;
             m.OutputPricePerMTokens = req.OutputPricePerMTokens;
             m.CachedInputPricePerMTokens = req.CachedInputPricePerMTokens;
+            m.MaxOutputTokens = req.MaxOutputTokens;
             m.Enabled = req.Enabled;
             m.SortOrder = req.SortOrder;
 
@@ -126,10 +158,43 @@ public static class AdminModelConfigsEndpoints
         });
     }
 
-    private static string Mask(string key)
+    private static string? ValidateRateCard(
+        decimal inputPrice,
+        decimal outputPrice,
+        decimal cachedInputPrice,
+        int maxOutputTokens)
     {
-        if (string.IsNullOrEmpty(key)) return "";
-        if (key.Length <= 8) return new string('*', key.Length);
-        return key[..4] + "***" + key[^4..];
+        const decimal maxStoredPrice = 999_999.999999m;
+        if (inputPrice < 0 || outputPrice < 0 || cachedInputPrice < 0)
+            return "Token prices cannot be negative";
+        if (inputPrice > maxStoredPrice
+            || outputPrice > maxStoredPrice
+            || cachedInputPrice > maxStoredPrice)
+            return $"Token prices must not exceed {maxStoredPrice}";
+        if (maxOutputTokens is < 1 or > 131_072)
+            return "MaxOutputTokens must be between 1 and 131072";
+        return null;
     }
+
+    private static string? ValidateEndpoint(
+        string provider,
+        string baseUrl,
+        string displayName,
+        string modelName)
+    {
+        if (string.IsNullOrWhiteSpace(displayName) || string.IsNullOrWhiteSpace(modelName))
+            return "DisplayName and ModelName are required";
+
+        var normalizedProvider = provider?.Trim().ToLowerInvariant();
+        if (normalizedProvider is not ("openai" or "deepseek"))
+            return "Only OpenAI-compatible providers are currently supported";
+
+        if (!Uri.TryCreate(baseUrl?.Trim(), UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp)
+            || string.IsNullOrWhiteSpace(uri.Host))
+            return "UpstreamBaseUrl must be an absolute http(s) URL";
+
+        return null;
+    }
+
 }

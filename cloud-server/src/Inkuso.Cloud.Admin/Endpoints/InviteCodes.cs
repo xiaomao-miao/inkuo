@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
+using Inkuso.Cloud.Core.Billing;
 using Inkuso.Cloud.Core.Data;
 using Inkuso.Cloud.Core.Entities;
 
@@ -32,15 +33,19 @@ public static class AdminInviteCodesEndpoints
 
         group.MapPost("/", async (InviteCodeRequest req, AppDbContext db) =>
         {
-            if (string.IsNullOrWhiteSpace(req.Code) || req.Code.Length < 4)
-                return Results.BadRequest(new { error = "Code must be at least 4 characters" });
+            var code = BillingLimits.NormalizeCode(req.Code);
+            var validationError = BillingLimits.ValidateCode(code)
+                                  ?? BillingLimits.ValidatePointGrant(req.FreePoints, allowZero: true)
+                                  ?? BillingLimits.ValidateMaxUses(req.MaxUses);
+            if (validationError is not null)
+                return Results.BadRequest(new { error = validationError });
 
-            if (await db.InviteCodes.AnyAsync(i => i.Code == req.Code))
+            if (await db.InviteCodes.AnyAsync(i => i.Code == code))
                 return Results.Conflict(new { error = "Code already exists" });
 
             var invite = new InviteCode
             {
-                Code = req.Code,
+                Code = code,
                 FreePoints = req.FreePoints,
                 MaxUses = req.MaxUses,
                 ExpiresAt = req.ExpiresAt,
@@ -48,22 +53,47 @@ public static class AdminInviteCodesEndpoints
                 CreatedAt = DateTime.UtcNow,
             };
             db.InviteCodes.Add(invite);
-            await db.SaveChangesAsync();
+            try
+            {
+                await db.SaveChangesAsync();
+            }
+            catch (DbUpdateException)
+            {
+                return Results.Conflict(new { error = "Code already exists" });
+            }
             return Results.Ok(new { id = invite.Id, code = invite.Code });
         });
 
         group.MapPut("/{id:int}", async (int id, InviteCodeRequest req, AppDbContext db) =>
         {
+            var code = BillingLimits.NormalizeCode(req.Code);
+            var validationError = BillingLimits.ValidateCode(code)
+                                  ?? BillingLimits.ValidatePointGrant(req.FreePoints, allowZero: true)
+                                  ?? BillingLimits.ValidateMaxUses(req.MaxUses);
+            if (validationError is not null)
+                return Results.BadRequest(new { error = validationError });
+
             var invite = await db.InviteCodes.FindAsync(id);
             if (invite == null) return Results.NotFound();
+            if (req.MaxUses < invite.UsedCount)
+                return Results.BadRequest(new { error = "MaxUses cannot be lower than UsedCount" });
+            if (await db.InviteCodes.AnyAsync(i => i.Id != id && i.Code == code))
+                return Results.Conflict(new { error = "Code already exists" });
 
-            invite.Code = req.Code;
+            invite.Code = code;
             invite.FreePoints = req.FreePoints;
             invite.MaxUses = req.MaxUses;
             invite.ExpiresAt = req.ExpiresAt;
             invite.Enabled = req.Enabled;
 
-            await db.SaveChangesAsync();
+            try
+            {
+                await db.SaveChangesAsync();
+            }
+            catch (DbUpdateException)
+            {
+                return Results.Conflict(new { error = "Code already exists" });
+            }
             return Results.Ok(new { message = "Invite code updated" });
         });
 
@@ -71,6 +101,20 @@ public static class AdminInviteCodesEndpoints
         {
             var invite = await db.InviteCodes.FindAsync(id);
             if (invite == null) return Results.NotFound();
+            if (!invite.Enabled)
+            {
+                var normalizedCode = BillingLimits.NormalizeCode(invite.Code);
+                var validationError = normalizedCode != invite.Code
+                    ? "Code must not contain leading or trailing whitespace"
+                    : BillingLimits.ValidateCode(normalizedCode)
+                      ?? BillingLimits.ValidatePointGrant(invite.FreePoints, allowZero: true)
+                      ?? BillingLimits.ValidateMaxUses(invite.MaxUses);
+                if (validationError is not null || invite.UsedCount > invite.MaxUses)
+                    return Results.BadRequest(new
+                    {
+                        error = validationError ?? "UsedCount exceeds MaxUses; edit the code before enabling it",
+                    });
+            }
             invite.Enabled = !invite.Enabled;
             await db.SaveChangesAsync();
             return Results.Ok(new { enabled = invite.Enabled });

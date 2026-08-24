@@ -6,6 +6,7 @@ using Microsoft.EntityFrameworkCore;
 using Inkuso.Cloud.Core.Data;
 using Inkuso.Cloud.Core.Entities;
 using Inkuso.Cloud.Core.Auth;
+using Inkuso.Cloud.Core.Billing;
 
 namespace Inkuso.Cloud.Api.Endpoints;
 
@@ -15,7 +16,14 @@ public static class Auth
     public record LoginRequest(string Email, string Password);
     public record RefreshRequest(string RefreshToken);
     public record AuthResponse(string AccessToken, string RefreshToken, DateTime ExpiresAt, UserDto User);
-    public record UserDto(Guid Id, string Email, long BalancePoints, bool IsSuspended, string? PlanName, DateTime? SubscriptionExpiresAt);
+    public record UserDto(
+        Guid Id,
+        string Email,
+        long BalancePoints,
+        long DebtPoints,
+        bool IsSuspended,
+        string? PlanName,
+        DateTime? SubscriptionExpiresAt);
 
     // Email format check. .NET's MailAddress parser rejects more than the
     // naive Contains('@') (e.g. rejects "foo@@bar" or trailing dots); we use
@@ -29,7 +37,11 @@ public static class Auth
     {
         var group = app.MapGroup("/auth").WithTags("auth");
 
-        group.MapPost("/register", async (RegisterRequest req, AppDbContext db, JwtService jwt) =>
+        group.MapPost("/register", async (
+            RegisterRequest req,
+            AppDbContext db,
+            JwtService jwt,
+            CancellationToken ct) =>
         {
             // Normalize once so every subsequent lookup is consistent —
             // the previous version validated `req.Email` (raw casing) but
@@ -42,76 +54,96 @@ public static class Auth
             if (string.IsNullOrWhiteSpace(req.Password) || req.Password.Length < 6)
                 return Results.BadRequest(new { error = "Password must be at least 6 characters" });
 
-            // Cheap pre-check (returns 409 fast) plus the unique index on
-            // Email as the ground-truth guard. We can't wrap register in a
-            // serializable transaction because BCrypt hashing is too slow for
-            // it; the DB unique index handles the rare race and surfaces a
-            // DbUpdateException that we translate to 409.
-            if (await db.Users.AnyAsync(u => u.Email == normalizedEmail))
+            // Hash before opening the transaction: BCrypt is deliberately slow,
+            // and keeping a database transaction open during it would amplify
+            // lock contention under registration bursts.
+            var passwordHash = BCrypt.Net.BCrypt.HashPassword(req.Password);
+
+            // Cheap pre-check for the common duplicate case; the unique index is
+            // still the source of truth for concurrent registrations.
+            if (await db.Users.AnyAsync(u => u.Email == normalizedEmail, ct))
                 return Results.Conflict(new { error = "Email already registered" });
 
-            // Validate invite code
-            long freeCredit = 0;
-            InviteCode? invite = null;
-            if (!string.IsNullOrWhiteSpace(req.InviteCode))
-            {
-                invite = await db.InviteCodes.FirstOrDefaultAsync(i =>
-                    i.Code == req.InviteCode && i.Enabled &&
-                    (i.ExpiresAt == null || i.ExpiresAt > DateTime.UtcNow));
-
-                if (invite is null)
-                    return Results.BadRequest(new { error = "Invalid or expired invite code" });
-
-                // Optimistic decrement + uniqueness against (Code, UsedCount+1 <= MaxUses)
-                // pattern: the DB unique index alone can't enforce max-uses,
-                // so we re-check inside the conditional update below to close
-                // the concurrent-register race that previously let two callers
-                // both succeed past MaxUses.
-                var reserved = await db.InviteCodes
-                    .Where(i => i.Id == invite.Id && i.Enabled && i.UsedCount < i.MaxUses &&
-                                (i.ExpiresAt == null || i.ExpiresAt > DateTime.UtcNow))
-                    .ExecuteUpdateAsync(s => s.SetProperty(i => i.UsedCount, i => i.UsedCount + 1));
-
-                if (reserved == 0)
-                    return Results.BadRequest(new { error = "Invite code has reached its usage limit" });
-
-                freeCredit = invite.FreePoints;
-            }
-
+            var inviteCode = string.IsNullOrWhiteSpace(req.InviteCode)
+                ? null
+                : req.InviteCode.Trim();
+            var freeCredit = 0L;
             var user = new User
             {
                 Email = normalizedEmail,
-                PasswordHash = BCrypt.Net.BCrypt.HashPassword(req.Password),
-                InviteCodeUsed = req.InviteCode,
-                BalancePoints = freeCredit,
+                PasswordHash = passwordHash,
+                InviteCodeUsed = inviteCode,
             };
 
-            db.Users.Add(user);
-            Microsoft.EntityFrameworkCore.DbUpdateException? updateException = null;
+            // Invite-use reservation and user creation form one transaction.
+            // Otherwise a duplicate-email race or database failure consumes a
+            // limited invite even though no account was created.
+            await using var tx = await db.Database.BeginTransactionAsync(ct);
             try
             {
-                await db.SaveChangesAsync();
-            }
-            catch (Microsoft.EntityFrameworkCore.DbUpdateException ex)
-            {
-                // The unique index caught a duplicate email that slipped
-                // through the pre-check race window. Re-query to confirm
-                // before returning 409 — some other DbUpdateException (e.g.
-                // a transient connection error) should bubble up.
-                updateException = ex;
-            }
+                if (inviteCode is not null)
+                {
+                    var invite = await db.InviteCodes.AsNoTracking()
+                        .FirstOrDefaultAsync(i =>
+                            i.Code == inviteCode
+                            && i.Enabled
+                            && i.UsedCount < i.MaxUses
+                            && (i.ExpiresAt == null || i.ExpiresAt > DateTime.UtcNow), ct);
+                    if (invite is null)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return Results.BadRequest(new { error = "Invalid, expired, or exhausted invite code" });
+                    }
+                    if (BillingLimits.ValidatePointGrant(invite.FreePoints, allowZero: true) is not null)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return Results.Json(
+                            new { error = "Invite code is temporarily unavailable; contact support." },
+                            statusCode: 503);
+                    }
 
-            if (updateException is not null
-                && await db.Users.AnyAsync(u => u.Email == normalizedEmail))
-            {
-                return Results.Conflict(new { error = "Email already registered" });
+                    var reserved = await db.InviteCodes
+                        .Where(i => i.Id == invite.Id
+                                    && i.Enabled
+                                    && i.UsedCount < i.MaxUses
+                                    && (i.ExpiresAt == null || i.ExpiresAt > DateTime.UtcNow))
+                        .ExecuteUpdateAsync(s => s.SetProperty(
+                            i => i.UsedCount,
+                            i => i.UsedCount + 1), ct);
+                    if (reserved != 1)
+                    {
+                        await tx.RollbackAsync(ct);
+                        return Results.BadRequest(new { error = "Invite code has reached its usage limit" });
+                    }
+                    freeCredit = invite.FreePoints;
+                }
+
+                user.BalancePoints = freeCredit;
+                db.Users.Add(user);
+                await db.SaveChangesAsync(ct);
+                await tx.CommitAsync(ct);
             }
-            if (updateException is not null) throw updateException;
+            catch (Microsoft.EntityFrameworkCore.DbUpdateException)
+            {
+                await tx.RollbackAsync(CancellationToken.None);
+                db.ChangeTracker.Clear();
+                if (await db.Users.AsNoTracking().AnyAsync(
+                        u => u.Email == normalizedEmail, CancellationToken.None))
+                    return Results.Conflict(new { error = "Email already registered" });
+                throw;
+            }
+            catch
+            {
+                await tx.RollbackAsync(CancellationToken.None);
+                throw;
+            }
 
             var tokens = await jwt.GenerateTokensAsync(user);
             var sub = await db.Subscriptions
                 .Include(s => s.Plan)
-                .Where(s => s.UserId == user.Id && s.Status == "active")
+                .Where(s => s.UserId == user.Id
+                            && s.Status == "active"
+                            && s.ExpiresAt > DateTime.UtcNow)
                 .OrderByDescending(s => s.ExpiresAt)
                 .FirstOrDefaultAsync();
 
@@ -119,7 +151,7 @@ public static class Auth
                 tokens.AccessToken,
                 tokens.RefreshToken,
                 tokens.AccessExpiresAt,
-                new UserDto(user.Id, user.Email, user.BalancePoints, user.IsSuspended,
+                new UserDto(user.Id, user.Email, user.BalancePoints, user.DebtPoints, user.IsSuspended,
                     sub?.Plan.Name, sub?.ExpiresAt)
             ));
         });
@@ -134,7 +166,9 @@ public static class Auth
             var tokens = await jwt.GenerateTokensAsync(user);
             var sub = await db.Subscriptions
                 .Include(s => s.Plan)
-                .Where(s => s.UserId == user.Id && s.Status == "active")
+                .Where(s => s.UserId == user.Id
+                            && s.Status == "active"
+                            && s.ExpiresAt > DateTime.UtcNow)
                 .OrderByDescending(s => s.ExpiresAt)
                 .FirstOrDefaultAsync();
 
@@ -142,7 +176,7 @@ public static class Auth
                 tokens.AccessToken,
                 tokens.RefreshToken,
                 tokens.AccessExpiresAt,
-                new UserDto(user.Id, user.Email, user.BalancePoints, user.IsSuspended,
+                new UserDto(user.Id, user.Email, user.BalancePoints, user.DebtPoints, user.IsSuspended,
                     sub?.Plan.Name, sub?.ExpiresAt)
             ));
         });

@@ -17,9 +17,9 @@
 //! - **Pre-restore safety backup** – before restoring, we create a timestamped
 //!   backup of the current workspace files via `crate::backup`.
 
-use std::fs::{self, File};
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::fs;
+use std::io;
+use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -37,6 +37,24 @@ use crate::file_watcher::{emit_file_change, FileChangeEvent};
 const DEFAULT_SNAPSHOT_CAP: usize = 50;
 /// How often the background cleanup task scans for orphan directories.
 const SNAPSHOT_CLEANUP_INTERVAL_SECS: u64 = 300;
+const MAX_SNAPSHOT_ID_BYTES: usize = 128;
+const MAX_RELATIVE_PATH_BYTES: usize = 4 * 1024;
+const MAX_SNAPSHOTS_PER_WORKSPACE: usize = 200;
+const MAX_TRACKED_FILES_PER_WORKSPACE: usize = 100_000;
+const EXCLUDED_WORKSPACE_DIRS: &[&str] = &[
+    "node_modules",
+    ".git",
+    "target",
+    "dist",
+    "build",
+    ".next",
+    ".cache",
+    ".turbo",
+    "out",
+    ".inkuo",
+];
+static SNAPSHOT_MUTATION_LOCK: once_cell::sync::Lazy<parking_lot::Mutex<()>> =
+    once_cell::sync::Lazy::new(|| parking_lot::Mutex::new(()));
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -66,11 +84,158 @@ pub fn workspace_hash(workspace_path: &str) -> String {
     hex[..16].to_string()
 }
 
+pub fn validate_snapshot_id(snapshot_id: &str) -> Result<(), SnapshotError> {
+    if snapshot_id.is_empty()
+        || snapshot_id.len() > MAX_SNAPSHOT_ID_BYTES
+        || !snapshot_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(SnapshotError::InvalidSnapshotPath(format!(
+            "invalid snapshot id: {snapshot_id:?}"
+        )));
+    }
+    Ok(())
+}
+
+/// Validate an IPC/manifest path before joining it below a workspace or
+/// snapshot root. Absolute paths, parent traversal and platform prefixes are
+/// rejected rather than normalised.
+pub fn validate_relative_path(relative_path: &str) -> Result<PathBuf, SnapshotError> {
+    if relative_path.is_empty()
+        || relative_path.len() > MAX_RELATIVE_PATH_BYTES
+        || relative_path.contains('\0')
+    {
+        return Err(SnapshotError::InvalidSnapshotPath(format!(
+            "invalid relative path: {relative_path:?}"
+        )));
+    }
+    let path = Path::new(relative_path);
+    if path.is_absolute()
+        || path.components().any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return Err(SnapshotError::InvalidSnapshotPath(format!(
+            "relative path escapes snapshot root: {relative_path:?}"
+        )));
+    }
+    Ok(path.to_path_buf())
+}
+
+fn validate_workspace_path(workspace_path: &str) -> Result<&Path, SnapshotError> {
+    if workspace_path.is_empty()
+        || workspace_path.len() > 32 * 1024
+        || workspace_path.contains('\0')
+        || !Path::new(workspace_path).is_absolute()
+    {
+        return Err(SnapshotError::InvalidWorkspacePath(
+            workspace_path.to_string(),
+        ));
+    }
+    Ok(Path::new(workspace_path))
+}
+
+fn workspace_destination(workspace: &Path, relative_path: &str) -> Result<PathBuf, SnapshotError> {
+    let relative = validate_relative_path(relative_path)?;
+    let mut current = workspace.to_path_buf();
+    if let Some(parent) = relative.parent() {
+        for component in parent.components() {
+            current.push(component.as_os_str());
+            if let Ok(metadata) = fs::symlink_metadata(&current) {
+                if metadata.file_type().is_symlink() {
+                    return Err(SnapshotError::InvalidSnapshotPath(format!(
+                        "workspace path crosses a symlink: {}",
+                        current.display()
+                    )));
+                }
+            }
+        }
+    }
+    let destination = workspace.join(relative);
+    if fs::symlink_metadata(&destination)
+        .map(|metadata| metadata.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        return Err(SnapshotError::InvalidSnapshotPath(format!(
+            "workspace destination is a symlink: {}",
+            destination.display()
+        )));
+    }
+    Ok(destination)
+}
+
+fn should_descend_workspace_entry(entry: &walkdir::DirEntry) -> bool {
+    entry.depth() == 0
+        || !entry.file_type().is_dir()
+        || entry
+            .file_name()
+            .to_str()
+            .map(|name| !EXCLUDED_WORKSPACE_DIRS.contains(&name))
+            .unwrap_or(true)
+}
+
+fn validate_snapshot_path_layout(
+    files: &std::collections::HashSet<PathBuf>,
+    directories: &std::collections::HashSet<PathBuf>,
+) -> Result<(), SnapshotError> {
+    for file in files {
+        if path_contains_excluded_directory(file) {
+            return Err(SnapshotError::InvalidSnapshotPath(format!(
+                "file is inside an excluded workspace directory: {}",
+                file.display()
+            )));
+        }
+        if directories.contains(file) {
+            return Err(SnapshotError::InvalidSnapshotPath(format!(
+                "path is both a file and directory: {}",
+                file.display()
+            )));
+        }
+    }
+
+    for directory in directories {
+        if path_contains_excluded_directory(directory) {
+            return Err(SnapshotError::InvalidSnapshotPath(format!(
+                "excluded workspace directory cannot be snapshotted: {}",
+                directory.display()
+            )));
+        }
+    }
+
+    for path in files.iter().chain(directories.iter()) {
+        let mut ancestor = path.parent();
+        while let Some(parent) = ancestor {
+            if parent.as_os_str().is_empty() {
+                break;
+            }
+            if files.contains(parent) {
+                return Err(SnapshotError::InvalidSnapshotPath(format!(
+                    "file path is an ancestor of another snapshot path: {}",
+                    parent.display()
+                )));
+            }
+            ancestor = parent.parent();
+        }
+    }
+    Ok(())
+}
+
+fn path_contains_excluded_directory(path: &Path) -> bool {
+    path.components().any(|component| match component {
+        Component::Normal(name) => name
+            .to_str()
+            .map(|name| EXCLUDED_WORKSPACE_DIRS.contains(&name))
+            .unwrap_or(false),
+        _ => false,
+    })
+}
+
 /// Full path to a specific snapshot directory.
-pub fn snapshot_dir(workspace_path: &str, snapshot_id: &str) -> PathBuf {
-    get_snapshots_root()
+pub fn snapshot_dir(workspace_path: &str, snapshot_id: &str) -> Result<PathBuf, SnapshotError> {
+    validate_workspace_path(workspace_path)?;
+    validate_snapshot_id(snapshot_id)?;
+    Ok(get_snapshots_root()
         .join(workspace_hash(workspace_path))
-        .join(snapshot_id)
+        .join(snapshot_id))
 }
 
 // ── Data model ─────────────────────────────────────────────────────────────
@@ -185,6 +350,8 @@ pub enum SnapshotError {
     Json(#[from] serde_json::Error),
     #[error("Workspace path is not absolute: {0}")]
     InvalidWorkspacePath(String),
+    #[error("Invalid snapshot path: {0}")]
+    InvalidSnapshotPath(String),
     #[error("Snapshot not found: {0}")]
     SnapshotNotFound(String),
     #[error("Snapshot manifest corrupt: {0}")]
@@ -220,9 +387,9 @@ fn read_cap_from_settings(settings: &Settings) -> usize {
         .and_then(|v| v.as_u64())
         .unwrap_or(DEFAULT_SNAPSHOT_CAP as u64);
     if cap == 0 {
-        usize::MAX
+        DEFAULT_SNAPSHOT_CAP
     } else {
-        cap as usize
+        cap.min(MAX_SNAPSHOTS_PER_WORKSPACE as u64) as usize
     }
 }
 
@@ -235,6 +402,7 @@ fn index_path(workspace_path: &str) -> PathBuf {
 }
 
 fn load_index(workspace_path: &str) -> Result<WorkspaceSnapshotIndex, SnapshotError> {
+    validate_workspace_path(workspace_path)?;
     let path = index_path(workspace_path);
     if !path.exists() {
         return Ok(WorkspaceSnapshotIndex {
@@ -245,22 +413,21 @@ fn load_index(workspace_path: &str) -> Result<WorkspaceSnapshotIndex, SnapshotEr
     let data = fs::read_to_string(&path)?;
     let mut index: WorkspaceSnapshotIndex = serde_json::from_str(&data)?;
     index.workspace_path = workspace_path.to_string();
+    index
+        .snapshots
+        .retain(|entry| validate_snapshot_id(&entry.id).is_ok());
+    index.snapshots.truncate(MAX_SNAPSHOTS_PER_WORKSPACE);
     Ok(index)
 }
 
 fn save_index(workspace_path: &str, index: &WorkspaceSnapshotIndex) -> Result<(), SnapshotError> {
+    validate_workspace_path(workspace_path)?;
     let path = index_path(workspace_path);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let tmp = path.with_extension("tmp");
     let data = serde_json::to_string_pretty(index)?;
-    {
-        let mut f = File::create(&tmp)?;
-        f.write_all(data.as_bytes())?;
-        f.sync_all()?;
-    }
-    fs::rename(&tmp, &path)?;
+    crate::fs_utils::atomic_write(&path, data.as_bytes())?;
     Ok(())
 }
 
@@ -285,14 +452,8 @@ fn load_manifest(snap_dir: &Path) -> Result<SnapshotManifest, SnapshotError> {
 fn save_manifest(snap_dir: &Path, manifest: &SnapshotManifest) -> Result<(), SnapshotError> {
     fs::create_dir_all(snap_dir.join("files"))?;
     let path = manifest_path(snap_dir);
-    let tmp = path.with_extension("tmp");
     let data = serde_json::to_string_pretty(manifest)?;
-    {
-        let mut f = File::create(&tmp)?;
-        f.write_all(data.as_bytes())?;
-        f.sync_all()?;
-    }
-    fs::rename(&tmp, &path)?;
+    crate::fs_utils::atomic_write(&path, data.as_bytes())?;
     Ok(())
 }
 
@@ -331,7 +492,7 @@ fn enforce_snapshot_cap(workspace_path: &str) -> Result<(), SnapshotError> {
     while index.snapshots.len() > cap {
         // snapshots are stored newest-first, so evict from the tail.
         if let Some(victim) = index.snapshots.pop() {
-            let dir = snapshot_dir(workspace_path, &victim.id);
+            let dir = snapshot_dir(workspace_path, &victim.id)?;
             let _ = fs::remove_dir_all(&dir);
         }
     }
@@ -357,6 +518,7 @@ pub fn init_snapshot_cleanup_task() {
 }
 
 fn run_cleanup_pass() -> Result<(), SnapshotError> {
+    let _mutation_guard = SNAPSHOT_MUTATION_LOCK.lock();
     let root = get_snapshots_root();
     if !root.exists() {
         return Ok(());
@@ -382,20 +544,17 @@ fn run_cleanup_pass() -> Result<(), SnapshotError> {
         let valid_ids: std::collections::HashSet<_> =
             index.snapshots.iter().map(|s| s.id.as_str()).collect();
 
-    for snap_entry in fs::read_dir(entry.path())? {
-        let snap_entry = snap_entry?;
-        if !snap_entry.file_type()?.is_dir() {
-            continue;
+        for snap_entry in fs::read_dir(entry.path())? {
+            let snap_entry = snap_entry?;
+            if !snap_entry.file_type()?.is_dir() {
+                continue;
+            }
+            let name = snap_entry.file_name();
+            let name_str = name.to_string_lossy();
+            if !valid_ids.contains(name_str.as_ref()) {
+                let _ = fs::remove_dir_all(snap_entry.path());
+            }
         }
-        let name = snap_entry.file_name();
-        let name_str = name.to_string_lossy();
-        if name_str == "index.json" || name_str == "index.json.tmp" {
-            continue;
-        }
-        if !valid_ids.contains(name_str.as_ref()) {
-            let _ = fs::remove_dir_all(snap_entry.path());
-        }
-    }
     }
     Ok(())
 }
@@ -414,29 +573,53 @@ pub fn create_workspace_snapshot(
     file_paths: Vec<(String, Vec<u8>)>,
     directories: Vec<String>,
 ) -> Result<SnapshotManifest, SnapshotError> {
-    if !Path::new(workspace_path).is_absolute() {
-        return Err(SnapshotError::InvalidWorkspacePath(
-            workspace_path.to_string(),
-        ));
+    let _mutation_guard = SNAPSHOT_MUTATION_LOCK.lock();
+    let workspace = validate_workspace_path(workspace_path)?;
+    if file_paths.len() > MAX_TRACKED_FILES_PER_WORKSPACE
+        || directories.len() > MAX_TRACKED_FILES_PER_WORKSPACE
+    {
+        return Err(SnapshotError::InvalidSnapshotPath(format!(
+            "snapshot contains too many paths (files={}, directories={}, max={})",
+            file_paths.len(),
+            directories.len(),
+            MAX_TRACKED_FILES_PER_WORKSPACE
+        )));
     }
+    let mut seen_files = std::collections::HashSet::new();
+    for (rel_path, _) in &file_paths {
+        let relative = validate_relative_path(rel_path)?;
+        if !seen_files.insert(relative) {
+            return Err(SnapshotError::InvalidSnapshotPath(format!(
+                "duplicate file path: {rel_path:?}"
+            )));
+        }
+    }
+    let mut seen_directories = std::collections::HashSet::new();
+    for directory in &directories {
+        let relative = validate_relative_path(directory)?;
+        if !seen_directories.insert(relative) {
+            return Err(SnapshotError::InvalidSnapshotPath(format!(
+                "duplicate directory path: {directory:?}"
+            )));
+        }
+    }
+    validate_snapshot_path_layout(&seen_files, &seen_directories)?;
 
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0);
 
-    let snapshot_id = format!(
-        "snap_{}",
-        chrono::Utc::now().format("%Y-%m-%dT%H-%M-%S")
-    );
+    let snapshot_id = format!("snap_{}_{}", now_ms, uuid::Uuid::new_v4());
 
-    let snap_dir = snapshot_dir(workspace_path, &snapshot_id);
+    let snap_dir = snapshot_dir(workspace_path, &snapshot_id)?;
     let files_dir = snap_dir.join("files");
 
     // Build manifest
     let mut files: Vec<SnapshotFileEntry> = Vec::with_capacity(file_paths.len());
     for (rel_path, bytes) in &file_paths {
-        let abs_path = Path::new(workspace_path).join(rel_path).to_string_lossy().to_string();
+        let relative = validate_relative_path(rel_path)?;
+        let abs_path = workspace.join(relative).to_string_lossy().to_string();
         let size = bytes.len() as u64;
         let mut hasher = Sha256::new();
         hasher.update(bytes);
@@ -472,17 +655,14 @@ pub fn create_workspace_snapshot(
             .find(|(rp, _)| rp == &entry.rel_path)
             .map(|(_, b)| b.clone())
             .unwrap_or_default();
-        let dest = files_dir.join(&entry.rel_path);
+        let dest = files_dir.join(validate_relative_path(&entry.rel_path)?);
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent)?;
         }
-        let tmp = dest.with_extension("snapshot_tmp");
-        {
-            let mut f = File::create(&tmp)?;
-            f.write_all(&src_bytes)?;
-            f.sync_all()?;
+        if let Err(error) = crate::fs_utils::atomic_write(&dest, &src_bytes) {
+            let _ = fs::remove_dir_all(&snap_dir);
+            return Err(error.into());
         }
-        fs::rename(&tmp, &dest)?;
     }
 
     // Write manifest
@@ -523,11 +703,13 @@ pub fn delete_workspace_snapshot(
     workspace_path: &str,
     snapshot_id: &str,
 ) -> Result<(), SnapshotError> {
+    let _mutation_guard = SNAPSHOT_MUTATION_LOCK.lock();
+    validate_snapshot_id(snapshot_id)?;
     let mut index = load_index(workspace_path)?;
     index.snapshots.retain(|s| s.id != snapshot_id);
     save_index(workspace_path, &index)?;
 
-    let dir = snapshot_dir(workspace_path, snapshot_id);
+    let dir = snapshot_dir(workspace_path, snapshot_id)?;
     let _ = fs::remove_dir_all(&dir);
     Ok(())
 }
@@ -538,19 +720,30 @@ pub fn preview_workspace_snapshot_restore(
     workspace_path: &str,
     snapshot_id: &str,
 ) -> Result<Vec<FileDiffPreview>, SnapshotError> {
-    let snap_dir = snapshot_dir(workspace_path, snapshot_id);
+    let _mutation_guard = SNAPSHOT_MUTATION_LOCK.lock();
+    let snap_dir = snapshot_dir(workspace_path, snapshot_id)?;
     let manifest = load_manifest(&snap_dir)?;
+    if manifest.snapshot_id != snapshot_id {
+        return Err(SnapshotError::SnapshotCorrupt(format!(
+            "manifest id {:?} does not match requested id {:?}",
+            manifest.snapshot_id, snapshot_id
+        )));
+    }
+    let ws_path = validate_workspace_path(workspace_path)?;
 
     let mut previews: Vec<FileDiffPreview> = Vec::with_capacity(manifest.files.len());
+    let mut manifest_file_abs = std::collections::HashSet::with_capacity(manifest.files.len());
 
     for entry in &manifest.files {
-        let disk_path = Path::new(&entry.abs_path);
+        let disk_path = workspace_destination(ws_path, &entry.rel_path)?;
+        let disk_path_string = disk_path.to_string_lossy().to_string();
+        manifest_file_abs.insert(disk_path_string.clone());
         let (change_kind, disk_bytes_now) = if disk_path.exists() {
             // Compare by SHA-256, not by byte size — same-size-but-different-
             // content files are still "Modified".  We read the whole file
             // because comparing hashes is cheaper than diffing and the file
             // was already on disk during the snapshot we just made.
-            match fs::read(disk_path) {
+            match fs::read(&disk_path) {
                 Ok(bytes) => {
                     let disk_size = bytes.len() as u64;
                     let mut hasher = Sha256::new();
@@ -571,7 +764,7 @@ pub fn preview_workspace_snapshot_restore(
 
         previews.push(FileDiffPreview {
             rel_path: entry.rel_path.clone(),
-            abs_path: entry.abs_path.clone(),
+            abs_path: disk_path_string,
             change_kind,
             is_binary: entry.is_binary,
             snapshot_bytes: entry.size,
@@ -580,25 +773,21 @@ pub fn preview_workspace_snapshot_restore(
     }
 
     // Detect deleted files: files that exist on disk but not in the snapshot.
-    let ws_path = Path::new(workspace_path);
-    if let Ok(entries) = collect_tracked_files(ws_path, manifest.files.len()) {
-        for tracked in entries {
-            if !manifest.files.iter().any(|e| e.abs_path == tracked) {
-                if let Ok(meta) = fs::metadata(&tracked) {
-                    let rel_path = ws_path
-                        .join(&tracked)
-                        .strip_prefix(ws_path)
-                        .map(|p| p.to_string_lossy().to_string())
-                        .unwrap_or(tracked.clone());
-                    previews.push(FileDiffPreview {
-                        rel_path,
-                        abs_path: tracked.clone(),
-                        change_kind: ChangeKind::Deleted,
-                        is_binary: path_is_binary(&tracked),
-                        snapshot_bytes: 0,
-                        disk_bytes_now: meta.len(),
-                    });
-                }
+    for tracked in collect_tracked_files(ws_path)? {
+        if !manifest_file_abs.contains(&tracked) {
+            if let Ok(meta) = fs::metadata(&tracked) {
+                let rel_path = Path::new(&tracked)
+                    .strip_prefix(ws_path)
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or(tracked.clone());
+                previews.push(FileDiffPreview {
+                    rel_path,
+                    abs_path: tracked.clone(),
+                    change_kind: ChangeKind::Deleted,
+                    is_binary: path_is_binary(&tracked),
+                    snapshot_bytes: 0,
+                    disk_bytes_now: meta.len(),
+                });
             }
         }
     }
@@ -626,117 +815,178 @@ pub fn restore_workspace_snapshot(
     snapshot_id: &str,
     app_handle: &AppHandle,
 ) -> Result<RestoreResult, SnapshotError> {
-    if !Path::new(workspace_path).is_absolute() {
-        return Err(SnapshotError::InvalidWorkspacePath(
-            workspace_path.to_string(),
-        ));
+    let _mutation_guard = SNAPSHOT_MUTATION_LOCK.lock();
+    let ws_path = validate_workspace_path(workspace_path)?;
+    let snap_dir = snapshot_dir(workspace_path, snapshot_id)?;
+    let manifest = load_manifest(&snap_dir)?;
+    if manifest.snapshot_id != snapshot_id {
+        return Err(SnapshotError::SnapshotCorrupt(format!(
+            "manifest id {:?} does not match requested id {:?}",
+            manifest.snapshot_id, snapshot_id
+        )));
     }
 
-    let snap_dir = snapshot_dir(workspace_path, snapshot_id);
-    let manifest = load_manifest(&snap_dir)?;
+    // Fully validate the manifest and snapshot payload before deleting or
+    // overwriting anything in the workspace. Stored absolute paths are
+    // intentionally ignored; destinations are always derived from the
+    // caller's validated workspace root plus a safe relative path.
+    let mut seen_files = std::collections::HashSet::new();
+    let mut safe_files = Vec::with_capacity(manifest.files.len());
+    for entry in &manifest.files {
+        let relative = validate_relative_path(&entry.rel_path)?;
+        if !seen_files.insert(relative.clone()) {
+            return Err(SnapshotError::SnapshotCorrupt(format!(
+                "duplicate file path in manifest: {:?}",
+                entry.rel_path
+            )));
+        }
+        let source = snap_dir.join("files").join(&relative);
+        if !source.is_file() {
+            return Err(SnapshotError::SnapshotCorrupt(format!(
+                "snapshot file missing: {}",
+                source.display()
+            )));
+        }
+        let bytes = fs::read(&source)?;
+        let mut hasher = Sha256::new();
+        hasher.update(&bytes);
+        let hash = hex::encode(hasher.finalize());
+        if bytes.len() as u64 != entry.size || hash != entry.sha256 {
+            return Err(SnapshotError::SnapshotCorrupt(format!(
+                "snapshot file failed integrity check: {}",
+                source.display()
+            )));
+        }
+        let destination = workspace_destination(ws_path, &entry.rel_path)?;
+        if destination.is_dir() {
+            return Err(SnapshotError::InvalidSnapshotPath(format!(
+                "refusing to replace a directory with a snapshot file: {}",
+                destination.display()
+            )));
+        }
+        safe_files.push((entry, source, destination));
+    }
+
+    let mut seen_directories = std::collections::HashSet::new();
+    let mut safe_directories = Vec::with_capacity(manifest.directories.len());
+    for relative in &manifest.directories {
+        let validated = validate_relative_path(relative)?;
+        if !seen_directories.insert(validated) {
+            return Err(SnapshotError::SnapshotCorrupt(format!(
+                "duplicate directory path in manifest: {relative:?}"
+            )));
+        }
+        let destination = workspace_destination(ws_path, relative)?;
+        if fs::symlink_metadata(&destination)
+            .map(|metadata| metadata.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            return Err(SnapshotError::InvalidSnapshotPath(format!(
+                "snapshot directory resolves to a symlink: {}",
+                destination.display()
+            )));
+        }
+        safe_directories.push(destination);
+    }
+    validate_snapshot_path_layout(&seen_files, &seen_directories)?;
 
     // Pre-restore safety backup of every file currently on disk.
     let backup_dir = get_backup_dir();
     let backup_stamp = format!(
-        "pre_restore_{}",
-        chrono::Utc::now().format("%Y%m%dT%H%M%S")
+        "pre_restore_{}_{}",
+        chrono::Utc::now().format("%Y%m%dT%H%M%S%3f"),
+        uuid::Uuid::new_v4()
     );
     let backup_target = backup_dir.join(&backup_stamp);
-    fs::create_dir_all(&backup_target)?;
+    let tracked_before_restore = collect_tracked_files(ws_path)
+        .map_err(|error| SnapshotError::BackupFailed(error.to_string()))?;
+    let empty_directories_before_restore = collect_empty_directories(ws_path, &[])
+        .map_err(|error| SnapshotError::BackupFailed(error.to_string()))?;
+    fs::create_dir_all(&backup_target)
+        .map_err(|error| SnapshotError::BackupFailed(error.to_string()))?;
 
-    let ws_path = Path::new(workspace_path);
-    if let Ok(tracked) = collect_tracked_files(ws_path, 0) {
-        for path_str in tracked {
-            let path = Path::new(&path_str);
+    let backup_result = (|| -> Result<(), SnapshotError> {
+        for path_str in &tracked_before_restore {
+            let path = Path::new(path_str);
             if !path.exists() {
                 continue;
             }
-            let rel = path
-                .strip_prefix(workspace_path)
-                .unwrap_or_else(|_| Path::new(&path_str));
+            let rel = path.strip_prefix(workspace_path).map_err(|error| {
+                SnapshotError::BackupFailed(format!("invalid backup path {path_str}: {error}"))
+            })?;
             let dest = backup_target.join(rel);
             if let Some(parent) = dest.parent() {
-                let _ = fs::create_dir_all(parent);
+                fs::create_dir_all(parent)
+                    .map_err(|error| SnapshotError::BackupFailed(error.to_string()))?;
             }
-            if let Err(e) = fs::copy(path, &dest) {
-                tracing::warn!(
-                    "Pre-restore backup failed for {}: {}",
-                    path_str,
-                    e
-                );
-            }
+            crate::fs_utils::atomic_copy(path, &dest).map_err(|error| {
+                SnapshotError::BackupFailed(format!("failed to back up {path_str}: {error}"))
+            })?;
         }
+        for relative in &empty_directories_before_restore {
+            let relative = validate_relative_path(relative).map_err(|error| {
+                SnapshotError::BackupFailed(format!("invalid empty directory: {error}"))
+            })?;
+            fs::create_dir_all(backup_target.join(relative))
+                .map_err(|error| SnapshotError::BackupFailed(error.to_string()))?;
+        }
+        Ok(())
+    })();
+    if let Err(error) = backup_result {
+        let _ = fs::remove_dir_all(&backup_target);
+        return Err(error);
     }
 
     // Build the set of paths the snapshot considers "kept".  Used to decide
     // what to delete.
-    let manifest_file_abs: std::collections::HashSet<String> = manifest
-        .files
+    let manifest_file_abs: std::collections::HashSet<String> = safe_files
         .iter()
-        .map(|e| e.abs_path.clone())
+        .map(|(_, _, destination)| destination.to_string_lossy().to_string())
         .collect();
-    let manifest_dir_abs: std::collections::HashSet<std::path::PathBuf> = manifest
-        .directories
-        .iter()
-        .map(|d| ws_path.join(d))
-        .collect();
+    let manifest_dir_abs: std::collections::HashSet<std::path::PathBuf> =
+        safe_directories.iter().cloned().collect();
 
     // 1. Delete files on disk that are not in the snapshot.
     let mut deleted: Vec<String> = Vec::new();
-    if let Ok(tracked) = collect_tracked_files(ws_path, manifest.files.len()) {
-        for path_str in tracked {
-            if manifest_file_abs.contains(&path_str) {
-                continue;
-            }
-            let path = Path::new(&path_str);
-            if !path.exists() {
-                continue;
-            }
-            // (already backed up above)
-            if let Err(e) = fs::remove_file(path) {
-                tracing::warn!("Delete failed for {}: {}", path_str, e);
-                continue;
-            }
-            deleted.push(path_str.clone());
-            emit_file_change(
-                app_handle,
-                FileChangeEvent::Deleted {
-                    path: path_str.clone(),
-                },
-            );
+    for path_str in tracked_before_restore {
+        if manifest_file_abs.contains(&path_str) {
+            continue;
         }
+        let path = Path::new(&path_str);
+        if !path.exists() {
+            continue;
+        }
+        // (already backed up above)
+        if let Err(e) = fs::remove_file(path) {
+            tracing::warn!("Delete failed for {}: {}", path_str, e);
+            continue;
+        }
+        deleted.push(path_str.clone());
+        emit_file_change(
+            app_handle,
+            FileChangeEvent::Deleted {
+                path: path_str.clone(),
+            },
+        );
     }
 
     // 2. Restore in-snapshot files.
-    let mut restored: Vec<String> = Vec::with_capacity(manifest.files.len());
-    for entry in &manifest.files {
-        let src = snap_dir.join("files").join(&entry.rel_path);
-        if !src.exists() {
-            tracing::warn!("Snapshot file missing during restore: {}", src.display());
-            continue;
-        }
-
-        let bytes = fs::read(&src)?;
-        let dest = Path::new(&entry.abs_path);
+    let mut restored: Vec<String> = Vec::with_capacity(safe_files.len());
+    for (_entry, src, dest) in &safe_files {
+        let bytes = fs::read(src)?;
 
         if let Some(parent) = dest.parent() {
             fs::create_dir_all(parent)?;
         }
+        crate::fs_utils::atomic_write(dest, &bytes)?;
 
-        let tmp = dest.with_extension("inkuo_restore_tmp");
-        {
-            let mut f = File::create(&tmp)?;
-            f.write_all(&bytes)?;
-            f.sync_all()?;
-        }
-        fs::rename(&tmp, dest)?;
-
-        restored.push(entry.abs_path.clone());
+        let restored_path = dest.to_string_lossy().to_string();
+        restored.push(restored_path.clone());
 
         emit_file_change(
             app_handle,
             FileChangeEvent::Modified {
-                path: entry.abs_path.clone(),
+                path: restored_path,
             },
         );
     }
@@ -775,8 +1025,7 @@ pub fn restore_workspace_snapshot(
     // 4. Re-create empty directories that were in the snapshot but are not
     //    currently on disk.
     let mut created_dirs: Vec<String> = Vec::new();
-    for rel in &manifest.directories {
-        let abs = ws_path.join(rel);
+    for abs in safe_directories {
         if abs.exists() {
             continue;
         }
@@ -798,30 +1047,41 @@ pub fn restore_workspace_snapshot(
 
 // ── Internal: collect tracked files for "deleted" detection ─────────────────
 
-/// Walk `workspace_path` recursively and return absolute paths of files
-/// that are *not* already in `skip_paths`.  Used by preview to detect files
-/// that existed on disk at restore-time but were not in the snapshot.
-fn collect_tracked_files(
-    workspace_path: &Path,
-    skip_paths: usize,
-) -> Result<Vec<String>, io::Error> {
+/// Walk `workspace_path` recursively and return all tracked absolute file
+/// paths. Derived/build directories are pruned, and an oversized workspace
+/// fails as a whole rather than returning a dangerous partial deletion set.
+fn collect_tracked_files(workspace_path: &Path) -> Result<Vec<String>, io::Error> {
     let mut result = Vec::new();
     if !workspace_path.exists() {
         return Ok(result);
     }
-    // Limit traversal to avoid O(n²) on huge trees.
     for entry in walkdir::WalkDir::new(workspace_path)
-        .max_depth(10)
         .into_iter()
-        .filter_map(|e| e.ok())
+        .filter_entry(should_descend_workspace_entry)
     {
+        let entry = entry.map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::Other,
+                format!("failed to walk workspace: {error}"),
+            )
+        })?;
         if entry.file_type().is_file() {
-            if let Some(p) = entry.path().to_str() {
-                result.push(p.to_string());
+            let p = entry.path().to_str().ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("workspace path is not valid UTF-8: {:?}", entry.path()),
+                )
+            })?;
+            result.push(p.to_string());
+            if result.len() > MAX_TRACKED_FILES_PER_WORKSPACE {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "workspace contains more than {} tracked files",
+                        MAX_TRACKED_FILES_PER_WORKSPACE
+                    ),
+                ));
             }
-        }
-        if result.len() > skip_paths + 500 {
-            break;
         }
     }
     Ok(result)
@@ -847,26 +1107,23 @@ pub fn collect_empty_directories(
     // path contains a skip-dir name component.
     let mut all_dirs: Vec<std::path::PathBuf> = Vec::new();
     for entry in walkdir::WalkDir::new(workspace_path)
-        .max_depth(10)
         .into_iter()
+        .filter_entry(|entry| {
+            should_descend_workspace_entry(entry)
+                && (entry.depth() == 0
+                    || !entry.file_type().is_dir()
+                    || entry
+                        .file_name()
+                        .to_str()
+                        .map(|name| !skip_dirs.iter().any(|skip| skip == name))
+                        .unwrap_or(true))
+        })
         .filter_map(|e| e.ok())
     {
         if !entry.file_type().is_dir() {
             continue;
         }
         if entry.path() == workspace_path {
-            continue;
-        }
-        let mut skip = false;
-        for comp in entry.path().components() {
-            if let Some(name) = comp.as_os_str().to_str() {
-                if skip_dirs.iter().any(|s| s == name) {
-                    skip = true;
-                    break;
-                }
-            }
-        }
-        if skip {
             continue;
         }
         all_dirs.push(entry.path().to_path_buf());
@@ -942,27 +1199,14 @@ fn collect_extra_directories(
 
     let mut all_dirs: Vec<std::path::PathBuf> = Vec::new();
     for entry in walkdir::WalkDir::new(workspace_path)
-        .max_depth(10)
         .into_iter()
+        .filter_entry(should_descend_workspace_entry)
         .filter_map(|e| e.ok())
     {
         if !entry.file_type().is_dir() {
             continue;
         }
         if entry.path() == workspace_path {
-            continue;
-        }
-        // Prune heavy / excluded directories.
-        let mut skip = false;
-        for comp in entry.path().components() {
-            if let Some(name) = comp.as_os_str().to_str() {
-                if name == "node_modules" || name == ".git" || name == ".inkuo" {
-                    skip = true;
-                    break;
-                }
-            }
-        }
-        if skip {
             continue;
         }
         all_dirs.push(entry.path().to_path_buf());
@@ -996,4 +1240,75 @@ fn collect_extra_directories(
     }
 
     Ok(result)
+}
+
+#[cfg(test)]
+mod security_tests {
+    use super::*;
+
+    #[test]
+    fn relative_snapshot_paths_cannot_escape_their_root() {
+        for invalid in ["", ".", "../secret", "folder/../../secret", "/absolute"] {
+            assert!(validate_relative_path(invalid).is_err(), "accepted {invalid:?}");
+        }
+        assert_eq!(
+            validate_relative_path("reports/2026/q1.docx").unwrap(),
+            PathBuf::from("reports/2026/q1.docx")
+        );
+    }
+
+    #[test]
+    fn snapshot_ids_are_single_safe_path_components() {
+        for invalid in ["", "../other", "nested/id", "id with spaces", "id.json"] {
+            assert!(validate_snapshot_id(invalid).is_err(), "accepted {invalid:?}");
+        }
+        assert!(validate_snapshot_id("snap_1720000000000_123e4567-e89b-12d3-a456-426614174000").is_ok());
+    }
+
+    #[test]
+    fn snapshot_directory_rejects_traversal_ids() {
+        let workspace = if cfg!(windows) {
+            r"C:\workspace"
+        } else {
+            "/tmp/workspace"
+        };
+        assert!(snapshot_dir(workspace, "../../outside").is_err());
+    }
+
+    #[test]
+    fn snapshot_layout_rejects_file_directory_conflicts() {
+        let files = [PathBuf::from("reports"), PathBuf::from("reports/q1.docx")]
+            .into_iter()
+            .collect();
+        assert!(validate_snapshot_path_layout(&files, &Default::default()).is_err());
+
+        let files = [PathBuf::from("reports/q1.docx")].into_iter().collect();
+        let directories = [PathBuf::from("reports/q1.docx")].into_iter().collect();
+        assert!(validate_snapshot_path_layout(&files, &directories).is_err());
+
+        let files = [PathBuf::from(".git/config")].into_iter().collect();
+        assert!(validate_snapshot_path_layout(&files, &Default::default()).is_err());
+    }
+
+    #[test]
+    fn tracked_files_never_include_derived_directories() {
+        let workspace = std::env::temp_dir().join(format!(
+            "inkuo_snapshot_walk_{}_{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let _ = fs::remove_dir_all(&workspace);
+        fs::create_dir_all(workspace.join(".git")).unwrap();
+        fs::create_dir_all(workspace.join("node_modules/pkg")).unwrap();
+        fs::write(workspace.join("report.md"), b"tracked").unwrap();
+        fs::write(workspace.join(".git/config"), b"must survive restore").unwrap();
+        fs::write(workspace.join("node_modules/pkg/index.js"), b"derived").unwrap();
+
+        let tracked = collect_tracked_files(&workspace).unwrap();
+        assert_eq!(
+            tracked,
+            vec![workspace.join("report.md").to_string_lossy().to_string()]
+        );
+        let _ = fs::remove_dir_all(&workspace);
+    }
 }

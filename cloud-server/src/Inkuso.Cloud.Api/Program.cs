@@ -12,16 +12,19 @@ using Inkuso.Cloud.Core.Billing;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// The API accepts compact JSON/SSE requests, not file uploads. Bound request
+// buffering before Chat parses the body so an authenticated client cannot make
+// the process retain the default 30 MiB per request under concurrency.
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.Limits.MaxRequestBodySize = 8L * 1024 * 1024;
+});
+
 // Database
 var connectionString = builder.Configuration.GetConnectionString("Postgres")
     ?? throw new InvalidOperationException("ConnectionStrings:Postgres is required");
 
-builder.Services.AddDbContext<AppDbContext>(opt =>
-    opt.UseNpgsql(connectionString)
-       // Allow auto-migrate to apply when seed data drift is detected
-       // without bringing down the whole service.
-       .ConfigureWarnings(w => w.Ignore(
-           Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning)));
+builder.Services.AddDbContext<AppDbContext>(opt => opt.UseNpgsql(connectionString));
 
 // JWT
 var jwtSettings = new JwtSettings
@@ -59,14 +62,18 @@ builder.Services.AddScoped<JwtService>();
 // ring with the Admin service — see the matching block in
 // Inkuso.Cloud.Admin/Program.cs.
 var apiDpKeysDir = builder.Configuration["DataProtection:KeyDir"];
+if (string.IsNullOrWhiteSpace(apiDpKeysDir) && !builder.Environment.IsDevelopment())
+    throw new InvalidOperationException(
+        "DataProtection:KeyDir is required outside Development and must be shared with Admin.");
+var apiDataProtection = builder.Services.AddDataProtection()
+    .SetApplicationName("inkuo-cloud");
 if (!string.IsNullOrWhiteSpace(apiDpKeysDir))
-    builder.Services.AddDataProtection()
-        .PersistKeysToFileSystem(new DirectoryInfo(apiDpKeysDir))
-        .SetApplicationName("inkuo-cloud");
-else
-    builder.Services.AddDataProtection().SetApplicationName("inkuo-cloud");
+    apiDataProtection.PersistKeysToFileSystem(new DirectoryInfo(apiDpKeysDir));
 
-builder.Services.AddSingleton<ISecretProtector, DataProtectionSecretProtector>();
+builder.Services.AddSingleton<ISecretProtector>(services =>
+    new DataProtectionSecretProtector(
+        services.GetRequiredService<IDataProtectionProvider>()
+            .CreateProtector(DataProtectionSecretProtector.Purpose)));
 
 // Auth
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -104,6 +111,7 @@ builder.Services.AddHttpClient("upstream-search");
 // LLM forwarder
 builder.Services.AddScoped<LlmForwarder>();
 builder.Services.AddScoped<BillingLedger>();
+builder.Services.AddScoped<WebSearchLedger>();
 // Web search forwarder: scoped (mirrors LlmForwarder) so it can pick up
 // the latest provider config from the DbContext on every call without
 // a stale-cache surprise when the operator pastes a new API key.
@@ -128,10 +136,13 @@ builder.Services.AddCors(opt => opt.AddDefaultPolicy(p =>
 
 var app = builder.Build();
 
-// Auto-migrate on startup (dev convenience). We swallow migration failures
-// and log them rather than crash-looping the container: in production the
-// migrate step should be a separate init job that fails fast, so a broken
-// migration shouldn't take the API out of rotation. Production deploys are
+// Resolve once at startup so a broken Data Protection registration fails the
+// deployment before the first operator saves or first customer uses a key.
+_ = app.Services.GetRequiredService<ISecretProtector>();
+
+// Auto-migrate on startup (dev convenience). Migration failures are logged and
+// fail fast. In production the migrate step should be a separate init job so a
+// broken migration cannot bring a partially upgraded API into rotation. Production deploys are
 // expected to set Database__AutoMigrate=false and run `dotnet ef database
 // update` as a Kubernetes Job / DB migration step before rolling the API.
 if (builder.Configuration.GetValue("Database:AutoMigrate", builder.Environment.IsDevelopment()))
@@ -150,6 +161,20 @@ if (builder.Configuration.GetValue("Database:AutoMigrate", builder.Environment.I
             throw;
         }
     }
+}
+
+// Do the credential upgrade in both Api and Admin. This closes the startup
+// ordering window where Api could begin forwarding with legacy plaintext rows
+// while Admin (the original backfill owner) was still waiting to start.
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    var protector = scope.ServiceProvider.GetRequiredService<ISecretProtector>();
+    var protectedSecretCount = await LegacySecretBackfill.ProtectAsync(db, protector);
+    if (protectedSecretCount > 0)
+        app.Logger.LogInformation(
+            "Protected {SecretCount} legacy upstream credential row(s) at rest",
+            protectedSecretCount);
 }
 
 app.UseCors();

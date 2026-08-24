@@ -13,6 +13,7 @@ import {
 import { useSettingsStore } from '../../store';
 import type { CloudModelEntry } from '../../types';
 import { cloudApi, type CloudAccountInfo } from './cloudApi';
+import { accountBalancePoints, formatPointsAsYuan } from './cloudMoney';
 import styles from './CloudPanel.module.css';
 
 interface CloudAccountCardProps {
@@ -44,24 +45,50 @@ export const CloudAccountCard = ({ onModelsLoaded }: CloudAccountCardProps) => {
     setRefreshing(true);
     setError(null);
     try {
-      const [accountInfo, models] = await Promise.all([
+      const [accountResult, modelsResult] = await Promise.allSettled([
         cloudApi.fetchAccount(),
         cloudApi.fetchModels(),
-      ]);
-      setInfo(accountInfo);
-      await setCloudModels(models);
-      // Refresh account record (server may have updated plan_name etc.)
-      const updatedAccount: typeof account = {
-        ...account,
-        balance_cents: accountInfo.balance_cents,
-        plan_name: accountInfo.plan_name,
-      };
-      await setCloudAccount(updatedAccount);
-      onModelsLoaded?.(models);
+      ] as const);
+      const errors: string[] = [];
 
-      // Auto-select first model if nothing picked yet
-      if (!activeCloudModelId && models.length > 0) {
-        await setActiveCloudModelId(models[0].id);
+      if (accountResult.status === 'fulfilled') {
+        const accountInfo = accountResult.value;
+        setInfo(accountInfo);
+        // Refresh the persisted snapshot so suspension/debt remain visible
+        // when the server is temporarily unreachable on a later launch.
+        const updatedAccount: typeof account = {
+          ...account,
+          balance_points: accountInfo.balance_points,
+          balance_cents: accountInfo.balance_points / 10,
+          reserved_points: accountInfo.reserved_points,
+          debt_points: accountInfo.debt_points,
+          is_suspended: accountInfo.is_suspended,
+          plan_name: accountInfo.plan_name,
+        };
+        await setCloudAccount(updatedAccount);
+      } else {
+        errors.push(accountResult.reason instanceof Error
+          ? accountResult.reason.message
+          : String(accountResult.reason));
+      }
+
+      if (modelsResult.status === 'fulfilled') {
+        const models = modelsResult.value;
+        await setCloudModels(models);
+        onModelsLoaded?.(models);
+
+        // Auto-select first model if nothing picked yet
+        if (!activeCloudModelId && models.length > 0) {
+          await setActiveCloudModelId(models[0].id);
+        }
+      } else {
+        errors.push(modelsResult.reason instanceof Error
+          ? modelsResult.reason.message
+          : String(modelsResult.reason));
+      }
+
+      if (errors.length > 0) {
+        setError(errors.join('；'));
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -82,7 +109,6 @@ export const CloudAccountCard = ({ onModelsLoaded }: CloudAccountCardProps) => {
 
   if (!account) return null;
 
-  const formatYuan = (cents: number) => `¥${(cents / 100).toFixed(2)}`;
   const formatExpires = (iso: string | null) => {
     if (!iso) return '无到期';
     try {
@@ -94,6 +120,11 @@ export const CloudAccountCard = ({ onModelsLoaded }: CloudAccountCardProps) => {
   };
 
   const activeModel = cachedModels.find((m) => m.id === activeCloudModelId);
+  const balancePoints = info?.balance_points ?? accountBalancePoints(account);
+  const reservedPoints = info?.reserved_points ?? account.reserved_points ?? 0;
+  const debtPoints = info?.debt_points ?? account.debt_points ?? 0;
+  const isSuspended = info?.is_suspended ?? account.is_suspended ?? false;
+  const availablePoints = Math.max(0, balancePoints - reservedPoints);
 
   return (
     <div className={styles.accountCard}>
@@ -114,6 +145,15 @@ export const CloudAccountCard = ({ onModelsLoaded }: CloudAccountCardProps) => {
 
       <div className={styles.accountEmail}>{account.email}</div>
 
+      {(isSuspended || debtPoints > 0) && (
+        <div className={styles.error} role="status">
+          <AlertCircle size={12} />
+          {debtPoints > 0
+            ? `账号因欠费暂停，尚欠 ${formatPointsAsYuan(debtPoints)}。充值会优先偿还欠费。`
+            : '账号已暂停，请联系管理员处理。'}
+        </div>
+      )}
+
       <div className={styles.accountGrid}>
         <div className={styles.stat}>
           <div className={styles.statLabel}>
@@ -123,11 +163,31 @@ export const CloudAccountCard = ({ onModelsLoaded }: CloudAccountCardProps) => {
         </div>
         <div className={styles.stat}>
           <div className={styles.statLabel}>
-            <Coins size={12} /> 余额
+            <Coins size={12} /> 可用余额
           </div>
-          <div className={styles.statValue}>
-            {formatYuan(info?.balance_cents ?? account.balance_cents)}
+          <div className={styles.statValue}>{formatPointsAsYuan(availablePoints)}</div>
+        </div>
+        {reservedPoints > 0 && (
+          <div className={styles.stat}>
+            <div className={styles.statLabel}>
+              <Coins size={12} /> 冻结待结算
+            </div>
+            <div className={styles.statValue}>{formatPointsAsYuan(reservedPoints)}</div>
           </div>
+        )}
+        {debtPoints > 0 && (
+          <div className={styles.stat}>
+            <div className={styles.statLabel}>
+              <AlertCircle size={12} /> 待偿欠费
+            </div>
+            <div className={styles.statValue}>{formatPointsAsYuan(debtPoints)}</div>
+          </div>
+        )}
+        <div className={styles.stat}>
+          <div className={styles.statLabel}>
+            <Coins size={12} /> 总余额
+          </div>
+          <div className={styles.statValue}>{formatPointsAsYuan(balancePoints)}</div>
         </div>
         <div className={styles.stat}>
           <div className={styles.statLabel}>

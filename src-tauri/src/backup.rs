@@ -27,7 +27,11 @@ pub fn create_backup_path(original_path: &str) -> std::path::PathBuf {
         .unwrap_or("unknown");
 
     let backup_dir = get_backup_dir();
-    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+    let timestamp = format!(
+        "{}_{}",
+        chrono::Utc::now().timestamp_millis(),
+        uuid::Uuid::new_v4()
+    );
 
     // Layout: `{safename}__bak-{hash}__{timestamp}.bak`
     //
@@ -47,9 +51,16 @@ pub fn create_backup_path(original_path: &str) -> std::path::PathBuf {
 /// expected `__bak-<hash>__` layout — callers must treat `None` as "unknown
 /// key" rather than falling back to a hand-rolled substring scan.
 pub fn parse_backup_filename(filename: &str) -> Option<&str> {
-    let rest = filename.strip_prefix("__bak-")?;
+    let marker = "__bak-";
+    let marker_start = filename.rfind(marker)? + marker.len();
+    let rest = &filename[marker_start..];
     let hash_end = rest.find("__")?;
-    Some(&rest[..hash_end])
+    let hash = &rest[..hash_end];
+    if hash.len() == 16 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        Some(hash)
+    } else {
+        None
+    }
 }
 
 /// Clean up old backup files, keeping only the most recent N backups per original file.
@@ -130,5 +141,23 @@ pub fn init_backup_cleanup_task() {
 pub fn request_backup_cleanup() {
     if let Some(tx) = BACKUP_CLEANUP_TX.lock().as_ref() {
         let _ = tx.try_send(());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_hash_after_user_supplied_filename() {
+        assert_eq!(
+            parse_backup_filename("quarterly_report.docx__bak-0123456789abcdef__123456.bak"),
+            Some("0123456789abcdef")
+        );
+        assert_eq!(parse_backup_filename("not-a-backup.bak"), None);
+        assert_eq!(
+            parse_backup_filename("file__bak-not-hex__________123.bak"),
+            None
+        );
     }
 }

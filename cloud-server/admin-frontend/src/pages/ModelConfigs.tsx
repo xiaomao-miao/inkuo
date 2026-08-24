@@ -2,12 +2,12 @@ import { useEffect, useState } from 'react';
 import {
   Table, Button, Space, Tag, Modal, Form, Input, InputNumber, Switch, Select, App, Tooltip,
 } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, EyeOutlined, CopyOutlined } from '@ant-design/icons';
+import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import { modelConfigsApi, ModelConfig } from '../api/modelConfigs';
 
 const providerOptions = [
-  { value: 'openai', label: 'OpenAI 协议 (含 OpenAI / DeepSeek / 月之暗面 / vLLM / Ollama 等)' },
-  { value: 'anthropic', label: 'Anthropic 协议 (Claude)' },
+  { value: 'openai', label: 'OpenAI 兼容协议（OpenAI / 月之暗面 / vLLM / Ollama 等）' },
+  { value: 'deepseek', label: 'DeepSeek（OpenAI 兼容协议）' },
 ];
 
 export default function ModelConfigsPage() {
@@ -15,19 +15,18 @@ export default function ModelConfigsPage() {
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [editing, setEditing] = useState<ModelConfig | null>(null);
-  const [revealKey, setRevealKey] = useState(false);
   const [form] = Form.useForm();
   const { message, modal } = App.useApp();
 
   const load = async () => {
     setLoading(true);
     try {
-      setData(await modelConfigsApi.list(revealKey));
+      setData(await modelConfigsApi.list());
     } finally {
       setLoading(false);
     }
   };
-  useEffect(() => { load(); }, [revealKey]);
+  useEffect(() => { load(); }, []);
 
   const onSubmit = async (values: any) => {
     try {
@@ -93,9 +92,11 @@ export default function ModelConfigsPage() {
     },
     {
       title: 'API Key',
-      dataIndex: 'upstreamApiKeyMasked',
+      dataIndex: 'hasUpstreamApiKey',
       width: 180,
-      render: (k: string) => k ? <code>{k}</code> : <Tag color="red">未配置</Tag>,
+      render: (hasKey: boolean) => hasKey
+        ? <Tag color="green">已配置（只写）</Tag>
+        : <Tag color="red">未配置</Tag>,
     },
     {
       title: '单价 (元/1M)',
@@ -128,9 +129,6 @@ export default function ModelConfigsPage() {
         <Button type="primary" icon={<PlusOutlined />} onClick={() => {
           setEditing(null); form.resetFields(); setModalOpen(true);
         }}>新增模型</Button>
-        <Button icon={revealKey ? <EyeOutlined /> : <CopyOutlined />} onClick={() => setRevealKey(!revealKey)}>
-          {revealKey ? '隐藏 API Key' : '查看完整 API Key'}
-        </Button>
       </Space>
 
       <Table rowKey="id" loading={loading} dataSource={data} columns={columns} pagination={false} scroll={{ x: 1300 }} />
@@ -150,6 +148,7 @@ export default function ModelConfigsPage() {
             inputPricePerMTokens: 1.0,
             outputPricePerMTokens: 2.0,
             cachedInputPricePerMTokens: 0.1,
+            maxOutputTokens: 4096,
           }}>
           <Form.Item name="displayName" label="显示名" rules={[{ required: true }]}>
             <Input placeholder="DeepSeek-V3 · Pro" />
@@ -179,6 +178,9 @@ export default function ModelConfigsPage() {
           </Form.Item>
           <Form.Item name="outputPricePerMTokens" label="输出单价 (元/1M tokens)" rules={[{ required: true }]}>
             <InputNumber min={0} step={0.01} style={{ width: '100%' }} />
+          </Form.Item>
+          <Form.Item name="maxOutputTokens" label="单次最大输出 Tokens" rules={[{ required: true }]} extra="用于限制上游输出并计算预授权点数；范围 1–131072">
+            <InputNumber min={1} max={131072} step={256} style={{ width: '100%' }} />
           </Form.Item>
           <Form.Item name="sortOrder" label="排序 (数字越小越靠前)">
             <InputNumber min={0} style={{ width: '100%' }} />
