@@ -26,9 +26,11 @@ public static class SseUsageParser
             if (!document.RootElement.TryGetProperty("usage", out var usage)
                 || usage.ValueKind != JsonValueKind.Object
                 || !usage.TryGetProperty("prompt_tokens", out var promptElement)
+                || promptElement.ValueKind != JsonValueKind.Number
                 || !promptElement.TryGetInt64(out var promptTokens)
                 || promptTokens < 0
                 || !usage.TryGetProperty("completion_tokens", out var completionElement)
+                || completionElement.ValueKind != JsonValueKind.Number
                 || !completionElement.TryGetInt64(out var completionTokens)
                 || completionTokens < 0)
             {
@@ -39,12 +41,14 @@ public static class SseUsageParser
             if (usage.TryGetProperty("prompt_tokens_details", out var details)
                 && details.ValueKind == JsonValueKind.Object
                 && details.TryGetProperty("cached_tokens", out var cachedElement)
+                && cachedElement.ValueKind == JsonValueKind.Number
                 && cachedElement.TryGetInt64(out var openAiCached)
                 && openAiCached >= 0)
             {
                 cachedTokens = openAiCached;
             }
             else if (usage.TryGetProperty("cache_read_input_tokens", out var cacheReadElement)
+                     && cacheReadElement.ValueKind == JsonValueKind.Number
                      && cacheReadElement.TryGetInt64(out var anthropicCached)
                      && anthropicCached >= 0)
             {

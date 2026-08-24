@@ -55,6 +55,9 @@ jobs:
   rust-check:
     name: Rust (check + clippy)
     runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_DEV_DEBUG: 0
     steps:
       - uses: actions/checkout@v4
 
@@ -74,19 +77,18 @@ jobs:
         with:
           components: clippy, rustfmt
 
-      - name: Cache cargo registry & target
+      - name: Cache cargo registry
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            src-tauri/target
           key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
       # The hardening branch predates an enforced rustfmt gate and contains a
       # sizeable backlog of formatting-only differences. Normalize the runner
-      # before the correctness gates so clippy and the tests still execute;
+      # before the correctness gates so check and clippy still execute;
       # source formatting can then be committed as a separate mechanical pass.
       - name: Normalize Rust formatting for checks
         working-directory: src-tauri
@@ -104,9 +106,44 @@ jobs:
         working-directory: src-tauri
         run: cargo clippy --all-targets
 
-      - name: Rust tests
+  rust-tests:
+    name: Rust (library tests)
+    runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Tauri Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      # All Rust tests live in the library. Keeping this on a fresh runner and
+      # excluding the app/example targets avoids materializing the enormous
+      # staticlib + cdylib + test graph together and exhausting runner disk.
+      - name: Rust library tests
         working-directory: src-tauri
-        run: cargo test --all-targets
+        run: cargo test --lib
 
   cloud-server:
     name: Cloud server (.NET build + test)

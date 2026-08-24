@@ -117,7 +117,14 @@ public static class AdminUsageEndpoints
             : await chatQuery.SumAsync(
                 u => (long?)u.PromptTokens + (long?)u.CompletionTokens, ct) ?? 0L;
 
-        var chatItems = chatQuery.Select(u => new AdminUsageItem(
+        // Order entity columns before projecting into the record type. EF 10
+        // cannot translate `OrderBy(item => item.RecordedAt)` when `item` is a
+        // positional record constructed inside Select (SQLite and Npgsql both
+        // reject it), even though the underlying column is straightforward.
+        var chatItems = chatQuery
+            .OrderByDescending(u => u.RecordedAt)
+            .ThenByDescending(u => u.Id)
+            .Select(u => new AdminUsageItem(
                 u.Id,
                 "chat",
                 u.UserId,
@@ -132,7 +139,10 @@ public static class AdminUsageEndpoints
                 u.ReservedPoints,
                 u.BillingStatus,
                 u.RecordedAt));
-        var webSearchItems = searchQuery.Select(u => new AdminUsageItem(
+        var webSearchItems = searchQuery
+            .OrderByDescending(u => u.RecordedAt)
+            .ThenByDescending(u => u.Id)
+            .Select(u => new AdminUsageItem(
                 u.Id,
                 "search",
                 u.UserId,
@@ -165,8 +175,6 @@ public static class AdminUsageEndpoints
             if (usageType == "chat")
             {
                 items = await chatItems
-                    .OrderByDescending(u => u.RecordedAt)
-                    .ThenByDescending(u => u.Id)
                     .Skip(skip)
                     .Take(pageSize)
                     .ToListAsync(ct);
@@ -174,8 +182,6 @@ public static class AdminUsageEndpoints
             else if (usageType == "search")
             {
                 items = await webSearchItems
-                    .OrderByDescending(u => u.RecordedAt)
-                    .ThenByDescending(u => u.Id)
                     .Skip(skip)
                     .Take(pageSize)
                     .ToListAsync(ct);
@@ -184,13 +190,9 @@ public static class AdminUsageEndpoints
             {
                 var candidateCount = checked((int)Math.Min(total, (long)skip + pageSize));
                 var chatCandidates = await chatItems
-                    .OrderByDescending(u => u.RecordedAt)
-                    .ThenByDescending(u => u.Id)
                     .Take(candidateCount)
                     .ToListAsync(ct);
                 var searchCandidates = await webSearchItems
-                    .OrderByDescending(u => u.RecordedAt)
-                    .ThenByDescending(u => u.Id)
                     .Take(candidateCount)
                     .ToListAsync(ct);
                 items = chatCandidates
