@@ -25,8 +25,9 @@ describe('cloud point display', () => {
   });
 
   it('migrates a legacy cents-only renderer snapshot', () => {
-    const legacy = account({ balance_cents: 12.3 }) as CloudAccount;
-    delete (legacy as CloudAccount & { balance_points?: number }).balance_points;
-    expect(accountBalancePoints(legacy)).toBe(123);
+    const legacy = account({ balance_cents: 12.3 }) as unknown as
+      Omit<CloudAccount, 'balance_points'> & { balance_points?: number };
+    delete legacy.balance_points;
+    expect(accountBalancePoints(legacy as CloudAccount)).toBe(123);
   });
 });

@@ -15,19 +15,21 @@ public sealed class DisablePublicSeedCodes : Migration
         // These values were published in the repository and deployment docs.
         // Leaving either row enabled would give anyone a predictable path to
         // mint operator-funded credit after a fresh or upgraded deployment.
-        migrationBuilder.UpdateData(
-            table: "InviteCodes",
-            keyColumn: "Id",
-            keyValue: 1,
-            columns: new[] { "Enabled", "FreePoints" },
-            values: new object[] { false, 0L });
+        // This security migration is intentionally hand-written rather than
+        // scaffolded, so it has no generated TargetModel designer. UpdateData
+        // asks EF to infer column mappings from that TargetModel and therefore
+        // fails before emitting SQL. Explicit PostgreSQL SQL is unambiguous and
+        // keeps the operation valid for both fresh databases and upgrades.
+        migrationBuilder.Sql(
+            """
+            UPDATE "InviteCodes"
+            SET "Enabled" = FALSE, "FreePoints" = 0
+            WHERE "Id" = 1;
 
-        migrationBuilder.UpdateData(
-            table: "RedemptionCodes",
-            keyColumn: "Id",
-            keyValue: 1,
-            columns: new[] { "CreditPoints", "Enabled" },
-            values: new object[] { 0L, false });
+            UPDATE "RedemptionCodes"
+            SET "CreditPoints" = 0, "Enabled" = FALSE
+            WHERE "Id" = 1;
+            """);
     }
 
     protected override void Down(MigrationBuilder migrationBuilder)

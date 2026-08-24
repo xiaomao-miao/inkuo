@@ -130,7 +130,7 @@ async function saveDirtyTabs(tabs: readonly OpenTab[]): Promise<boolean> {
   });
   if (changedAgain) {
     useNotificationStore.getState().pushNotification({
-      kind: 'warning',
+      kind: 'info',
       title: '保存期间又有新更改',
       message: '文件仍保持打开，请再次保存后再关闭。',
     });
