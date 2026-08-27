@@ -3,6 +3,7 @@ import {
   Files,
   Brain,
   History,
+  Blocks,
   PanelLeft
 } from 'lucide-react';
 import { useSidebarStore } from '../../store';
@@ -28,6 +29,7 @@ export const ActivityBar = ({
     { id: 'files', icon: <Files size={22} />, label: '资源管理器' },
     { id: 'knowledge', icon: <Brain size={22} />, label: '知识库' },
     { id: 'snapshots', icon: <History size={22} />, label: '快照' },
+    { id: 'extensions', icon: <Blocks size={22} />, label: '插件' },
   ];
 
   return (

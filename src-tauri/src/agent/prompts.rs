@@ -19,6 +19,8 @@
 //! table in `prompts/main/agent.slim.md §1.1` (the agent.slim.md table is
 //! the human-readable form sent to the model; this array is the runtime
 //! gate). When you add a tool to one, update the other in the same change.
+//! Today the main profile lists 15 tools; `agent.slim.md` calls this out
+//! at the head of §1.2.
 
 use crate::agent::profile::AgentProfile;
 use std::sync::OnceLock;
@@ -49,6 +51,12 @@ pub const PROFILES: &[ProfileDescriptor] = &[
             // feature_toggles unless the user enables Sandbox.
             "run_sandbox_command",
             "get_tool_help", "delegate_to",
+            // `ask_user` is main-profile only. Sub-agents do not have
+            // it — if they need a decision they have to surface it via
+            // a delegated run-up that calls `ask_user` from the main
+            // agent. (In practice they should just pick a sensible
+            // default and keep going.)
+            "ask_user",
             "update_todo",
         ],
         max_iterations: 50,
@@ -60,6 +68,10 @@ pub const PROFILES: &[ProfileDescriptor] = &[
         tools: &[
             "read_file", "write_file",
             "list_dir", "glob", "grep",
+            // Word deliverables own their complete visual-asset loop:
+            // author/generate → rasterize when needed → inspect pixels → embed.
+            "create_svg", "svg_to_png", "render_mermaid",
+            "read_image", "generate_image",
             "read_office_file", "create_word_doc", "inspect_office", "compare_word_docs",
             "render_office_preview",
         ],
@@ -166,7 +178,6 @@ pub const PROFILES: &[ProfileDescriptor] = &[
             "read_file",
             "list_dir", "glob", "grep",
             "svg_to_png",
-            "md_to_word",
             "word_to_pdf",
         ],
         max_iterations: 30,

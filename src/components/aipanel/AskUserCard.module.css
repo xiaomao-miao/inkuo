@@ -11,6 +11,16 @@
   opacity: 0.85;
 }
 
+.cancelled {
+  border-color: var(--warning);
+  opacity: 0.85;
+}
+
+.failed {
+  border-color: var(--error);
+  opacity: 0.9;
+}
+
 .header {
   display: flex;
   align-items: center;
@@ -42,6 +52,16 @@
   color: #22c55e;
 }
 
+.cancelled .icon {
+  background-color: var(--warning-subtle);
+  color: var(--warning);
+}
+
+.failed .icon {
+  background-color: var(--error-subtle);
+  color: var(--error);
+}
+
 .toolName {
   font-size: 12px;
   font-weight: 600;
@@ -65,6 +85,16 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.cancelled .answerBadge {
+  color: var(--warning);
+  background-color: var(--warning-subtle);
+}
+
+.failed .answerBadge {
+  color: var(--error);
+  background-color: var(--error-subtle);
 }
 
 .question {

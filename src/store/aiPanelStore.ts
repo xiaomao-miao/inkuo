@@ -22,6 +22,7 @@ import type { AIPanelState } from './aiPanelStore.types';
 import {
   createDiffSlice,
   createMessageSlice,
+  createPendingAskSlice,
   createSessionSlice,
   createSubagentSlice,
   createToolCallSlice,
@@ -52,6 +53,7 @@ export const useAIPanelStore = create<AIPanelState>()(
       ...createMessageSlice(...args),
       ...createToolCallSlice(...args),
       ...createDiffSlice(editorDiffActions)(...args),
+      ...createPendingAskSlice(...args),
       ...createSubagentSlice(...args),
     }),
     {

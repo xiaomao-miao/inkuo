@@ -605,6 +605,69 @@
 }
 
 .spinning {
-  animation: spin 1s linear infinite;
+  animation: aiPanelSpinnerSpin 1s linear infinite;
   color: var(--accent-primary);
+}
+
+@keyframes aiPanelSpinnerSpin {
+  to { transform: rotate(360deg); }
+}
+
+.minimalActivityList {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin: 2px 0 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: color-mix(in oklch, var(--bg-secondary) 82%, transparent);
+}
+
+.minimalActivityRow {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 7px;
+  color: var(--fg-secondary);
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+
+.minimalActivityRow > svg {
+  flex: 0 0 auto;
+}
+
+.minimalActivityLabel {
+  flex: 0 0 auto;
+  color: var(--fg-primary);
+  font-weight: 500;
+}
+
+.minimalActivityDetail {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg-muted);
+  text-overflow: ellipsis;
+}
+
+.minimalActivitySuccess {
+  color: var(--success-color, #2f9e69);
+}
+
+.minimalActivityError {
+  color: var(--error-color, #dc4c4c);
+}
+
+.askUserPreparing {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-secondary);
+  color: var(--fg-secondary);
+  font-size: 12px;
 }

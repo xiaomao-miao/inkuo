@@ -22,6 +22,10 @@ interface WordEditorProps {
   isActive: boolean;
 }
 
+interface OfficeTextPreview {
+  text_content: string;
+}
+
 /**
  * Word editor using bapbong (canvas-rendered DOCX editor)
  * 
@@ -42,6 +46,8 @@ export const BapbongWordEditor: React.FC<WordEditorProps> = ({
   const [documentBuffer, setDocumentBuffer] = useState<Uint8Array | null>(() => initialBuffer);
   const [loading, setLoading] = useState<boolean>(() => initialBuffer === null);
   const [error, setError] = useState<string | null>(null);
+  const [fallbackText, setFallbackText] = useState<string | null>(null);
+  const [fallbackLoading, setFallbackLoading] = useState(false);
   const [isDirty, setIsDirty] = useState(false);
   const [hasExternalConflict, setHasExternalConflict] = useState(false);
   const dirtyStateRef = useRef(false);
@@ -109,6 +115,7 @@ export const BapbongWordEditor: React.FC<WordEditorProps> = ({
     if (discardLocalChanges) explicitReloadInProgressRef.current = true;
     setLoading(true);
     setError(null);
+    setFallbackText(null);
     let applied = false;
     try {
       applied = await readAndApplyBuffer(token, discardLocalChanges);
@@ -254,6 +261,8 @@ export const BapbongWordEditor: React.FC<WordEditorProps> = ({
 
   const handleEditorLoad = useCallback(() => {
     suppressChangesRef.current = false;
+    setError(null);
+    setFallbackText(null);
     editGenerationRef.current = 0;
     dirtyStateRef.current = false;
     setIsDirty(false);
@@ -276,12 +285,31 @@ export const BapbongWordEditor: React.FC<WordEditorProps> = ({
   // Error handler
   const handleError = useCallback((err: Error) => {
     setError(err.message);
+    setFallbackLoading(true);
+    void invoke<OfficeTextPreview>('read_office_text', { path: filePath })
+      .then((preview) => setFallbackText(preview.text_content || '（文档没有可提取的文本内容）'))
+      .catch(() => setFallbackText(null))
+      .finally(() => setFallbackLoading(false));
     pushNotification({
       kind: 'error',
       title: 'Word 编辑器错误',
       message: err.message,
     });
-  }, [pushNotification]);
+  }, [filePath, pushNotification]);
+
+  const handleRetryOpen = useCallback(() => {
+    void reloadFromDisk(false);
+  }, [reloadFromDisk]);
+
+  const handleOpenWithSystem = useCallback(() => {
+    void invoke('open_with_default_app', { path: filePath }).catch((err) => {
+      pushNotification({
+        kind: 'error',
+        title: '无法打开系统应用',
+        message: reportError('office-word-open-external', err),
+      });
+    });
+  }, [filePath, pushNotification]);
 
   // Toolbar handlers
   const handleFind = useCallback(() => {
@@ -333,15 +361,33 @@ export const BapbongWordEditor: React.FC<WordEditorProps> = ({
           onLoad={handleEditorLoad}
           onError={handleError}
         />
-        {(loading || error) && (
+        {loading && !error && (
           <div className={styles.editorOverlay} role="status" aria-live="polite">
-            {loading ? (
-              <>
+            <div className={styles.loadingSpinner} />
+            <span>正在加载 Word 文档...</span>
+          </div>
+        )}
+        {error && (
+          <div className={styles.wordFallback} role="region" aria-label="Word 兼容预览">
+            <div className={styles.wordFallbackHeader}>
+              <div>
+                <strong>内置编辑器未能完整解析此文档</strong>
+                <span className={styles.editorErrorMessage}>{error}</span>
+              </div>
+              <div className={styles.wordFallbackActions}>
+                <button type="button" onClick={handleRetryOpen}>重试</button>
+                <button type="button" onClick={handleOpenWithSystem}>用系统应用打开</button>
+              </div>
+            </div>
+            {fallbackLoading ? (
+              <div className={styles.wordFallbackLoading}>
                 <div className={styles.loadingSpinner} />
-                <span>正在加载 Word 文档...</span>
-              </>
+                <span>正在加载兼容预览…</span>
+              </div>
+            ) : fallbackText ? (
+              <pre className={styles.wordFallbackText}>{fallbackText}</pre>
             ) : (
-              <span className={styles.editorErrorMessage}>加载失败: {error}</span>
+              <div className={styles.wordFallbackLoading}>无法生成兼容预览，请使用系统应用打开。</div>
             )}
           </div>
         )}

@@ -15,7 +15,7 @@ const host = process.env.TAURI_DEV_HOST;
 //
 // We intentionally split ONLY chunks that are unambiguously self-contained:
 //   - `tauri`: never re-exports from other vendors (only `@tauri-apps/*`)
-//   - `office-editor` / `fortune-sheet` / `pdfjs` / `codemirror` /
+//   - `office-editor` (Bapbong) / `fortune-sheet` / `pdfjs` / `codemirror` /
 //     `prosemirror` / `markdown` / `icons` — each is the only consumer of
 //     its own internal helpers, so cross-chunk aliasing doesn't apply.
 //
@@ -24,7 +24,10 @@ const host = process.env.TAURI_DEV_HOST;
 
 const chunkSplit = (id: string): string | undefined => {
   if (id.includes('/node_modules/@tauri-apps/')) return 'tauri';
-  if (id.includes('/node_modules/@eigenpal/')) return 'office-editor';
+  if (
+    id.includes('/node_modules/@shadow-garden/bapbong-') ||
+    id.includes('/node_modules/@eigenpal/')
+  ) return 'office-editor';
   if (id.includes('/node_modules/@fortune-sheet/')) return 'fortune-sheet';
   if (id.includes('/node_modules/pdfjs-dist/')) return 'pdfjs';
   if (id.includes('/node_modules/@codemirror/')) return 'codemirror';

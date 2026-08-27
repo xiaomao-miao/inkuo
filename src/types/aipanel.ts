@@ -153,6 +153,12 @@ export type OutputItem =
       status?: 'success' | 'error';
       duration?: number;
       diffSummary?: StreamDiffSummary;
+      /** Interactive state for tools such as `ask_user`. Keeping the
+       * resolution on the output item makes answered questions survive
+       * display-mode toggles and history remounts. */
+      interactionState?: 'pending' | 'answered' | 'cancelled';
+      /** Compact, user-readable answer summary for resolved interactions. */
+      interactionSummary?: string;
       /** Wall-clock start for terminal reconciliation if a result is lost. */
       startedAt?: number;
     }
@@ -259,6 +265,9 @@ export interface ChatMessage {
 export interface SubagentActivity {
   /** Unique ID for this sub-agent run */
   id: string;
+  /** The concrete `delegate_to` call that owns this run. Older persisted
+   * snapshots may omit it and are reconciled by task order in the UI. */
+  parentToolCallId?: string;
   /** The expert name (e.g., "office_word_expert") */
   expert: string;
   /** Display label (e.g., "Word Document Expert") */

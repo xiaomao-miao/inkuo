@@ -10,6 +10,7 @@ export {
   type WorkspaceSnapshot,
 } from './sidebarStore';
 export { useAIPanelStore } from './aiPanelStore';
+export { pendingAskKey } from './aiPanelStore/slices/pendingAskSlice';
 export { useLayoutStore } from './layoutStore';
 export { useSettingsStore, flushSettings } from './settingsStore';
 export { useCmdKStore } from './cmdKStore';
@@ -45,6 +46,9 @@ export {
 
 export type {
   ActiveToolCall,
+  AskUserAnswer,
+  AskUserOption,
+  AskUserQuestion,
   BuildProgress,
   ChatMessage,
   ChatMode,

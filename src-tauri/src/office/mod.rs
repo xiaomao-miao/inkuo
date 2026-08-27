@@ -56,6 +56,51 @@ pub enum OfficeFileType {
     Excel(xlsx::ExcelWorkbook),
 }
 
+/// Create the canonical editable blank Word document used by the workspace UI
+/// and the zero-byte legacy migration. A body paragraph is included because
+/// browser editors need a valid caret host even when the page has no text yet.
+pub fn blank_word_document() -> WordDocument {
+    let mut document = WordDocument::default();
+    document.paragraphs.push(WordParagraph {
+        id: "blank-paragraph".to_string(),
+        style: Some("Normal".to_string()),
+        ..WordParagraph::default()
+    });
+    document
+}
+
+/// Create the canonical editable blank workbook with one visible sheet.
+pub fn blank_excel_workbook() -> XlsxWorkbook {
+    XlsxWorkbook {
+        sheets: vec![XlsxSheet::new("Sheet1".to_string())],
+        shared_strings: Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod blank_document_tests {
+    use super::*;
+
+    #[test]
+    fn blank_word_document_is_a_parseable_package_with_an_editable_paragraph() {
+        let document = blank_word_document();
+        let mut output = std::io::Cursor::new(Vec::new());
+        docx::write_word_document(&document, &mut output, None).expect("write blank docx");
+
+        let parsed = read_word_document(output.get_ref()).expect("read blank docx");
+        assert_eq!(parsed.paragraphs.len(), 1);
+        assert_eq!(parsed.paragraphs[0].style.as_deref(), Some("Normal"));
+    }
+
+    #[test]
+    fn blank_excel_workbook_has_one_visible_sheet() {
+        let workbook = blank_excel_workbook();
+        assert_eq!(workbook.sheets.len(), 1);
+        assert_eq!(workbook.sheets[0].name, "Sheet1");
+        assert_eq!(workbook.sheets[0].state, "visible");
+    }
+}
+
 pub fn read_office_file(path: &Path) -> Result<(OfficeFileType, String), OfficeError> {
     let bytes = std::fs::read(path)?;
 

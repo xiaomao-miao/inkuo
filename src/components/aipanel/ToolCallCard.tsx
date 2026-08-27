@@ -89,11 +89,12 @@ const ToolCardHeader: React.FC<{
   name: string;
   fileName: string | null;
   isFileModification: boolean;
+  isWorking: boolean;
   isExecuting: boolean;
   isStreamingArguments: boolean;
   finalStatus: string;
   duration?: number;
-}> = ({ name, fileName, isFileModification, isExecuting, isStreamingArguments, finalStatus, duration }) => (
+}> = ({ name, fileName, isFileModification, isWorking, isExecuting, isStreamingArguments, finalStatus, duration }) => (
   <div className={styles.header}>
     <div className={styles.headerLeft}>
       <div className={styles.icon}>
@@ -103,26 +104,23 @@ const ToolCardHeader: React.FC<{
       {fileName && <span className={styles.fileName}>{fileName}</span>}
     </div>
     <div className={styles.headerRight}>
-      {isExecuting && (
+      {isWorking && (
         <>
           <Loader2 size={12} className={styles.spinning} />
-          <span>{isStreamingArguments ? '生成参数中...' : '执行中'}</span>
+          <span>{isExecuting ? (isStreamingArguments ? '生成参数中...' : '执行中') : '等待执行'}</span>
         </>
       )}
-      {!isExecuting && finalStatus === 'success' && (
+      {!isWorking && finalStatus === 'success' && (
         <>
           <Check size={12} />
           <span>成功</span>
         </>
       )}
-      {!isExecuting && finalStatus === 'error' && (
+      {!isWorking && finalStatus === 'error' && (
         <>
           <X size={12} />
           <span>失败</span>
         </>
-      )}
-      {!isExecuting && finalStatus === 'pending' && (
-        <span>等待</span>
       )}
       {duration !== undefined && (
         <span className={styles.duration}>{duration}ms</span>
@@ -292,8 +290,9 @@ export const ToolCallCard: React.FC<ToolCallCardProps> = React.memo(function Too
   const filePath = (args?.path as string | undefined) ?? (args?.file_path as string | undefined);
   const fileName = extractFileNameFromPath(filePath);
 
-  const isExecuting = status === 'executing';
   const finalStatus = status === 'pending' && diffSummary ? 'success' : status;
+  const isExecuting = finalStatus === 'executing';
+  const isWorking = finalStatus === 'pending' || isExecuting;
   const showCursor = isStreamingArguments && isExecuting;
 
   // 当状态从 executing 切到 success / error 时,在节点上挂一个
@@ -345,6 +344,7 @@ const generatedImagePath =
         name={name}
         fileName={fileName}
         isFileModification={isFileModification}
+        isWorking={isWorking}
         isExecuting={isExecuting}
         isStreamingArguments={isStreamingArguments}
         finalStatus={finalStatus}

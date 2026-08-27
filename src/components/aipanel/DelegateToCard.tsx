@@ -45,6 +45,7 @@ export const DelegateToCard: React.FC<DelegateToCardProps> = React.memo(function
   const [userToggled, setUserToggled] = useState<boolean | null>(null);
   const isRunning = subagentActivities?.some(a => a.status === 'running') ?? false;
   const effectiveStatus = isRunning ? 'executing' : status;
+  const isWorking = effectiveStatus === 'pending' || effectiveStatus === 'executing';
   const previousRunningRef = React.useRef(false);
   React.useEffect(() => {
     if (isRunning && !previousRunningRef.current) {
@@ -67,19 +68,19 @@ export const DelegateToCard: React.FC<DelegateToCardProps> = React.memo(function
           <span className={styles.fileName}>{expert}</span>
         </div>
         <div className={styles.headerRight}>
-          {isRunning && (
+          {isWorking && (
             <>
               <Loader2 size={12} className={styles.spinning} />
-              <span>执行中</span>
+              <span>{effectiveStatus === 'pending' ? '等待执行' : '执行中'}</span>
             </>
           )}
-          {!isRunning && status === 'success' && (
+          {!isWorking && status === 'success' && (
             <>
               <Check size={12} />
               <span>完成</span>
             </>
           )}
-          {!isRunning && status === 'error' && (
+          {!isWorking && status === 'error' && (
             <>
               <X size={12} />
               <span>失败</span>
@@ -140,6 +141,9 @@ export const DelegateToCard: React.FC<DelegateToCardProps> = React.memo(function
   // Only re-render if the status, result, or subagentActivities actually changed.
   // This prevents cascading re-renders when parent passes a new array reference
   // for subagentActivities but the content hasn't changed.
+  if (prevProps.id !== nextProps.id) return false;
+  if (prevProps.expert !== nextProps.expert) return false;
+  if (prevProps.task !== nextProps.task) return false;
   if (prevProps.status !== nextProps.status) return false;
   if (prevProps.result !== nextProps.result) return false;
   if (prevProps.error !== nextProps.error) return false;

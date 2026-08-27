@@ -27,6 +27,7 @@ use super::tools::{SharedToolRegistry, ToolCall, ToolResult};
 // lint. Same goes for `list_profiles` and `resolve_profile`.
 use crate::ai::{AIConfig, AIProvider};
 use crate::diff;
+use crate::runtime::ask_pending::PendingAsk;
 use crate::streaming::{
     FileDiffSummary, OfficeFileModified, StreamDiffChange, StreamDiffHunk, StreamPayload,
 };
@@ -34,6 +35,7 @@ use crate::streaming::{
 use crate::agent::agent_helpers::{
     parse_tool_call_message, DeltaFunction, DeltaResponse, DeltaToolCall,
 };
+use crate::agent::tools::meta_tools;
 
 /// Check if a session has been cancelled
 fn is_session_cancelled(session_id: &str) -> bool {
@@ -61,6 +63,13 @@ pub enum AgentError {
     InvalidResponse(String),
     #[error("Cancelled by user")]
     Cancelled,
+    /// The agent loop called `ask_user` and is parked in
+    /// `runtime::ask_pending`, waiting for the user to reply via the
+    /// `ai_agent_resume` Tauri command. The `ai_agent_stream` command
+    /// recognises this variant and emits a `stream_paused` event
+    /// instead of a generic error.
+    #[error("Paused for user input (request {0})")]
+    PausedForUser(String),
 }
 
 /// Callback type for streaming events
@@ -1096,10 +1105,32 @@ impl AgentExecutor {
                     new_content: result.new_content.clone(),
                     diff_summary,
                     office_file_modified,
+                    request_id: None,
+                    questions: None,
                 });
 
                 // Add tool result to message history
                 session.add_message(Message::tool_result(&parsed.id, &result.output));
+
+                // Detect an `ask_user` pause: the meta-tool arm parked a
+                // `PendingAsk` and returned the sentinel
+                // `__paused_for_user__` placeholder as the tool output.
+                // Bail out of the loop NOW (before the next iteration)
+                // so the AI command returns with `PausedForUser`. The
+                // resume command picks the session up from the
+                // registry and continues from this same conversation
+                // state — the `Message::tool_result` we just appended
+                // becomes the synthetic answer that's already in
+                // history when resume kicks in, and gets overwritten
+                // there with the real answer.
+                if !result.is_error
+                    && parsed.name == "ask_user"
+                    && result.output == "__paused_for_user__"
+                {
+                    let request_id =
+                        crate::runtime::ask_pending::peek(session_id).unwrap_or_default();
+                    return Err(AgentError::PausedForUser(request_id));
+                }
             }
 
             // Protocol invariant: never insert a user/image message between
@@ -1135,7 +1166,7 @@ impl AgentExecutor {
     fn try_handle_meta_tool<'a, F>(
         &'a self,
         tool_call: &'a ToolCall,
-        session: &'a AgentSession,
+        session: &'a mut AgentSession,
         session_id: &'a str,
         message_id: &'a str,
         on_event: F,
@@ -1232,6 +1263,7 @@ impl AgentExecutor {
                             session,
                             session_id,
                             message_id,
+                            &tool_call.id,
                             on_event,
                         )
                         .await;
@@ -1243,6 +1275,71 @@ impl AgentExecutor {
                             format!("[{}] {}", expert, e),
                         )),
                     }
+                }
+                "ask_user" => {
+                    // Validate the schema before we park the session.
+                    // A malformed call should be sent back to the model
+                    // as a normal error so it can self-correct, NOT
+                    // stranded on the frontend as a broken question card.
+                    let questions = match meta_tools::parse_ask_user_questions(&tool_call.arguments)
+                    {
+                        Ok(q) => q,
+                        Err(err) => {
+                            return Some(ToolResult::error(
+                                &tool_call.id,
+                                format!("ask_user rejected: {err}"),
+                            ));
+                        }
+                    };
+
+                    let request_id = uuid::Uuid::new_v4().to_string();
+
+                    // Emit the pause event BEFORE parking the session
+                    // so the frontend has the request id at hand when
+                    // the user clicks Submit (and can ignore any stale
+                    // submissions from a previous pause).
+                    on_event(StreamPayload::tool_paused(
+                        session_id,
+                        message_id,
+                        &tool_call.id,
+                        &request_id,
+                        questions.clone(),
+                    ));
+
+                    // Hand the session off to the resume command. We
+                    // `mem::replace` because `AgentSession` doesn't
+                    // implement Clone and we still need to keep the
+                    // outer `&mut session` borrow valid — the slot is
+                    // overwritten with a fresh, registry-less stub
+                    // (which the dispatcher never touches because the
+                    // surrounding `run` returns the PausedForUser
+                    // error immediately after this arm).
+                    let pending = PendingAsk {
+                        session_id: session_id.to_string(),
+                        message_id: message_id.to_string(),
+                        tool_call_id: tool_call.id.clone(),
+                        request_id: request_id.clone(),
+                        questions,
+                        session: std::mem::replace(
+                            session,
+                            AgentSession::new(std::sync::Arc::new(tokio::sync::RwLock::new(
+                                crate::agent::tools::ToolRegistry::new(),
+                            ))),
+                        ),
+                        ai_config: self.config.clone(),
+                    };
+                    crate::runtime::ask_pending::put(pending);
+
+                    // Return the regular success tool result so the
+                    // dispatcher's normal `tool_result` emission runs.
+                    // The resume command will overwrite the LLM-facing
+                    // conversation history with the real answer; this
+                    // placeholder just keeps the streaming UI consistent
+                    // while the pause is pending.
+                    Some(ToolResult::success(
+                        &tool_call.id,
+                        "__paused_for_user__".to_string(),
+                    ))
                 }
                 _ => None,
             }
@@ -1264,6 +1361,7 @@ impl AgentExecutor {
         parent_session: &'a AgentSession,
         session_id: &'a str,
         parent_message_id: &'a str,
+        parent_tool_call_id: &'a str,
         on_event: F,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, AgentError>> + Send + 'a>>
     where
@@ -1290,6 +1388,7 @@ impl AgentExecutor {
                 session_id,
                 parent_message_id,
                 &sub_message_id,
+                parent_tool_call_id,
                 &profile.name,
                 &profile.label,
                 &task,
@@ -1514,6 +1613,8 @@ impl AgentExecutor {
                                     new_content: None,
                                     diff_summary: None,
                                     office_file_modified: None,
+                                    request_id: None,
+                                    questions: None,
                                 });
                             }
                             // Also handle reasoning_content (DeepSeek's thinking).
@@ -1541,6 +1642,8 @@ impl AgentExecutor {
                                         new_content: None,
                                         diff_summary: None,
                                         office_file_modified: None,
+                                        request_id: None,
+                                        questions: None,
                                     });
                                 }
                             }
@@ -1632,6 +1735,8 @@ impl AgentExecutor {
                                             new_content: None,
                                             diff_summary: None,
                                             office_file_modified: None,
+                                            request_id: None,
+                                            questions: None,
                                         });
                                     } else if id_updated || name_updated || arg_delta.is_some() {
                                         // Subsequent chunk for the same tool call index.
@@ -1672,6 +1777,8 @@ impl AgentExecutor {
                                                 new_content: None,
                                                 diff_summary: None,
                                                 office_file_modified: None,
+                                                request_id: None,
+                                                questions: None,
                                             });
                                         } else {
                                             // Mark that we owe a delta so the *next* chunk
@@ -1743,6 +1850,8 @@ impl AgentExecutor {
                     new_content: None,
                     diff_summary: None,
                     office_file_modified: None,
+                    request_id: None,
+                    questions: None,
                 });
             }
         }

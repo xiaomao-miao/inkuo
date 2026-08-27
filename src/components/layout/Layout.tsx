@@ -5,6 +5,7 @@ import { ActivityBar } from '../activitybar/ActivityBar';
 import { Sidebar } from '../sidebar/Sidebar';
 import { KnowledgeView } from '../sidebar/KnowledgeView';
 import { SnapshotPanel } from '../snapshots/SnapshotPanel';
+import { PluginManager } from '../extensions/PluginManager';
 import { ResizableHandle } from '../resizable';
 import { Editor } from '../editor/Editor';
 import { TabBar } from '../editor/TabBar';
@@ -13,7 +14,7 @@ import { useGlobalKeydown } from '../../hooks/useGlobalKeydown';
 import { useAIPanelStore, useLayoutStore } from '../../store';
 import styles from './Layout.module.css';
 
-const PUBLIC_SIDEBAR_VIEWS = new Set(['files', 'knowledge', 'snapshots']);
+const PUBLIC_SIDEBAR_VIEWS = new Set(['files', 'knowledge', 'snapshots', 'extensions']);
 
 // Bounds MUST stay in sync with `layoutStore.ts` — clamping happens in
 // `applyPanelDelta` below so the CSS variable never escapes the [min, max]
@@ -201,6 +202,8 @@ export const Layout = () => {
                 <Sidebar />
               ) : visibleActiveView === 'knowledge' ? (
                 <KnowledgeView />
+              ) : visibleActiveView === 'extensions' ? (
+                <PluginManager />
               ) : (
                 <SnapshotPanel />
               )}

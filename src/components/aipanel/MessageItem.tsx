@@ -74,6 +74,12 @@ const MessageItemImpl: React.FC<MessageItemProps> = ({
     const hasVisibleAnswer = Boolean(message.content?.trim()) || message.outputItems.some(
       (item) => item.type === 'text' && item.content.trim().length > 0,
     );
+    const hasVisibleMinimalActivity = message.outputItems.some((item) => (
+      item.type === 'reasoning' ||
+      item.type === 'tool_error' ||
+      item.type === 'subagent_block' ||
+      item.type === 'tool_call_start'
+    ));
 
     return (
       <div
@@ -91,7 +97,7 @@ const MessageItemImpl: React.FC<MessageItemProps> = ({
             />
           )}
 
-          {displayMode === 'minimal' && !hasVisibleAnswer && (
+          {displayMode === 'minimal' && !hasVisibleAnswer && !hasVisibleMinimalActivity && (
             <div className={styles.minimalProgress} role="status">
               {isThisStreaming ? (
                 <>

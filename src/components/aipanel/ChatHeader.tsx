@@ -96,8 +96,8 @@ export const ChatHeader: React.FC<ChatHeaderProps> = ({
       </div>
       <button
         className={styles.closeButton}
-        title={displayMode === 'minimal' ? '显示工具与思考详情' : '切换到极简模式'}
-        aria-label={displayMode === 'minimal' ? '显示详细过程' : '切换到极简模式'}
+        title={displayMode === 'minimal' ? '显示工具与思考详情' : '切换到精简进度'}
+        aria-label={displayMode === 'minimal' ? '显示详细过程' : '切换到精简进度'}
         onClick={onToggleDisplayMode}
         type="button"
         data-active={displayMode === 'detailed' ? true : undefined}

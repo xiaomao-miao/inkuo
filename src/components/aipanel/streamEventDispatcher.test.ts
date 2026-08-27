@@ -11,6 +11,7 @@ describe('sub-agent stream ordering', () => {
   it('flushes reasoning before later text instead of reordering separate buffers', async () => {
     const appendOutputDeltaToSubagentActivity = vi.fn();
     const completeSubagentActivity = vi.fn();
+    const addSubagentActivity = vi.fn();
     const common = {
       currentMode: 'agent' as const,
       clearToolCalls: vi.fn(),
@@ -21,7 +22,7 @@ describe('sub-agent stream ordering', () => {
       handleToolCallStart: vi.fn(),
       handleToolCallArgsDelta: vi.fn(),
       setPendingDiff: vi.fn(),
-      addSubagentActivity: vi.fn(),
+      addSubagentActivity,
       addOutputToSubagentActivity: vi.fn(),
       appendOutputDeltaToSubagentActivity,
       completeSubagentActivity,
@@ -32,12 +33,21 @@ describe('sub-agent stream ordering', () => {
       session_id: 'session',
       message_id: 'parent',
       event_type: 'subagent_start',
+      tool_call_id: 'delegate-call-1',
       content: 'task',
       summary: 'researcher',
       tool_args: 'Researcher',
       final_content: 'sub:researcher:1',
       done: false,
     });
+    expect(addSubagentActivity).toHaveBeenCalledWith(
+      'session',
+      'parent',
+      expect.objectContaining({
+        id: 'sub:researcher:1',
+        parentToolCallId: 'delegate-call-1',
+      }),
+    );
     await send({
       session_id: 'session',
       message_id: 'sub:researcher:1',

@@ -8,6 +8,7 @@
 
 export { createDiffSlice } from './diffSlice';
 export { createMessageSlice } from './messageSlice';
+export { createPendingAskSlice } from './pendingAskSlice';
 export { createSessionSlice } from './sessionSlice';
 export { createSubagentSlice } from './subagentSlice';
 export { createToolCallSlice } from './toolCallSlice';

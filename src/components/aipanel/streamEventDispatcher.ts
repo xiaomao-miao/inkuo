@@ -295,6 +295,7 @@ export async function dispatchStreamEvent({
     // Create the nested activity in the store
     addSubagentActivity(session_id, message_id, {
       id: subagentId,
+      parentToolCallId: payload.tool_call_id || undefined,
       expert,
       label,
       task,
@@ -498,6 +499,42 @@ export async function dispatchStreamEvent({
   if (event_type === 'tool_call_args_delta') {
     handleToolCallArgsDelta(payload);
     lastCategoryByMessage.set(message_id, 'tool');
+    return;
+  }
+
+  if (event_type === 'tool_paused') {
+    // The agent loop got the model to emit an `ask_user` tool call and
+    // parked the session in `runtime::ask_pending`. The full question
+    // schema rides on this event so the frontend can render the
+    // AskUserCard without an extra round-trip. We push the entry into
+    // the store keyed by `session_id:message_id` so the renderer can
+    // find it next to the `tool_call_start` output item.
+    if (payload.request_id && payload.tool_call_id && payload.questions) {
+      const { setPendingAsk, patchOutputItem } = useAIPanelStore.getState();
+      setPendingAsk(session_id, message_id, {
+        sessionId: session_id,
+        messageId: message_id,
+        requestId: payload.request_id,
+        toolCallId: payload.tool_call_id,
+        questions: payload.questions,
+      });
+      patchOutputItem(
+        session_id,
+        message_id,
+        { toolCallId: payload.tool_call_id },
+        { interactionState: 'pending' },
+      );
+    }
+    return;
+  }
+
+  if (event_type === 'stream_paused') {
+    // Terminal event emitted by `ai_agent_stream` when the loop parked
+    // itself in response to `ask_user`. Flip `isStreaming` so the chat
+    // input unlocks; the AskUserCard still owns the cursor while the
+    // user is making their choice.
+    useAIPanelStore.getState().setIsStreaming(session_id, false);
+    lastCategoryByMessage.set(message_id, 'text');
     return;
   }
 

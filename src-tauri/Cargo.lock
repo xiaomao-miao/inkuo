@@ -4203,7 +4203,6 @@ dependencies = [
  "calamine",
  "chrono",
  "dirs",
- "docx-rs",
  "embed-resource",
  "fastembed",
  "futures-util",

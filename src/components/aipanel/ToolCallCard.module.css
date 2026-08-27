@@ -214,8 +214,12 @@
 
 /* spinner 用 motion-spring 摆动的旋转 */
 .spinning {
-  animation: spin 1s linear infinite;
+  animation: toolCardSpin 1s linear infinite;
   color: var(--accent);
+}
+
+@keyframes toolCardSpin {
+  to { transform: rotate(360deg); }
 }
 
 .success .spinning,

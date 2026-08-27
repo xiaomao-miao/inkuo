@@ -307,6 +307,29 @@ export function useChatSessionActions({
 
   const handleStop = useCallback(async () => {
     if (!activeSession) return;
+    // If there's a pending `ask_user` pause parked in the store, the
+    // loop is waiting for `ai_agent_resume` — the model isn't actively
+    // streaming. Cancel that pause first so the user gets immediate
+    // feedback (the resume command routes through `cancel: true` so
+    // the LLM sees a "cancelled" answer and the loop unwinds with the
+    // regular `cancelled` event). Then send the regular cancel in
+    // case the resume picks up a second streaming iteration.
+    const pendingAskEntries = Object.values(
+      useAIPanelStore.getState().pendingAskByMessage,
+    ).filter((entry) => entry.sessionId === activeSession.id);
+    for (const entry of pendingAskEntries) {
+      try {
+        await invoke('ai_agent_resume', {
+          sessionId: entry.sessionId,
+          requestId: entry.requestId,
+          answers: [],
+          cancel: true,
+        });
+      } catch {
+        // best-effort cancel
+      }
+      useAIPanelStore.getState().clearPendingAsk(entry.sessionId, entry.messageId);
+    }
     try {
       await invoke('ai_agent_cancel', { sessionId: activeSession.id });
     } catch {

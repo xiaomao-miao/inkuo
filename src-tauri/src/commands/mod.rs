@@ -603,7 +603,45 @@ pub async fn test_image_gen_config(
 #[tauri::command]
 pub async fn read_office_file(path: String) -> Result<Vec<u8>, AppCommandError> {
     tracing::info!("Reading office file: {}", path);
-    std::fs::read(&path).map_err(|e| AppCommandError::ReadOfficeFile(e.to_string()))
+    let path_obj = std::path::Path::new(&path);
+    let mut bytes = std::fs::read(path_obj)
+        .map_err(|e| AppCommandError::ReadOfficeFile(e.to_string()))?;
+
+    // One-time migration for files created by older sidebar templates. Those
+    // templates wrote zero bytes for .docx/.xlsx, which is never a valid
+    // Office package. There is no user content to preserve in a zero-byte
+    // file, so replacing it with a real blank package is lossless.
+    if bytes.is_empty() {
+        let extension = path_obj
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        match extension.as_str() {
+            "docx" => {
+                tracing::warn!("Repairing legacy zero-byte Word document: {}", path);
+                office::write_word_document_to_path(
+                    &office::blank_word_document(),
+                    path_obj,
+                    None,
+                )
+                .map_err(|e| AppCommandError::ReadOfficeFile(e.to_string()))?;
+                bytes = std::fs::read(path_obj)
+                    .map_err(|e| AppCommandError::ReadOfficeFile(e.to_string()))?;
+            }
+            "xlsx" => {
+                tracing::warn!("Repairing legacy zero-byte Excel workbook: {}", path);
+                let workbook = office::blank_excel_workbook();
+                office::write_excel_document(&workbook, None, path_obj)
+                    .map_err(|e| AppCommandError::ReadOfficeFile(e.to_string()))?;
+                bytes = std::fs::read(path_obj)
+                    .map_err(|e| AppCommandError::ReadOfficeFile(e.to_string()))?;
+            }
+            _ => {}
+        }
+    }
+
+    Ok(bytes)
 }
 
 #[tauri::command]

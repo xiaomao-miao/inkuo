@@ -44,6 +44,16 @@ Create, modify, append, or delete content in a .docx. A single tool covers every
 - `width_emu` / `height_emu` (required) — dimensions in EMU (914400 = 1 inch, 360000 = 1 cm).
 - `id`, `anchor_id`, `position` — same as paragraphs/tables.
 
+### Visual asset workflow
+
+For visual-friendly deliverables, do not stop at headings and coloured tables. Use the Word expert's asset tools to create or source purposeful visuals, inspect their real pixels, then embed them as image elements:
+
+- Vector/diagram: `create_svg` → `read_image` → `svg_to_png` → `read_image` → `create_word_doc` image element.
+- Process/architecture diagram: `render_mermaid` directly to PNG → `read_image` → embed.
+- Illustration/cover image: `generate_image` → `read_image` → embed.
+
+The DOCX writer accepts PNG/JPEG/JPG/GIF, not raw SVG. Preserve the source asset next to the document, use absolute paths, keep aspect ratio, and place a caption near each non-decorative visual. Visuals should explain or support content; conservative legal/memo genres may intentionally use none.
+
 **Key behavioral rules**:
 1. Always specify `style` for every paragraph (`Heading1/2/3` for section titles, `Normal` for body).
 2. **Do not duplicate the document title.** If you pass `title="..."`, the backend already inserts a `Title`-styled paragraph for it. Do not also add a `Heading1`/`Title` paragraph with the same text in `elements[]`, and do not repeat the title as the first `Heading1` of the first section when appending.

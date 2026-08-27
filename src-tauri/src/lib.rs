@@ -437,6 +437,7 @@ pub fn run() {
             commands_stream::ai_ask_cancel,
             commands_agent::ai_agent_stream,
             commands_agent::ai_agent_cancel,
+            commands_agent::ai_agent_resume,
             commands_agent::get_available_tools,
             commands_agent::plugins::plugin_create_package,
             commands_agent::plugins::plugin_import,

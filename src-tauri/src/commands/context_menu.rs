@@ -85,9 +85,27 @@ pub async fn create_file_entry(
             if final_path.exists() {
                 return Err(AppCommandError::TargetExists);
             }
-            let content = template.unwrap_or_default();
-            std::fs::write(&final_path, content)
-                .map_err(|e| AppCommandError::CreateEntry(e.to_string()))?;
+            match ext_clean.to_ascii_lowercase().as_str() {
+                // Office files are ZIP packages, not empty text files. Older
+                // builds wrote zero bytes here, producing a tab that could
+                // never be opened by either embedded or system editors.
+                "docx" => crate::office::write_word_document_to_path(
+                    &crate::office::blank_word_document(),
+                    &final_path,
+                    None,
+                )
+                .map_err(|e| AppCommandError::CreateEntry(e.to_string()))?,
+                "xlsx" => {
+                    let workbook = crate::office::blank_excel_workbook();
+                    crate::office::write_excel_document(&workbook, None, &final_path)
+                        .map_err(|e| AppCommandError::CreateEntry(e.to_string()))?;
+                }
+                _ => {
+                    let content = template.unwrap_or_default();
+                    std::fs::write(&final_path, content)
+                        .map_err(|e| AppCommandError::CreateEntry(e.to_string()))?;
+                }
+            }
             let final_str = final_path.to_string_lossy().to_string();
             emit_file_change(&app_handle, FileChangeEvent::Created { path: final_str.clone() });
             return Ok(CreateEntryResult { path: final_str });
@@ -300,4 +318,3 @@ fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::
     }
     Ok(())
 }
-

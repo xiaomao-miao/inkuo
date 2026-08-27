@@ -226,13 +226,13 @@ impl ToolResult {
 
 // Re-export tool structs and their enum variants for the unified ToolExecutor
 pub mod asset_registry;
-mod convert_tools; // svg_to_png / md_to_word / word_to_pdf  (document_converter sub-agent)
+mod convert_tools; // svg_to_png / word_to_pdf  (document_converter sub-agent)
 mod database_tools;
 mod file_tools;
 pub mod image_gen_tools; // generate_image (AI image generation)
 mod media_tools; // read_image / read_pdf  (binary workspace files for multimodal LLMs)
 mod mermaid_tools; // render_mermaid  (in-process merman renderer, mermaid.js 11.15 parity)
-mod meta_tools; // get_tool_help + delegate_to
+pub mod meta_tools; // get_tool_help + delegate_to + ask_user
 mod office;
 mod pptx; // create_pptx (packs SVGs into editable .pptx; see office_pptx_expert)
 mod pptx_anim; // create_pptx_animation + add_pptx_animation
@@ -241,17 +241,17 @@ mod search_tools;
 mod svg_tools; // create_svg  (AI-authored standalone .svg files)
 mod todo_tools; // update_todo (read-only meta-tool; see agent_loop::try_handle_meta_tool)
 mod visual_inspection_tools; // Office/PPT render -> bounded multimodal page assets
-mod web_search_tool; // web_search (external encyclopedia lookup; today Baike) // binary side-channel: stores asset://<id> entries so LLM context never sees base64
+mod web_search_tool; // web_search (external encyclopedia lookup; today Baike)
 
 // ── Re-exports ─────────────────────────────────────────────────────────────────
 
-pub use convert_tools::{MdToWordTool, SvgToPngTool, WordToPdfTool};
+pub use convert_tools::{SvgToPngTool, WordToPdfTool};
 pub use database_tools::DatabaseSearchTool;
 pub use file_tools::{CreateDirTool, EditFileTool, MoveFileTool, ReadFileTool, WriteFileTool};
 pub use image_gen_tools::{GenerateImageOutcome, GenerateImageTool};
 pub use media_tools::{ReadImageTool, ReadPdfTool};
 pub use mermaid_tools::RenderMermaidTool;
-pub use meta_tools::{DelegateToTool, GetToolHelpTool};
+pub use meta_tools::{AskUserTool, DelegateToTool, GetToolHelpTool};
 pub use office::{
     CompareWordDocsTool, CreateExcelTool, CreateWordDocTool, InspectOfficeTool, ModifyExcelTool,
     ReadOfficeFileTool,
@@ -291,11 +291,10 @@ pub enum ToolExecutor {
     ReadImage(media_tools::ReadImageTool),
     ReadPdf(media_tools::ReadPdfTool),
     GenerateImage(image_gen_tools::GenerateImageTool),
-    // Document converter (svg_to_png / md_to_word / word_to_pdf). Lives
+    // Document converter (svg_to_png / word_to_pdf). Lives
     // in `document_converter` sub-agent profile; main agent must
     // delegate_to it to reach any of these tools.
     SvgToPng(convert_tools::SvgToPngTool),
-    MdToWord(convert_tools::MdToWordTool),
     WordToPdf(convert_tools::WordToPdfTool),
     SandboxCommand(sandbox_tools::SandboxCommandTool),
     RenderOfficePreview(visual_inspection_tools::RenderOfficePreviewTool),
@@ -303,6 +302,7 @@ pub enum ToolExecutor {
     // if reached directly).
     GetToolHelp(meta_tools::GetToolHelpTool),
     DelegateTo(meta_tools::DelegateToTool),
+    AskUser(meta_tools::AskUserTool),
     UpdateTodo(todo_tools::UpdateTodoTool),
 }
 
@@ -336,12 +336,12 @@ impl ToolExecutor {
             ToolExecutor::ReadPdf(_) => "read_pdf",
             ToolExecutor::GenerateImage(_) => "generate_image",
             ToolExecutor::SvgToPng(_) => "svg_to_png",
-            ToolExecutor::MdToWord(_) => "md_to_word",
             ToolExecutor::WordToPdf(_) => "word_to_pdf",
             ToolExecutor::SandboxCommand(_) => "run_sandbox_command",
             ToolExecutor::RenderOfficePreview(_) => "render_office_preview",
             ToolExecutor::GetToolHelp(_) => "get_tool_help",
             ToolExecutor::DelegateTo(_) => "delegate_to",
+            ToolExecutor::AskUser(_) => "ask_user",
             ToolExecutor::UpdateTodo(_) => "update_todo",
         }
     }
@@ -373,12 +373,12 @@ impl ToolExecutor {
             ToolExecutor::ReadPdf(t) => t.definition(),
             ToolExecutor::GenerateImage(t) => t.definition(),
             ToolExecutor::SvgToPng(t) => t.definition(),
-            ToolExecutor::MdToWord(t) => t.definition(),
             ToolExecutor::WordToPdf(t) => t.definition(),
             ToolExecutor::SandboxCommand(t) => t.definition(),
             ToolExecutor::RenderOfficePreview(t) => t.definition(),
             ToolExecutor::GetToolHelp(t) => t.definition(),
             ToolExecutor::DelegateTo(t) => t.definition(),
+            ToolExecutor::AskUser(t) => t.definition(),
             ToolExecutor::UpdateTodo(t) => t.definition(),
         }
     }
@@ -452,10 +452,6 @@ impl ToolExecutor {
                 let outcome = t.execute(arguments, workspace).await?;
                 Ok(outcome.output)
             }
-            ToolExecutor::MdToWord(t) => {
-                let outcome = t.execute(arguments, workspace).await?;
-                Ok(outcome.output)
-            }
             ToolExecutor::WordToPdf(t) => {
                 let outcome = t.execute(arguments, workspace).await?;
                 Ok(outcome.output)
@@ -464,6 +460,7 @@ impl ToolExecutor {
             ToolExecutor::RenderOfficePreview(t) => t.execute(arguments, workspace).await,
             ToolExecutor::GetToolHelp(t) => t.execute(arguments, workspace).await,
             ToolExecutor::DelegateTo(t) => t.execute(arguments, workspace).await,
+            ToolExecutor::AskUser(t) => t.execute(arguments, workspace).await,
             ToolExecutor::UpdateTodo(t) => t.execute(arguments, workspace).await,
         }
     }
@@ -596,7 +593,6 @@ impl ToolRegistry {
             // knows how to stamp `file_path` on the `ToolResult` and
             // emit the frontend `file-written` event.
             ToolExecutor::SvgToPng(convert_tools::SvgToPngTool::new()),
-            ToolExecutor::MdToWord(convert_tools::MdToWordTool::new()),
             ToolExecutor::WordToPdf(convert_tools::WordToPdfTool::new()),
             // Allowlisted, dependency-free diagnostics. Visibility is gated
             // by the user-controlled `sandbox` feature toggle.
@@ -608,6 +604,11 @@ impl ToolRegistry {
             // they appear in tool catalogs and can be schema-validated).
             ToolExecutor::GetToolHelp(GetToolHelpTool),
             ToolExecutor::DelegateTo(DelegateToTool),
+            // `ask_user` is main-profile only (the meta-tool stub errors
+            // if reached; the intercept path lives in
+            // `agent_loop::try_handle_meta_tool`). Registered here so it
+            // appears in tool catalogs and is schema-validated.
+            ToolExecutor::AskUser(AskUserTool),
             ToolExecutor::UpdateTodo(UpdateTodoTool),
         ];
 
@@ -717,7 +718,6 @@ impl ToolRegistry {
             || tool_call.name == "add_pptx_animation"
             || tool_call.name == "generate_image"
             || tool_call.name == "svg_to_png"
-            || tool_call.name == "md_to_word"
             || tool_call.name == "word_to_pdf"
         {
             let output_path = tool_call

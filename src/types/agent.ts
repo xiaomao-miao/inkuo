@@ -79,7 +79,9 @@ export interface StreamEvent {
     | 'tool_result'
     | 'done'
     | 'subagent_start'
-    | 'subagent_end';
+    | 'subagent_end'
+    | 'tool_paused'
+    | 'stream_paused';
   content?: string;
   summary?: string;
   tool_call_id?: string;
@@ -87,7 +89,33 @@ export interface StreamEvent {
   tool_args?: string;
   final_content?: string;
   error?: string;
+  request_id?: string;
+  questions?: AskUserQuestion[];
   done: boolean;
+}
+
+/** One option inside an `ask_user` question. Mirrors `AskUserOption` in
+ * `src-tauri/src/runtime/ask_pending.rs`. */
+export interface AskUserOption {
+  label: string;
+  description?: string;
+}
+
+/** One question in an `ask_user` invocation. */
+export interface AskUserQuestion {
+  question: string;
+  options: AskUserOption[];
+  multiSelect?: boolean;
+  header?: string;
+}
+
+/** One answer sent back via `ai_agent_resume`. Per-question; carries
+ * the labels of the options the user picked plus optional free-text
+ * typed into the "Other" input. */
+export interface AskUserAnswer {
+  questionIndex: number;
+  selectedLabels: string[];
+  customText?: string;
 }
 
 /** Agent session configuration */

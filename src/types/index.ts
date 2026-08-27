@@ -51,6 +51,9 @@ export type {
   AgentConfig,
   AgentMode,
   AgentStatus,
+  AskUserOption,
+  AskUserQuestion,
+  AskUserAnswer,
 } from './agent';
 
 export type {

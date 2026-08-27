@@ -5,5 +5,7 @@
 //! `commands.rs`:
 //!
 //!  - `cancel` — the AI stream cancellation set + RAII guard.
+//!  - `ask_pending` — pending `ask_user` pauses keyed by session id.
 
+pub mod ask_pending;
 pub mod cancel;

@@ -41,6 +41,7 @@ export const CompactToolCard: React.FC<CompactToolCardProps> = React.memo(functi
   error,
 }) {
   const isExecuting = status === 'executing';
+  const isWorking = status === 'pending' || isExecuting;
   const filePath = (args?.path as string | undefined) ?? (args?.file_path as string | undefined);
   const fileName = extractFileNameFromPath(filePath);
   const pattern = (args?.pattern as string | undefined) ?? (args?.glob as string | undefined);
@@ -53,17 +54,17 @@ export const CompactToolCard: React.FC<CompactToolCardProps> = React.memo(functi
   // 在节点上挂 `data-just-finished` 属性 1 秒,触发 ToolCallCard.module.css
   // 中的 success-flash / shake 动画。
   const [justFinished, setJustFinished] = useState<'success' | 'error' | null>(null);
-  const prevExecutingRef = useRef(isExecuting);
+  const prevExecutingRef = useRef(isWorking);
   useEffect(() => {
-    if (prevExecutingRef.current && !isExecuting) {
+    if (prevExecutingRef.current && !isWorking) {
       const next: 'success' | 'error' = error ? 'error' : 'success';
       setJustFinished(next);
       const t = window.setTimeout(() => setJustFinished(null), TIMING.TOOL_CALL_JUST_FINISHED_HOLD_MS);
       prevExecutingRef.current = false;
       return () => window.clearTimeout(t);
     }
-    prevExecutingRef.current = isExecuting;
-  }, [isExecuting, error]);
+    prevExecutingRef.current = isWorking;
+  }, [isWorking, error]);
 
   const dataAttrs = React.useMemo<Record<string, string | undefined>>(() => {
     const attrs: Record<string, string | undefined> = {
@@ -79,7 +80,7 @@ export const CompactToolCard: React.FC<CompactToolCardProps> = React.memo(functi
   return (
     <div className={`${styles.compactCard} ${styles[status]}`} {...dataAttrs}>
       <div className={styles.compactLeft}>
-        <div className={`${styles.compactIcon} ${isExecuting ? styles.compactIconExecuting : ''}`}>
+        <div className={`${styles.compactIcon} ${isWorking ? styles.compactIconExecuting : ''}`}>
           {getToolIcon(name)}
         </div>
         <span className={styles.compactName}>{getToolDisplayName(name)}</span>
@@ -99,13 +100,13 @@ export const CompactToolCard: React.FC<CompactToolCardProps> = React.memo(functi
         )}
       </div>
       <div className={styles.compactRight}>
-        {isExecuting && (
+        {isWorking && (
           <Loader2 size={10} className={styles.spinning} />
         )}
-        {!isExecuting && status === 'success' && (
+        {!isWorking && status === 'success' && (
           <Check size={10} className={styles.compactSuccessIcon} />
         )}
-        {!isExecuting && status === 'error' && (
+        {!isWorking && status === 'error' && (
           <X size={10} className={styles.compactErrorIcon} />
         )}
         {duration !== undefined && (

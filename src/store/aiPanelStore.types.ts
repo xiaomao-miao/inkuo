@@ -1,6 +1,7 @@
 import type { StateCreator } from 'zustand';
 import type {
   ActiveToolCall,
+  AskUserQuestion,
   ChatMessage,
   ChatMode,
   ChatSession,
@@ -23,10 +24,39 @@ export interface TodoSnapshot {
   updatedAt: number;
 }
 
+/**
+ * Live `ask_user` pause keyed by `session_id:message_id`. The Rust
+ * agent loop emits `tool_paused` with the question schema; the
+ * dispatcher stores it here; `AskUserCard` reads it. Cleared when the
+ * user submits, cancels, or hits the global "stop" button.
+ */
+export interface PendingAskEntry {
+  sessionId: string;
+  messageId: string;
+  requestId: string;
+  toolCallId: string;
+  questions: AskUserQuestion[];
+}
+
+/** State + actions for the pending-ask registry. Not persisted across
+ * reloads — if the user reloads the app mid-pause the pending resume
+ * is lost (the agent will sit waiting in `runtime::ask_pending` for a
+ * submit that never comes; the next time the user sends a query the
+ * session is hard-deleted and the registry entry is GC'd with it). */
+export interface PendingAskSlice {
+  pendingAskByMessage: Record<string, PendingAskEntry>;
+  setPendingAsk: (
+    sessionId: string,
+    messageId: string,
+    entry: PendingAskEntry,
+  ) => void;
+  clearPendingAsk: (sessionId: string, messageId: string) => void;
+}
+
 export interface AIPanelUiSlice {
   isOpen: boolean;
   activeTab: 'chat' | 'edit';
-  /** Minimal hides tool/reasoning traces; detailed exposes the full stream. */
+  /** Minimal shows a compact live activity summary; detailed exposes the full trace. */
   panelDisplayMode: 'minimal' | 'detailed';
   /**
    * Whether the feature toolbar above the chat input is expanded.
@@ -229,6 +259,7 @@ export type AIPanelState =
   & AIPanelMessageSlice
   & AIPanelToolCallSlice
   & AIPanelDiffSlice
+  & PendingAskSlice
   & SubagentActivitySlice;
 
 export type AIPanelStateCreator<T> = StateCreator<

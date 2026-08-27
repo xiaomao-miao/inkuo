@@ -499,6 +499,14 @@ pub async fn ai_agent_stream(
             if matches!(e, AgentError::Cancelled) {
                 _cancel_guard.clear();
                 emit(&app, StreamPayload::cancelled(&session_id, &message_id));
+            } else if matches!(e, AgentError::PausedForUser(_)) {
+                // The loop parked itself in `runtime::ask_pending`
+                // waiting for `ai_agent_resume`. Drop the cancel guard
+                // (the cancel set still applies — if the user later
+                // hits "stop" while the question card is on screen,
+                // the resume command picks up the cancellation flag).
+                _cancel_guard.clear();
+                emit(&app, StreamPayload::stream_paused(&session_id, &message_id));
             } else {
                 _cancel_guard.clear();
                 emit(
@@ -510,6 +518,211 @@ pub async fn ai_agent_stream(
     }
 
     Ok(())
+}
+
+/// Resume an agent loop that was paused by an `ask_user` tool call.
+///
+/// The frontend hits this command when the user clicks Submit (or
+/// Cancel) on the AskUserCard. We pull the parked session out of
+/// `runtime::ask_pending`, inject the synthetic `Message::Tool` with
+/// the user's answers into the conversation history, and call
+/// `executor.run` on the same session — the loop picks up exactly
+/// where it left off, sees the new tool result, and continues.
+#[tauri::command]
+pub async fn ai_agent_resume(
+    app: AppHandle,
+    session_id: String,
+    request_id: String,
+    answers: Option<Vec<AskUserAnswer>>,
+    cancel: Option<bool>,
+) -> Result<(), AgentCommandError> {
+    let cancel = cancel.unwrap_or(false);
+
+    let pending = match crate::runtime::ask_pending::take(&session_id) {
+        Some(p) => p,
+        None => {
+            // No pause active — stale submission. Be silent about it:
+            // the user's "Submit" click is harmless if the pause was
+            // already cleared by some other path (cancel, frontend
+            // reload, etc.). The frontend's `stream_paused` state is
+            // also keyed by `request_id`, so it should already be
+            // out of "waiting" mode.
+            tracing::debug!(
+                "ai_agent_resume called with no pending pause for {}",
+                session_id
+            );
+            return Ok(());
+        }
+    };
+
+    // Reject submissions for an old pause (e.g. the user had two
+    // windows open and clicked Submit in the wrong one). The state in
+    // `runtime::ask_pending` is keyed by session, not request, so by
+    // the time we get here a different request_id means a different
+    // agent pause has overwritten this slot — which is itself odd,
+    // but we still want to be defensive.
+    if pending.request_id != request_id {
+        tracing::warn!(
+            "ai_agent_resume request_id mismatch (expected {}, got {}) — dropping",
+            pending.request_id,
+            request_id
+        );
+        // Put the *new* pending entry back so the matching submit
+        // still works.
+        crate::runtime::ask_pending::put(pending);
+        return Ok(());
+    }
+
+    let tool_call_id = pending.tool_call_id.clone();
+    let message_id = pending.message_id.clone();
+    let mut session = pending.session;
+    let ai_config = pending.ai_config;
+
+    // Build the synthetic tool result that gets injected into the
+    // conversation history so the model can pick up where it left
+    // off.
+    let response_payload: serde_json::Value = if cancel {
+        serde_json::json!({ "cancelled": true })
+    } else {
+        let answers = answers.unwrap_or_default();
+        let answers_value: Vec<serde_json::Value> = answers
+            .into_iter()
+            .map(|a| {
+                serde_json::json!({
+                    "questionIndex": a.question_index,
+                    "selectedLabels": a.selected_labels,
+                    "customText": a.custom_text,
+                })
+            })
+            .collect();
+        serde_json::json!({ "cancelled": false, "answers": answers_value })
+    };
+
+    let response_text = serde_json::to_string(&response_payload)
+        .map_err(|e| AgentCommandError::ToolDefinitionsSerialization(e.to_string()))?;
+
+    // We appended a placeholder `Message::tool_result` with the
+    // sentinel `__paused_for_user__` when the loop paused. Replace
+    // that last entry with the real answer so the LLM sees a
+    // well-formed `tool` role turn on resume.
+    replace_last_tool_result(&mut session, &tool_call_id, &response_text);
+
+    let executor = create_agent_executor(ai_config);
+
+    let callback = {
+        let app_for_emit = app.clone();
+        move |payload: StreamPayload| {
+            emit(&app_for_emit, payload.clone());
+        }
+    };
+
+    let _cancel_guard = crate::commands::StreamCancelGuard::new(&session_id);
+
+    // No user request to pass — `run` expects one but resume is a
+    // continuation, so an empty string is fine. The session already
+    // contains the full conversation up to the `ask_user` tool call.
+    match executor
+        .run(&mut session, "", &session_id, &message_id, callback)
+        .await
+    {
+        Ok(final_response) => {
+            if crate::commands::clear_stream_cancelled(&session_id) {
+                _cancel_guard.clear();
+                emit(&app, StreamPayload::cancelled(&session_id, &message_id));
+                return Ok(());
+            }
+            _cancel_guard.clear();
+            emit(
+                &app,
+                StreamPayload::done(&session_id, &message_id, Some(&final_response)),
+            );
+        }
+        Err(AgentError::PausedForUser(next_request_id)) => {
+            // The model asked another question — re-emit the terminal
+            // pause event so the frontend's streaming UI unwinds
+            // exactly the same way as the first pause. The
+            // `tool_paused` event for the new pause has already been
+            // emitted by `try_handle_meta_tool`.
+            _cancel_guard.clear();
+            tracing::info!(
+                "ai_agent_resume re-paused for request {} (session {})",
+                next_request_id,
+                session_id
+            );
+            emit(&app, StreamPayload::stream_paused(&session_id, &message_id));
+        }
+        Err(e) => {
+            tracing::error!(
+                "ai_agent_resume error - session: {}, error: {}",
+                session_id,
+                e
+            );
+            let error_msg = match &e {
+                AgentError::MaxIterationsReached(_) => {
+                    "Agent reached maximum iterations. The task may be too complex.".to_string()
+                }
+                AgentError::Cancelled => "Cancelled by user".to_string(),
+                _ => e.to_string(),
+            };
+            if matches!(e, AgentError::Cancelled) {
+                _cancel_guard.clear();
+                emit(&app, StreamPayload::cancelled(&session_id, &message_id));
+            } else {
+                _cancel_guard.clear();
+                emit(
+                    &app,
+                    StreamPayload::error(&session_id, &message_id, &error_msg),
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// One answer from the user, sent back via `ai_agent_resume`.
+///
+/// Mirrors `AskUserAnswer` in the frontend: per-question, carries the
+/// indices of the chosen options plus optional free-text typed into the
+/// "Other" input. The `rename_all = "camelCase"` matters here: Tauri's
+/// IPC only translates top-level arg names from camelCase to snake_case,
+/// so any nested struct (like this one) has to do the rename itself,
+/// otherwise the deserialiser rejects the payload with a
+/// "missing field" error.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AskUserAnswer {
+    pub question_index: usize,
+    #[serde(default)]
+    pub selected_labels: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub custom_text: Option<String>,
+}
+
+/// Replace the trailing `Message::Tool` whose `tool_call_id` matches
+/// `tool_call_id` with a new one carrying `new_content`. The
+/// `try_handle_meta_tool` arm added a placeholder tool result before
+/// parking the session; on resume we want the LLM to see the real
+/// answer instead. If no matching entry exists (e.g. resume hit an
+/// error path before we got here) we leave the history alone and
+/// append a fresh `Tool` message.
+fn replace_last_tool_result(session: &mut AgentSession, tool_call_id: &str, new_content: &str) {
+    for message in session.messages.iter_mut().rev() {
+        if let Message::Tool {
+            tool_call_id: id,
+            content,
+        } = message
+        {
+            if id == tool_call_id {
+                *content = new_content.to_string();
+                return;
+            }
+        }
+    }
+    // Fallback: append a fresh tool message. Shouldn't normally happen,
+    // but if the loop bailed before the placeholder landed we'd
+    // otherwise lose the user's answer.
+    session.add_message(Message::tool_result(tool_call_id, new_content));
 }
 
 #[tauri::command]

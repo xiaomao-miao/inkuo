@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
+use crate::runtime::ask_pending::AskUserQuestion;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KnowledgeSearchResult {
     pub chunk_id: String,
@@ -81,6 +83,16 @@ pub struct StreamPayload {
     /// Office file that was modified (path -> format: "xlsx" or "docx")
     #[serde(skip_serializing_if = "Option::is_none")]
     pub office_file_modified: Option<OfficeFileModified>,
+
+    /// `request_id` for the `ask_user` pause this event represents.
+    /// Only set on `event_type == "tool_paused"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+
+    /// Question schema for the `ask_user` pause. Only set on
+    /// `event_type == "tool_paused"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub questions: Option<Vec<AskUserQuestion>>,
 }
 
 /// Metadata about an Office file that was modified
@@ -225,6 +237,7 @@ impl StreamPayload {
         session_id: &str,
         parent_message_id: &str,
         sub_message_id: &str,
+        parent_tool_call_id: &str,
         expert: &str,
         label: &str,
         task: &str,
@@ -233,6 +246,7 @@ impl StreamPayload {
             .with_ids(session_id, parent_message_id)
             .with_event("subagent_start")
             .with(|p| {
+                p.tool_call_id = Some(parent_tool_call_id.to_string());
                 p.content = Some(task.to_string());
                 p.final_content = Some(sub_message_id.to_string());
                 p.summary = Some(expert.to_string());
@@ -254,6 +268,41 @@ impl StreamPayload {
             .with(|p| {
                 p.content = Some(sub_message_id.to_string());
                 p.done = false;
+            })
+    }
+
+    /// `ask_user` pause event. The agent loop parked its session in
+    /// `runtime::ask_pending` (keyed by `session_id`) and is waiting for
+    /// the frontend to reply via `ai_agent_resume`. The frontend uses
+    /// `request_id` to scope the reply — stale submissions from a
+    /// previous pause are rejected by the resume command.
+    pub fn tool_paused(
+        session_id: &str,
+        message_id: &str,
+        tool_call_id: &str,
+        request_id: &str,
+        questions: Vec<AskUserQuestion>,
+    ) -> Self {
+        Self::default()
+            .with_ids(session_id, message_id)
+            .with_event("tool_paused")
+            .with(|p| {
+                p.tool_call_id = Some(tool_call_id.to_string());
+                p.request_id = Some(request_id.to_string());
+                p.questions = Some(questions);
+                p.done = false;
+            })
+    }
+
+    /// Terminal event emitted by `ai_agent_stream` when the loop parked
+    /// itself waiting for an `ask_user` reply. Mirrors `cancelled` /
+    /// `done` for the paused branch.
+    pub fn stream_paused(session_id: &str, message_id: &str) -> Self {
+        Self::default()
+            .with_ids(session_id, message_id)
+            .with_event("stream_paused")
+            .with(|p| {
+                p.done = true;
             })
     }
 

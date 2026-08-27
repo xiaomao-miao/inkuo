@@ -1,13 +1,19 @@
 import React from 'react';
-import { Loader2, X } from 'lucide-react';
+import { CheckCircle2, Loader2, X } from 'lucide-react';
 import { LazyTextContent } from './LazyTextContent';
 import { ReasoningBlock } from './ReasoningBlock';
 import { ToolCallCard } from './ToolCallCard';
 import { CompactToolCard } from './CompactToolCard';
 import { InlineCompactTool, isCompactToolItem } from './InlineCompactTool';
 import { DelegateToCard, GetToolHelpCard } from './DelegateToCard';
+import { AskUserCard, AskUserResolvedCard } from './AskUserCard';
 import { COMPACT_TOOLS } from './toolUtils';
-import { useAIPanelStore, useSidebarStore } from '../../store';
+import {
+  buildMinimalActivities,
+  shouldRenderOutputItemInMinimal,
+} from './minimalActivity';
+import { groupSubagentActivitiesByDelegate } from './subagentActivityGrouping';
+import { pendingAskKey, useAIPanelStore, useSidebarStore } from '../../store';
 import type {
   ActiveToolCall,
   ChatMessage,
@@ -32,7 +38,9 @@ export const AssistantMessageBody: React.FC<AssistantMessageBodyProps> = ({
   minimal = false,
 }) => {
   const renderedOutputItems = React.useMemo(
-    () => minimal ? message.outputItems.filter((item) => item.type === 'text') : message.outputItems,
+    () => minimal
+      ? message.outputItems.filter(shouldRenderOutputItemInMinimal)
+      : message.outputItems,
     [message.outputItems, minimal],
   );
   const hasOutputItems = renderedOutputItems.length > 0;
@@ -58,6 +66,18 @@ export const AssistantMessageBody: React.FC<AssistantMessageBodyProps> = ({
     return new Map(message.toolCalls.map((tc) => [tc.id, tc]));
   }, [message.toolCalls]);
 
+  const subagentActivitiesByToolCallId = React.useMemo(() => {
+    const delegateCalls = message.outputItems.flatMap((item) => {
+      if (item.type !== 'tool_call_start' || item.toolName !== 'delegate_to') return [];
+      return [{
+        id: item.toolCallId,
+        expert: (item.arguments.expert as string) || '',
+        task: (item.arguments.task as string) || '',
+      }];
+    });
+    return groupSubagentActivitiesByDelegate(delegateCalls, message.subagentActivities);
+  }, [message.outputItems, message.subagentActivities]);
+
   const handleFileClick = React.useCallback((filePath: string) => {
     openWorkspaceFile(filePath, { forceNew: true });
   }, [openWorkspaceFile]);
@@ -68,9 +88,10 @@ export const AssistantMessageBody: React.FC<AssistantMessageBodyProps> = ({
 
   return (
     <>
+      {minimal && <MinimalActivitySummary outputItems={message.outputItems} />}
       {hasOutputItems && renderedOutputItems.map((item, idx) => (
         <OutputItemView
-          key={`output-${idx}`}
+          key={outputItemReactKey(item, idx)}
           item={item}
           messageId={message.id}
           sessionId={sessionId}
@@ -80,7 +101,7 @@ export const AssistantMessageBody: React.FC<AssistantMessageBodyProps> = ({
           workspacePath={workspacePath ?? undefined}
           onSubagentToggle={handleSubagentToggle}
           toolCallMap={toolCallMap}
-          subagentActivities={message.subagentActivities}
+          subagentActivitiesByToolCallId={subagentActivitiesByToolCallId}
         />
       ))}
       {/* Legacy content path */}
@@ -100,6 +121,15 @@ export const AssistantMessageBody: React.FC<AssistantMessageBodyProps> = ({
   );
 };
 
+function outputItemReactKey(item: OutputItem, index: number): string {
+  if (item.type === 'tool_call_start') return `tool-${item.toolCallId}`;
+  if (item.type === 'tool_result') return `result-${item.toolCallId}`;
+  if (item.type === 'tool_error') return `error-${item.toolCallId}`;
+  if (item.type === 'reasoning') return `reasoning-${item.reasoningId ?? index}`;
+  if (item.type === 'subagent_block') return `subagent-${item.subMessageId}`;
+  return `text-${index}`;
+}
+
 interface OutputItemViewProps {
   item: OutputItem;
   messageId: string;
@@ -110,7 +140,7 @@ interface OutputItemViewProps {
   workspacePath?: string;
   onSubagentToggle?: (subagentId: string) => void;
   toolCallMap?: Map<string, NonNullable<ChatMessage['toolCalls']>[number]> | null;
-  subagentActivities?: SubagentActivity[];
+  subagentActivitiesByToolCallId?: Map<string, SubagentActivity[]>;
 }
 
 const OutputItemView: React.FC<OutputItemViewProps> = React.memo(({
@@ -123,7 +153,7 @@ const OutputItemView: React.FC<OutputItemViewProps> = React.memo(({
   workspacePath,
   onSubagentToggle,
   toolCallMap,
-  subagentActivities,
+  subagentActivitiesByToolCallId,
 }) => {
   if (item.type === 'text') {
     return (
@@ -151,10 +181,7 @@ const OutputItemView: React.FC<OutputItemViewProps> = React.memo(({
     // Specialized renderers for sub-agent meta tools.
     if (item.toolName === 'delegate_to') {
       const args = item.arguments || {};
-      // Memoized filter — subagentActivities is already a stable reference
-      const relevantSubagentActivities = subagentActivities?.filter(
-        (a) => a.expert === (args.expert as string),
-      );
+      const relevantSubagentActivities = subagentActivitiesByToolCallId?.get(item.toolCallId);
       return (
         <ToolOutputItem
           isCompact={false}
@@ -191,6 +218,27 @@ const OutputItemView: React.FC<OutputItemViewProps> = React.memo(({
               status={status}
               result={item.result}
               duration={item.duration}
+            />
+          }
+        />
+      );
+    }
+
+    if (item.toolName === 'ask_user') {
+      return (
+        <ToolOutputItem
+          isCompact={false}
+          isThisStreaming={isThisStreaming}
+          isLastItem={isLastItem}
+          content={
+            <AskUserCardSlot
+              sessionId={sessionId}
+              messageId={messageId}
+              toolCallId={item.toolCallId}
+              toolStatus={item.status}
+              toolResult={item.result}
+              interactionState={item.interactionState}
+              interactionSummary={item.interactionSummary}
             />
           }
         />
@@ -329,9 +377,101 @@ const OutputItemView: React.FC<OutputItemViewProps> = React.memo(({
     prevProps.workspacePath === nextProps.workspacePath &&
     prevProps.onSubagentToggle === nextProps.onSubagentToggle &&
     prevProps.toolCallMap === nextProps.toolCallMap &&
-    prevProps.subagentActivities === nextProps.subagentActivities
+    prevProps.subagentActivitiesByToolCallId === nextProps.subagentActivitiesByToolCallId
   );
 });
+
+interface AskUserCardSlotProps {
+  sessionId: string;
+  messageId: string;
+  toolCallId: string;
+  toolStatus?: 'success' | 'error';
+  toolResult?: string;
+  interactionState?: 'pending' | 'answered' | 'cancelled';
+  interactionSummary?: string;
+}
+
+/** Reactive bridge between stream-owned pending state and the inline card. */
+const AskUserCardSlot: React.FC<AskUserCardSlotProps> = ({
+  sessionId,
+  messageId,
+  toolCallId,
+  toolStatus,
+  toolResult,
+  interactionState,
+  interactionSummary,
+}) => {
+  const pendingAsk = useAIPanelStore((state) => (
+    state.pendingAskByMessage[pendingAskKey(sessionId, messageId)]
+  ));
+
+  if (interactionState === 'answered' || interactionState === 'cancelled') {
+    return (
+      <AskUserResolvedCard
+        state={interactionState}
+        summary={interactionSummary}
+      />
+    );
+  }
+
+  if (toolStatus === 'error') {
+    return <AskUserResolvedCard state="error" summary={toolResult || 'AI 提问失败'} />;
+  }
+
+  if (!pendingAsk || pendingAsk.toolCallId !== toolCallId) {
+    if (interactionState === 'pending') {
+      return (
+        <AskUserResolvedCard
+          state="error"
+          summary="提问会话已失效，请重新发送这项任务。"
+        />
+      );
+    }
+    return (
+      <div className={styles.askUserPreparing} role="status" aria-live="polite">
+        <Loader2 size={13} className={styles.spinning} />
+        <span>AI 正在准备需要你确认的问题…</span>
+      </div>
+    );
+  }
+
+  return (
+    <AskUserCard
+      sessionId={sessionId}
+      messageId={messageId}
+      toolCallId={toolCallId}
+      requestId={pendingAsk.requestId}
+      questions={pendingAsk.questions}
+    />
+  );
+};
+
+const MinimalActivitySummary: React.FC<{ outputItems: OutputItem[] }> = ({ outputItems }) => {
+  const activities = React.useMemo(() => buildMinimalActivities(outputItems), [outputItems]);
+  if (activities.length === 0) return null;
+
+  return (
+    <div className={styles.minimalActivityList} aria-live="polite">
+      {activities.map((activity) => (
+        <div key={activity.key} className={styles.minimalActivityRow}>
+          {activity.status === 'working' ? (
+            <Loader2 size={13} className={styles.spinning} />
+          ) : activity.status === 'success' ? (
+            <CheckCircle2 size={13} className={styles.minimalActivitySuccess} />
+          ) : (
+            <X size={13} className={styles.minimalActivityError} />
+          )}
+          <span className={styles.minimalActivityLabel}>{activity.label}</span>
+          {activity.detail && (
+            <span className={styles.minimalActivityDetail} title={activity.detail}>
+              {activity.detail}
+            </span>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+};
 
 interface ToolOutputItemProps {
   isCompact: boolean;
@@ -448,6 +588,18 @@ const LegacyMessageContent: React.FC<LegacyMessageContentProps> = ({
     return new Map(message.toolCalls.map((tc) => [tc.id, tc]));
   }, [message.toolCalls]);
 
+  const subagentActivitiesByToolCallId = React.useMemo(() => {
+    const delegateCalls = (message.toolCalls ?? []).flatMap((toolCall) => {
+      if (toolCall.name !== 'delegate_to') return [];
+      return [{
+        id: toolCall.id,
+        expert: (toolCall.arguments.expert as string) || '',
+        task: (toolCall.arguments.task as string) || '',
+      }];
+    });
+    return groupSubagentActivitiesByDelegate(delegateCalls, message.subagentActivities);
+  }, [message.toolCalls, message.subagentActivities]);
+
   return (
     <>
       {!minimal && isThisStreaming && activeToolCalls.map((tc) => (
@@ -480,9 +632,7 @@ const LegacyMessageContent: React.FC<LegacyMessageContentProps> = ({
         const toolName = toolCall?.name || 'unknown';
         if (toolName === 'delegate_to') {
           const args = toolCall?.arguments || {};
-          const subagentActivities = message.subagentActivities?.filter(
-            (a) => a.expert === (args.expert as string),
-          );
+          const subagentActivities = subagentActivitiesByToolCallId.get(result.toolCallId);
           return (
             <div key={`tool-${result.toolCallId}`} className={styles.toolResultItem}>
               <DelegateToCard
