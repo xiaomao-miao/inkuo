@@ -150,8 +150,11 @@ describe('colLetter', () => {
 });
 
 describe('buildStylesXml', () => {
-  it('returns an empty string when there are no styles', () => {
-    expect(buildStylesXml([])).toBe('');
+  it('returns the mandatory default stylesheet when there are no custom styles', () => {
+    const xml = buildStylesXml([]);
+    expect(xml).toContain('<fonts count="1">');
+    expect(xml).toContain('<fills count="2">');
+    expect(xml).toContain('<cellXfs count="1">');
   });
 
   it('produces a valid stylesheet root with only the default font + cellXfs', () => {

@@ -1,0 +1,55 @@
+.page {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  padding: var(--space-xl);
+  color: var(--fg-primary);
+  background: var(--bg-canvas);
+}
+
+.card {
+  width: min(440px, 100%);
+  padding: 32px;
+  text-align: center;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+}
+
+.icon {
+  display: inline-grid;
+  width: 48px;
+  height: 48px;
+  margin-bottom: var(--space-md);
+  color: var(--error);
+  background: var(--error-subtle);
+  border-radius: var(--radius-pill);
+  place-items: center;
+}
+
+.card h1 {
+  margin-bottom: var(--space-sm);
+  font-size: var(--font-size-xl);
+}
+
+.card p {
+  margin-bottom: var(--space-xl);
+  color: var(--fg-secondary);
+  line-height: var(--line-height-relaxed);
+}
+
+.card button {
+  display: inline-flex;
+  gap: var(--space-sm);
+  align-items: center;
+  padding: var(--space-sm) var(--space-lg);
+  color: var(--accent-contrast);
+  background: var(--accent);
+  border-radius: var(--radius-md);
+}
+
+.card button:hover {
+  background: var(--accent-hover);
+}

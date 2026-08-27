@@ -4,24 +4,27 @@ import { ConfigProvider, App as AntdApp } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import 'dayjs/locale/zh-cn';
 import App from './App';
+import { ErrorBoundary } from './ErrorBoundary';
 import './index.css';
 
-// Catch unhandled errors so we don't just see minified stack traces
-window.addEventListener('error', (e) => {
-  if (!document.getElementById('__boot_error')) {
-    const el = document.createElement('pre');
-    el.id = '__boot_error';
-    el.style.cssText = 'position:fixed;inset:0;background:#fff;color:#000;padding:24px;overflow:auto;z-index:99999;font-size:13px;white-space:pre-wrap;';
-    el.textContent = `[BOOT ERROR]\n${e.message}\n\n${e.error?.stack ?? '(no stack)'}\n\nat ${e.filename}:${e.lineno}:${e.colno}`;
-    document.body.appendChild(el);
-  }
+function showUnhandledError(): void {
+  if (document.getElementById('__global_error')) return;
+  const el = document.createElement('div');
+  el.id = '__global_error';
+  el.className = 'global-error-toast';
+  el.role = 'alert';
+  el.textContent = '操作未完成，请稍后重试。';
+  document.body.appendChild(el);
+  window.setTimeout(() => el.remove(), 5000);
+}
+
+window.addEventListener('error', (event) => {
+  console.error('[admin-window]', event.error ?? event.message);
+  showUnhandledError();
 });
-window.addEventListener('unhandledrejection', (e) => {
-  const reason: any = e.reason;
-  document.body.appendChild(Object.assign(document.createElement('pre'), {
-    textContent: `[UNHANDLED REJECTION]\n${reason?.message ?? reason}\n\n${reason?.stack ?? ''}`,
-    style: 'position:fixed;bottom:0;left:0;right:0;max-height:50%;background:#fee;color:#000;padding:16px;overflow:auto;z-index:99999;font-size:12px;white-space:pre-wrap;'
-  }));
+window.addEventListener('unhandledrejection', (event) => {
+  console.error('[admin-promise]', event.reason);
+  showUnhandledError();
 });
 
 createRoot(document.getElementById('root')!).render(
@@ -36,7 +39,9 @@ createRoot(document.getElementById('root')!).render(
       }}
     >
       <AntdApp>
-        <App />
+        <ErrorBoundary>
+          <App />
+        </ErrorBoundary>
       </AntdApp>
     </ConfigProvider>
   </StrictMode>

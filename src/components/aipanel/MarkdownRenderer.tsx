@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import { Check, Copy } from 'lucide-react';
 import styles from './MarkdownRenderer.module.css';
+import { isExternalHttpLink, isLikelyWorkspacePath, resolveWorkspaceHref, safelyDecodeHref } from './linkUtils';
 
 /**
  * Standalone copyable code block. 必须独立为组件,才能在内部
@@ -114,19 +115,14 @@ export const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
           },
           a({ href, children, ...props }) {
             // Decode URL-encoded paths (e.g. %E6%B5%8B%E8%AF%95 -> 测试3)
-            const decodedHref = href ? decodeURIComponent(href) : href;
-            // Check if this is a file path link (starts with / or ~)
-            const isFilePath = decodedHref?.startsWith('/') || decodedHref?.startsWith('~') || /^[A-Za-z]:\\/.test(decodedHref || '');
-            const isExternal = href?.startsWith('http://') || href?.startsWith('https://');
+            const decodedHref = safelyDecodeHref(href);
+            const isFilePath = isLikelyWorkspacePath(decodedHref);
+            const isExternal = isExternalHttpLink(href);
 
             if (isFilePath && onFileClick) {
               const handleClick = (e: React.MouseEvent) => {
                 e.preventDefault();
-                let fullPath = decodedHref!;
-                if (!fullPath.startsWith('/') && !fullPath.startsWith('~') && workspacePath) {
-                  fullPath = `${workspacePath}/${fullPath}`;
-                }
-                onFileClick(fullPath);
+                onFileClick(resolveWorkspaceHref(decodedHref!, workspacePath));
               };
 
               // Extract just the filename for display

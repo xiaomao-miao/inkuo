@@ -224,6 +224,13 @@ server {
     deny all;
 
     location / {
+        # 管理台允许上传大型安装包；关闭 nginx 请求体落盘缓冲，让上传
+        # 直接流向仅该端点放宽限制的 Admin 服务。
+        # 2 GiB 安装包之外还需要容纳少量 multipart 边界与表单字段。
+        client_max_body_size 2050m;
+        proxy_request_buffering off;
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
         proxy_pass http://127.0.0.1:8082;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
@@ -256,7 +263,9 @@ pnpm install
 pnpm tauri dev
 ```
 
-打开设置面板, 模式切到 "inkuo Cloud", 填你的服务器地址 (例如 `https://cloud.inkuo.com`) 即可登录使用。
+打开设置面板，模式切到 "inkuo Cloud" 即可登录使用。正式构建默认连接
+`https://cloud.inkuo.com`；开发构建默认连接 `http://localhost:8080`，测试环境可在
+构建时通过 `VITE_INKUO_CLOUD_BASE_URL` 覆盖。
 
 ### 2. 桌面端 release build
 

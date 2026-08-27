@@ -3,6 +3,7 @@ using System.Security.Claims;
 using System.Text;
 using Microsoft.IdentityModel.Tokens;
 using Inkuso.Cloud.Core.Entities;
+using Inkuso.Cloud.Core.Security;
 using Microsoft.Extensions.Configuration;
 
 namespace Inkuso.Cloud.Admin.Auth;
@@ -14,30 +15,29 @@ namespace Inkuso.Cloud.Admin.Auth;
 /// </summary>
 public class AdminJwtService(IConfiguration config)
 {
-    // Minimum key length for HS256: 256 bits = 32 bytes.
-    private const int MinSecretLength = 32;
-
     // Verify the secret once at construction — before any token can be issued.
     private readonly string _secret = ValidateSecret(config);
     private readonly string _issuer = config["Jwt:Issuer"] ?? "inkuo-cloud";
     private readonly string _audience = config["Jwt:AdminAudience"] ?? "inkuo-admin";
-    private readonly int _expiryHours = config.GetValue("Jwt:AdminExpiryHours", 12);
+    private readonly int _expiryHours = ValidateExpiry(config);
 
     private static string ValidateSecret(IConfiguration config)
     {
         var secret = config["Jwt:Secret"]
             ?? throw new InvalidOperationException("Jwt:Secret is required");
-        if (secret.Length < MinSecretLength)
+        if (CredentialPolicy.IsWeakSecret(secret))
             throw new InvalidOperationException(
-                $"Jwt:Secret must be at least {MinSecretLength} characters for HS256. "
+                "Jwt:Secret must be at least 32 UTF-8 bytes of random data and not a placeholder. "
               + "Generate one with `openssl rand -base64 48`.");
-        if (secret.StartsWith("change-me",    StringComparison.OrdinalIgnoreCase)
-         || secret.StartsWith("replace-with", StringComparison.OrdinalIgnoreCase)
-         || secret.StartsWith("replace-",     StringComparison.OrdinalIgnoreCase)
-         || secret.StartsWith("your-",        StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException(
-                "Jwt:Secret must not be a placeholder value.");
         return secret;
+    }
+
+    private static int ValidateExpiry(IConfiguration config)
+    {
+        var hours = config.GetValue("Jwt:AdminExpiryHours", 12);
+        if (hours is < 1 or > 24)
+            throw new InvalidOperationException("Jwt:AdminExpiryHours must be between 1 and 24");
+        return hours;
     }
 
     public string GenerateToken(AdminUser user)

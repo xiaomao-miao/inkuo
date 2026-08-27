@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useLayoutEffect } from 'react';
 import { Layout } from './components/layout';
 import { CmdK } from './components/cmdk';
 import { WelcomePage } from './components/welcome';
@@ -35,12 +35,12 @@ function App() {
   // preserved — so reopening the same workspace from the new window
   // restores the user's tabs and AI chat history.
   //
-  // We do this inside an effect (running once at mount) rather than at
+  // We do this inside a layout effect (running once at mount) rather than at
   // module top-level so it executes in a render commit, not during module
   // evaluation. The check runs in the very first commit, well before the
-  // first paint can show a stale workspace, because effects with an empty
-  // dep array run synchronously after layout.
-  useEffect(() => {
+  // first paint can show a stale workspace. A regular effect would run only
+  // after paint and could briefly flash the previous workspace.
+  useLayoutEffect(() => {
     // The Rust side sets `window.__INKUO_FRESH_WINDOW__ = true` via
     // `initialization_script` for windows opened from "File > New Window"
     // so we can wipe the live workspace view (open tabs, document cache,

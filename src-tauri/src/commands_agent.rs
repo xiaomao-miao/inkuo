@@ -231,35 +231,13 @@ pub async fn ai_agent_stream(
         Mode::Agent
     });
 
-    let (tool_registry, mut system_prompt, profile_base_tools): (_, String, Option<Vec<String>>) =
-        match parsed_mode {
-            Mode::Agent => {
-                // Use the "main" profile so the LLM sees only the curated Tier 1
-                // tools. This keeps the schema focused and prevents the model
-                // from "guessing" Office tool names — those tools only live in
-                // sub-agent profiles and are unreachable without delegate_to.
-                let profile = resolve_profile("main", None)
-                    .expect("BUG: 'main' profile must be registered in prompts.rs");
-                let registry = get_full_tool_registry(&app).await;
-                (
-                    registry,
-                    profile.system_prompt.clone(),
-                    Some(profile.allowed_tools),
-                )
-            }
-            // Unknown modes fall through to Agent.
-            _ => {
-                tracing::warn!("Unknown mode '{:?}', defaulting to agent", parsed_mode);
-                let profile = resolve_profile("main", None)
-                    .expect("BUG: 'main' profile must be registered in prompts.rs");
-                let registry = get_full_tool_registry(&app).await;
-                (
-                    registry,
-                    profile.system_prompt.clone(),
-                    Some(profile.allowed_tools),
-                )
-            }
-        };
+    // Agent is currently the only supported mode. Unknown wire values were
+    // normalized above, so a second fallback match here was unreachable.
+    let profile = resolve_profile("main", None)
+        .expect("BUG: 'main' profile must be registered in prompts.rs");
+    let tool_registry = get_full_tool_registry(&app).await;
+    let mut system_prompt = profile.system_prompt.clone();
+    let profile_base_tools = Some(profile.allowed_tools);
 
     // Parse the frontend toggle list. Unknown ids are an explicit error —
     // they imply a desync between `src/types/index.ts` and the Rust

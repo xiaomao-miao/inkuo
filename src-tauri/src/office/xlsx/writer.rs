@@ -32,10 +32,9 @@ use zip::{CompressionMethod, ZipWriter, ZipArchive};
 // Top-level writers
 // ============================================================================
 
-/// Enable verbose logging in the structured writer (mirrors `DEBUG_XLSX` in
-/// `mod.rs`). Local copy because pulling in a `const` from a `pub(crate)`
-/// module adds friction for no benefit.
-const DEBUG_XLSX: bool = true;
+/// Keep spreadsheet contents out of production logs. This local switch can be
+/// flipped temporarily while diagnosing the writer.
+const DEBUG_XLSX: bool = false;
 
 /// Read a single ZIP entry as a UTF-8 string. Returns the empty string if the
 /// entry is missing (matches the historical mod.rs behaviour).
@@ -854,4 +853,3 @@ fn build_cell_xml(cell: &Cell, style_index: usize) -> String {
 fn escape_xml_attr(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
-

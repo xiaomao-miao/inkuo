@@ -7,6 +7,7 @@ interface UseWorkspaceSearchResult {
   setSearchQuery: (query: string) => void;
   searchResults: FileEntry[];
   isSearching: boolean;
+  searchError: string | null;
   clearSearch: () => void;
 }
 
@@ -14,19 +15,26 @@ export function useWorkspaceSearch(workspacePath: string | null): UseWorkspaceSe
   const [searchQuery, setSearchQueryState] = useState('');
   const [searchResults, setSearchResults] = useState<FileEntry[]>([]);
   const [isSearching, setIsSearching] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
 
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
   const clearSearch = useCallback(() => {
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    searchTimeoutRef.current = null;
     setSearchQueryState('');
     setSearchResults([]);
     setIsSearching(false);
+    setSearchError(null);
   }, []);
 
   const setSearchQuery = useCallback(
     (query: string) => {
       setSearchQueryState(query);
+      setSearchError(null);
 
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
@@ -60,6 +68,7 @@ export function useWorkspaceSearch(workspacePath: string | null): UseWorkspaceSe
         } catch {
           if (!controller.signal.aborted) {
             setSearchResults([]);
+            setSearchError('搜索失败，请重试');
           }
         } finally {
           if (!controller.signal.aborted) {
@@ -82,11 +91,18 @@ export function useWorkspaceSearch(workspacePath: string | null): UseWorkspaceSe
     };
   }, []);
 
+  // Search results belong to one workspace. Clear them immediately when the
+  // user switches roots so an old path can never be opened from the new tree.
+  useEffect(() => {
+    clearSearch();
+  }, [workspacePath, clearSearch]);
+
   return {
     searchQuery,
     setSearchQuery,
     searchResults,
     isSearching,
+    searchError,
     clearSearch,
   };
 }

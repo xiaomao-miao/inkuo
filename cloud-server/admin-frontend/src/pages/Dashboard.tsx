@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Row, Col, Card, Statistic, Spin, Empty } from 'antd';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Row, Col, Card, Statistic, Spin, Result, Button } from 'antd';
 import {
   UserOutlined,
   CrownOutlined,
@@ -9,10 +9,33 @@ import {
   TagsOutlined,
   SearchOutlined,
   StopOutlined,
+  ReloadOutlined,
 } from '@ant-design/icons';
-import ReactECharts from 'echarts-for-react';
+import ReactEChartsCore from 'echarts-for-react/lib/core';
+import * as echarts from 'echarts/core';
+import { BarChart, LineChart, PieChart } from 'echarts/charts';
+import {
+  GridComponent,
+  LegendComponent,
+  TitleComponent,
+  TooltipComponent,
+} from 'echarts/components';
+import { CanvasRenderer } from 'echarts/renderers';
 import dayjs from 'dayjs';
-import { dashboardApi, DashboardSummary, DailyUsagePoint, PlanDistribution, ModelUsageShare } from '../api/dashboard';
+import { dashboardApi, type DashboardSummary, type DailyUsagePoint, type PlanDistribution, type ModelUsageShare } from '../api/dashboard';
+
+// Pull in only the chart primitives used on this page. Importing the ECharts
+// all-in-one entry point made the lazy-loaded dashboard heavier than 1 MiB.
+echarts.use([
+  BarChart,
+  LineChart,
+  PieChart,
+  GridComponent,
+  LegendComponent,
+  TitleComponent,
+  TooltipComponent,
+  CanvasRenderer,
+]);
 
 export default function DashboardPage() {
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
@@ -20,25 +43,49 @@ export default function DashboardPage() {
   const [planDist, setPlanDist] = useState<PlanDistribution[]>([]);
   const [modelUsage, setModelUsage] = useState<ModelUsageShare[]>([]);
   const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
+  const requestIdRef = useRef(0);
 
-  useEffect(() => {
-    Promise.all([
-      dashboardApi.summary(),
-      dashboardApi.usageTrend(),
-      dashboardApi.planDistribution(),
-      dashboardApi.modelUsage(),
-    ])
-      .then(([s, t, p, m]) => {
+  const load = useCallback(async () => {
+    const requestId = ++requestIdRef.current;
+    setLoading(true);
+    setFailed(false);
+    try {
+      const [s, t, p, m] = await Promise.all([
+        dashboardApi.summary(),
+        dashboardApi.usageTrend(),
+        dashboardApi.planDistribution(),
+        dashboardApi.modelUsage(),
+      ]);
+      if (requestId === requestIdRef.current) {
         setSummary(s);
         setTrend(t);
         setPlanDist(p);
         setModelUsage(m);
-      })
-      .finally(() => setLoading(false));
+      }
+    } catch {
+      if (requestId === requestIdRef.current) setFailed(true);
+    } finally {
+      if (requestId === requestIdRef.current) setLoading(false);
+    }
   }, []);
 
+  useEffect(() => {
+    void load();
+    return () => { requestIdRef.current += 1; };
+  }, [load]);
+
   if (loading) return <Spin size="large" tip="加载中..." style={{ display: 'block', textAlign: 'center', padding: 80 }} />;
-  if (!summary) return <Empty />;
+  if (failed || !summary) {
+    return (
+      <Result
+        status="warning"
+        title="仪表盘加载失败"
+        subTitle="请检查网络或服务状态后重试。"
+        extra={<Button icon={<ReloadOutlined />} onClick={() => void load()}>重新加载</Button>}
+      />
+    );
+  }
 
   const trendOption = {
     title: { text: '近 30 天对话 / 搜索用量', left: 'left' },
@@ -215,17 +262,17 @@ export default function DashboardPage() {
       <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
         <Col xs={24} lg={16}>
           <Card>
-            <ReactECharts option={trendOption} style={{ height: 360 }} />
+            <ReactEChartsCore echarts={echarts} option={trendOption} notMerge lazyUpdate style={{ height: 360 }} />
           </Card>
         </Col>
         <Col xs={24} lg={8}>
           <Card>
-            <ReactECharts option={planOption} style={{ height: 360 }} />
+            <ReactEChartsCore echarts={echarts} option={planOption} notMerge lazyUpdate style={{ height: 360 }} />
           </Card>
         </Col>
         <Col xs={24}>
           <Card>
-            <ReactECharts option={modelOption} style={{ height: 320 }} />
+            <ReactEChartsCore echarts={echarts} option={modelOption} notMerge lazyUpdate style={{ height: 320 }} />
           </Card>
         </Col>
       </Row>

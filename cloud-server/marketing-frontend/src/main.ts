@@ -1,6 +1,6 @@
 import './styles.css';
 import { Typewriter } from './typewriter';
-import { fetchReleases, formatBytes, Release } from './releases';
+import { fetchReleases, formatBytes, type Release } from './releases';
 
 // ---- inline SVG icons ----
 const ICON_DOC = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="15" y2="17"/></svg>`;
@@ -41,9 +41,7 @@ function h<K extends keyof HTMLElementTagNameMap>(
     if (k === 'class') el.className = v;
     else if (k === 'html') el.innerHTML = v;
     else if (k === 'text') el.textContent = v;
-    else if (k.startsWith('on') && typeof v === 'string') {
-      (el as any)[k.toLowerCase()] = new Function('event', v);
-    } else el.setAttribute(k, v);
+    else el.setAttribute(k, v);
   }
   for (const c of children) el.append(typeof c === 'string' ? document.createTextNode(c) : c);
   return el;
@@ -70,7 +68,7 @@ function buildPage(): void {
   ]);
 
   // ----- hero -----
-  const twEl = h('span', { id: 'tw', class: 'tw-target' });
+  const twEl = h('span', { id: 'tw', class: 'tw-target', 'aria-hidden': 'true' });
   const hero = h('section', { class: 'hero', id: 'top' }, [
     h('div', { class: 'container' }, [
       h('span', { class: 'hero-eyebrow' }, ['桌面端 · 中文优先 · Word / Excel 可直接修改']),
@@ -134,7 +132,11 @@ function buildPage(): void {
   root.append(nav, hero, featuresSection, downloadSection, footer, toTop);
 
   // typewriter
-  new Typewriter(twEl, TYPEWRITER_WORDS, { typeMs: 70, deleteMs: 35, holdMs: 1600, betweenMs: 500 }).start();
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    twEl.textContent = TYPEWRITER_WORDS[0];
+  } else {
+    new Typewriter(twEl, TYPEWRITER_WORDS, { typeMs: 70, deleteMs: 35, holdMs: 1600, betweenMs: 500 }).start();
+  }
 
   // scroll reveal
   setupReveal();
@@ -194,18 +196,25 @@ function buildPreview(): HTMLElement {
 
 // ---- Releases rendering ----
 async function loadReleases(grid: HTMLElement): Promise<void> {
-  grid.innerHTML = '';
-  grid.append(renderSkeleton());
+  grid.replaceChildren(renderSkeleton());
 
   let releases: Release[];
   try {
     releases = await fetchReleases();
   } catch (err) {
     console.warn('release fetch failed', err);
-    releases = [];
+    const retry = h('button', { class: 'btn btn-ghost', type: 'button' }, ['重新加载']);
+    retry.addEventListener('click', () => void loadReleases(grid));
+    grid.replaceChildren(
+      h('div', { class: 'empty-state', role: 'alert' }, [
+        h('p', {}, ['暂时无法连接发行服务，请检查网络后重试。']),
+        retry,
+      ]),
+    );
+    return;
   }
 
-  grid.innerHTML = '';
+  grid.replaceChildren();
   if (releases.length === 0) {
     grid.append(
       h('div', { class: 'empty-state' }, [
@@ -235,16 +244,13 @@ function renderReleaseCard(r: Release): HTMLElement {
   });
   copyBtn.addEventListener('click', () => {
     const url = `${window.location.origin}${r.download_url}`;
-    navigator.clipboard?.writeText(`${url}\nSHA-256: ${r.sha256}`).then(
+    void copyText(`${url}\nSHA-256: ${r.sha256}`).then(
       () => flashCopyBtn(copyBtn),
-      () => { /* ignore */ },
+      () => { copyBtn.setAttribute('title', '复制失败，请手动选择校验和'); },
     );
   });
 
-  const notes = h('div', {
-    class: 'dl-notes' + (r.release_notes ? '' : ' empty'),
-    text: r.release_notes || '本次发布暂无更新日志。',
-  });
+  const notes = renderReleaseNotes(r.release_notes);
 
   const created = new Date(r.created_at).toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' });
   const metaHtml = `<span><strong>文件名:</strong> ${escapeHtml(r.file_name)}</span>`
@@ -265,6 +271,41 @@ function renderReleaseCard(r: Release): HTMLElement {
   return card;
 }
 
+function renderReleaseNotes(markdown: string | null): HTMLElement {
+  const container = h('div', { class: 'dl-notes' + (markdown?.trim() ? '' : ' empty') });
+  if (!markdown?.trim()) {
+    container.textContent = '本次发布暂无更新日志。';
+    return container;
+  }
+
+  let list: HTMLUListElement | null = null;
+  for (const rawLine of markdown.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line) {
+      list = null;
+      continue;
+    }
+    const heading = /^(#{1,3})\s+(.+)$/.exec(line);
+    if (heading) {
+      list = null;
+      container.append(h('h4', {}, [heading[2]]));
+      continue;
+    }
+    const bullet = /^[-*]\s+(.+)$/.exec(line);
+    if (bullet) {
+      if (!list) {
+        list = h('ul');
+        container.append(list);
+      }
+      list.append(h('li', {}, [bullet[1]]));
+      continue;
+    }
+    list = null;
+    container.append(h('p', {}, [line]));
+  }
+  return container;
+}
+
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' } as Record<string, string>)[c]);
 }
@@ -281,6 +322,24 @@ function flashCopyBtn(btn: HTMLElement): void {
   btn.innerHTML = '已复制 ✓';
   btn.setAttribute('style', 'background:rgba(25,219,227,0.2);color:var(--accent-strong)');
   setTimeout(() => { btn.innerHTML = original; btn.setAttribute('style', ''); }, 1200);
+}
+
+async function copyText(text: string): Promise<void> {
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.append(textarea);
+  textarea.select();
+  const copied = document.execCommand('copy');
+  textarea.remove();
+  if (!copied) throw new Error('Clipboard is unavailable');
 }
 
 // ---- IntersectionObserver-based reveal ----

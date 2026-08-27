@@ -57,7 +57,7 @@ export function useDocumentLoader(
 
         if (cancelled) return;
 
-        const needsReload = !cachedDocument || cachedMtime === 0 || result.mtime !== cachedMtime;
+        const needsReload = !hasCachedDocument || cachedMtime === 0 || result.mtime !== cachedMtime;
         if (needsReload) {
           // Re-check immediately before applying the disk result. The editor
           // may have become dirty while `read_document` was in flight; using

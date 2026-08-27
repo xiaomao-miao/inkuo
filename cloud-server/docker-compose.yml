@@ -38,7 +38,8 @@ services:
     volumes:
       - dpkeys:/var/lib/inkuo/dp-keys
     ports:
-      - "8080:8080"
+      # Public traffic must enter through the TLS reverse proxy, not bypass it.
+      - "127.0.0.1:8080:8080"
 
   billing:
     build:
@@ -81,7 +82,8 @@ services:
       - dpkeys:/var/lib/inkuo/dp-keys
       - releases-data:/var/lib/inkuo/releases
     ports:
-      - "8082:8082"
+      # Keeps the admin IP allow-list / TLS proxy from being bypassed directly.
+      - "127.0.0.1:8082:8082"
 
 volumes:
   pgdata:

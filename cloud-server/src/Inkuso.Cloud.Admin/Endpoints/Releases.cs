@@ -12,15 +12,15 @@ namespace Inkuso.Cloud.Admin.Endpoints;
 /// <c>/api/releases</c>:
 ///   - public (no auth): listing the currently enabled releases for the
 ///     marketing landing page, plus a single-item lookup. The actual
-///     installer binary is served as a static file under
-///     <c>/releases-files/{stored-name}</c> so users can fetch it without
-///     a JWT.
+///     installer binary is resolved through a database-backed public endpoint
+///     so disabling a release also revokes its existing URL.
 ///   - admin (Bearer): upload a new release, toggle enabled / isLatest,
 ///     and delete (which removes the file from disk).
 /// </summary>
 public static class AdminReleasesEndpoints
 {
-    public const string StaticRequestPath = "/releases-files";
+    public const long MaxUploadBytes = 2L * 1024 * 1024 * 1024;
+    private const long MaxUploadRequestBytes = MaxUploadBytes + 2L * 1024 * 1024;
 
     public record ToggleEnabledRequest(bool Enabled);
     public record ToggleLatestRequest(bool IsLatest);
@@ -30,8 +30,9 @@ public static class AdminReleasesEndpoints
         // ---------- Public (no auth) ----------
         var publicGroup = app.MapGroup("/api/releases").WithTags("releases-public").AllowAnonymous();
 
-        publicGroup.MapGet("/", async (AppDbContext db) =>
+        publicGroup.MapGet("/", async (HttpContext context, AppDbContext db) =>
         {
+            context.Response.Headers.CacheControl = "no-store";
             var rows = await db.Releases
                 .Where(r => r.Enabled)
                 .OrderByDescending(r => r.IsLatest)
@@ -46,7 +47,7 @@ public static class AdminReleasesEndpoints
                     r.FileName,
                     r.FileSizeBytes,
                     r.Sha256,
-                    r.DownloadUrl,
+                    DownloadUrl = $"/api/releases/{r.Id}/download",
                     r.ReleaseNotes,
                     r.IsLatest,
                     r.CreatedAt,
@@ -55,8 +56,9 @@ public static class AdminReleasesEndpoints
             return Results.Ok(rows);
         });
 
-        publicGroup.MapGet("/latest", async (AppDbContext db) =>
+        publicGroup.MapGet("/latest", async (HttpContext context, AppDbContext db) =>
         {
+            context.Response.Headers.CacheControl = "no-store";
             var latest = await db.Releases
                 .Where(r => r.Enabled && r.IsLatest)
                 .OrderByDescending(r => r.CreatedAt)
@@ -70,12 +72,34 @@ public static class AdminReleasesEndpoints
                     r.FileName,
                     r.FileSizeBytes,
                     r.Sha256,
-                    r.DownloadUrl,
+                    DownloadUrl = $"/api/releases/{r.Id}/download",
                     r.ReleaseNotes,
                     r.CreatedAt,
                 })
                 .FirstOrDefaultAsync();
             return latest == null ? Results.NotFound() : Results.Ok(latest);
+        });
+
+        // Resolve downloads through the database instead of exposing the
+        // storage directory as static files. This makes `Enabled = false`
+        // actually revoke an existing URL and lets us provide a safe original
+        // filename while still storing artifacts under unguessable names.
+        publicGroup.MapGet("/{id:guid}/download", async (Guid id, HttpContext context, AppDbContext db) =>
+        {
+            context.Response.Headers.CacheControl = "no-store";
+            var release = await db.Releases.AsNoTracking()
+                .FirstOrDefaultAsync(r => r.Id == id && r.Enabled);
+            if (release is null || !File.Exists(release.StoragePath))
+                return Results.NotFound();
+
+            // Browsers and intermediate proxies must revalidate the database
+            // gate on every request; otherwise a previously cached installer
+            // could remain downloadable after an admin disables it.
+            return Results.File(
+                release.StoragePath,
+                contentType: "application/octet-stream",
+                fileDownloadName: release.FileName,
+                enableRangeProcessing: true);
         });
 
         // ---------- Admin (Bearer) ----------
@@ -95,7 +119,7 @@ public static class AdminReleasesEndpoints
                     r.FileName,
                     r.FileSizeBytes,
                     r.Sha256,
-                    r.DownloadUrl,
+                    DownloadUrl = $"/api/releases/{r.Id}/download",
                     r.StoragePath,
                     r.ReleaseNotes,
                     r.IsLatest,
@@ -110,8 +134,9 @@ public static class AdminReleasesEndpoints
         // Multipart upload using the minimal-API's built-in IFormFile binding —
         // a much more reliable path than manually calling req.ReadFormAsync()
         // and then file.OpenReadStream(), which can deadlock under load.
-        // The 2 GiB limit is configured globally via Kestrel + FormOptions
-        // in Program.cs.
+        // Request-size metadata below raises the limit only for this
+        // authenticated endpoint; every public/admin JSON route keeps
+        // Kestrel's conservative default.
         adminGroup.MapPost("/upload", async (
             [Microsoft.AspNetCore.Mvc.FromForm] IFormFile? file,
             [Microsoft.AspNetCore.Mvc.FromForm] string? version,
@@ -132,10 +157,16 @@ public static class AdminReleasesEndpoints
             version = version?.Trim();
             if (string.IsNullOrWhiteSpace(version))
                 return Results.BadRequest(new { error = "version is required" });
+            if (version.Length > 64)
+                return Results.BadRequest(new { error = "version must be at most 64 characters" });
 
-            if (string.IsNullOrWhiteSpace(channel)) channel = "stable";
-            if (string.IsNullOrWhiteSpace(platform)) platform = "windows";
-            if (string.IsNullOrWhiteSpace(architecture)) architecture = "x86_64";
+            channel = string.IsNullOrWhiteSpace(channel) ? "stable" : channel.Trim().ToLowerInvariant();
+            platform = string.IsNullOrWhiteSpace(platform) ? "windows" : platform.Trim().ToLowerInvariant();
+            architecture = string.IsNullOrWhiteSpace(architecture) ? "x86_64" : architecture.Trim().ToLowerInvariant();
+            if (channel is not ("stable" or "beta"))
+                return Results.BadRequest(new { error = "channel must be stable or beta" });
+            if (architecture is not ("x86_64" or "aarch64"))
+                return Results.BadRequest(new { error = "architecture must be x86_64 or aarch64" });
 
             var releaseNotesText = string.IsNullOrWhiteSpace(releaseNotes) ? null : releaseNotes.Trim();
             var isLatestFlag = string.Equals(isLatest, "true", StringComparison.OrdinalIgnoreCase);
@@ -152,18 +183,24 @@ public static class AdminReleasesEndpoints
             if (exists)
                 return Results.Conflict(new { error = "A release with this version already exists" });
 
-            // Refuse oversized uploads (default 2 GiB cap).
-            const long maxBytes = 2L * 1024 * 1024 * 1024;
-            if (file.Length > maxBytes)
-                return Results.BadRequest(new { error = $"file exceeds {maxBytes / (1024 * 1024)} MiB cap" });
+            if (file.Length > MaxUploadBytes)
+                return Results.BadRequest(new { error = $"file exceeds {MaxUploadBytes / (1024 * 1024)} MiB cap" });
 
             var storageDir = cfg["Releases:StorageDir"] ?? "/var/lib/inkuo/releases";
             Directory.CreateDirectory(storageDir);
 
             var id = Guid.NewGuid();
-            var ext = Path.GetExtension(file.FileName);
-            if (string.IsNullOrWhiteSpace(ext)) ext = ".bin";
-            if (ext.Length > 16) ext = ".bin";
+            // Browsers may send either slash convention in Content-Disposition.
+            // Store only a leaf name and reject control characters before the
+            // value is echoed into a future download response header.
+            var originalFileName = Path.GetFileName(file.FileName.Replace('\\', '/'));
+            if (string.IsNullOrWhiteSpace(originalFileName)
+                || originalFileName.Length > 256
+                || originalFileName.Any(char.IsControl))
+                return Results.BadRequest(new { error = "file name must be between 1 and 256 characters" });
+            var ext = Path.GetExtension(originalFileName).ToLowerInvariant();
+            if (ext is not (".exe" or ".msi" or ".msix" or ".zip"))
+                return Results.BadRequest(new { error = "unsupported release file type" });
             var storedName = id.ToString("N") + ext;
             var storagePath = Path.Combine(storageDir, storedName);
 
@@ -196,7 +233,7 @@ public static class AdminReleasesEndpoints
                 return Results.Problem(detail: "Failed to save uploaded file", statusCode: 500);
             }
 
-            var downloadUrl = $"{StaticRequestPath}/{storedName}";
+            var downloadUrl = $"/api/releases/{id}/download";
 
             var adminIdStr = httpCtx.User.FindFirst(ClaimTypes.NameIdentifier)?.Value
                              ?? httpCtx.User.FindFirst("sub")?.Value;
@@ -209,7 +246,7 @@ public static class AdminReleasesEndpoints
                 Channel = channel!,
                 Platform = platform!,
                 Architecture = architecture!,
-                FileName = Path.GetFileName(file.FileName),
+                FileName = originalFileName,
                 FileSizeBytes = bytesWritten,
                 Sha256 = sha256,
                 StoragePath = storagePath,
@@ -233,7 +270,16 @@ public static class AdminReleasesEndpoints
             }
 
             db.Releases.Add(release);
-            await db.SaveChangesAsync();
+            try
+            {
+                await db.SaveChangesAsync();
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Failed to create release row for {Version}", version);
+                try { File.Delete(storagePath); } catch { /* best effort */ }
+                return Results.Problem(detail: "Failed to publish release", statusCode: 500);
+            }
 
             return Results.Ok(new
             {
@@ -245,7 +291,18 @@ public static class AdminReleasesEndpoints
                 release.DownloadUrl,
                 release.CreatedAt,
             });
-        }).DisableAntiforgery();
+        })
+        .DisableAntiforgery()
+        .WithMetadata(
+            // Multipart framing adds a small amount beyond the file itself.
+            // Keep the artifact cap at exactly 2 GiB while allowing that
+            // bounded protocol overhead through the request parser.
+            new Microsoft.AspNetCore.Mvc.RequestSizeLimitAttribute(MaxUploadRequestBytes),
+            new Microsoft.AspNetCore.Mvc.RequestFormLimitsAttribute
+            {
+                MultipartBodyLengthLimit = MaxUploadRequestBytes,
+                ValueLengthLimit = 1024 * 1024,
+            });
 
         adminGroup.MapPatch("/{id:guid}/enabled", async (Guid id, ToggleEnabledRequest req, AppDbContext db) =>
         {
@@ -282,12 +339,14 @@ public static class AdminReleasesEndpoints
             var r = await db.Releases.FindAsync(id);
             if (r == null) return Results.NotFound();
 
-            // Remove the file from disk (best-effort; ignore if already gone).
-            try { if (File.Exists(r.StoragePath)) File.Delete(r.StoragePath); }
-            catch { /* ignore — DB row is removed regardless */ }
-
+            var storagePath = r.StoragePath;
             db.Releases.Remove(r);
             await db.SaveChangesAsync();
+            // Delete only after the row is committed. If filesystem cleanup
+            // fails, the orphan is no longer reachable through the download
+            // endpoint; deleting first could leave a live row with no file.
+            try { if (File.Exists(storagePath)) File.Delete(storagePath); }
+            catch { /* best-effort orphan cleanup */ }
             return Results.Ok(new { message = "Release deleted", id });
         });
     }

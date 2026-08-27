@@ -148,7 +148,7 @@ export const Sidebar = () => {
     knowledgeBase,
   } = useSidebarStore();
 
-  const { searchQuery, setSearchQuery, searchResults, isSearching, clearSearch } =
+  const { searchQuery, setSearchQuery, searchResults, isSearching, searchError, clearSearch } =
     useWorkspaceSearch(workspacePath);
 
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -318,6 +318,8 @@ export const Sidebar = () => {
                     <SkeletonListItem dense />
                     <SkeletonListItem dense />
                   </SkeletonGroup>
+                ) : searchError ? (
+                  <div className={styles.emptyFolder} role="alert">{searchError}</div>
                 ) : searchResults.length === 0 ? (
                   <div className={styles.emptyFolder}>未找到匹配文件</div>
                 ) : (

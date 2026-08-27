@@ -251,9 +251,8 @@ fn strip_repeated_prefix(completion: &str, suffix_after_cursor: &str) -> String 
 /// Returns:
 /// - `context`: the joined snippet text with `CURSOR_MARKER` inserted at
 ///   the cursor position.
-/// - `cursor_in_context`: the *character* offset of the marker within
-///   `context` (i.e. the character position a model would slice `context`
-///   at to get "(prefix, suffix)").
+/// - `cursor_in_context`: the UTF-8 byte offset of the marker within
+///   `context`, suitable for [`str::split_at`].
 ///
 /// The cursor marker is placed inside the source line itself (not on a
 /// separate line) so the model sees the exact byte it needs to continue
@@ -268,64 +267,34 @@ fn extract_context(document: &str, cursor_pos: usize, context_lines: usize) -> (
         .map(|(byte, _)| byte)
         .unwrap_or_else(|| document.len());
 
-    let lines: Vec<&str> = document.lines().collect();
-
-    // Find the index of the line containing the cursor by walking byte
-    // offsets once. If the document is empty we treat the caret as being
-    // on a virtual "line 0".
-    let line_index = {
-        let mut acc = 0usize;
-        let mut idx = lines.len(); // sentinel: cursor is on a trailing empty line
-        for (i, line) in lines.iter().enumerate() {
-            let line_len = line.len();
-            // The caret is on this line if it falls anywhere within
-            // [acc, acc + line_len], inclusive of the end-of-line position.
-            if cursor_byte <= acc + line_len {
-                idx = i;
-                break;
-            }
-            acc += line_len + 1; // +1 for the newline byte
-        }
-        idx.min(lines.len().saturating_sub(1).max(0))
-    };
-
-    // Calculate start/end line indices
-    let start_line = line_index.saturating_sub(context_lines);
-    let end_line = (line_index + context_lines + 1).min(lines.len());
-
-    // Build context string with cursor marker
-    let mut context_parts = Vec::new();
-
-    for (i, line) in lines[start_line..end_line].iter().enumerate() {
-        if start_line + i == line_index {
-            // Split the line at the cursor byte offset without going through
-            // a `Vec<char>` round-trip. `split_at` operates on the byte
-            // boundary, which is safe here because we computed `col_bytes`
-            // as a byte offset above and only enter the branch when the
-            // boundary falls on a UTF-8 char boundary.
-            let line_start = if start_line > 0 {
-                lines[..start_line].iter().map(|l| l.len() + 1).sum::<usize>()
-            } else {
-                0
-            };
-            let col_bytes = cursor_byte.saturating_sub(line_start);
-            let safe_col = col_bytes.min(line.len());
-            let (before, after) = line.split_at(safe_col);
-
-            context_parts.push(format!("{}{}{}\n", before, CURSOR_MARKER, after));
-        } else {
-            context_parts.push(format!("{}\n", line));
+    // Store exact byte offsets instead of using `str::lines()`: `lines()`
+    // discards the final empty line, which made a caret after a trailing
+    // newline jump back to the previous line. Keeping offsets also preserves
+    // CRLF and avoids recomputing the wrong line start when the context window
+    // begins before the caret line.
+    let mut line_starts = vec![0usize];
+    for (byte, ch) in document.char_indices() {
+        if ch == '\n' {
+            line_starts.push(byte + ch.len_utf8());
         }
     }
 
-    let context = context_parts.join("");
+    // The caret belongs to the last line whose start is not after it. A caret
+    // on a newline byte therefore remains at the end of the preceding line;
+    // a caret immediately after it belongs to the following line.
+    let line_index = line_starts
+        .partition_point(|start| *start <= cursor_byte)
+        .saturating_sub(1);
 
-    // Locate the marker within the joined context. The marker is plain ASCII
-    // so a byte-level search is correct.
-    let cursor_in_context = context
-        .find(CURSOR_MARKER)
-        .map(|byte_idx| byte_idx)
-        .unwrap_or(0);
+    let start_line = line_index.saturating_sub(context_lines);
+    let end_line = (line_index + context_lines + 1).min(line_starts.len());
+    let context_start = line_starts[start_line];
+    let context_end = line_starts.get(end_line).copied().unwrap_or(document.len());
+    let cursor_in_context = cursor_byte - context_start;
+
+    let source = &document[context_start..context_end];
+    let (before, after) = source.split_at(cursor_in_context);
+    let context = format!("{before}{CURSOR_MARKER}{after}");
 
     (context, cursor_in_context)
 }
@@ -550,10 +519,10 @@ pub async fn ai_inline_complete(
     // `context` contains the CURSOR_MARKER inlined at the cursor position; we
     // split around it so the prompt can talk about PREFIX / SUFFIX explicitly
     // and the model can be told not to repeat the prefix.
-    let (context, cursor_in_context) = extract_context(source_text, cursor_pos, 10);
+    let (context, cursor_byte_in_context) = extract_context(source_text, cursor_pos, 10);
 
-    let (prefix, suffix) = if cursor_in_context < context.len() {
-        context.split_at(cursor_in_context)
+    let (prefix, suffix) = if cursor_byte_in_context < context.len() {
+        context.split_at(cursor_byte_in_context)
     } else {
         (context.as_str(), "")
     };
@@ -570,7 +539,7 @@ pub async fn ai_inline_complete(
 
     // Build prompt based on language
     let prompt = if request.language == "docx" {
-        build_docx_completion_prompt(prefix, suffix, cursor_in_context)
+        build_docx_completion_prompt(prefix, suffix, prefix.chars().count())
     } else {
         build_completion_prompt(
             prefix,
@@ -677,3 +646,56 @@ pub fn get_inline_completion_state() -> InlineCompletionState {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::{extract_context, CURSOR_MARKER};
+
+    fn split_context(document: &str, cursor: usize, context_lines: usize) -> (String, String) {
+        let (context, marker_byte) = extract_context(document, cursor, context_lines);
+        let (prefix, marked_suffix) = context.split_at(marker_byte);
+        let suffix = marked_suffix
+            .strip_prefix(CURSOR_MARKER)
+            .expect("context must contain the cursor marker at the returned offset");
+        (prefix.to_string(), suffix.to_string())
+    }
+
+    #[test]
+    fn extract_context_marks_an_empty_document() {
+        let (prefix, suffix) = split_context("", 0, 10);
+        assert_eq!(prefix, "");
+        assert_eq!(suffix, "");
+    }
+
+    #[test]
+    fn extract_context_uses_character_offsets_for_unicode_text() {
+        let document = "第一行\n中文光标位置\n第三行";
+        // Seven characters: 第一行 + newline + 中文光.
+        let (prefix, suffix) = split_context(document, 7, 10);
+        assert_eq!(prefix, "第一行\n中文光");
+        assert_eq!(suffix, "标位置\n第三行");
+    }
+
+    #[test]
+    fn extract_context_keeps_a_trailing_empty_line() {
+        let (prefix, suffix) = split_context("标题\n", 3, 10);
+        assert_eq!(prefix, "标题\n");
+        assert_eq!(suffix, "");
+    }
+
+    #[test]
+    fn extract_context_crops_by_lines_without_moving_the_cursor() {
+        let document = "zero\none\ntwo\nthree\nfour";
+        // Cursor after "thr" on line three.
+        let cursor = "zero\none\ntwo\nthr".chars().count();
+        let (prefix, suffix) = split_context(document, cursor, 1);
+        assert_eq!(prefix, "two\nthr");
+        assert_eq!(suffix, "ee\nfour");
+    }
+
+    #[test]
+    fn extract_context_clamps_an_out_of_range_cursor() {
+        let (prefix, suffix) = split_context("内容", usize::MAX, 1);
+        assert_eq!(prefix, "内容");
+        assert_eq!(suffix, "");
+    }
+}

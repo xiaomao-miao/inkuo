@@ -91,7 +91,7 @@
   flex-shrink: 0;
   background: transparent;
   border: none;
-  color: var(--fg-tertiary);
+  color: var(--fg-muted);
   cursor: pointer;
   padding: 2px;
   border-radius: var(--radius-sm, 4px);

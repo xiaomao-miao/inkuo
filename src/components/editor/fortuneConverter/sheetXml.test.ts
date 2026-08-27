@@ -24,6 +24,13 @@ describe('buildContentTypesXml', () => {
     expect(xml).toContain('PartName="/xl/workbook.xml"');
     expect(xml).toContain('PartName="/xl/styles.xml"');
   });
+
+  it('declares every worksheet in a multi-sheet workbook', () => {
+    const xml = buildContentTypesXml(3);
+    expect(xml).toContain('PartName="/xl/worksheets/sheet1.xml"');
+    expect(xml).toContain('PartName="/xl/worksheets/sheet2.xml"');
+    expect(xml).toContain('PartName="/xl/worksheets/sheet3.xml"');
+  });
 });
 
 describe('buildRelsXml', () => {
@@ -142,6 +149,25 @@ describe('buildWorksheetXml', () => {
     expect(xml).toContain('<v>7</v>');
   });
 
+  it('uses the OOXML formula-string and error cell encodings', () => {
+    const xml = buildWorksheetXml(
+      {
+        A1: { v: 'done', f: '=IF(TRUE,"done","no")', t: 'str' },
+        B1: { v: '#DIV/0!', t: 'e' },
+      },
+      new Map(),
+    );
+    expect(xml).toMatch(/<c r="A1" t="str"><f>.*<\/f><v>done<\/v><\/c>/);
+    expect(xml).toContain('<c r="B1" t="e"><v>#DIV/0!</v></c>');
+    expect(xml).not.toContain('<c r="B1" t="e"><is>');
+  });
+
+  it('orders multi-letter columns numerically', () => {
+    const xml = buildWorksheetXml({ AA1: { v: 3 }, B1: { v: 2 }, A1: { v: 1 } }, new Map());
+    expect(xml.indexOf('r="A1"')).toBeLessThan(xml.indexOf('r="B1"'));
+    expect(xml.indexOf('r="B1"')).toBeLessThan(xml.indexOf('r="AA1"'));
+  });
+
   it('strips leading = from formulas', () => {
     const xml = buildWorksheetXml(
       { 'A1': { v: 42, f: '=2*21' } },
@@ -196,6 +222,13 @@ describe('buildWorksheetXml', () => {
     );
     expect(xml).toMatch(/<row r="1"/);
     expect(xml).toMatch(/<row r="2" ht="36" customHeight="1"/);
+  });
+
+  it('preserves a custom height on an empty sparse row', () => {
+    const rows: Array<{ hpx?: number }> = [];
+    rows[5] = { hpx: 42 };
+    const xml = buildWorksheetXml({ A1: { v: 1 }, '!rows': rows }, new Map());
+    expect(xml).toContain('<row r="6" ht="42" customHeight="1"></row>');
   });
 
   it('skips reserved keys like "!ref"', () => {

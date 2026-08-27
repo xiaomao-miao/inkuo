@@ -811,7 +811,7 @@
   border-radius: 20px;
   background: color-mix(in oklch, var(--bg-elevated) 96%, transparent);
   box-shadow:
-    var(--shadow-xl),
+    var(--shadow-lg),
     0 1px 0 color-mix(in oklch, var(--accent-contrast) 8%, transparent) inset;
   outline: none;
   animation: welcome-modal-pop var(--motion-slow) var(--motion-spring);

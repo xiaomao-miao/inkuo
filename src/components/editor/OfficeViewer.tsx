@@ -17,7 +17,7 @@ import {
 import {
   rustWorkbookToFortuneSheets,
 } from './fortuneSheetConverter';
-import { fortuneSheetsToSheetJSBuffer } from './fortuneSheetConverter';
+import { fortuneSheetsToXlsxBuffer } from './fortuneSheetConverter';
 import type { RustXlsxWorkbook } from './fortuneSheetConverter';
 import { reportError } from '../../utils/errors';
 import styles from './OfficeViewer.module.css';
@@ -458,7 +458,7 @@ export const ExcelEditor: React.FC<ExcelEditorProps> = ({
     try {
       recalcAllSheetsRef.current();
       const latestSheets = wb.getAllSheets();
-      const buffer = await fortuneSheetsToSheetJSBuffer(latestSheets, wb.dataToCelldata.bind(wb));
+      const buffer = await fortuneSheetsToXlsxBuffer(latestSheets, wb.dataToCelldata.bind(wb));
       const bufferArray = Array.from(buffer);
       await invoke('write_office_file', { path: filePath, data: bufferArray });
 

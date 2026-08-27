@@ -2,9 +2,10 @@ import { useEffect } from 'react';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useWorkspaceSnapshotAutosave } from '../hooks/useWorkspaceSnapshotAutosave';
 import { confirmWindowClose } from '../services/openTabLifecycle';
+import { saveCurrentSnapshot } from '../services/workspace';
 import { reportError } from '../utils/errors';
 import { isTauriRuntime } from '../utils/tauri';
-import { useNotificationStore } from '../store';
+import { useAIPanelStore, useNotificationStore, useSidebarStore } from '../store';
 import { useAgentStream } from './aipanel/useAgentStream';
 
 /**
@@ -107,8 +108,6 @@ export function WorkspaceBootstrap(): null {
 }
 
 async function flushPendingSnapshotSave(): Promise<void> {
-  const { useSidebarStore, useAIPanelStore } = await import('../store');
-  const { saveCurrentSnapshot } = await import('../services/workspace');
   const sidebar = useSidebarStore.getState();
   const aiPanel = useAIPanelStore.getState();
   if (!sidebar.workspacePath) return;

@@ -68,12 +68,7 @@ public class JwtService(AppDbContext db, JwtSettings settings)
     /// </summary>
     public async Task<string> CreateRefreshTokenAsync(User user)
     {
-        var token = new RefreshToken
-        {
-            Jti = Base64UrlEncode(RandomNumberGenerator.GetBytes(32)),
-            UserId = user.Id,
-            ExpiresAt = DateTime.UtcNow.AddDays(settings.RefreshExpiryDays),
-        };
+        var token = CreateRefreshToken(user.Id);
 
         db.RefreshTokens.Add(token);
         await db.SaveChangesAsync();
@@ -88,6 +83,9 @@ public class JwtService(AppDbContext db, JwtSettings settings)
     /// </summary>
     public async Task<RefreshResult> RefreshAccessTokenAsync(string refreshTokenJti)
     {
+        if (db.Database.IsRelational())
+            return await RefreshRelationalAsync(refreshTokenJti);
+
         // Look up the refresh token. We deliberately do NOT `Include` the
         // user navigation here: EF Core 10's InMemory provider (used in
         // unit tests) returns zero rows when the navigation's principal
@@ -113,37 +111,59 @@ public class JwtService(AppDbContext db, JwtSettings settings)
             return new RefreshResult(string.Empty, null, DateTime.MinValue, false);
         }
 
-        // Rotate inside a single transaction so a crash between "revoke old"
-        // and "issue new" can never leave the user with no valid refresh
-        // token (the previous implementation called SaveChanges twice).
-        // We tolerate the in-memory provider's lack of cross-store transactions
-        // (used by tests) by skipping the explicit begin/commit — SaveChanges
-        // remains atomic against a single provider.
-        var supportsTx = db.Database.IsRelational();
-        Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction? tx = null;
-        if (supportsTx) tx = await db.Database.BeginTransactionAsync();
+        // The in-memory provider used by unit tests has no relational
+        // ExecuteUpdate support. One SaveChanges still keeps this path atomic.
+        rt.Revoked = true;
+        var replacement = CreateRefreshToken(user.Id);
+        db.RefreshTokens.Add(replacement);
+        await db.SaveChangesAsync();
+
+        return SuccessfulRefresh(user, replacement.Jti);
+    }
+
+    private async Task<RefreshResult> RefreshRelationalAsync(string refreshTokenJti)
+    {
+        await using var tx = await db.Database.BeginTransactionAsync();
         try
         {
-            rt.Revoked = true;
-            var accessToken = GenerateAccessToken(user);
-            var newRefreshToken = await CreateRefreshTokenAsync(user);
-            await db.SaveChangesAsync();
-            if (tx is not null) await tx.CommitAsync();
+            var now = DateTime.UtcNow;
+            var token = await db.RefreshTokens.AsNoTracking()
+                .Where(r => r.Jti == refreshTokenJti && !r.Revoked && r.ExpiresAt > now)
+                .Select(r => new { r.Id, r.UserId })
+                .FirstOrDefaultAsync();
+            if (token is null)
+                return FailedRefresh();
 
-            return new RefreshResult(
-                accessToken,
-                newRefreshToken,
-                DateTime.UtcNow.AddMinutes(settings.AccessExpiryMinutes),
-                true);
+            // Claim the old token with one conditional UPDATE. PostgreSQL
+            // re-checks the predicate after a concurrent row lock is released,
+            // so exactly one of two simultaneous refresh requests can affect
+            // the row; the loser receives a normal authentication failure.
+            var claimed = await db.RefreshTokens
+                .Where(r => r.Id == token.Id && !r.Revoked && r.ExpiresAt > now)
+                .ExecuteUpdateAsync(setters => setters.SetProperty(r => r.Revoked, true));
+            if (claimed != 1)
+            {
+                await tx.RollbackAsync();
+                return FailedRefresh();
+            }
+
+            var user = await db.Users.FindAsync(token.UserId);
+            if (user is null)
+            {
+                await tx.RollbackAsync();
+                return FailedRefresh();
+            }
+
+            var replacement = CreateRefreshToken(user.Id);
+            db.RefreshTokens.Add(replacement);
+            await db.SaveChangesAsync();
+            await tx.CommitAsync();
+            return SuccessfulRefresh(user, replacement.Jti);
         }
         catch
         {
-            if (tx is not null) await tx.RollbackAsync();
+            await tx.RollbackAsync();
             throw;
-        }
-        finally
-        {
-            if (tx is not null) await tx.DisposeAsync();
         }
     }
 
@@ -154,6 +174,22 @@ public class JwtService(AppDbContext db, JwtSettings settings)
         foreach (var t in tokens) t.Revoked = true;
         await db.SaveChangesAsync();
     }
+
+    private RefreshToken CreateRefreshToken(Guid userId) => new()
+    {
+        Jti = Base64UrlEncode(RandomNumberGenerator.GetBytes(32)),
+        UserId = userId,
+        ExpiresAt = DateTime.UtcNow.AddDays(settings.RefreshExpiryDays),
+    };
+
+    private RefreshResult SuccessfulRefresh(User user, string refreshToken) => new(
+        GenerateAccessToken(user),
+        refreshToken,
+        DateTime.UtcNow.AddMinutes(settings.AccessExpiryMinutes),
+        true);
+
+    private static RefreshResult FailedRefresh() =>
+        new(string.Empty, null, DateTime.MinValue, false);
 
     private static string Base64UrlEncode(byte[] bytes) =>
         Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');

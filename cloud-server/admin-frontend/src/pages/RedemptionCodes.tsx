@@ -1,11 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Table, Button, Space, Tag, Modal, Form, Input, InputNumber, Switch, DatePicker, Select, App, Popconfirm,
+  type TableColumnsType,
 } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, CopyOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { redemptionCodesApi, RedemptionCode } from '../api/redemptionCodes';
-import { plansApi, Plan } from '../api/plans';
+import { redemptionCodesApi, type RedemptionCode } from '../api/redemptionCodes';
+import { plansApi, type Plan } from '../api/plans';
+import { getApiErrorMessage } from '../api/client';
 import {
   CODE_PATTERN, MAX_CODE_LENGTH, MAX_CODE_USES, MAX_SINGLE_CREDIT_POINTS, MIN_CODE_LENGTH, trimCode,
 } from '../billingLimits';
@@ -17,24 +19,45 @@ export default function RedemptionCodesPage() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [modalOpen, setModalOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState<RedemptionCode | null>(null);
   const [plans, setPlans] = useState<Plan[]>([]);
   const [form] = Form.useForm();
   const { message } = App.useApp();
+  const requestIdRef = useRef(0);
 
-  const load = async () => {
+  const load = useCallback(async () => {
+    const requestId = ++requestIdRef.current;
     setLoading(true);
     try {
-      const [r, p] = await Promise.all([
-        redemptionCodesApi.list(page, pageSize),
-        plansApi.list(),
-      ]);
-      setData(r.items); setTotal(r.total); setPlans(p);
-    } finally { setLoading(false); }
-  };
-  useEffect(() => { load(); }, [page, pageSize]);
+      const r = await redemptionCodesApi.list(page, pageSize);
+      if (requestId !== requestIdRef.current) return;
+      setData(r.items); setTotal(r.total);
+    } catch (error) {
+      if (requestId === requestIdRef.current) {
+        message.error(getApiErrorMessage(error, '加载兑换码失败'));
+      }
+    } finally {
+      if (requestId === requestIdRef.current) setLoading(false);
+    }
+  }, [message, page, pageSize]);
+  useEffect(() => {
+    void load();
+    return () => { requestIdRef.current += 1; };
+  }, [load]);
+
+  useEffect(() => {
+    let cancelled = false;
+    plansApi.list()
+      .then((result) => { if (!cancelled) setPlans(result); })
+      .catch((error) => {
+        if (!cancelled) message.error(getApiErrorMessage(error, '加载套餐列表失败'));
+      });
+    return () => { cancelled = true; };
+  }, [message]);
 
   const onSubmit = async (values: any) => {
+    setSaving(true);
     try {
       const payload = {
         code: values.code.trim(),
@@ -47,36 +70,42 @@ export default function RedemptionCodesPage() {
       if (editing) await redemptionCodesApi.update(editing.id, payload);
       else await redemptionCodesApi.create(payload);
       message.success(editing ? '兑换码已更新' : '兑换码已创建');
-      setModalOpen(false); form.resetFields(); setEditing(null); load();
-    } catch (e: any) {
-      message.error(e.response?.data?.error ?? '保存失败');
+      setModalOpen(false); form.resetFields(); setEditing(null); await load();
+    } catch (error) {
+      message.error(getApiErrorMessage(error, '保存失败'));
+    } finally {
+      setSaving(false);
     }
   };
 
   const onToggle = async (id: number) => {
     try {
-      await redemptionCodesApi.toggle(id); message.success('状态已切换'); load();
-    } catch (e: any) { message.error(e.response?.data?.error ?? '操作失败'); }
+      await redemptionCodesApi.toggle(id); message.success('状态已切换'); await load();
+    } catch (error) { message.error(getApiErrorMessage(error, '操作失败')); }
   };
 
   const onDelete = async (id: number) => {
     try {
-      await redemptionCodesApi.delete(id); message.success('已删除'); load();
-    } catch (e: any) { message.error(e.response?.data?.error ?? '删除失败'); }
+      await redemptionCodesApi.delete(id); message.success('已删除'); await load();
+    } catch (error) { message.error(getApiErrorMessage(error, '删除失败')); }
   };
 
-  const copy = (text: string) => {
-    navigator.clipboard.writeText(text);
-    message.success(`已复制: ${text}`);
+  const copy = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      message.success(`已复制: ${text}`);
+    } catch {
+      message.error('复制失败，请手动选择代码');
+    }
   };
 
-  const columns = [
+  const columns: TableColumnsType<RedemptionCode> = [
     {
       title: '代码', dataIndex: 'code', width: 220,
       render: (c: string) => (
         <Space>
           <code style={{ fontSize: 14, fontWeight: 600 }}>{c}</code>
-          <Button size="small" type="text" icon={<CopyOutlined />} onClick={() => copy(c)} />
+          <Button aria-label={`复制兑换码 ${c}`} size="small" type="text" icon={<CopyOutlined />} onClick={() => void copy(c)} />
         </Space>
       ),
     },
@@ -99,9 +128,9 @@ export default function RedemptionCodesPage() {
       title: '状态', dataIndex: 'enabled', width: 110,
       render: (e: boolean, r: RedemptionCode) => (
         <Popconfirm title={e ? '禁用该兑换码？' : '启用该兑换码？'} onConfirm={() => onToggle(r.id)}>
-          <Tag color={e ? 'green' : 'default'} style={{ cursor: 'pointer' }}>
-            {e ? '启用' : '停用'} (点击切换)
-          </Tag>
+          <Button type="text" size="small" aria-label={`${e ? '禁用' : '启用'}兑换码 ${r.code}`}>
+            <Tag color={e ? 'green' : 'default'}>{e ? '启用' : '停用'}</Tag>
+          </Button>
         </Popconfirm>
       ),
     },
@@ -122,7 +151,9 @@ export default function RedemptionCodesPage() {
               ...r, expiresAt: r.expiresAt ? dayjs(r.expiresAt) : null, planId: r.planId ?? undefined,
             }); setModalOpen(true);
           }}>编辑</Button>
-          <Button size="small" danger icon={<DeleteOutlined />} onClick={() => onDelete(r.id)}>删除</Button>
+          <Popconfirm title={`确定删除兑换码 ${r.code}？`} okText="删除" okButtonProps={{ danger: true }} onConfirm={() => onDelete(r.id)}>
+            <Button size="small" danger icon={<DeleteOutlined />}>删除</Button>
+          </Popconfirm>
         </Space>
       ),
     },
@@ -155,6 +186,7 @@ export default function RedemptionCodesPage() {
         open={modalOpen}
         onCancel={() => { setModalOpen(false); setEditing(null); }}
         onOk={() => form.submit()}
+        confirmLoading={saving}
         width={600}
       >
         <Form form={form} layout="vertical" onFinish={onSubmit}

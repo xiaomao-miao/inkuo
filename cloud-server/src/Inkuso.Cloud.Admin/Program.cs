@@ -1,7 +1,7 @@
 using System.Text;
+using System.Security.Claims;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.DataProtection;
-using Microsoft.AspNetCore.Http.Features;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Inkuso.Cloud.Admin.Auth;
@@ -11,20 +11,6 @@ using Inkuso.Cloud.Core.Data;
 using Inkuso.Cloud.Core.Security;
 
 var builder = WebApplication.CreateBuilder(args);
-
-// Raise request-body limits so admins can upload multi-hundred-MiB Tauri
-// installers via the Releases upload endpoint. Kestrel defaults to 30 MiB
-// which is too small for a NSIS-bundled Windows installer that ships the
-// WebView2 runtime.
-builder.WebHost.ConfigureKestrel(opts =>
-{
-    opts.Limits.MaxRequestBodySize = 2L * 1024 * 1024 * 1024; // 2 GiB
-});
-builder.Services.Configure<FormOptions>(opts =>
-{
-    opts.MultipartBodyLengthLimit = 2L * 1024 * 1024 * 1024; // 2 GiB
-    opts.ValueLengthLimit = int.MaxValue;
-});
 
 // Database
 var connectionString = builder.Configuration.GetConnectionString("Postgres")
@@ -38,9 +24,9 @@ builder.Services.AddDbContext<AppDbContext>(opt => opt.UseNpgsql(connectionStrin
 // attacker can brute-force offline.
 var jwtSecret = builder.Configuration["Jwt:Secret"]
     ?? throw new InvalidOperationException("Jwt:Secret is required");
-if (jwtSecret.Length < 32 || jwtSecret.StartsWith("change-me", StringComparison.OrdinalIgnoreCase))
+if (CredentialPolicy.IsWeakSecret(jwtSecret))
     throw new InvalidOperationException(
-        "Jwt:Secret must be at least 32 characters of random data and not a placeholder. "
+        "Jwt:Secret must be at least 32 UTF-8 bytes of random data and not a placeholder. "
       + "Generate one with `openssl rand -base64 48`.");
 var jwtIssuer = builder.Configuration["Jwt:Issuer"] ?? "inkuo-cloud";
 var adminAudience = builder.Configuration["Jwt:AdminAudience"] ?? "inkuo-admin";
@@ -82,6 +68,33 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidAudience = adminAudience,
             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret)),
             ClockSkew = TimeSpan.FromMinutes(1),
+        };
+        opt.Events = new JwtBearerEvents
+        {
+            OnTokenValidated = async context =>
+            {
+                var subject = context.Principal?.FindFirst(ClaimTypes.NameIdentifier)?.Value
+                              ?? context.Principal?.FindFirst("sub")?.Value;
+                var tokenRole = context.Principal?.FindFirst(ClaimTypes.Role)?.Value;
+                var tokenType = context.Principal?.FindFirst("type")?.Value;
+                if (!Guid.TryParse(subject, out var adminId) || tokenType != "admin")
+                {
+                    context.Fail("Invalid admin token claims");
+                    return;
+                }
+
+                // A signed token must not outlive account deletion, disabling,
+                // or a role change. Requiring a fresh login also prevents a
+                // demoted superadmin from retaining privileged claims for the
+                // remainder of the token's lifetime.
+                var db = context.HttpContext.RequestServices.GetRequiredService<AppDbContext>();
+                var current = await db.AdminUsers.AsNoTracking()
+                    .Where(user => user.Id == adminId && user.Enabled)
+                    .Select(user => new { user.Role })
+                    .FirstOrDefaultAsync(context.HttpContext.RequestAborted);
+                if (current is null || !string.Equals(current.Role, tokenRole, StringComparison.Ordinal))
+                    context.Fail("Admin account is no longer active with this role");
+            },
         };
     });
 builder.Services.AddAuthorization();
@@ -146,6 +159,24 @@ builder.Services.AddSwaggerGen(c =>
 
 var app = builder.Build();
 
+// Safe defaults for both SPAs and JSON endpoints. The admin UI uses inline
+// style attributes (Ant Design), hence `unsafe-inline` is limited to styles;
+// executable scripts remain same-origin only.
+app.Use(async (context, next) =>
+{
+    context.Response.Headers.XContentTypeOptions = "nosniff";
+    context.Response.Headers.XFrameOptions = "DENY";
+    context.Response.Headers["Referrer-Policy"] = "no-referrer";
+    if (!app.Environment.IsDevelopment())
+        context.Response.Headers.ContentSecurityPolicy =
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+          + "img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; "
+          + "object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'";
+    context.Response.Headers["Permissions-Policy"] =
+        "camera=(), microphone=(), geolocation=(), payment=()";
+    await next();
+});
+
 // Fail fast if the protector cannot be constructed; waiting until the first
 // Admin write would turn a deployment mistake into a runtime credential outage.
 _ = app.Services.GetRequiredService<ISecretProtector>();
@@ -171,13 +202,17 @@ using (var scope = app.Services.CreateScope())
     // service refuses to start with a known default credential in production.
     if (!db.AdminUsers.Any())
     {
-        var seedUsername = app.Configuration["Admin:SeedUsername"]
+        var seedUsername = app.Configuration["Admin:SeedUsername"]?.Trim()
             ?? throw new InvalidOperationException("Admin:SeedUsername is required when no admin user exists");
         var seedPassword = app.Configuration["Admin:SeedPassword"]
             ?? throw new InvalidOperationException("Admin:SeedPassword is required when no admin user exists");
-        if (seedPassword.Length < 12)
+        var seedPasswordError = CredentialPolicy.ValidatePassword(seedPassword);
+        var seedUsernameError = CredentialPolicy.ValidateAdminUsername(seedUsername);
+        if (seedUsernameError is not null)
+            throw new InvalidOperationException($"Admin:SeedUsername is invalid: {seedUsernameError}");
+        if (seedPasswordError is not null)
             throw new InvalidOperationException(
-                "Admin:SeedPassword must be at least 12 characters. "
+                $"Admin:SeedPassword is invalid: {seedPasswordError}. "
               + "Generate one with `openssl rand -base64 24`.");
         db.AdminUsers.Add(new Inkuso.Cloud.Core.Entities.AdminUser
         {

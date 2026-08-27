@@ -2,8 +2,9 @@ import { useState } from 'react';
 import { Form, Input, Button, Card, Typography, App, Alert } from 'antd';
 import { UserOutlined, LockOutlined } from '@ant-design/icons';
 import { authApi } from '../api/auth';
-import { tokenStore } from '../api/client';
-import { AdminUser } from '../api/auth';
+import { getApiErrorMessage, tokenStore } from '../api/client';
+import type { AdminUser } from '../api/auth';
+import axios from 'axios';
 
 const { Title, Text } = Typography;
 
@@ -24,11 +25,11 @@ export default function LoginPage({ onLogin }: Props) {
       tokenStore.set(result.accessToken);
       message.success('登录成功');
       onLogin(result.admin);
-    } catch (err: any) {
-      if (err.response?.status === 401) {
+    } catch (err: unknown) {
+      if (axios.isAxiosError(err) && err.response?.status === 401) {
         setError('用户名或密码错误');
       } else {
-        setError(err.response?.data?.error ?? '登录失败，请稍后重试');
+        setError(getApiErrorMessage(err, '登录失败，请稍后重试'));
       }
     } finally {
       setLoading(false);
@@ -53,12 +54,12 @@ export default function LoginPage({ onLogin }: Props) {
 
         {error && <Alert type="error" message={error} style={{ marginBottom: 16 }} />}
 
-        <Form layout="vertical" onFinish={onFinish} autoComplete="off">
+        <Form layout="vertical" onFinish={onFinish} autoComplete="on">
           <Form.Item name="username" rules={[{ required: true, message: '请输入用户名' }]}>
-            <Input prefix={<UserOutlined />} placeholder="用户名" size="large" />
+            <Input prefix={<UserOutlined />} placeholder="用户名" size="large" autoComplete="username" />
           </Form.Item>
           <Form.Item name="password" rules={[{ required: true, message: '请输入密码' }]}>
-            <Input.Password prefix={<LockOutlined />} placeholder="密码" size="large" />
+            <Input.Password prefix={<LockOutlined />} placeholder="密码" size="large" autoComplete="current-password" />
           </Form.Item>
           <Form.Item>
             <Button type="primary" htmlType="submit" loading={loading} size="large" block>

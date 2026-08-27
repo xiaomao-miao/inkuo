@@ -32,7 +32,9 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::net::IpAddr;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use super::super::super::settings_state::{
     get_image_gen_settings, ImageGenProviderConfig, ImageGenSettings,
@@ -43,13 +45,14 @@ use super::{validate_workspace_path, ToolDefinition, ToolError, ToolParameters};
 /// source. Generators rarely produce images this large, but we cap
 /// defensive against a buggy model.
 const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
+const MAX_IMAGE_DIMENSION: u32 = 4096;
+const MAX_PROMPT_CHARS: usize = 16_000;
 
 /// Structured outcome returned by `GenerateImageTool::execute`. Mirrors
 /// `CreateSvgOutcome` so the registry / frontend can treat the two
-/// consistently. The `asset_id` is filled in whenever we stash the image
-/// bytes in the asset registry (we currently don't — see TODO note in
-/// `execute`) — but the field is reserved for future symmetry with
-/// `read_image` so the chat panel can render the same chip UI.
+/// consistently. Generated files already have a durable workspace path, so
+/// downstream Office tools can embed them without copying their bytes into
+/// the transient asset registry.
 pub struct GenerateImageOutcome {
     pub output: String,
     pub file_path: String,
@@ -75,9 +78,8 @@ struct GenerateImageArgs {
     /// Optional height in pixels. Falls back to `ImageGenSettings.default_height`.
     #[serde(default)]
     height: Option<u32>,
-    /// Optional number of images to generate (1..=4). Today we only
-    /// persist the first one — multi-image output is reserved for a
-    /// future variant.
+    /// Retained for compatibility with older tool calls. A single output path
+    /// can only represent one image, so values other than one are rejected.
     #[serde(default)]
     num_images: Option<u32>,
     /// Optional seed for reproducible results.
@@ -129,7 +131,6 @@ impl GenerateImageTool {
                     ("output_path", "string", Some("Absolute workspace path to save the image to. Must end with .png, .jpg, .jpeg, or .webp.")),
                     ("width", "integer", Some("Optional image width in pixels. Default: image_gen.default_width (1024).")),
                     ("height", "integer", Some("Optional image height in pixels. Default: image_gen.default_height (1024).")),
-                    ("num_images", "integer", Some("Optional number of images to request (1-4). Default: 1. Currently only the first image is saved.")),
                     ("seed", "integer", Some("Optional seed for reproducible results.")),
                     ("model", "string", Some("Optional model override. Either a bare model id (routed via Settings → Image Generation) or `<provider_id>/<model>` to pin a specific backend.")),
                     ("negative_prompt", "string", Some("Optional negative prompt (things to avoid). Forwarded to backends that understand it.")),
@@ -143,12 +144,28 @@ impl GenerateImageTool {
         arguments: Value,
         workspace: Option<String>,
     ) -> Result<GenerateImageOutcome, ToolError> {
-        let args: GenerateImageArgs = serde_json::from_value(arguments).map_err(|e| {
+        let mut args: GenerateImageArgs = serde_json::from_value(arguments).map_err(|e| {
             ToolError::InvalidArguments(
                 "generate_image".to_string(),
                 format!("Invalid parameters: {}", e),
             )
         })?;
+
+        args.prompt = args.prompt.trim().to_string();
+        let prompt_chars = args.prompt.chars().count();
+        if prompt_chars == 0 || prompt_chars > MAX_PROMPT_CHARS {
+            return Err(ToolError::InvalidArguments(
+                "generate_image".to_string(),
+                format!("prompt must contain 1 to {} characters", MAX_PROMPT_CHARS),
+            ));
+        }
+        if args.num_images.is_some_and(|count| count != 1) {
+            return Err(ToolError::InvalidArguments(
+                "generate_image".to_string(),
+                "generate_image writes one output path and therefore supports exactly one image"
+                    .to_string(),
+            ));
+        }
 
         // ── 1. Path validation ────────────────────────────────────────────
         let output_path = PathBuf::from(&args.output_path);
@@ -205,13 +222,19 @@ impl GenerateImageTool {
             })?;
 
         // Defaults fall through args → settings → 1024x1024 baked-in.
-        let width = args
-            .width
-            .unwrap_or(settings.default_width.max(1));
-        let height = args
-            .height
-            .unwrap_or(settings.default_height.max(1));
-        let _num_images = args.num_images.unwrap_or(1).clamp(1, 4);
+        let width = args.width.unwrap_or(settings.default_width);
+        let height = args.height.unwrap_or(settings.default_height);
+        if !(1..=MAX_IMAGE_DIMENSION).contains(&width)
+            || !(1..=MAX_IMAGE_DIMENSION).contains(&height)
+        {
+            return Err(ToolError::InvalidArguments(
+                "generate_image".to_string(),
+                format!(
+                    "width and height must be between 1 and {} pixels",
+                    MAX_IMAGE_DIMENSION
+                ),
+            ));
+        }
 
         // ── 3. Generate ────────────────────────────────────────────────────
         let (image_data, actual_model) = match provider.provider_type.as_str() {
@@ -262,7 +285,10 @@ impl GenerateImageTool {
             ));
         }
 
-        let primary_image = &image_data[0];
+        let primary_image = image_data
+            .into_iter()
+            .next()
+            .expect("checked non-empty image list");
         let byte_size = primary_image.len();
 
         if byte_size as u64 > MAX_IMAGE_BYTES {
@@ -272,8 +298,32 @@ impl GenerateImageTool {
             )));
         }
 
+        let encoded_extension = detect_encoded_image_extension(&primary_image).ok_or_else(|| {
+            ToolError::ExecutionError(
+                "image provider returned bytes in an unsupported or invalid image format"
+                    .to_string(),
+            )
+        })?;
+        let extension_matches = extension == encoded_extension
+            || (extension == "jpeg" && encoded_extension == "jpg");
+        if !extension_matches {
+            return Err(ToolError::ExecutionError(format!(
+                "image provider returned {} data, but output_path ends with .{}; use a matching extension",
+                encoded_extension.to_uppercase(),
+                extension
+            )));
+        }
+
         // ── 4. Write to workspace ──────────────────────────────────────────
-        tokio::fs::write(&output_path, primary_image).await.map_err(|e| {
+        // Publish through a sibling temporary file. A crash or full disk must
+        // not truncate an existing image that the document already embeds.
+        let write_path = output_path.clone();
+        tokio::task::spawn_blocking(move || {
+            crate::fs_utils::atomic_write(&write_path, &primary_image)
+        })
+        .await
+        .map_err(|e| ToolError::IoError(format!("Image writer task failed: {}", e)))?
+        .map_err(|e| {
             ToolError::IoError(format!(
                 "Failed to write image to {}: {}",
                 output_path.display(),
@@ -513,6 +563,168 @@ impl GenerateImageTool {
     }
 }
 
+fn detect_encoded_image_extension(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("png")
+    } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        Some("jpg")
+    } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("webp")
+    } else {
+        None
+    }
+}
+
+fn validate_generated_image_url(raw: &str) -> Result<reqwest::Url, ToolError> {
+    let url = reqwest::Url::parse(raw).map_err(|_| {
+        ToolError::ExecutionError("image provider returned an invalid download URL".to_string())
+    })?;
+    if url.scheme() != "https" {
+        return Err(ToolError::ExecutionError(
+            "image provider download URL must use HTTPS".to_string(),
+        ));
+    }
+    let host = url.host_str().ok_or_else(|| {
+        ToolError::ExecutionError("image provider download URL has no host".to_string())
+    })?;
+    if host.eq_ignore_ascii_case("localhost") || host.to_ascii_lowercase().ends_with(".localhost") {
+        return Err(ToolError::ExecutionError(
+            "image provider download URL cannot target localhost".to_string(),
+        ));
+    }
+    let ip_literal = host
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'))
+        .unwrap_or(host);
+    if ip_literal.parse::<IpAddr>().is_ok_and(is_non_public_ip) {
+        return Err(ToolError::ExecutionError(
+            "image provider download URL cannot target a private or reserved address".to_string(),
+        ));
+    }
+    Ok(url)
+}
+
+fn is_non_public_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            let octets = ip.octets();
+            ip.is_private()
+                || ip.is_loopback()
+                || ip.is_link_local()
+                || ip.is_broadcast()
+                || ip.is_documentation()
+                || ip.is_unspecified()
+                || ip.is_multicast()
+                || octets[0] == 0
+                || (octets[0] == 100 && (64..=127).contains(&octets[1]))
+                || (octets[0] == 198 && (18..=19).contains(&octets[1]))
+                || octets[0] >= 240
+        }
+        IpAddr::V6(ip) => {
+            ip.is_loopback()
+                || ip.is_unspecified()
+                || ip.is_multicast()
+                || ip.is_unique_local()
+                || ip.is_unicast_link_local()
+                || ip.segments()[..2] == [0x2001, 0x0db8]
+                || ip.to_ipv4_mapped().is_some_and(|mapped| {
+                    is_non_public_ip(IpAddr::V4(mapped))
+                })
+        }
+    }
+}
+
+async fn download_generated_image(raw_url: &str, provider_name: &str) -> Result<Vec<u8>, ToolError> {
+    let url = validate_generated_image_url(raw_url)?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(60))
+        // Never follow an otherwise-public URL to a local metadata service.
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| ToolError::ExecutionError(format!("Failed to initialize image downloader: {}", e)))?;
+    let mut response = client.get(url).send().await.map_err(|e| {
+        ToolError::ExecutionError(format!(
+            "Failed to download generated image from {}: {}",
+            provider_name, e
+        ))
+    })?;
+    if !response.status().is_success() {
+        return Err(ToolError::ExecutionError(format!(
+            "{} image download failed with HTTP {}",
+            provider_name,
+            response.status()
+        )));
+    }
+    if response.content_length().is_some_and(|length| length > MAX_IMAGE_BYTES) {
+        return Err(ToolError::ExecutionError(format!(
+            "{} image download exceeds the {} byte limit",
+            provider_name, MAX_IMAGE_BYTES
+        )));
+    }
+
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| {
+        ToolError::ExecutionError(format!(
+            "Failed to read generated image from {}: {}",
+            provider_name, e
+        ))
+    })? {
+        if bytes.len().saturating_add(chunk.len()) > MAX_IMAGE_BYTES as usize {
+            return Err(ToolError::ExecutionError(format!(
+                "{} image download exceeds the {} byte limit",
+                provider_name, MAX_IMAGE_BYTES
+            )));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
+}
+
+#[cfg(test)]
+mod encoded_image_tests {
+    use super::{detect_encoded_image_extension, validate_generated_image_url};
+
+    #[test]
+    fn recognises_supported_image_signatures() {
+        assert_eq!(
+            detect_encoded_image_extension(b"\x89PNG\r\n\x1a\nrest"),
+            Some("png")
+        );
+        assert_eq!(
+            detect_encoded_image_extension(&[0xff, 0xd8, 0xff, 0xe0]),
+            Some("jpg")
+        );
+        assert_eq!(
+            detect_encoded_image_extension(b"RIFF\x04\x00\x00\x00WEBP"),
+            Some("webp")
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_or_truncated_payloads() {
+        assert_eq!(detect_encoded_image_extension(b"not-an-image"), None);
+        assert_eq!(detect_encoded_image_extension(b"RIFF"), None);
+    }
+
+    #[test]
+    fn generated_image_urls_must_be_public_https_targets() {
+        assert!(validate_generated_image_url("https://cdn.example.com/image.png").is_ok());
+        for blocked in [
+            "http://cdn.example.com/image.png",
+            "https://localhost/image.png",
+            "https://127.0.0.1/image.png",
+            "https://10.0.0.5/image.png",
+            "https://[::1]/image.png",
+            "https://[::ffff:127.0.0.1]/image.png",
+        ] {
+            assert!(
+                validate_generated_image_url(blocked).is_err(),
+                "accepted {blocked}"
+            );
+        }
+    }
+}
+
 /// Pick the provider + model id that should serve this call. The LLM can
 /// either pin a backend with `<provider_id>/<model>` or pass a bare
 /// model id and let `settings.routing` decide.
@@ -626,8 +838,6 @@ impl Serialize for GenerateImageOutcome {
 struct TencentRequest<'a> {
     host: &'a str,
     service: &'a str,
-    action: &'a str,
-    region: &'a str,
     payload: &'a str,
     /// Unix timestamp (seconds) the signature is anchored to. Caller
     /// chooses it so test code can pin a deterministic value.
@@ -681,10 +891,9 @@ fn tencent_canonical_request(
 /// Compute the lowercase hex signature for a Tencent Cloud API request.
 ///
 /// Returns the full `Authorization` header value ready to attach to the
-/// outbound HTTP request. Exposed at `pub` level so the test-connection
-/// path in `ai_config.rs` can re-use the same implementation instead of
-/// duplicating the algorithm.
-pub fn tencent_authorization(
+/// outbound HTTP request. The public flat-field wrapper below is used by the
+/// settings test-connection path.
+fn tencent_authorization(
     secret_id: &str,
     secret_key: &str,
     req: &TencentRequest,
@@ -728,8 +937,8 @@ pub fn sign_tencent_request(
     secret_key: &str,
     host: &str,
     service: &str,
-    action: &str,
-    region: &str,
+    _action: &str,
+    _region: &str,
     payload: &str,
     timestamp: i64,
     date: &str,
@@ -737,8 +946,6 @@ pub fn sign_tencent_request(
     let req = TencentRequest {
         host,
         service,
-        action,
-        region,
         payload,
         timestamp,
         date,
@@ -777,8 +984,6 @@ async fn send_tencent_request(
     let sign_req = TencentRequest {
         host,
         service: "aiart",
-        action,
-        region,
         payload,
         timestamp: now,
         date: &date,
@@ -869,19 +1074,9 @@ async fn generate_with_tencent(
             ))
         })?;
 
-    let image_bytes = reqwest::get(result_image).await.map_err(|e| {
-        ToolError::ExecutionError(format!(
-            "Failed to download generated image from Tencent: {}",
-            e
-        ))
-    })?.bytes().await.map_err(|e| {
-        ToolError::ExecutionError(format!(
-            "Failed to read Tencent image bytes: {}",
-            e
-        ))
-    })?;
+    let image_bytes = download_generated_image(result_image, "Tencent Cloud").await?;
 
-    Ok((vec![image_bytes.to_vec()], model.to_string()))
+    Ok((vec![image_bytes], model.to_string()))
 }
 
 /// Tencent Token Hub (tokenhub.tencentmaas.com). OpenAI-compatible wire
@@ -975,20 +1170,7 @@ async fn generate_with_tencent_token(
             ))
         })?;
 
-    let image_bytes = reqwest::get(image_url).await.map_err(|e| {
-        ToolError::ExecutionError(format!(
-            "Failed to download generated image from Tencent Token Hub: {}",
-            e
-        ))
-    })?
-    .bytes()
-    .await
-    .map_err(|e| {
-        ToolError::ExecutionError(format!(
-            "Failed to read Tencent Token Hub image bytes: {}",
-            e
-        ))
-    })?;
+    let image_bytes = download_generated_image(image_url, "Tencent Token Hub").await?;
 
-    Ok((vec![image_bytes.to_vec()], model.to_string()))
+    Ok((vec![image_bytes], model.to_string()))
 }

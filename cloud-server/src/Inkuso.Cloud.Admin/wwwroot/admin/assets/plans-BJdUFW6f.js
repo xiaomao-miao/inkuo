@@ -1,0 +1,1 @@
+import{c as p}from"./index-DEw4TEaB.js";const s={list:()=>p.get("/api/plans/").then(a=>a.data),create:a=>p.post("/api/plans/",a).then(t=>t.data),update:(a,t)=>p.put(`/api/plans/${a}`,t).then(e=>e.data),delete:a=>p.delete(`/api/plans/${a}`).then(t=>t.data)};export{s as p};

@@ -1,11 +1,13 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Table, Button, Input, Space, Tag, Drawer, Descriptions, App, Modal, Form, InputNumber,
-  Statistic, Row, Col, Card, List, Empty, Tooltip,
+  Statistic, Row, Col, Card, List, Empty, Tooltip, Popconfirm, type TableColumnsType,
+  type TableProps,
 } from 'antd';
 import { SearchOutlined, ReloadOutlined, DollarOutlined, StopOutlined, DeleteOutlined, EyeOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { usersApi, UserListItem } from '../api/users';
+import { usersApi, type UserDetailResponse, type UserListItem } from '../api/users';
+import { getApiErrorMessage } from '../api/client';
 import { MAX_ADJUSTMENT_REASON_LENGTH, MAX_SINGLE_CREDIT_POINTS } from '../billingLimits';
 
 export default function UsersPage() {
@@ -14,51 +16,72 @@ export default function UsersPage() {
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
-  const [search, setSearch] = useState('');
+  const [searchDraft, setSearchDraft] = useState('');
+  const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('createdAt');
   const [sortDir, setSortDir] = useState('desc');
-  const [detail, setDetail] = useState<any>(null);
+  const [detail, setDetail] = useState<UserDetailResponse | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [adjustOpen, setAdjustOpen] = useState(false);
+  const [adjustSaving, setAdjustSaving] = useState(false);
   const [adjustTarget, setAdjustTarget] = useState<UserListItem | null>(null);
   const [adjustForm] = Form.useForm();
   const { message, modal } = App.useApp();
+  const requestIdRef = useRef(0);
+  const detailRequestIdRef = useRef(0);
 
-  const load = async () => {
+  const load = useCallback(async () => {
+    const requestId = ++requestIdRef.current;
     setLoading(true);
     try {
-      const result = await usersApi.list({ page, pageSize, search, sortBy, sortDir });
+      const result = await usersApi.list({ page, pageSize, search: searchQuery, sortBy, sortDir });
+      if (requestId !== requestIdRef.current) return;
       setData(result.items);
       setTotal(result.total);
-    } catch {
-      message.error('加载用户列表失败');
+    } catch (error) {
+      if (requestId === requestIdRef.current) {
+        message.error(getApiErrorMessage(error, '加载用户列表失败'));
+      }
     } finally {
-      setLoading(false);
+      if (requestId === requestIdRef.current) setLoading(false);
     }
-  };
+  }, [message, page, pageSize, searchQuery, sortBy, sortDir]);
 
-  useEffect(() => { load(); }, [page, pageSize, sortBy, sortDir]);
+  useEffect(() => {
+    void load();
+    return () => { requestIdRef.current += 1; };
+  }, [load]);
 
   const openDetail = async (id: string) => {
+    const requestId = ++detailRequestIdRef.current;
+    setDetail(null);
     setDetailLoading(true);
     try {
       const d = await usersApi.detail(id);
+      if (requestId !== detailRequestIdRef.current) return;
       setDetail(d);
+    } catch (error) {
+      if (requestId === detailRequestIdRef.current) {
+        message.error(getApiErrorMessage(error, '加载用户详情失败'));
+      }
     } finally {
-      setDetailLoading(false);
+      if (requestId === detailRequestIdRef.current) setDetailLoading(false);
     }
   };
 
   const onAdjust = async (values: { deltaPoints: number; reason: string }) => {
     if (!adjustTarget) return;
+    setAdjustSaving(true);
     try {
       await usersApi.adjustBalance(adjustTarget.id, values.deltaPoints, values.reason.trim());
       message.success('余额已调整');
       setAdjustOpen(false);
       adjustForm.resetFields();
-      load();
-    } catch (e: any) {
-      message.error(e.response?.data?.error ?? '调整失败');
+      await load();
+    } catch (error) {
+      message.error(getApiErrorMessage(error, '调整失败'));
+    } finally {
+      setAdjustSaving(false);
     }
   };
 
@@ -81,15 +104,16 @@ export default function UsersPage() {
         try {
           await usersApi.delete(user.id);
           message.success('用户已删除');
-          load();
-        } catch (e: any) {
-          message.error(e.response?.data?.error ?? '删除失败');
+          if (data.length === 1 && page > 1) setPage(page - 1);
+          else await load();
+        } catch (error) {
+          message.error(getApiErrorMessage(error, '删除失败'));
         }
       },
     });
   };
 
-  const columns = [
+  const columns: TableColumnsType<UserListItem> = [
     {
       title: '邮箱', dataIndex: 'email', key: 'email',
       sorter: true, sortOrder: sortBy === 'email' ? (sortDir === 'asc' ? 'ascend' : 'descend') : null,
@@ -131,9 +155,11 @@ export default function UsersPage() {
       title: '操作', key: 'action', width: 240, fixed: 'right' as const,
       render: (_: any, r: UserListItem) => (
         <Space size="small">
-          <Button size="small" icon={<EyeOutlined />} onClick={() => openDetail(r.id)}>详情</Button>
+          <Button size="small" icon={<EyeOutlined />} onClick={() => void openDetail(r.id)}>详情</Button>
           <Button size="small" icon={<DollarOutlined />} onClick={() => { setAdjustTarget(r); setAdjustOpen(true); }}>调账</Button>
-          <Button size="small" icon={<StopOutlined />} danger onClick={() => onRevoke(r.id)}>吊销</Button>
+          <Popconfirm title={`吊销 ${r.email} 的全部登录会话？`} onConfirm={() => onRevoke(r.id)}>
+            <Button size="small" icon={<StopOutlined />} danger>吊销</Button>
+          </Popconfirm>
           <Button size="small" icon={<DeleteOutlined />} danger onClick={() => onDelete(r)}>删除</Button>
         </Space>
       ),
@@ -143,14 +169,17 @@ export default function UsersPage() {
   return (
     <div>
       <Space style={{ marginBottom: 16 }}>
-        <Input
+        <Input.Search
           placeholder="搜索邮箱" prefix={<SearchOutlined />}
-          value={search} onChange={e => setSearch(e.target.value)}
-          onPressEnter={() => { setPage(1); load(); }}
+          value={searchDraft} onChange={e => setSearchDraft(e.target.value)}
+          onSearch={(value) => {
+            setSearchQuery(value.trim().toLowerCase());
+            setPage(1);
+          }}
           style={{ width: 280 }}
           allowClear
         />
-        <Button icon={<ReloadOutlined />} onClick={() => { setPage(1); load(); }}>刷新</Button>
+        <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void load()}>刷新</Button>
       </Space>
 
       <Table
@@ -164,19 +193,25 @@ export default function UsersPage() {
           showSizeChanger: true, showTotal: (t) => `共 ${t} 条`,
           onChange: (p, ps) => { setPage(p); setPageSize(ps); },
         }}
-        onChange={(_, __, sorter: any) => {
-          if (sorter.columnKey) {
-            setSortBy(sorter.columnKey);
-            setSortDir(sorter.order === 'ascend' ? 'asc' : 'desc');
+        onChange={((_, __, sorter) => {
+          const activeSorter = Array.isArray(sorter) ? sorter[0] : sorter;
+          if (activeSorter?.columnKey && activeSorter.order) {
+            setSortBy(String(activeSorter.columnKey));
+            setSortDir(activeSorter.order === 'ascend' ? 'asc' : 'desc');
+            setPage(1);
           }
-        }}
+        }) satisfies NonNullable<TableProps<UserListItem>['onChange']>}
       />
 
       <Drawer
         title={detail ? `用户详情 - ${detail.user.email}` : '用户详情'}
         width={720}
         open={!!detail || detailLoading}
-        onClose={() => setDetail(null)}
+        onClose={() => {
+          detailRequestIdRef.current += 1;
+          setDetailLoading(false);
+          setDetail(null);
+        }}
         loading={detailLoading}
       >
         {detail && (
@@ -212,7 +247,7 @@ export default function UsersPage() {
 
             <Descriptions title="订阅历史" bordered column={2} size="small" style={{ marginTop: 16 }}>
               {detail.subscriptions.length === 0 && <Descriptions.Item>暂无订阅</Descriptions.Item>}
-              {detail.subscriptions.map((s: any) => (
+              {detail.subscriptions.map((s) => (
                 <Descriptions.Item key={s.id} label={s.planName} span={2}>
                   {dayjs(s.startedAt).format('YYYY-MM-DD')} 至 {dayjs(s.expiresAt).format('YYYY-MM-DD')} · <Tag color={s.status === 'active' ? 'green' : 'default'}>{s.status}</Tag>
                 </Descriptions.Item>
@@ -226,7 +261,7 @@ export default function UsersPage() {
               <List
                 size="small"
                 dataSource={detail.recentUsage}
-                renderItem={(u: any) => (
+                renderItem={(u) => (
                   <List.Item>
                     <span><Tag>{u.modelName}</Tag></span>
                     <span>{u.promptTokens + u.completionTokens} tokens</span>
@@ -243,8 +278,9 @@ export default function UsersPage() {
       <Modal
         title={adjustTarget ? `调整余额 - ${adjustTarget.email}` : ''}
         open={adjustOpen}
-        onCancel={() => setAdjustOpen(false)}
+        onCancel={() => { setAdjustOpen(false); setAdjustTarget(null); adjustForm.resetFields(); }}
         onOk={() => adjustForm.submit()}
+        confirmLoading={adjustSaving}
       >
         <Form form={adjustForm} layout="vertical" onFinish={onAdjust} initialValues={{ deltaPoints: 0 }}>
           <Form.Item name="deltaPoints" label="调整点数（可负数，1000 点 = ¥1）" rules={[

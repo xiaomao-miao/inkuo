@@ -27,8 +27,8 @@
 //! "tool-call round-trip → follow-up write" window even on slow
 //! models, while still bounding the worst-case memory cost.
 
+use parking_lot::{Mutex, MutexGuard};
 use std::collections::HashMap;
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 /// One binary asset held in the registry.
@@ -78,16 +78,13 @@ fn registry() -> &'static Mutex<HashMap<String, AssetEntry>> {
 /// modules concurrently, including the multimodal bridge tests in another
 /// module, so local `clear()` calls alone are not sufficient isolation.
 #[cfg(test)]
-pub(crate) fn test_registry_guard() -> std::sync::MutexGuard<'static, ()> {
-    TEST_REGISTRY_LOCK
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+pub(crate) fn test_registry_guard() -> MutexGuard<'static, ()> {
+    TEST_REGISTRY_LOCK.get_or_init(|| Mutex::new(())).lock()
 }
 
 /// Insert an asset under `id`. Returns the same id so callers can chain.
 pub fn insert(id: String, entry: AssetEntry) -> String {
-    let mut guard = registry().lock().expect("asset registry poisoned");
+    let mut guard = registry().lock();
     guard.insert(id.clone(), entry);
     evict_expired_and_over_budget(&mut guard, Some(&id));
     id
@@ -97,7 +94,7 @@ pub fn insert(id: String, entry: AssetEntry) -> String {
 /// older than `ASSET_TTL` on the way through. Returns `None` if the id
 /// is unknown or expired.
 fn lookup(id: &str) -> Option<AssetEntry> {
-    let mut guard = registry().lock().expect("asset registry poisoned");
+    let mut guard = registry().lock();
     evict_expired_and_over_budget(&mut guard, None);
     guard.get(id).cloned()
 }
@@ -117,25 +114,25 @@ pub fn lookup_for_workspace(id: &str, workspace: Option<&str>) -> Option<AssetEn
 /// embedding the asset (so we can free memory instead of waiting for TTL).
 /// Returns `None` if the id is unknown or already evicted.
 pub fn take(id: &str) -> Option<AssetEntry> {
-    let mut guard = registry().lock().expect("asset registry poisoned");
+    let mut guard = registry().lock();
     guard.remove(id)
 }
 
 /// Drop every entry. Useful for tests and for "reset workspace" hooks.
 pub fn clear() {
-    let mut guard = registry().lock().expect("asset registry poisoned");
+    let mut guard = registry().lock();
     guard.clear();
 }
 
 /// Current number of live entries (mostly for tests + diagnostics).
 pub fn len() -> usize {
-    let guard = registry().lock().expect("asset registry poisoned");
+    let guard = registry().lock();
     guard.len()
 }
 
 /// Current decoded byte footprint (diagnostics + tests).
 pub fn byte_len() -> usize {
-    let guard = registry().lock().expect("asset registry poisoned");
+    let guard = registry().lock();
     guard.values().map(|entry| entry.data.len()).sum()
 }
 

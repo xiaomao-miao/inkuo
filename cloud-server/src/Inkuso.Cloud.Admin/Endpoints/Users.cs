@@ -32,7 +32,10 @@ public static class AdminUsersEndpoints
 
             var query = db.Users.AsQueryable();
             if (!string.IsNullOrWhiteSpace(search))
-                query = query.Where(u => u.Email.Contains(search));
+            {
+                var normalizedSearch = search.Trim().ToLowerInvariant();
+                query = query.Where(u => u.Email.Contains(normalizedSearch));
+            }
 
             query = (sortBy?.ToLowerInvariant(), sortDir?.ToLowerInvariant()) switch
             {
@@ -80,6 +83,12 @@ public static class AdminUsersEndpoints
                     Cost = g.Sum(u => u.CostPoints),
                 })
                 .ToDictionaryAsync(g => g.UserId, g => new { g.Tokens, g.Cost });
+            var searchUsage = await db.WebSearchUsageRecords
+                .Where(u => ids.Contains(u.UserId)
+                            && (u.BillingStatus == "settled" || u.BillingStatus == "released"))
+                .GroupBy(u => u.UserId)
+                .Select(g => new { UserId = g.Key, Cost = g.Sum(u => u.CostPoints) })
+                .ToDictionaryAsync(g => g.UserId, g => g.Cost);
 
             var items = rows.Select(r => new UserListItem(
                 r.Id, r.Email, r.BalancePoints, r.ReservedPoints, r.DebtPoints, r.IsSuspended,
@@ -87,7 +96,8 @@ public static class AdminUsersEndpoints
                 subs.TryGetValue(r.Id, out var s) ? s.PlanName : null,
                 subs.TryGetValue(r.Id, out var s2) ? s2.ExpiresAt : null,
                 usage.TryGetValue(r.Id, out var u) ? u.Tokens : 0L,
-                usage.TryGetValue(r.Id, out var u2) ? u2.Cost : 0L,
+                (usage.TryGetValue(r.Id, out var u2) ? u2.Cost : 0L)
+                    + (searchUsage.TryGetValue(r.Id, out var searchCost) ? searchCost : 0L),
                 subs.ContainsKey(r.Id) ? 1 : 0)).ToList();
 
             return Results.Ok(new { total, page, pageSize, items });
@@ -104,13 +114,24 @@ public static class AdminUsersEndpoints
                 .OrderByDescending(s => s.StartedAt)
                 .ToListAsync();
 
-            var usage = await db.UsageRecords
-                .Include(u => u.ModelConfig)
+            var usageQuery = db.UsageRecords
                 .Where(u => u.UserId == id
                             && (u.BillingStatus == "settled"
                                 || u.BillingStatus == "released"
                                 || u.BillingStatus == "debt"
-                                || u.BillingStatus == "estimated"))
+                                || u.BillingStatus == "estimated"));
+            var chatRecordCount = await usageQuery.CountAsync();
+            var totalTokens = await usageQuery.SumAsync(
+                u => (long?)u.PromptTokens + (long?)u.CompletionTokens) ?? 0L;
+            var chatCostPoints = await usageQuery.SumAsync(u => (long?)u.CostPoints) ?? 0L;
+            var searchUsageQuery = db.WebSearchUsageRecords
+                .Where(u => u.UserId == id
+                            && (u.BillingStatus == "settled" || u.BillingStatus == "released"));
+            var searchRecordCount = await searchUsageQuery.CountAsync();
+            var searchCostPoints = await searchUsageQuery.SumAsync(u => (long?)u.CostPoints) ?? 0L;
+
+            var usage = await usageQuery
+                .Include(u => u.ModelConfig)
                 .OrderByDescending(u => u.RecordedAt)
                 .Take(100)
                 .ToListAsync();
@@ -137,9 +158,9 @@ public static class AdminUsersEndpoints
                 }),
                 totalUsage = new
                 {
-                    tokens = usage.Sum(u => u.PromptTokens + u.CompletionTokens),
-                    costPoints = usage.Sum(u => u.CostPoints),
-                    recordCount = await db.UsageRecords.CountAsync(r => r.UserId == id),
+                    tokens = totalTokens,
+                    costPoints = checked(chatCostPoints + searchCostPoints),
+                    recordCount = checked(chatRecordCount + searchRecordCount),
                 },
                 recentUsage = usage.Select(u => new
                 {

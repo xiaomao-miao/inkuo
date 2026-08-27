@@ -171,5 +171,5 @@
   padding: 1px 4px;
   background-color: var(--bg-secondary);
   border-radius: 3px;
-  color: var(--fg-tertiary);
+  color: var(--fg-muted);
 }

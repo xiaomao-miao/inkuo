@@ -1,17 +1,18 @@
-// SheetJS (xlsx) export path: FortuneSheet → .xlsx buffer.
+// Browser xlsx export path: FortuneSheet → .xlsx buffer.
 //
 // This is the primary save path. Instead of going through Rust's
 // structured xlsx writer (which has a fragile Rust→FortuneSheet→Rust
 // conversion layer), we convert directly in the browser using
-// SheetJS, then post-process the resulting .xlsx zip to swap in a
-// custom `xl/styles.xml` so we keep cell-level formatting intact.
+// a sparse worksheet model, then write the OOXML package directly so we keep
+// cell-level formatting intact without depending on the vulnerable, legacy
+// SheetJS 0.18 package.
 //
 // Pieces of this pipeline:
-//   1. `fortuneCellToSheetJS`           — single-cell conversion
-//   2. `fortuneSheetToSheetJSWorksheet` — sheet-level conversion
-//   3. `fortuneSheetsToSheetJSBuffer`   — top-level entry point
+//   1. `fortuneCellToWorksheetCell` — single-cell conversion
+//   2. `fortuneSheetToWorksheet`    — sheet-level conversion
+//   3. `fortuneSheetsToXlsxBuffer`  — top-level entry point
 //
-// SheetJS cell object reference:
+// Sparse worksheet cell shape (compatible with our sheetXml writer):
 //   { v: value,     // computed result
 //     f: formula,   // formula text (without leading '=')
 //     t: type,      // 's'=string, 'n'=number, 'b'=boolean, 'e'=error
@@ -36,21 +37,41 @@ import {
   buildWorkbookXml,
   buildWorksheetXml,
 } from './sheetXml';
-import { composeStyleKey, escapeXml, parseStyleKey } from './stylesheetXml';
+import { buildStylesXml, composeStyleKey, escapeXml, parseStyleKey } from './stylesheetXml';
 
-// Lazily imported to avoid loading SheetJS until the first save.
-// The `xlsx` package (SheetJS 0.18.x) is a peer dep already present
-// in the project.
-type SheetJSLazy = typeof import('xlsx');
-
-let _XLSX: SheetJSLazy | null = null;
-async function getXLSX(): Promise<SheetJSLazy> {
-  if (!_XLSX) {
-    const m = await import('xlsx');
-    // Handle both CJS `module.exports` and ESM `export default` patterns.
-    _XLSX = (m.default ?? m) as SheetJSLazy;
+/** Convert zero-based row/column coordinates to an Excel address. */
+export function encodeCellAddress(row: number, column: number): string {
+  if (!Number.isInteger(row) || row < 0 || !Number.isInteger(column) || column < 0) {
+    throw new RangeError('row and column must be non-negative integers');
   }
-  return _XLSX;
+
+  let letters = '';
+  let current = column;
+  do {
+    letters = String.fromCharCode(65 + (current % 26)) + letters;
+    current = Math.floor(current / 26) - 1;
+  } while (current >= 0);
+
+  return `${letters}${row + 1}`;
+}
+
+/** Make sheet names legal and unique under Excel's case-insensitive rules. */
+export function normalizeSheetNames(names: Array<string | undefined>): string[] {
+  const used = new Set<string>();
+  return names.map((rawName, index) => {
+    const cleaned = (rawName?.trim() || `Sheet${index + 1}`)
+      .replace(/[\\/*?:[\]]/g, '_')
+      .replace(/^'+|'+$/g, '');
+    const base = Array.from(cleaned || `Sheet${index + 1}`).slice(0, 31).join('');
+    let candidate = base;
+    let duplicate = 2;
+    while (used.has(candidate.toLocaleLowerCase())) {
+      const suffix = ` (${duplicate++})`;
+      candidate = `${Array.from(base).slice(0, 31 - suffix.length).join('')}${suffix}`;
+    }
+    used.add(candidate.toLocaleLowerCase());
+    return candidate;
+  });
 }
 
 /**
@@ -90,7 +111,7 @@ function buildStyleKey(v: FortuneCell): string {
  * We use `'str'` for strings instead of `'s'` so we don't have to
  * allocate a sharedStrings array for simple edits.
  */
-function fortuneCellToSheetJS(v: FortuneCell): Record<string, unknown> {
+function fortuneCellToWorksheetCell(v: FortuneCell): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   const raw = v.v;
 
@@ -139,7 +160,7 @@ function fortuneCellToSheetJS(v: FortuneCell): Record<string, unknown> {
   return result;
 }
 
-interface SheetJSWorksheet {
+interface SparseWorksheet {
   /** Sparse map of cell address ("A1") → cell. */
   [addr: string]: unknown;
   /** Cell range like `"A1:C3"`. */
@@ -154,20 +175,19 @@ interface SheetJSWorksheet {
 
 /** Result of converting one FortuneSheet sheet. */
 interface BuiltWorksheet {
-  worksheet: SheetJSWorksheet;
+  worksheet: SparseWorksheet;
   styleKeys: string[];
 }
 
 /**
- * Convert a FortuneSheet Sheet to a SheetJS worksheet object.
+ * Convert a FortuneSheet sheet to the sparse object consumed by sheetXml.
  * Merged regions, row heights, and column widths are stored in
  * SheetJS's worksheet metadata properties.
  */
-async function fortuneSheetToSheetJSWorksheet(
+function fortuneSheetToWorksheet(
   sheet: FortuneSheetCoreSheet,
-  XLSX: SheetJSLazy,
   dataToCelldata: (data: CellMatrix) => CellWithRowAndCol[],
-): Promise<BuiltWorksheet> {
+): BuiltWorksheet {
   const cells: Record<string, Record<string, unknown>> = {};
   const styleKeys: string[] = [];
   const data = sheet.data ?? [];
@@ -190,14 +210,22 @@ async function fortuneSheetToSheetJSWorksheet(
     if (item.v) sparseMap.set(`${item.r},${item.c}`, item.v);
   }
 
+  let minRow = Infinity;
+  let maxRow = 0;
+  let minCol = Infinity;
+  let maxCol = 0;
   for (const [key, v] of sparseMap) {
     const [rStr, cStr] = key.split(',');
     const r = parseInt(rStr, 10);
     const c = parseInt(cStr, 10);
-    const addr = XLSX.utils.encode_cell({ r, c });
-    const jsCell = fortuneCellToSheetJS(v);
+    const addr = encodeCellAddress(r, c);
+    const jsCell = fortuneCellToWorksheetCell(v);
     if (Object.keys(jsCell).length > 0) {
       cells[addr] = jsCell;
+      minRow = Math.min(minRow, r);
+      maxRow = Math.max(maxRow, r);
+      minCol = Math.min(minCol, c);
+      maxCol = Math.max(maxCol, c);
       const sk = jsCell._styleKey;
       if (typeof sk === 'string' && sk !== STYLE_KEY_ALL_EMPTY) {
         styleKeys.push(sk);
@@ -215,36 +243,26 @@ async function fortuneSheetToSheetJSWorksheet(
   const columnlenConfig = (sheet.config?.columnlen ?? {}) as Record<string, number>;
 
   const merges = Object.values(mergeConfig);
-  const rows: Array<{ hpx?: number }> = Object.entries(rowlenConfig).map(([_, hpx]) => ({ hpx }));
-  const cols: Array<{ wpx?: number }> = Object.entries(columnlenConfig).map(([_, wpx]) => ({ wpx }));
-
-  // Determine overall ref range.
-  let minRow = Infinity, maxRow = 0, minCol = Infinity, maxCol = 0;
-  for (const key of Object.keys(cells)) {
-    const [rStr, cStr] = key.split(',');
-    // Cells are keyed by SheetJS address ("A1"), not "r,c" — convert back.
-    const m = key.match(/^([A-Z]+)(\d+)$/);
-    if (!m) continue;
-    const r = parseInt(m[2], 10) - 1;
-    const colLetters = m[1];
-    let c = 0;
-    for (let i = 0; i < colLetters.length; i++) {
-      c = c * 26 + (colLetters.charCodeAt(i) - 64);
-    }
-    c -= 1;
-    minRow = Math.min(minRow, r);
-    maxRow = Math.max(maxRow, r);
-    minCol = Math.min(minCol, c);
-    maxCol = Math.max(maxCol, c);
-    // also consume rStr/cStr to satisfy unused-locals
-    void rStr; void cStr;
+  // FortuneSheet keys these maps by zero-based row/column index. Building
+  // them with `Object.entries().map()` compacted sparse indexes (row 6 became
+  // row 1), so preserve the numeric positions explicitly.
+  const rows: Array<{ hpx?: number }> = [];
+  for (const [index, hpx] of Object.entries(rowlenConfig)) {
+    const row = Number(index);
+    if (Number.isInteger(row) && row >= 0) rows[row] = { hpx };
+  }
+  const cols: Array<{ wpx?: number }> = [];
+  for (const [index, wpx] of Object.entries(columnlenConfig)) {
+    const column = Number(index);
+    if (Number.isInteger(column) && column >= 0) cols[column] = { wpx };
   }
 
+  // Determine overall ref range.
   const rangeRef = minRow <= maxRow
-    ? `${XLSX.utils.encode_cell({ r: minRow, c: minCol })}:${XLSX.utils.encode_cell({ r: maxRow, c: maxCol })}`
+    ? `${encodeCellAddress(minRow, minCol)}:${encodeCellAddress(maxRow, maxCol)}`
     : 'A1';
 
-  const worksheet: SheetJSWorksheet = {
+  const worksheet: SparseWorksheet = {
     ...cells,
     '!ref': rangeRef,
     ...(merges.length > 0 ? { '!merges': merges } : {}),
@@ -256,18 +274,20 @@ async function fortuneSheetToSheetJSWorksheet(
 }
 
 /**
- * Convert FortuneSheet sheets to a SheetJS workbook AND return the binary buffer.
- * Styles are preserved by injecting a custom stylesheet via JSZip post-processing.
+ * Convert FortuneSheet sheets directly to an OOXML workbook buffer.
  *
  * Usage:
- *   const buffer = await fortuneSheetsToSheetJSBuffer(sheets, wb.dataToCelldata.bind(wb));
+ *   const buffer = await fortuneSheetsToXlsxBuffer(sheets, wb.dataToCelldata.bind(wb));
  *   // Write buffer to disk via Tauri invoke('write_office_file', ...)
  */
-export async function fortuneSheetsToSheetJSBuffer(
+export async function fortuneSheetsToXlsxBuffer(
   allSheets: FortuneSheetCoreSheet[],
   dataToCelldata: (data: CellMatrix) => CellWithRowAndCol[],
 ): Promise<Uint8Array> {
-  const XLSX = await getXLSX();
+  const sourceSheets = allSheets.length > 0
+    ? allSheets
+    : [{ name: 'Sheet1', data: [], config: {} } as FortuneSheetCoreSheet];
+  const sheetNames = normalizeSheetNames(sourceSheets.map((sheet) => sheet.name));
 
   // First pass: collect all style keys across all sheets.
   const allStyleKeys: string[] = [];
@@ -277,10 +297,10 @@ export async function fortuneSheetsToSheetJSBuffer(
   // accept it directly without a separate narrowing step.
   const sheetRawData: { name: string; worksheet: Record<string, unknown> }[] = [];
 
-  for (const sheet of allSheets) {
-    const { worksheet, styleKeys } = await fortuneSheetToSheetJSWorksheet(sheet, XLSX, dataToCelldata);
+  for (const [index, sheet] of sourceSheets.entries()) {
+    const { worksheet, styleKeys } = fortuneSheetToWorksheet(sheet, dataToCelldata);
     allStyleKeys.push(...styleKeys);
-    sheetRawData.push({ name: sheet.name ?? 'Sheet1', worksheet });
+    sheetRawData.push({ name: sheetNames[index], worksheet });
   }
 
   // Deduplicate style keys.
@@ -288,22 +308,17 @@ export async function fortuneSheetsToSheetJSBuffer(
   const styleIndexMap: Map<string, number> = new Map();
   uniqueStyleKeys.forEach((key, idx) => styleIndexMap.set(key, idx + 1)); // 0 = default
 
-  // Generate xlsx with custom worksheet XML (not SheetJS cell writing).
-  // SheetJS re-processes cells and ignores our s values, so we build
-  // the worksheet XML directly to ensure correct style references.
-  const { buildStylesXml } = await import('./stylesheetXml');
-  const stylesXml = uniqueStyleKeys.length > 0 ? buildStylesXml(uniqueStyleKeys) : null;
+  // Generate xlsx with custom worksheet XML to ensure correct style refs.
+  const stylesXml = buildStylesXml(uniqueStyleKeys);
   const jszipMod = await import('jszip');
   const JSZip = jszipMod.default;
 
   const zip = new JSZip();
-  zip.file('[Content_Types].xml', buildContentTypesXml());
+  zip.file('[Content_Types].xml', buildContentTypesXml(sheetRawData.length));
   zip.file('_rels/.rels', buildRelsXml());
   zip.file('xl/_rels/workbook.xml.rels', buildWorkbookRelsXml(sheetRawData.length));
   zip.file('xl/workbook.xml', buildWorkbookXml(sheetRawData.map(s => s.name)));
-  if (stylesXml) {
-    zip.file('xl/styles.xml', stylesXml);
-  }
+  zip.file('xl/styles.xml', stylesXml);
 
   for (let i = 0; i < sheetRawData.length; i++) {
     const { worksheet } = sheetRawData[i];

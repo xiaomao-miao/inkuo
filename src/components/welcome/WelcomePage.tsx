@@ -34,6 +34,7 @@ import { accountBalancePoints, formatPointsAsYuan } from '../cloud/cloudMoney';
 import { MOTION_LEVELS, type MotionLevel } from '../../hooks/useMotionLevel';
 import { Wordmark } from './Wordmark';
 import { getCloudBaseUrl } from '../../utils/cloudBaseUrl';
+import { validateNewPassword } from '../../utils/passwordPolicy';
 import { getModifierKeyLabel } from '../../utils/platform';
 import styles from './WelcomePage.module.css';
 
@@ -332,6 +333,13 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onWorkspaceSelected })
       setAuthError('注册需要邀请码');
       return;
     }
+    if (authMode === 'register') {
+      const passwordError = validateNewPassword(password);
+      if (passwordError) {
+        setAuthError(passwordError);
+        return;
+      }
+    }
     setSubmitting(true);
     try {
       const account =
@@ -354,7 +362,7 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onWorkspaceSelected })
       } else if (message.toLowerCase().includes('unauthorized') || message.includes('401')) {
         setAuthError('邮箱或密码错误');
       } else if (message.toLowerCase().includes('network')) {
-        setAuthError('无法连接到云端服务器,请检查地址或网络');
+        setAuthError('无法连接到云端服务器，请检查网络后重试');
       } else {
         setAuthError(message);
       }

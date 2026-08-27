@@ -12,15 +12,14 @@
 //! Pulled out of `office/mod.rs` because the file had grown past 2000
 //! lines and most of that weight was this one tool's input schemas.
 
-use std::collections::HashMap;
 use std::io::Read;
 
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::{ToolDefinition, ToolError, ToolParameters, validate_workspace_path};
-use crate::office::{ElementId, WordParagraph, WordTable, WordImage};
 use super::paragraph_columns::expand_paragraph_columns;
+use super::{validate_workspace_path, ToolDefinition, ToolError, ToolParameters};
+use crate::office::{ElementId, WordParagraph};
 
 /// Output of `parse_component_block`. Carries the rendered paragraphs/tables
 /// plus the optional positional metadata so the caller can integrate the
@@ -914,10 +913,8 @@ impl CreateWordDocTool {
     /// `format` is the optional Word date format string (e.g. `"yyyy-MM-dd"`).
     /// When `None`, the placeholder is left untouched.
     fn apply_date_placeholders(doc: &mut crate::office::WordDocument, format: Option<&str>) {
-        let fmt_owned;
-        let fmt_ref: &str = match format {
-            Some(f) if !f.is_empty() => { fmt_owned = f.clone(); &fmt_owned }
-            _ => return,
+        let Some(fmt_ref) = format.filter(|value| !value.is_empty()) else {
+            return;
         };
         for p in doc.paragraphs.iter_mut() {
             Self::rewrite_date_in_paragraph(p, fmt_ref);
@@ -1682,8 +1679,6 @@ impl CreateWordDocTool {
         }
 
         // New file mode: title + new_elements + component blocks (properly interleaved)
-        let mut elements_for_new: Vec<crate::office::DocElement> = Vec::new();
-
         // Track (original_element_index, element) so the interleaving loop
         // can place component blocks (which carry their original index from
         // `elements[]`) at the correct point in the stream. Components and

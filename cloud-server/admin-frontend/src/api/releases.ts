@@ -31,7 +31,10 @@ export interface UploadReleaseInput {
 
 export const releasesApi = {
   list: () => api.get<Release[]>('/api/releases/admin/all').then(r => r.data),
-  upload: (data: UploadReleaseInput) => {
+  upload: (
+    data: UploadReleaseInput,
+    options?: { signal?: AbortSignal; onProgress?: (percent: number) => void },
+  ) => {
     const fd = new FormData();
     fd.append('file', data.file);
     fd.append('version', data.version);
@@ -42,7 +45,17 @@ export const releasesApi = {
     fd.append('isLatest', String(data.isLatest));
     fd.append('enabled', String(data.enabled));
     return api.post<{ id: string; version: string; fileName: string; fileSizeBytes: number; sha256: string; downloadUrl: string; createdAt: string }>(
-      '/api/releases/upload', fd,
+      '/api/releases/upload', fd, {
+        signal: options?.signal,
+        // Installer uploads can legitimately take much longer than the JSON
+        // client's 30-second default timeout.
+        timeout: 0,
+        onUploadProgress: (event) => {
+          if (event.total && event.total > 0) {
+            options?.onProgress?.(Math.min(100, Math.round((event.loaded / event.total) * 100)));
+          }
+        },
+      },
     ).then(r => r.data);
   },
   setEnabled: (id: string, enabled: boolean) =>

@@ -33,14 +33,18 @@ const EXCEL_MDW = 7;
 const COLUMN_PADDING_PX = 5;
 
 /** `[Content_Types].xml` — declares MIME content types for every part. */
-export function buildContentTypesXml(): string {
+export function buildContentTypesXml(sheetCount = 1): string {
+  const worksheetOverrides = Array.from(
+    { length: Math.max(0, sheetCount) },
+    (_, index) => `  <Override PartName="/xl/worksheets/sheet${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`,
+  ).join('\n');
   return `<?xml version="1.0" encoding="UTF-8"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
   <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
   <Default Extension="xml" ContentType="application/xml"/>
   <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
   <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
-  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+${worksheetOverrides}
 </Types>`;
 }
 
@@ -101,14 +105,15 @@ function cellToXml(
   if (s !== undefined) xml += ` s="${s}"`;
 
   const t = cell.t as string | undefined;
+  const hasFormula = cell.f !== undefined && cell.f !== null && cell.f !== '';
   if (t === 's') xml += ` t="s"`;
-  else if (t === 'str') xml += ` t="inlineStr"`;
+  else if (t === 'str') xml += hasFormula ? ` t="str"` : ` t="inlineStr"`;
   else if (t === 'b') xml += ` t="b"`;
   else if (t === 'e') xml += ` t="e"`;
 
   xml += '>';
 
-  if (cell.f) {
+  if (hasFormula) {
     // Strip leading = from formula
     const f = escapeXml(String(cell.f).replace(/^=/, ''));
     xml += `<f>${f}</f>`;
@@ -118,8 +123,10 @@ function cellToXml(
   } else if (cell.v !== undefined) {
     if (t === 's') {
       xml += `<v>${cell.v}</v>`;
-    } else if (t === 'str' || t === 'e') {
+    } else if (t === 'str') {
       xml += `<is><t>${escapeXml(String(cell.v))}</t></is>`;
+    } else if (t === 'e') {
+      xml += `<v>${escapeXml(String(cell.v))}</v>`;
     } else if (t === 'b') {
       xml += `<v>${cell.v ? 1 : 0}</v>`;
     } else {
@@ -133,10 +140,6 @@ function cellToXml(
 
 /**
  * Group cell addresses by row number, then sort rows + addresses.
- * Row keys (like "A1") are sorted lexically by column letter, which
- * works for single-letter columns but not multi-letter (AB vs A) —
- * the Excel round-trip is robust enough to handle that, but worth
- * noting.
  */
 function groupCellsByRow(
   worksheet: Record<string, unknown>,
@@ -162,9 +165,12 @@ function pixelWidthToExcelUnits(wpx: number): number {
   return Math.round(((wpx - COLUMN_PADDING_PX) / EXCEL_MDW) * 256) / 256;
 }
 
-/** Convert a cell column letters ("A", "AB") into the column index for `localeCompare`. */
-function cellColumnLetters(addr: string): string {
-  return addr.match(/^([A-Z]+)/)?.[1] ?? '';
+/** Convert cell column letters ("A", "AB") into a one-based column index. */
+function cellColumnIndex(addr: string): number {
+  const letters = addr.match(/^([A-Z]+)/)?.[1] ?? '';
+  let index = 0;
+  for (const letter of letters) index = index * 26 + letter.charCodeAt(0) - 64;
+  return index;
 }
 
 /**
@@ -200,9 +206,16 @@ export function buildWorksheetXml(
   xml += `<sheetData>`;
 
   const { rowGroups, sortedRows } = groupCellsByRow(worksheet);
+  // A custom height on an otherwise empty row is still meaningful. Include
+  // those sparse row indexes instead of emitting rows only when they contain
+  // a cell.
+  const rowsToWrite = [...new Set([
+    ...sortedRows,
+    ...rows.flatMap((row, index) => row?.hpx ? [index + 1] : []),
+  ])].sort((a, b) => a - b);
 
-  for (const rowNum of sortedRows) {
-    const rowCells = rowGroups[rowNum];
+  for (const rowNum of rowsToWrite) {
+    const rowCells = rowGroups[rowNum] ?? {};
     xml += `<row r="${rowNum}"`;
     if (rows[rowNum - 1]?.hpx) {
       xml += ` ht="${rows[rowNum - 1].hpx}" customHeight="1"`;
@@ -210,9 +223,7 @@ export function buildWorksheetXml(
     xml += '>';
 
     const sortedAddrs = Object.keys(rowCells).sort((a, b) => {
-      const colA = cellColumnLetters(a);
-      const colB = cellColumnLetters(b);
-      return colA.localeCompare(colB);
+      return cellColumnIndex(a) - cellColumnIndex(b);
     });
 
     for (const addr of sortedAddrs) {

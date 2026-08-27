@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import styles from './MarkdownRenderer.module.css';
+import { isExternalHttpLink, isLikelyWorkspacePath, resolveWorkspaceHref, safelyDecodeHref } from './linkUtils';
 
 interface StreamingMarkdownRendererProps {
   content: string;
@@ -156,32 +157,14 @@ export const StreamingMarkdownRenderer: React.FC<StreamingMarkdownRendererProps>
             );
           },
           a({ href, children, ...props }) {
-            // Decode URL-encoded paths (e.g. %E6%B5%8B%E8%AF%95 -> 测试3).
-            // Wrap in try/catch: malformed escapes (e.g. a stray `%` or
-            // a `%` followed by non-hex chars) raise URIError, which
-            // would otherwise bubble out of the React render and unmount
-            // the whole AI panel. Falling back to the raw href keeps the
-            // link clickable and the message visible.
-            const decodedHref = (() => {
-              if (!href) return href;
-              try {
-                return decodeURIComponent(href);
-              } catch {
-                return href;
-              }
-            })();
-            // Check if this is a file path link (starts with / or ~)
-            const isFilePath = decodedHref?.startsWith('/') || decodedHref?.startsWith('~') || /^[A-Za-z]:\\/.test(decodedHref || '');
-            const isExternal = href?.startsWith('http://') || href?.startsWith('https://');
+            const decodedHref = safelyDecodeHref(href);
+            const isFilePath = isLikelyWorkspacePath(decodedHref);
+            const isExternal = isExternalHttpLink(href);
 
             if (isFilePath && onFileClick) {
               const handleClick = (e: React.MouseEvent) => {
                 e.preventDefault();
-                let fullPath = decodedHref!;
-                if (!fullPath.startsWith('/') && !fullPath.startsWith('~') && workspacePath) {
-                  fullPath = `${workspacePath}/${fullPath}`;
-                }
-                onFileClick(fullPath);
+                onFileClick(resolveWorkspaceHref(decodedHref!, workspacePath));
               };
 
               // Extract just the filename for display

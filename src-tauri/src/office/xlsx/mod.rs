@@ -48,8 +48,9 @@ use quick_xml::reader::Reader as XmlReader;
 
 use super::shared::OfficeError;
 
-// DEBUG: Enable verbose logging
-const DEBUG_XLSX: bool = true;
+// Keep document contents out of production logs. Flip locally only while
+// diagnosing the parser; normal desktop builds must stay quiet.
+const DEBUG_XLSX: bool = false;
 
 // ─── Legacy flat API (kept for backward compatibility) ────────────────────────
 
@@ -1314,5 +1315,4 @@ fn build_minimal_styles_xml(num_fmts: &[(u32, String)]) -> String {
     xml.push_str("</styleSheet>");
     xml
 }
-
 

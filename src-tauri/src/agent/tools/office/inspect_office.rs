@@ -182,7 +182,6 @@ async fn inspect_docx_elements(path: &str, path_obj: &std::path::Path) -> Result
             // Truncate text preview to 100 chars for readability
             // Use char_indices to avoid splitting multi-byte characters (e.g., Chinese)
             let text_preview = if p.text.chars().count() > 100 {
-                let mut chars_taken = 0;
                 let end_byte = p.text.char_indices()
                     .nth(100)
                     .map(|(idx, _)| idx)
@@ -210,7 +209,6 @@ async fn inspect_docx_elements(path: &str, path_obj: &std::path::Path) -> Result
             let header_preview: Vec<String> = t.rows.first()
                 .map(|row| row.cells.iter().map(|c| {
                     if c.text.chars().count() > 30 {
-                        let mut chars_taken = 0;
                         let end_byte = c.text.char_indices()
                             .nth(30)
                             .map(|(idx, _)| idx)

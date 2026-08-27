@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
 using Inkuso.Cloud.Admin.Auth;
 using Inkuso.Cloud.Core.Data;
+using Inkuso.Cloud.Core.Security;
 
 namespace Inkuso.Cloud.Admin.Endpoints;
 
@@ -27,7 +28,10 @@ public static class AdminAuthEndpoints
             if (string.IsNullOrWhiteSpace(req.Username) || string.IsNullOrWhiteSpace(req.Password))
                 return Results.BadRequest(new { error = "Username and password required" });
 
-            var user = await db.AdminUsers.FirstOrDefaultAsync(u => u.Username == req.Username);
+            var username = req.Username.Trim();
+            if (CredentialPolicy.ValidateAdminUsername(username) is not null)
+                return Results.BadRequest(new { error = "Invalid username or password" });
+            var user = await db.AdminUsers.FirstOrDefaultAsync(u => u.Username == username);
             if (user == null || !user.Enabled || !BCrypt.Net.BCrypt.Verify(req.Password, user.PasswordHash))
                 return Results.Unauthorized();
 
@@ -45,10 +49,10 @@ public static class AdminAuthEndpoints
         {
             var id = ctx.User.FindFirst(ClaimTypes.NameIdentifier)?.Value
                      ?? ctx.User.FindFirst("sub")?.Value;
-            if (id == null) return Results.Unauthorized();
+            if (!Guid.TryParse(id, out var adminId)) return Results.Unauthorized();
 
-            var user = await db.AdminUsers.FindAsync(Guid.Parse(id));
-            if (user == null) return Results.Unauthorized();
+            var user = await db.AdminUsers.FindAsync(adminId);
+            if (user == null || !user.Enabled) return Results.Unauthorized();
             return Results.Ok(new AdminDto(user.Id, user.Username, user.Role));
         });
 
@@ -56,14 +60,17 @@ public static class AdminAuthEndpoints
         {
             var id = ctx.User.FindFirst(ClaimTypes.NameIdentifier)?.Value
                      ?? ctx.User.FindFirst("sub")?.Value;
-            if (id == null) return Results.Unauthorized();
+            if (!Guid.TryParse(id, out var adminId)) return Results.Unauthorized();
 
-            var user = await db.AdminUsers.FindAsync(Guid.Parse(id));
+            var user = await db.AdminUsers.FindAsync(adminId);
             if (user == null) return Results.Unauthorized();
+            if (string.IsNullOrEmpty(req.CurrentPassword))
+                return Results.BadRequest(new { error = "Current password is required" });
             if (!BCrypt.Net.BCrypt.Verify(req.CurrentPassword, user.PasswordHash))
                 return Results.BadRequest(new { error = "Current password is incorrect" });
-            if (string.IsNullOrWhiteSpace(req.NewPassword) || req.NewPassword.Length < 8)
-                return Results.BadRequest(new { error = "New password must be at least 8 characters" });
+            var passwordError = CredentialPolicy.ValidatePassword(req.NewPassword);
+            if (passwordError is not null)
+                return Results.BadRequest(new { error = passwordError });
 
             user.PasswordHash = BCrypt.Net.BCrypt.HashPassword(req.NewPassword);
             await db.SaveChangesAsync();
@@ -74,17 +81,20 @@ public static class AdminAuthEndpoints
         {
             if (RoleOf(ctx) != "superadmin") return Results.Forbid();
 
-            if (string.IsNullOrWhiteSpace(req.Username) || req.Username.Length < 3)
-                return Results.BadRequest(new { error = "Username must be at least 3 chars" });
-            if (string.IsNullOrWhiteSpace(req.Password) || req.Password.Length < 8)
-                return Results.BadRequest(new { error = "Password must be at least 8 chars" });
+            var username = req.Username?.Trim() ?? string.Empty;
+            var usernameError = CredentialPolicy.ValidateAdminUsername(username);
+            if (usernameError is not null)
+                return Results.BadRequest(new { error = usernameError });
+            var passwordError = CredentialPolicy.ValidatePassword(req.Password);
+            if (passwordError is not null)
+                return Results.BadRequest(new { error = passwordError });
 
-            if (await db.AdminUsers.AnyAsync(u => u.Username == req.Username))
+            if (await db.AdminUsers.AnyAsync(u => u.Username == username))
                 return Results.Conflict(new { error = "Username already exists" });
 
             db.AdminUsers.Add(new Core.Entities.AdminUser
             {
-                Username = req.Username,
+                Username = username,
                 PasswordHash = BCrypt.Net.BCrypt.HashPassword(req.Password),
                 Role = req.Role == "superadmin" ? "superadmin" : "admin",
                 Enabled = true,
@@ -109,7 +119,7 @@ public static class AdminAuthEndpoints
 
             var myId = ctx.User.FindFirst(ClaimTypes.NameIdentifier)?.Value
                        ?? ctx.User.FindFirst("sub")?.Value;
-            if (myId != null && Guid.Parse(myId) == id)
+            if (Guid.TryParse(myId, out var currentAdminId) && currentAdminId == id)
                 return Results.BadRequest(new { error = "Cannot delete yourself" });
 
             var user = await db.AdminUsers.FindAsync(id);

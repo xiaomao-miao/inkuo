@@ -23,10 +23,41 @@ export interface UserListResponse {
   items: UserListItem[];
 }
 
+export interface UserDetailResponse {
+  user: {
+    id: string;
+    email: string;
+    createdAt: string;
+    inviteCodeUsed: string;
+    balancePoints: number;
+    reservedPoints: number;
+    debtPoints: number;
+    isSuspended: boolean;
+  };
+  subscriptions: Array<{
+    id: string;
+    planName: string;
+    startedAt: string;
+    expiresAt: string;
+    status: string;
+  }>;
+  totalUsage: { tokens: number; costPoints: number; recordCount: number };
+  recentUsage: Array<{
+    id: string;
+    modelName: string;
+    promptTokens: number;
+    completionTokens: number;
+    costPoints: number;
+    billingStatus: string;
+    recordedAt: string;
+  }>;
+  refreshTokens: Array<{ jti: string; expiresAt: string; revoked: boolean }>;
+}
+
 export const usersApi = {
   list: (params: { page?: number; pageSize?: number; search?: string; sortBy?: string; sortDir?: string }) =>
     api.get<UserListResponse>('/api/users/', { params }).then(r => r.data),
-  detail: (id: string) => api.get(`/api/users/${id}`).then(r => r.data),
+  detail: (id: string) => api.get<UserDetailResponse>(`/api/users/${id}`).then(r => r.data),
   adjustBalance: (id: string, deltaPoints: number, reason: string) =>
     api.post(`/api/users/${id}/adjust-balance`, { deltaPoints, reason }).then(r => r.data),
   revokeSessions: (id: string) => api.post(`/api/users/${id}/revoke-sessions`, {}).then(r => r.data),

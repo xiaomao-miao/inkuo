@@ -7,6 +7,7 @@ using Inkuso.Cloud.Core.Data;
 using Inkuso.Cloud.Core.Entities;
 using Inkuso.Cloud.Core.Auth;
 using Inkuso.Cloud.Core.Billing;
+using Inkuso.Cloud.Core.Security;
 
 namespace Inkuso.Cloud.Api.Endpoints;
 
@@ -49,10 +50,13 @@ public static class Auth
             // `Alice@x.com` and `alice@x.com` slip past the duplicate check.
             var normalizedEmail = (req.Email ?? string.Empty).ToLowerInvariant().Trim();
 
-            if (string.IsNullOrEmpty(normalizedEmail) || !EmailRegex.IsMatch(normalizedEmail))
+            if (string.IsNullOrEmpty(normalizedEmail)
+                || normalizedEmail.Length > 320
+                || !EmailRegex.IsMatch(normalizedEmail))
                 return Results.BadRequest(new { error = "Invalid email" });
-            if (string.IsNullOrWhiteSpace(req.Password) || req.Password.Length < 6)
-                return Results.BadRequest(new { error = "Password must be at least 6 characters" });
+            var passwordError = CredentialPolicy.ValidatePassword(req.Password);
+            if (passwordError is not null)
+                return Results.BadRequest(new { error = passwordError });
 
             // Hash before opening the transaction: BCrypt is deliberately slow,
             // and keeping a database transaction open during it would amplify
@@ -159,6 +163,8 @@ public static class Auth
         group.MapPost("/login", async (LoginRequest req, AppDbContext db, JwtService jwt) =>
         {
             var normalizedEmail = (req.Email ?? string.Empty).ToLowerInvariant().Trim();
+            if (normalizedEmail.Length is 0 or > 320 || string.IsNullOrEmpty(req.Password))
+                return Results.Unauthorized();
             var user = await db.Users.FirstOrDefaultAsync(u => u.Email == normalizedEmail);
             if (user == null || !BCrypt.Net.BCrypt.Verify(req.Password, user.PasswordHash))
                 return Results.Unauthorized();
@@ -186,6 +192,7 @@ public static class Auth
             // `db` is no longer injected here — JwtService owns its own
             // DbContext, and pulling the unused service in was producing
             // a "you don't need this" analyzer warning.
+            if (string.IsNullOrWhiteSpace(req.RefreshToken)) return Results.Unauthorized();
             var result = await jwt.RefreshAccessTokenAsync(req.RefreshToken);
             if (!result.Succeeded)
                 return Results.Unauthorized();
@@ -201,8 +208,8 @@ public static class Auth
         {
             var userId = ctx.User.FindFirst(ClaimTypes.NameIdentifier)?.Value
                          ?? ctx.User.FindFirst("sub")?.Value;
-            if (userId == null) return Results.Unauthorized();
-            await jwt.RevokeAllUserTokensAsync(Guid.Parse(userId));
+            if (!Guid.TryParse(userId, out var parsedUserId)) return Results.Unauthorized();
+            await jwt.RevokeAllUserTokensAsync(parsedUserId);
             return Results.Ok();
         });
     }

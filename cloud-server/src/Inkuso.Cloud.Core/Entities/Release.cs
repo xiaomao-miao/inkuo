@@ -34,7 +34,7 @@ public class Release
     /// <summary>Absolute path on the admin server's local disk.</summary>
     public string StoragePath { get; set; } = string.Empty;
 
-    /// <summary>URL path under which the static file is served (e.g. "/releases-files/&lt;id&gt;.exe").</summary>
+    /// <summary>Database-gated public download endpoint for this release.</summary>
     public string DownloadUrl { get; set; } = string.Empty;
 
     /// <summary>Markdown release notes shown on the landing page.</summary>

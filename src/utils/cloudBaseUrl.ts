@@ -1,16 +1,30 @@
-/**
- * inkuo Cloud 服务的官方 base URL。所有前端调用 cloudApi
- * 之前都必须从 `getCloudBaseUrl()` 拿,不允许在 UI 上让用户
- * 填写。原因:
- *   1. 跨前端/后端/base URL 是单一可发现的事实源;
- *   2. 防止测试用户被诱导输错地址;
- *   3. 后续切换 staging/production 时只改这一个常量 +
- *      构建环境变量。
- *
- * 临时值:`http://localhost:8080`(本地自托管)
- * TODO: 上线后改为 `https://cloud.inkuo.com`。
- */
-const INKUO_CLOUD_BASE_URL = 'http://localhost:8080';
+const DEVELOPMENT_CLOUD_URL = 'http://localhost:8080';
+const PRODUCTION_CLOUD_URL = 'https://cloud.inkuo.com';
+
+/** Resolve and normalize the cloud endpoint selected at build time. */
+export function resolveCloudBaseUrl(
+  configuredUrl: string | undefined,
+  isDevelopment: boolean,
+): string {
+  const fallback = isDevelopment ? DEVELOPMENT_CLOUD_URL : PRODUCTION_CLOUD_URL;
+  const candidate = configuredUrl?.trim() || fallback;
+
+  try {
+    const parsed = new URL(candidate);
+    if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) {
+      throw new Error('unsupported cloud URL');
+    }
+    return parsed.toString().replace(/\/$/, '');
+  } catch {
+    console.error('[cloud-config] VITE_INKUO_CLOUD_BASE_URL is invalid; using the safe default');
+    return fallback;
+  }
+}
+
+const INKUO_CLOUD_BASE_URL = resolveCloudBaseUrl(
+  import.meta.env.VITE_INKUO_CLOUD_BASE_URL,
+  import.meta.env.DEV,
+);
 
 export function getCloudBaseUrl(): string {
   return INKUO_CLOUD_BASE_URL;

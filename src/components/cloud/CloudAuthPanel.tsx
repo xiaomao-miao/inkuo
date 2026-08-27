@@ -3,6 +3,7 @@ import { Cloud, LogIn, UserPlus, Loader2, AlertCircle } from 'lucide-react';
 import { useSettingsStore } from '../../store';
 import { cloudApi } from './cloudApi';
 import { getCloudBaseUrl } from '../../utils/cloudBaseUrl';
+import { validateNewPassword } from '../../utils/passwordPolicy';
 import styles from './CloudPanel.module.css';
 
 interface CloudAuthPanelProps {
@@ -43,9 +44,12 @@ export const CloudAuthPanel = ({ onAuthSuccess }: CloudAuthPanelProps) => {
       setError('注册需要邀请码');
       return;
     }
-    if (mode === 'register' && password.length < 6) {
-      setError('密码至少需要 6 个字符');
-      return;
+    if (mode === 'register') {
+      const passwordError = validateNewPassword(password);
+      if (passwordError) {
+        setError(passwordError);
+        return;
+      }
     }
 
     setSubmitting(true);
@@ -80,7 +84,7 @@ export const CloudAuthPanel = ({ onAuthSuccess }: CloudAuthPanelProps) => {
   };
 
   return (
-    <div className={styles.authPanel}>
+    <form className={styles.authPanel} onSubmit={(event) => { event.preventDefault(); void handleSubmit(); }}>
       <div className={styles.authHeader}>
         <Cloud size={18} />
         <span>inkuo Cloud</span>
@@ -148,9 +152,8 @@ export const CloudAuthPanel = ({ onAuthSuccess }: CloudAuthPanelProps) => {
       )}
 
       <button
-        type="button"
+        type="submit"
         className={styles.submitBtn}
-        onClick={handleSubmit}
         disabled={submitting}
       >
         {submitting ? (
@@ -171,6 +174,6 @@ export const CloudAuthPanel = ({ onAuthSuccess }: CloudAuthPanelProps) => {
       <p className={styles.hint}>
         inkuo Cloud 由我们托管，按 token 用量计费。当前支持邀请制注册 + 兑换码充值。
       </p>
-    </div>
+    </form>
   );
 };

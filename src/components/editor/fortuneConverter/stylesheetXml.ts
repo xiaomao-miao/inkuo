@@ -177,11 +177,10 @@ function collectFills(uniqueStyleKeys: string[]): FillSpec[] {
  *   Structure: numFmts (custom formats), fonts, fills, borders,
  *   cellStyleXfs, cellXfs, cellStyles, dxfs, tableStyles.
  *
- * Returns an empty string when there are no styles to emit.
+ * Even an unstyled workbook gets the mandatory default stylesheet because
+ * workbook relationships always reference `xl/styles.xml`.
  */
 export function buildStylesXml(uniqueStyleKeys: string[]): string {
-  if (uniqueStyleKeys.length === 0) return '';
-
   const fontList = collectFonts(uniqueStyleKeys);
   const fillList = collectFills(uniqueStyleKeys);
 

@@ -1,9 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Table, Button, Space, Tag, Modal, Form, Input, InputNumber, Switch, Select, App, Tooltip,
+  type TableColumnsType,
 } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
-import { modelConfigsApi, ModelConfig } from '../api/modelConfigs';
+import { modelConfigsApi, type ModelConfig } from '../api/modelConfigs';
+import { getApiErrorMessage } from '../api/client';
 
 const providerOptions = [
   { value: 'openai', label: 'OpenAI 兼容协议（OpenAI / 月之暗面 / vLLM / Ollama 等）' },
@@ -14,21 +16,33 @@ export default function ModelConfigsPage() {
   const [data, setData] = useState<ModelConfig[]>([]);
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState<ModelConfig | null>(null);
   const [form] = Form.useForm();
   const { message, modal } = App.useApp();
+  const requestIdRef = useRef(0);
 
-  const load = async () => {
+  const load = useCallback(async () => {
+    const requestId = ++requestIdRef.current;
     setLoading(true);
     try {
-      setData(await modelConfigsApi.list());
+      const result = await modelConfigsApi.list();
+      if (requestId === requestIdRef.current) setData(result);
+    } catch (error) {
+      if (requestId === requestIdRef.current) {
+        message.error(getApiErrorMessage(error, '加载模型配置失败'));
+      }
     } finally {
-      setLoading(false);
+      if (requestId === requestIdRef.current) setLoading(false);
     }
-  };
-  useEffect(() => { load(); }, []);
+  }, [message]);
+  useEffect(() => {
+    void load();
+    return () => { requestIdRef.current += 1; };
+  }, [load]);
 
   const onSubmit = async (values: any) => {
+    setSaving(true);
     try {
       const payload = { ...values, sortOrder: Number(values.sortOrder ?? 0) };
       if (editing) {
@@ -47,9 +61,11 @@ export default function ModelConfigsPage() {
       setModalOpen(false);
       form.resetFields();
       setEditing(null);
-      load();
-    } catch (e: any) {
-      message.error(e.response?.data?.error ?? '保存失败');
+      await load();
+    } catch (error) {
+      message.error(getApiErrorMessage(error, '保存失败'));
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -62,15 +78,15 @@ export default function ModelConfigsPage() {
         try {
           await modelConfigsApi.delete(m.id);
           message.success('已删除');
-          load();
-        } catch (e: any) {
-          message.error(e.response?.data?.error ?? '删除失败');
+          await load();
+        } catch (error) {
+          message.error(getApiErrorMessage(error, '删除失败'));
         }
       },
     });
   };
 
-  const columns = [
+  const columns: TableColumnsType<ModelConfig> = [
     { title: '排序', dataIndex: 'sortOrder', width: 60 },
     {
       title: '显示名', dataIndex: 'displayName', width: 160,
@@ -138,6 +154,7 @@ export default function ModelConfigsPage() {
         open={modalOpen}
         onCancel={() => { setModalOpen(false); setEditing(null); }}
         onOk={() => form.submit()}
+        confirmLoading={saving}
         width={700}
       >
         <Form form={form} layout="vertical" onFinish={onSubmit}

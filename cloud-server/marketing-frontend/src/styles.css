@@ -43,6 +43,11 @@ html, body {
 a { color: var(--accent); text-decoration: none; transition: color var(--transition); }
 a:hover { color: var(--accent-strong); }
 
+:where(a, button, input, select, textarea):focus-visible {
+  outline: 3px solid var(--accent-strong);
+  outline-offset: 3px;
+}
+
 code {
   font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
   font-size: 0.92em;
@@ -374,6 +379,10 @@ section { padding: 80px 0; position: relative; }
   overflow: auto;
 }
 .dl-notes.empty { color: var(--fg-2); font-style: italic; }
+.dl-notes h4 { margin: 0 0 6px; color: var(--fg-0); font-size: 14px; }
+.dl-notes h4:not(:first-child) { margin-top: 12px; }
+.dl-notes p { margin: 4px 0; }
+.dl-notes ul { margin: 4px 0 8px; padding-left: 20px; }
 .dl-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-top: auto; }
 .dl-actions .btn { flex: 1; justify-content: center; }
 .dl-actions .btn-mini {
@@ -429,3 +438,24 @@ footer a:hover { color: var(--accent); }
 }
 .to-top.visible { opacity: 1; transform: translateY(0); pointer-events: auto; }
 .to-top:hover { background: rgba(25, 219, 227, 0.3); }
+
+@media (max-width: 520px) {
+  .container { padding: 0 16px; }
+  .hero { padding: 72px 0 48px; }
+  section { padding: 56px 0; }
+  .hero-sub { font-size: 16px; }
+  .preview-doc { padding: 22px 18px; }
+  .features, .downloads { grid-template-columns: minmax(0, 1fr); }
+  .dl-card { padding: 20px; }
+  .to-top { right: 16px; bottom: 16px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .reveal { opacity: 1; transform: none; }
+}

@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
-import { Table, Card, Statistic, Row, Col, DatePicker, Space, Button, Segmented, Tag } from 'antd';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Table, Card, Statistic, Row, Col, DatePicker, Space, Button, Segmented, Tag, App, type TableColumnsType } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { usageApi, UsageRecord, UsageType } from '../api/usage';
+import { usageApi, type UsageRecord, type UsageType } from '../api/usage';
+import { getApiErrorMessage } from '../api/client';
 
 const { RangePicker } = DatePicker;
 
@@ -20,8 +21,11 @@ export default function UsagePage() {
   const [pageSize, setPageSize] = useState(30);
   const [range, setRange] = useState<[dayjs.Dayjs, dayjs.Dayjs] | null>(null);
   const [usageType, setUsageType] = useState<UsageType>('all');
+  const { message } = App.useApp();
+  const requestIdRef = useRef(0);
 
-  const load = async () => {
+  const load = useCallback(async () => {
+    const requestId = ++requestIdRef.current;
     setLoading(true);
     try {
       const r = await usageApi.list({
@@ -30,13 +34,23 @@ export default function UsagePage() {
         to: range?.[1].toISOString(),
         usageType,
       });
+      if (requestId !== requestIdRef.current) return;
       setData(r.items); setTotal(r.total);
       setTotalCostPoints(r.totalCostPoints); setTotalTokens(r.totalTokens);
       setChatRecords(r.chatRecords); setWebSearchRecords(r.webSearchRecords);
       setChatCostPoints(r.chatCostPoints); setWebSearchCostPoints(r.webSearchCostPoints);
-    } finally { setLoading(false); }
-  };
-  useEffect(() => { load(); }, [page, pageSize, range, usageType]);
+    } catch (error) {
+      if (requestId === requestIdRef.current) {
+        message.error(getApiErrorMessage(error, '加载用量记录失败'));
+      }
+    } finally {
+      if (requestId === requestIdRef.current) setLoading(false);
+    }
+  }, [message, page, pageSize, range, usageType]);
+  useEffect(() => {
+    void load();
+    return () => { requestIdRef.current += 1; };
+  }, [load]);
 
   const statusColor = (status: string) => {
     if (status === 'settled' || status === 'estimated') return 'green';
@@ -45,7 +59,7 @@ export default function UsagePage() {
     return 'gold';
   };
 
-  const columns = [
+  const columns: TableColumnsType<UsageRecord> = [
     {
       title: '类型', dataIndex: 'usageType', width: 90,
       render: (type: UsageRecord['usageType']) => (
@@ -121,9 +135,12 @@ export default function UsagePage() {
         <RangePicker
           showTime
           value={range}
-          onChange={(v) => { setRange(v as any); setPage(1); }}
+          onChange={(value) => {
+            setRange(value?.[0] && value[1] ? [value[0], value[1]] : null);
+            setPage(1);
+          }}
         />
-        <Button icon={<ReloadOutlined />} onClick={() => load()}>刷新</Button>
+        <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void load()}>刷新</Button>
       </Space>
 
       <Table rowKey="id" loading={loading} dataSource={data} columns={columns}

@@ -1,23 +1,40 @@
-import { useEffect, useState } from 'react';
-import { Table, Button, Space, Tag, Modal, Form, Input, InputNumber, Switch, App } from 'antd';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Table, Button, Space, Tag, Modal, Form, Input, InputNumber, Switch, App, type TableColumnsType } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
-import { plansApi, Plan } from '../api/plans';
+import { plansApi, type Plan } from '../api/plans';
+import { getApiErrorMessage } from '../api/client';
 
 export default function PlansPage() {
   const [data, setData] = useState<Plan[]>([]);
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState<Plan | null>(null);
   const [form] = Form.useForm();
   const { message, modal } = App.useApp();
+  const requestIdRef = useRef(0);
 
-  const load = async () => {
+  const load = useCallback(async () => {
+    const requestId = ++requestIdRef.current;
     setLoading(true);
-    try { setData(await plansApi.list()); } finally { setLoading(false); }
-  };
-  useEffect(() => { load(); }, []);
+    try {
+      const result = await plansApi.list();
+      if (requestId === requestIdRef.current) setData(result);
+    } catch (error) {
+      if (requestId === requestIdRef.current) {
+        message.error(getApiErrorMessage(error, '加载套餐失败'));
+      }
+    } finally {
+      if (requestId === requestIdRef.current) setLoading(false);
+    }
+  }, [message]);
+  useEffect(() => {
+    void load();
+    return () => { requestIdRef.current += 1; };
+  }, [load]);
 
   const onSubmit = async (values: any) => {
+    setSaving(true);
     try {
       if (editing) {
         await plansApi.update(editing.id, values);
@@ -29,9 +46,11 @@ export default function PlansPage() {
       setModalOpen(false);
       form.resetFields();
       setEditing(null);
-      load();
-    } catch (e: any) {
-      message.error(e.response?.data?.error ?? '保存失败');
+      await load();
+    } catch (error) {
+      message.error(getApiErrorMessage(error, '保存失败'));
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -44,15 +63,15 @@ export default function PlansPage() {
         try {
           await plansApi.delete(plan.id);
           message.success('套餐已删除');
-          load();
-        } catch (e: any) {
-          message.error(e.response?.data?.error ?? '删除失败');
+          await load();
+        } catch (error) {
+          message.error(getApiErrorMessage(error, '删除失败'));
         }
       },
     });
   };
 
-  const columns = [
+  const columns: TableColumnsType<Plan> = [
     { title: '名称', dataIndex: 'name', render: (n: string) => <Tag color="purple">{n}</Tag> },
     {
       title: '月费', dataIndex: 'monthlyPricePoints', width: 120,
@@ -108,6 +127,7 @@ export default function PlansPage() {
         open={modalOpen}
         onCancel={() => { setModalOpen(false); setEditing(null); }}
         onOk={() => form.submit()}
+        confirmLoading={saving}
         width={600}
       >
         <Form form={form} layout="vertical" onFinish={onSubmit}

@@ -1,8 +1,10 @@
-import { useEffect, useState } from 'react';
-import { Table, Button, Space, Tag, Modal, Form, Input, Select, App } from 'antd';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Table, Button, Space, Tag, Modal, Form, Input, Select, App, type TableColumnsType } from 'antd';
 import { PlusOutlined, DeleteOutlined, CrownOutlined, UserOutlined } from '@ant-design/icons';
 import dayjs from 'dayjs';
 import { authApi } from '../api/auth';
+import { getApiErrorMessage } from '../api/client';
+import { validateNewPassword } from '../passwordPolicy';
 
 interface AdminRow {
   id: string;
@@ -17,22 +19,40 @@ export default function AdminsPage() {
   const [data, setData] = useState<AdminRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [form] = Form.useForm();
   const { message, modal } = App.useApp();
+  const requestIdRef = useRef(0);
 
-  const load = async () => {
+  const load = useCallback(async () => {
+    const requestId = ++requestIdRef.current;
     setLoading(true);
-    try { setData(await authApi.listAdmins()); } finally { setLoading(false); }
-  };
-  useEffect(() => { load(); }, []);
+    try {
+      const result = await authApi.listAdmins();
+      if (requestId === requestIdRef.current) setData(result);
+    } catch (error) {
+      if (requestId === requestIdRef.current) {
+        message.error(getApiErrorMessage(error, '加载管理员失败'));
+      }
+    } finally {
+      if (requestId === requestIdRef.current) setLoading(false);
+    }
+  }, [message]);
+  useEffect(() => {
+    void load();
+    return () => { requestIdRef.current += 1; };
+  }, [load]);
 
   const onCreate = async (values: any) => {
+    setSaving(true);
     try {
       await authApi.createAdmin(values.username, values.password, values.role);
       message.success('管理员已创建');
-      setModalOpen(false); form.resetFields(); load();
-    } catch (e: any) {
-      message.error(e.response?.data?.error ?? '创建失败');
+      setModalOpen(false); form.resetFields(); await load();
+    } catch (error) {
+      message.error(getApiErrorMessage(error, '创建失败'));
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -44,15 +64,15 @@ export default function AdminsPage() {
       onOk: async () => {
         try {
           await authApi.deleteAdmin(admin.id);
-          message.success('已删除'); load();
-        } catch (e: any) {
-          message.error(e.response?.data?.error ?? '删除失败');
+          message.success('已删除'); await load();
+        } catch (error) {
+          message.error(getApiErrorMessage(error, '删除失败'));
         }
       },
     });
   };
 
-  const columns = [
+  const columns: TableColumnsType<AdminRow> = [
     {
       title: '用户名', dataIndex: 'username',
       render: (u: string, r: AdminRow) => (
@@ -98,12 +118,20 @@ export default function AdminsPage() {
 
       <Table rowKey="id" loading={loading} dataSource={data} columns={columns} pagination={false} />
 
-      <Modal title="新增管理员" open={modalOpen} onCancel={() => setModalOpen(false)} onOk={() => form.submit()}>
+      <Modal title="新增管理员" open={modalOpen} onCancel={() => setModalOpen(false)} onOk={() => form.submit()} confirmLoading={saving}>
         <Form form={form} layout="vertical" onFinish={onCreate} initialValues={{ role: 'admin' }}>
           <Form.Item name="username" label="用户名" rules={[{ required: true, min: 3 }]}>
             <Input />
           </Form.Item>
-          <Form.Item name="password" label="密码" rules={[{ required: true, min: 8 }]}>
+          <Form.Item name="password" label="密码" rules={[
+            { required: true },
+            {
+              validator: (_, value?: string) => {
+                if (!value) return Promise.resolve();
+                return validateNewPassword(value);
+              },
+            },
+          ]}>
             <Input.Password />
           </Form.Item>
           <Form.Item name="role" label="角色">

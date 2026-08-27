@@ -1,30 +1,52 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Table, Button, Space, Tag, Modal, Form, Input, Switch, Select, App, Upload, Tooltip, Alert,
+  Progress, type TableColumnsType,
 } from 'antd';
 import {
   PlusOutlined, DeleteOutlined, CloudUploadOutlined, CopyOutlined, DownloadOutlined,
 } from '@ant-design/icons';
 import dayjs from 'dayjs';
-import { releasesApi, Release, UploadReleaseInput, formatBytes } from '../api/releases';
+import { releasesApi, type Release, type UploadReleaseInput, formatBytes } from '../api/releases';
+import { getApiErrorMessage, isRequestCancelled } from '../api/client';
 
 const { TextArea } = Input;
+const MAX_UPLOAD_BYTES = 2 * 1024 * 1024 * 1024;
+const ALLOWED_RELEASE_EXTENSIONS = ['.exe', '.msi', '.msix', '.zip'];
 
 export default function ReleasesPage() {
   const [data, setData] = useState<Release[]>([]);
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [uploadPercent, setUploadPercent] = useState(0);
   const [form] = Form.useForm();
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const { message, modal } = App.useApp();
+  const requestIdRef = useRef(0);
+  const uploadControllerRef = useRef<AbortController | null>(null);
 
-  const load = async () => {
+  const load = useCallback(async () => {
+    const requestId = ++requestIdRef.current;
     setLoading(true);
-    try { setData(await releasesApi.list()); }
-    finally { setLoading(false); }
-  };
-  useEffect(() => { load(); }, []);
+    try {
+      const result = await releasesApi.list();
+      if (requestId === requestIdRef.current) setData(result);
+    } catch (error) {
+      if (requestId === requestIdRef.current) {
+        message.error(getApiErrorMessage(error, '加载发行版失败'));
+      }
+    } finally {
+      if (requestId === requestIdRef.current) setLoading(false);
+    }
+  }, [message]);
+  useEffect(() => {
+    void load();
+    return () => {
+      requestIdRef.current += 1;
+      uploadControllerRef.current?.abort();
+    };
+  }, [load]);
 
   const openCreate = () => {
     form.resetFields();
@@ -33,6 +55,7 @@ export default function ReleasesPage() {
       isLatest: true, enabled: true,
     });
     setPendingFile(null);
+    setUploadPercent(0);
     setModalOpen(true);
   };
 
@@ -54,17 +77,25 @@ export default function ReleasesPage() {
         file: pendingFile,
       };
       setSubmitting(true);
+      setUploadPercent(0);
+      const controller = new AbortController();
+      uploadControllerRef.current = controller;
       try {
-        const r = await releasesApi.upload(payload);
+        const r = await releasesApi.upload(payload, {
+          signal: controller.signal,
+          onProgress: setUploadPercent,
+        });
         message.success(`已发布 ${r.version}（${formatBytes(r.fileSizeBytes)}）`);
         setModalOpen(false);
-        load();
+        await load();
       } finally {
         setSubmitting(false);
+        uploadControllerRef.current = null;
       }
-    } catch (e: any) {
-      if (e?.errorFields) return; // form validation error
-      message.error(e.response?.data?.error ?? '上传失败');
+    } catch (error) {
+      if (typeof error === 'object' && error && 'errorFields' in error) return;
+      if (isRequestCancelled(error)) message.info('上传已取消');
+      else message.error(getApiErrorMessage(error, '上传失败'));
     }
   };
 
@@ -74,20 +105,20 @@ export default function ReleasesPage() {
       content: '此操作会同时删除服务器上的安装包文件，不可撤销。',
       okType: 'danger',
       onOk: async () => {
-        try { await releasesApi.remove(r.id); message.success('已删除'); load(); }
-        catch (e: any) { message.error(e.response?.data?.error ?? '删除失败'); }
+        try { await releasesApi.remove(r.id); message.success('已删除'); await load(); }
+        catch (error) { message.error(getApiErrorMessage(error, '删除失败')); }
       },
     });
   };
 
   const onToggleEnabled = async (r: Release, enabled: boolean) => {
-    try { await releasesApi.setEnabled(r.id, enabled); load(); }
-    catch (e: any) { message.error(e.response?.data?.error ?? '更新失败'); }
+    try { await releasesApi.setEnabled(r.id, enabled); await load(); }
+    catch (error) { message.error(getApiErrorMessage(error, '更新失败')); }
   };
 
   const onToggleLatest = async (r: Release, isLatest: boolean) => {
-    try { await releasesApi.setLatest(r.id, isLatest); load(); }
-    catch (e: any) { message.error(e.response?.data?.error ?? '更新失败'); }
+    try { await releasesApi.setLatest(r.id, isLatest); await load(); }
+    catch (error) { message.error(getApiErrorMessage(error, '更新失败')); }
   };
 
   const copyDownloadUrl = (r: Release) => {
@@ -98,7 +129,7 @@ export default function ReleasesPage() {
     );
   };
 
-  const columns = [
+  const columns: TableColumnsType<Release> = [
     {
       title: '版本', dataIndex: 'version', width: 130,
       render: (v: string, r: Release) => (
@@ -154,7 +185,16 @@ export default function ReleasesPage() {
             </Button>
           </Tooltip>
           <Button size="small" icon={<CopyOutlined />} onClick={() => copyDownloadUrl(r)}>链接</Button>
-          <Button size="small" icon={<DownloadOutlined />} href={r.downloadUrl} target="_blank">下载</Button>
+          <Button
+            size="small"
+            icon={<DownloadOutlined />}
+            href={r.enabled ? r.downloadUrl : undefined}
+            target="_blank"
+            rel="noopener noreferrer"
+            disabled={!r.enabled}
+          >
+            下载
+          </Button>
           <Button size="small" danger icon={<DeleteOutlined />} onClick={() => onDelete(r)} />
         </Space>
       ),
@@ -182,11 +222,14 @@ export default function ReleasesPage() {
       <Modal
         title="上传新发行版"
         open={modalOpen}
-        onCancel={() => setModalOpen(false)}
+        onCancel={() => {
+          if (submitting) uploadControllerRef.current?.abort();
+          else setModalOpen(false);
+        }}
         onOk={onSubmit}
         confirmLoading={submitting}
         okText="上传"
-        cancelText="取消"
+        cancelText={submitting ? '取消上传' : '取消'}
         width={560}
         destroyOnClose
       >
@@ -220,13 +263,22 @@ export default function ReleasesPage() {
           <Form.Item label="安装包文件" required>
             <Upload.Dragger
               beforeUpload={(file) => {
+                const lowerName = file.name.toLowerCase();
+                if (!ALLOWED_RELEASE_EXTENSIONS.some((ext) => lowerName.endsWith(ext))) {
+                  message.error('仅支持 .exe、.msi、.msix 或 .zip');
+                  return Upload.LIST_IGNORE;
+                }
+                if (file.size > MAX_UPLOAD_BYTES) {
+                  message.error('文件不能超过 2 GiB');
+                  return Upload.LIST_IGNORE;
+                }
                 setPendingFile(file);
                 return false; // prevent auto-upload
               }}
               maxCount={1}
               onRemove={() => { setPendingFile(null); return true; }}
               fileList={pendingFile ? [{ uid: '-1', name: pendingFile.name, status: 'done' as const }] : []}
-              accept=".exe,.msi,.zip,.dmg,.deb,.AppImage"
+              accept=".exe,.msi,.msix,.zip"
             >
               <p className="ant-upload-drag-icon"><CloudUploadOutlined /></p>
               <p className="ant-upload-text">点击或拖拽 .exe / .msi / 安装包到此区域</p>
@@ -237,6 +289,15 @@ export default function ReleasesPage() {
               </p>
             </Upload.Dragger>
           </Form.Item>
+
+          {submitting && (
+            <Progress
+              percent={uploadPercent}
+              status="active"
+              aria-label={`上传进度 ${uploadPercent}%`}
+              style={{ marginBottom: 16 }}
+            />
+          )}
 
           <Form.Item name="releaseNotes" label="更新日志 (Markdown, 可选)">
             <TextArea rows={4} placeholder={`## 新增\n- ...\n\n## 修复\n- ...`} />

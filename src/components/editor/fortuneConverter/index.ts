@@ -8,7 +8,7 @@
 //   - `sheetConversions.ts`  — workbook / sheet-level Rust⇄FortuneSheet
 //   - `stylesheetXml.ts`     — `xl/styles.xml` builder + small XML helpers
 //   - `sheetXml.ts`          — worksheet + content-types + rels XML builders
-//   - `sheetjsExport.ts`     — top-level SheetJS export orchestrator
+//   - `sheetjsExport.ts`     — top-level browser xlsx export orchestrator
 
 export type {
   RustCell,
@@ -67,7 +67,9 @@ export type {
 
 export {
   composeStyleKey as composeSheetJSStyleKey,
+  encodeCellAddress,
   escapeXml as escapeSheetJSXml,
-  fortuneSheetsToSheetJSBuffer,
+  fortuneSheetsToXlsxBuffer,
+  normalizeSheetNames,
   parseStyleKey as parseSheetJSStyleKey,
 } from './sheetjsExport';

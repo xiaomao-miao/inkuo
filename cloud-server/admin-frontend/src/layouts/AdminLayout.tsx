@@ -15,7 +15,9 @@ import {
   CloudUploadOutlined,
 } from '@ant-design/icons';
 import { useState } from 'react';
-import { AdminUser, authApi } from '../api/auth';
+import { type AdminUser, authApi } from '../api/auth';
+import { getApiErrorMessage } from '../api/client';
+import { validateNewPassword } from '../passwordPolicy';
 
 const { Header, Sider, Content } = Layout;
 
@@ -29,6 +31,7 @@ export default function AdminLayout({ admin, onLogout }: Props) {
   const location = useLocation();
   const { message } = App.useApp();
   const [pwModalOpen, setPwModalOpen] = useState(false);
+  const [changingPassword, setChangingPassword] = useState(false);
   const [pwForm] = Form.useForm();
 
   const menuItems = [
@@ -57,13 +60,16 @@ export default function AdminLayout({ admin, onLogout }: Props) {
   };
 
   const onChangePassword = async (values: { currentPassword: string; newPassword: string }) => {
+    setChangingPassword(true);
     try {
       await authApi.changePassword(values.currentPassword, values.newPassword);
       message.success('密码已更新');
       setPwModalOpen(false);
       pwForm.resetFields();
-    } catch (err: any) {
-      message.error(err.response?.data?.error ?? '修改失败');
+    } catch (error) {
+      message.error(getApiErrorMessage(error, '修改失败'));
+    } finally {
+      setChangingPassword(false);
     }
   };
 
@@ -116,12 +122,16 @@ export default function AdminLayout({ admin, onLogout }: Props) {
         open={pwModalOpen}
         onCancel={() => setPwModalOpen(false)}
         onOk={() => pwForm.submit()}
+        confirmLoading={changingPassword}
       >
         <Form form={pwForm} layout="vertical" onFinish={onChangePassword}>
           <Form.Item name="currentPassword" label="当前密码" rules={[{ required: true }]}>
             <Input.Password />
           </Form.Item>
-          <Form.Item name="newPassword" label="新密码" rules={[{ required: true, min: 8, message: '至少 8 个字符' }]}>
+          <Form.Item name="newPassword" label="新密码" rules={[
+            { required: true },
+            { validator: (_, value?: string) => value ? validateNewPassword(value) : Promise.resolve() },
+          ]}>
             <Input.Password />
           </Form.Item>
         </Form>

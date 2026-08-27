@@ -36,21 +36,18 @@ var jwtSettings = new JwtSettings
     AccessExpiryMinutes = builder.Configuration.GetValue("Jwt:AccessExpiryMinutes", 15),
     RefreshExpiryDays = builder.Configuration.GetValue("Jwt:RefreshExpiryDays", 30),
 };
-// Refuse to start with a placeholder or too-short HS256 key so we can't be
-// brute-forced offline if the secret leaks through a misconfigured deploy.
-// Covers: "change-me" (the old pattern), "replace-with" (the current
-// .env.example), "your-" (a common onboarding placeholder), and anything
-// shorter than 32 chars (below HS256's 256-bit minimum).
-static bool IsWeakSecret(string s) =>
-    s.Length < 32
-    || s.StartsWith("change-me",    StringComparison.OrdinalIgnoreCase)
-    || s.StartsWith("replace-with", StringComparison.OrdinalIgnoreCase)
-    || s.StartsWith("your-",        StringComparison.OrdinalIgnoreCase);
-
-if (IsWeakSecret(jwtSettings.Secret))
+if (string.IsNullOrWhiteSpace(jwtSettings.Issuer)
+    || string.IsNullOrWhiteSpace(jwtSettings.Audience))
+    throw new InvalidOperationException("Jwt:Issuer and Jwt:Audience must not be blank");
+if (jwtSettings.AccessExpiryMinutes is < 1 or > 1440)
+    throw new InvalidOperationException("Jwt:AccessExpiryMinutes must be between 1 and 1440");
+if (jwtSettings.RefreshExpiryDays is < 1 or > 365)
+    throw new InvalidOperationException("Jwt:RefreshExpiryDays must be between 1 and 365");
+// Refuse placeholders and keys below HS256's 256-bit minimum.
+if (CredentialPolicy.IsWeakSecret(jwtSettings.Secret))
 {
     throw new InvalidOperationException(
-        "Jwt:Secret must be at least 32 characters of random data and not a placeholder. "
+        "Jwt:Secret must be at least 32 UTF-8 bytes of random data and not a placeholder. "
       + "Generate one with `openssl rand -base64 48`.");
 }
 

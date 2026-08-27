@@ -232,7 +232,7 @@
   display: inline-block;
   width: 14px;
   height: 14px;
-  border: 2px solid var(--border-muted);
+  border: 2px solid var(--border-strong);
   border-top-color: var(--accent-primary);
   border-radius: 50%;
   animation: routeFallbackSpin 0.8s linear infinite;

@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Table, Button, Space, Tag, Modal, Form, Input, Switch, App, Tooltip,
+  Table, Button, Space, Tag, Modal, Form, Input, Switch, App, Tooltip, type TableColumnsType,
 } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
-import { webSearchProvidersApi, WebSearchProvider } from '../api/webSearchProviders';
+import { webSearchProvidersApi, type WebSearchProvider } from '../api/webSearchProviders';
+import { getApiErrorMessage } from '../api/client';
 
 /**
  * Admin CRUD for web_search provider routing. Mirrors
@@ -19,21 +20,33 @@ export default function WebSearchProvidersPage() {
   const [data, setData] = useState<WebSearchProvider[]>([]);
   const [loading, setLoading] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [editing, setEditing] = useState<WebSearchProvider | null>(null);
   const [form] = Form.useForm();
   const { message, modal } = App.useApp();
+  const requestIdRef = useRef(0);
 
-  const load = async () => {
+  const load = useCallback(async () => {
+    const requestId = ++requestIdRef.current;
     setLoading(true);
     try {
-      setData(await webSearchProvidersApi.list());
+      const result = await webSearchProvidersApi.list();
+      if (requestId === requestIdRef.current) setData(result);
+    } catch (error) {
+      if (requestId === requestIdRef.current) {
+        message.error(getApiErrorMessage(error, '加载搜索服务配置失败'));
+      }
     } finally {
-      setLoading(false);
+      if (requestId === requestIdRef.current) setLoading(false);
     }
-  };
-  useEffect(() => { load(); }, []);
+  }, [message]);
+  useEffect(() => {
+    void load();
+    return () => { requestIdRef.current += 1; };
+  }, [load]);
 
   const onSubmit = async (values: any) => {
+    setSaving(true);
     try {
       // Fall back to the editing record when an antd `disabled` Form.Item
       // drops a field from `values` (the field visually shows the old
@@ -73,9 +86,11 @@ export default function WebSearchProvidersPage() {
       setModalOpen(false);
       form.resetFields();
       setEditing(null);
-      load();
-    } catch (e: any) {
-      message.error(e.response?.data?.error ?? '保存失败');
+      await load();
+    } catch (error) {
+      message.error(getApiErrorMessage(error, '保存失败'));
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -88,15 +103,15 @@ export default function WebSearchProvidersPage() {
         try {
           const r = await webSearchProvidersApi.delete(p.id);
           message.success(r.message);
-          load();
-        } catch (e: any) {
-          message.error(e.response?.data?.error ?? '删除失败');
+          await load();
+        } catch (error) {
+          message.error(getApiErrorMessage(error, '删除失败'));
         }
       },
     });
   };
 
-  const columns = [
+  const columns: TableColumnsType<WebSearchProvider> = [
     {
       title: 'Provider ID', dataIndex: 'providerId', width: 140,
       render: (v: string) => <Tag color="geekblue">{v}</Tag>,
@@ -167,6 +182,7 @@ export default function WebSearchProvidersPage() {
         open={modalOpen}
         onCancel={() => { setModalOpen(false); setEditing(null); }}
         onOk={() => form.submit()}
+        confirmLoading={saving}
         width={620}
       >
         <Form form={form} layout="vertical" onFinish={onSubmit}>

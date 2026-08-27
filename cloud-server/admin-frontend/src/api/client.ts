@@ -11,7 +11,7 @@ export const tokenStore = {
 // The cloud-server serializes JSON as snake_case (to match the desktop
 // Rust client's wire types). The admin frontend is written in
 // camelCase (TS convention), so we translate on the wire with two
-// converters — request bodies go snake→camel, responses camel→snake.
+// converters — request bodies go camel→snake, responses snake→camel.
 const camelToSnake = (s: string) =>
   s.replace(/([A-Z])/g, (_m, c: string, i: number) => (i === 0 ? c.toLowerCase() : `_${c.toLowerCase()}`));
 
@@ -20,7 +20,14 @@ const snakeToCamel = (s: string) =>
 
 const deepKeys = (input: unknown, transform: (s: string) => string): unknown => {
   if (Array.isArray(input)) return input.map((v) => deepKeys(v, transform));
-  if (input && typeof input === 'object' && !(input instanceof Date) && !(input instanceof File)) {
+  // Transform JSON records only. Blob, ArrayBuffer, URLSearchParams and other
+  // browser objects would otherwise be replaced with an empty object by
+  // Object.entries(), corrupting binary responses and non-JSON requests.
+  if (
+    input
+    && typeof input === 'object'
+    && (Object.getPrototypeOf(input) === Object.prototype || Object.getPrototypeOf(input) === null)
+  ) {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
       out[transform(k)] = deepKeys(v, transform);
@@ -31,7 +38,7 @@ const deepKeys = (input: unknown, transform: (s: string) => string): unknown => 
 };
 
 export const api: AxiosInstance = axios.create({
-  baseURL: import.meta.env.DEV ? '' : '',
+  baseURL: '',
   timeout: 30_000,
 });
 
@@ -58,9 +65,8 @@ api.interceptors.response.use(
   (error) => {
     if (error.response?.status === 401) {
       tokenStore.clear();
-      // The admin SPA lives under /admin; the basename is set on
-      // RouterProvider so navigating to '/login' inside React resolves
-      // to '/admin/login' on the wire.
+      // Authentication has expired; use the concrete deployment path because
+      // this redirect happens outside React Router.
       if (!window.location.pathname.endsWith('/login')) {
         window.location.href = '/admin/login';
       }
@@ -68,3 +74,15 @@ api.interceptors.response.use(
     return Promise.reject(error);
   }
 );
+
+export function getApiErrorMessage(error: unknown, fallback: string): string {
+  if (axios.isAxiosError<{ error?: unknown }>(error)) {
+    const detail = error.response?.data?.error;
+    if (typeof detail === 'string' && detail.trim()) return detail;
+  }
+  return fallback;
+}
+
+export function isRequestCancelled(error: unknown): boolean {
+  return axios.isCancel(error);
+}
